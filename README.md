@@ -1,6 +1,6 @@
-# BDAS-Maa
+# MaaBanGDream
 
-BDAS 在 MaaFramework 下的独立重构项目。v0.1.0 是开发预览，仅包含最小页面闭环：
+BanG Dream! 自动化在 MaaFramework 下的独立重构项目。v0.1.0 是开发预览，仅包含最小页面闭环：
 
 HomeMarker → HomeLive → FreeLive → SongSelectMarker → BackToHome
 

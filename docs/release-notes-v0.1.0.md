@@ -1,4 +1,4 @@
-# BDAS-Maa v0.1.0
+# MaaBanGDream v0.1.0
 
 首个 MaaFramework 开发预览。
 
