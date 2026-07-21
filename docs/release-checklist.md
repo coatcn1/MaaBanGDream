@@ -2,6 +2,7 @@
 
 - [ ] Work on a `feature/*` or `fix/*` branch.
 - [ ] Review `git status --short` and the complete diff.
+- [ ] Update the README project status, dated change log, and future plan.
 - [ ] Run `scripts/verify.ps1` successfully.
 - [ ] Confirm ADB device is online at 1280x720 and DPI 240.
 - [ ] Run the minimal navigation task through MFAAvalonia.
