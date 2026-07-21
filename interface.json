@@ -1,0 +1,36 @@
+{
+  "$schema": "https://raw.githubusercontent.com/MaaXYZ/MaaFramework/main/tools/interface.schema.json",
+  "interface_version": 2,
+  "name": "BDAS-Maa",
+  "label": "BanG Dream! 自动化（MaaFramework）",
+  "version": "0.1.0",
+  "description": "BDAS 的 MaaFramework 重开发版本；当前提供主页到选曲页的最小闭环。",
+  "license": "GPL-3.0-only",
+  "controller": [
+    {
+      "name": "Android",
+      "label": "Android 模拟器（1280×720）",
+      "type": "Adb",
+      "display_short_side": 720
+    }
+  ],
+  "resource": [
+    {
+      "name": "Bilibili",
+      "label": "哔哩哔哩服",
+      "path": ["./resource"],
+      "controller": ["Android"]
+    }
+  ],
+  "agent": {
+    "child_exec": "./.venv/Scripts/python.exe",
+    "child_args": ["./agent/server.py"]
+  },
+  "task": [
+    {
+      "name": "MinimalNavigation",
+      "label": "页面流连通性测试",
+      "entry": "MinimalNavigation"
+    }
+  ]
+}

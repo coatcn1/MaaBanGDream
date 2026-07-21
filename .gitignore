@@ -1,0 +1,11 @@
+/.venv/
+/.local/
+/debug/
+/logs/
+/config.local.json
+/screencap/
+/profiles/*.json
+!/profiles/.gitkeep
+__pycache__/
+*.py[cod]
+.pytest_cache/

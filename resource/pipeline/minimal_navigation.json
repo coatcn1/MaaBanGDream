@@ -1,0 +1,54 @@
+{
+  "MinimalNavigation": {
+    "recognition": "DirectHit",
+    "action": "StartApp",
+    "package": "com.bilibili.star.bili",
+    "next": ["MinimalHomeMarker", "LoginTapToStart", "LoginNext", "CommonClose"],
+    "on_error": ["CommonRecover"]
+  },
+  "MinimalHomeMarker": {
+    "recognition": "TemplateMatch",
+    "template": "home_marker.png",
+    "threshold": 0.88,
+    "action": "DoNothing",
+    "next": ["HomeLive"],
+    "on_error": ["CommonRecover"]
+  },
+  "HomeLive": {
+    "recognition": "TemplateMatch",
+    "template": "home_live.png",
+    "threshold": 0.88,
+    "action": "Click",
+    "target": [1085, 580, 180, 130],
+    "next": ["FreeLive", "CommonClose"],
+    "on_error": ["CommonRecover"]
+  },
+  "FreeLive": {
+    "recognition": "TemplateMatch",
+    "template": "free_live.png",
+    "threshold": 0.88,
+    "action": "Click",
+    "next": ["SongSelectMarker", "CommonClose"],
+    "on_error": ["CommonRecover"]
+  },
+  "SongSelectMarker": {
+    "recognition": "TemplateMatch",
+    "template": "song_select_marker.png",
+    "threshold": 0.92,
+    "action": "DoNothing",
+    "next": ["BackToHome"]
+  },
+  "BackToHome": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "CommonRecover",
+    "custom_action_param": {
+      "home_node": "HomeMarker",
+      "escape_interval_ms": 1500,
+      "escape_timeout_ms": 30000,
+      "restart_limit": 2,
+      "package": "com.bilibili.star.bili"
+    },
+    "next": ["HomeMarker"]
+  }
+}
