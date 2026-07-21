@@ -1,10 +1,10 @@
 {
   "$schema": "https://raw.githubusercontent.com/MaaXYZ/MaaFramework/main/tools/interface.schema.json",
   "interface_version": 2,
-  "name": "BDAS-Maa",
+  "name": "MaaBanGDream",
   "label": "BanG Dream! 自动化（MaaFramework）",
   "version": "0.1.0",
-  "description": "BDAS 的 MaaFramework 重开发版本；当前提供主页到选曲页的最小闭环。",
+  "description": "BanG Dream! 的 MaaFramework 自动化项目；当前提供主页到选曲页的最小闭环。",
   "license": "GPL-3.0-only",
   "controller": [
     {
