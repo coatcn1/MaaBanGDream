@@ -3,6 +3,7 @@
   "CalibrationDifficultySetting": {"recognition": "DirectHit", "action": "Custom", "custom_action": "RealtimeRuntimeOptions", "custom_action_param": {"difficulty": "Easy"}, "next": ["CalibrationDebugSetting"]},
   "CalibrationDebugSetting": {"recognition": "DirectHit", "action": "Custom", "custom_action": "RealtimeRuntimeOptions", "custom_action_param": {"debug_recording": false}, "next": ["RealtimeCalibrationRun"]},
   "RealtimeCalibrationRun": {"recognition": "DirectHit", "action": "Custom", "custom_action": "RealtimeCalibrationRun", "custom_action_param": {"timing_offset_ms": 0}},
+  "RealtimeCalibrationSingleLive": {"recognition": "DirectHit", "action": "StartApp", "package": "com.bilibili.star.bili", "next": ["RealtimeLiveDebugGate"]},
   "CalibrationCaptureSong": {"recognition": "DirectHit", "action": "Custom", "custom_action": "CalibrationSongIdentity", "next": ["RealtimeLiveDifficulty"]},
   "RealtimeCalibrationRoundComplete": {"recognition": "DirectHit", "action": "DoNothing"}
 }

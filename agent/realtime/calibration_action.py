@@ -27,6 +27,7 @@ PLAY_NODES = {
     "Hard": "RealtimeLivePlayHard", "Expert": "RealtimeLivePlayExpert",
     "Special": "RealtimeLivePlaySpecial",
 }
+CALIBRATION_ROUND_ENTRY = "RealtimeCalibrationSingleLive"
 
 
 def result_report_snapshot(root: Path) -> dict[str, tuple[int, int]]:
@@ -132,10 +133,19 @@ class RealtimeCalibration(CustomAction):
             raise ValueError(f"不支持的难度: {difficulty}")
         play_node = PLAY_NODES[difficulty]
         calibration_debug = debug_enabled()
+        round_number = 0
 
         def run_round(formal: bool, offset: int) -> dict:
+            nonlocal round_number
+            round_number += 1
             if context.tasker.stopping:
                 raise InterruptedError("校准已停止")
+            print(
+                f"RealtimeCalibration round={round_number} start "
+                f"mode={'formal' if formal else 'rehearsal'} "
+                f"entry={CALIBRATION_ROUND_ENTRY} offset={offset}ms",
+                flush=True,
+            )
             reports_before = result_report_snapshot(PROJECT_ROOT / "screencap")
             play_params = {
                 "difficulty": difficulty, "require_profile": False,
@@ -149,7 +159,6 @@ class RealtimeCalibration(CustomAction):
             }
             start_next = [play_node]
             override = {
-                "RealtimeLiveRoundGate": {"max_hit": 1},
                 "RealtimeLiveSongSelectMarker": {"next": ["RealtimeLiveRandomSong"]},
                 "RealtimeLiveRandomSong": {"next": ["CalibrationCaptureSong"]},
                 "RealtimeLiveDifficulty": {"target": DIFFICULTY_TARGETS[difficulty]},
@@ -162,12 +171,19 @@ class RealtimeCalibration(CustomAction):
             }
             if formal:
                 override["RealtimeLiveFormalModeGate"] = {"next": ["RealtimeLiveRehearsalToFormal", "RealtimeLiveFormalReady"]}
-            detail = context.run_task("RealtimeMultiLive", override)
-            if detail is None:
-                raise RuntimeError("校准单轮 Maa 任务执行失败")
-            return latest_result_report_since(
+            detail = context.run_task(CALIBRATION_ROUND_ENTRY, override)
+            if detail is None or not detail.status.succeeded:
+                status = None if detail is None else detail.status
+                raise RuntimeError(f"校准单轮 Maa 任务执行失败: {status}")
+            report = latest_result_report_since(
                 PROJECT_ROOT / "screencap", reports_before, current_song_id()
             )
+            print(
+                f"RealtimeCalibration round={round_number} complete "
+                f"song={report['song_id']} hit_rate={report.get('hit_rate')}",
+                flush=True,
+            )
+            return report
 
         runner = CalibrationRunner(run_round)
         offset, rehearsals, formal = runner.run(int(params.get("timing_offset_ms", 0)))

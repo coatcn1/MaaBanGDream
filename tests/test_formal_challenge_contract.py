@@ -31,6 +31,19 @@ def test_calibration_is_single_task_with_three_rehearsal_contract():
     assert nodes["RealtimeCalibrationRoundComplete"]["action"] == "DoNothing"
 
 
+def test_calibration_rounds_bypass_the_shared_multi_live_hit_counter():
+    calibration = load("resource/pipeline/realtime_calibration.json")
+    multi_live = load("resource/pipeline/realtime_multi_live.json")
+
+    entry = calibration["RealtimeCalibrationSingleLive"]
+    assert entry["action"] == "StartApp"
+    assert entry["next"] == ["RealtimeLiveDebugGate"]
+    assert "max_hit" not in entry
+    # This shared gate is intentionally stateful for normal 1-99 round tasks,
+    # so a calibration Custom Action must never reuse it across nested calls.
+    assert multi_live["RealtimeLiveRoundGate"]["max_hit"] == 1
+
+
 def test_challenge_points_and_profile_contract():
     interface = load("interface.json")
     nodes = load("resource/pipeline/challenge_live.json")

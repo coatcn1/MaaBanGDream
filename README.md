@@ -144,7 +144,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\launch-mfa.ps1
 | 单轮自动演出 | 已完成 | 当前歌曲、单轮、结算后返回主页；已通过关闭与开启状态真机验收 |
 | 多轮、随机曲目与难度 | 已完成 | 1–99 轮，当前曲目/随机选曲，五档难度；已由用户真机验收 |
 | 实时演奏 | 部分验收 | 正式连续演奏与结算恢复已通过；松手后原位补点修复待复验 |
-| 智能校准与 Profile | 修复待验收 | 首轮报告筛选和单轮返回已修复；待确认三排练一正式完整闭环 |
+| 智能校准与 Profile | 修复待验收 | 已修复嵌套任务复用 `max_hit` 计数导致第二轮被跳过；待确认三排练一正式完整闭环 |
 | 完整歌曲与结算反馈 | 已完成 | 已实现最长 300 秒门禁、触点清理、逐次 ESC 结算识别及 FAST/SLOW 解析 |
 | 挑战演出 | 已完成 | 当前活动曲、点数、连续轮次、Profile 与结算恢复已由用户真机验收 |
 | 每日调度 | 未开始 | 最后接入，不迁移旧调度器 |
@@ -153,6 +153,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\launch-mfa.ps1
 
 ### 2026-07-22
 
+- 再次定位校准首曲后停在主页的真实根因：第一轮报告其实已成功读取，第二次 `context.run_task()` 复用了普通连续演奏的 `RealtimeLiveRoundGate(max_hit=1)`；MaaFramework 在同一个外层任务中保留该节点命中计数，导致第二轮尚未导航就被跳过。新增无 `max_hit` 的 `RealtimeCalibrationSingleLive` 专用入口，四轮嵌套调用均绕过共享计数器；同时检查嵌套任务真实状态，并永久记录每轮开始、完成、模式、偏移与歌曲 ID。
 - 将运行环境从依赖用户级 Python 的仓库 `.venv` 迁移到工作区独立 Miniconda：固定 Miniconda 26.5.3-1、环境名 `maabangdream`、Python 3.12 和 `conda-forge/nodefaults`。`setup.ps1`、`verify.ps1`、`launch-mfa.ps1` 与 MFA 部署配置全部改用该环境；README 记录完整路径、版本、哈希、重建和检查命令。
 - 验证脚本将 pytest 临时目录固定到仓库已忽略的 `.local/pytest-<进程号>` 并关闭跨账户缓存，避免 MFA、用户终端和 Codex 使用不同 Windows 账户时再次访问 AppData 或旧 `.pytest_cache` 失败。
 - 根据 19:47 校准日志再次修复“首轮结束停在主页”：结算已于 19:49:44 保存，旧逻辑却因文件时间筛选将其排除并在 19:50:57 异常退出。现改为“单轮运行前报告目录快照 → 运行后新增/变化报告”，不再依赖进程时间与文件系统时间一致；校准专用覆盖还会在识别主页后直接结束嵌套单轮，不再回到通用轮次门控等待。
