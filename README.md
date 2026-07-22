@@ -37,7 +37,7 @@
 ## 环境要求
 
 - Windows 10/11
-- Python 3.12
+- Miniconda 26.5.3-1，独立环境 Python 3.12
 - MaaFramework Native Core / Python binding 5.10.2（PyPI 包名 `MaaFw`）
 - MFAAvalonia 2.12.0、.NET Binding 5.8.0
 - .NET Desktop Runtime 10
@@ -52,10 +52,44 @@
 .\scripts\verify.ps1
 ```
 
+### Conda 环境固定配置
+
+本项目不再使用仓库内 `.venv`。Windows venv 的启动器仍依赖创建它的用户级 Python；该 Python 被系统修复、卸载或因运行账户不同而不可访问时，`.venv` 目录虽然存在，实际仍无法启动。Conda 环境包含独立解释器，因此 MFA 不再依赖 `C:\Users\<用户名>\AppData` 下的 Python。
+
+| 配置 | 固定值 |
+| --- | --- |
+| 发行版 | Miniconda `26.5.3-1`（Python 3.12 Windows x64 安装包） |
+| 安装目录 | `D:\Documents\workplace\.tools\Miniconda3` |
+| 环境名 | `maabangdream` |
+| 环境目录 | `D:\Documents\workplace\.tools\Miniconda3\envs\maabangdream` |
+| Python 约束 | `3.12`（当前解析为 `3.12.13`） |
+| Conda 软件源 | `conda-forge`，`nodefaults` 禁用默认源 |
+| Python 依赖 | `requirements.txt`，其中 MaaFw 固定为 `5.10.2` |
+| 环境声明 | `environment.yml` |
+
+Miniconda 安装包固定为 `Miniconda3-py312_26.5.3-1-Windows-x86_64.exe`，官方 SHA-256：
+
+```text
+60ab6c430d19ca822841ecfc101d465f3c826ee2d2a3d6c028ffab0f3bcde57a
+```
+
+环境不存在或需要修复时，只运行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1
+```
+
+该脚本会按 `environment.yml` 中相同的约束创建或更新 `maabangdream`，并显式使用 `--override-channels --channel conda-forge`，避免触发 Anaconda 默认源的额外条款确认；随后从 `requirements.txt` 安装 Python 包。无需执行 `conda init`，也不需要把 Conda 加入系统 PATH。手工检查可使用绝对路径：
+
+```powershell
+D:\Documents\workplace\.tools\Miniconda3\Scripts\conda.exe env list
+D:\Documents\workplace\.tools\Miniconda3\envs\maabangdream\python.exe --version
+```
+
 完整运行时检查需要提供本机 MFAAvalonia 目录：
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\check_runtime.py --mfa-root <MFAAvalonia目录>
+D:\Documents\workplace\.tools\Miniconda3\envs\maabangdream\python.exe scripts\check_runtime.py --mfa-root <MFAAvalonia目录>
 ```
 
 把 `interface.json` 和 `resource` 部署到 MFAAvalonia 项目目录后即可启动。发布前还必须完成连接、截图、点击、BACK、应用启停、相关页面闭环及停止任务安全性真机验收。本机 ADB 路径、设备序列号、日志、截图、Profile、虚拟环境和 MFAAvalonia 运行目录均不得提交。
@@ -75,10 +109,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\launch-mfa.ps1
 
 脚本会一次完成以下操作：
 
-1. 检查 MFAAvalonia、项目 `.venv`、Agent 和源码资源是否存在。
+1. 检查 MFAAvalonia、`maabangdream` Conda 环境、Agent 和源码资源是否存在。
    同时检查 `Microsoft.NETCore.App 10.x`；缺失时会停止并给出安装命令，不再打开误导性的下载页。
 2. 将仓库 `resource` 同步到 MFA 的 `resource/resource` 部署目录。
-3. 从仓库生成部署用 `interface.json`，将资源路径改为 `./resource/resource`，并将 Agent 路径指向仓库中的 `.venv` 和 `agent/server.py`。
+3. 从仓库生成部署用 `interface.json`，将资源路径改为 `./resource/resource`，并将 Agent 解释器指向 `maabangdream` Conda 环境、脚本指向仓库中的 `agent/server.py`。
 4. 关闭已有 MFAAvalonia 进程，以 MFA 安装目录作为工作目录重新启动。
 
 如果 MFA 显示“下载资源”而不是 MaaBanGDream 任务列表，不要点击下载；这表示启动了未同步的部署副本。关闭该页面并重新运行上述脚本。正常界面必须只显示：自动演出、实时演奏、实时演奏校准、挑战演出。
@@ -102,7 +136,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\launch-mfa.ps1
 | 里程碑 | 状态 | 说明 |
 | --- | --- | --- |
 | 独立 MaaFramework 项目 | 已完成 | 与旧 BDAS 工作树分离，不带入旧仓库脏改动 |
-| 基础运行环境 | 已完成 | Python 3.12、MaaFw 5.10.2、MFAAvalonia 2.12.0、.NET 10 |
+| 基础运行环境 | 已完成 | Miniconda 26.5.3-1 / `maabangdream` / Python 3.12、MaaFw 5.10.2、MFAAvalonia 2.12.0、.NET 10 |
 | 运行时兼容门禁 | 已完成 | 锁定 Python、Core、MFA、.NET Binding 与 PI 组合 |
 | 最小页面闭环 | 已完成 | 已在真实雷电模拟器验收 |
 | 故障恢复 | 已完成 | 已覆盖安全节点、BACK、停止检测及重启上限 |
@@ -119,6 +153,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\launch-mfa.ps1
 
 ### 2026-07-22
 
+- 将运行环境从依赖用户级 Python 的仓库 `.venv` 迁移到工作区独立 Miniconda：固定 Miniconda 26.5.3-1、环境名 `maabangdream`、Python 3.12 和 `conda-forge/nodefaults`。`setup.ps1`、`verify.ps1`、`launch-mfa.ps1` 与 MFA 部署配置全部改用该环境；README 记录完整路径、版本、哈希、重建和检查命令。
+- 验证脚本将 pytest 临时目录固定到仓库已忽略的 `.local/pytest-<进程号>` 并关闭跨账户缓存，避免 MFA、用户终端和 Codex 使用不同 Windows 账户时再次访问 AppData 或旧 `.pytest_cache` 失败。
 - 根据 19:47 校准日志再次修复“首轮结束停在主页”：结算已于 19:49:44 保存，旧逻辑却因文件时间筛选将其排除并在 19:50:57 异常退出。现改为“单轮运行前报告目录快照 → 运行后新增/变化报告”，不再依赖进程时间与文件系统时间一致；校准专用覆盖还会在识别主页后直接结束嵌套单轮，不再回到通用轮次门控等待。
 - 使用用户开启调试记录后生成的三份整曲 `trace.jsonl` 定位正式演奏原位补点：长条 `UP` 后约 0.28–0.31 秒，尾环残影被新建为普通音符并触发同轨 `rescue`。新增松手后 0.4 秒残影抑制，但保留具有完整下落轨迹的真实 `crossing`；三份记录离线重放分别由 9/6/9 次降至 0，邻轨重复和长条尾补点继续保持 0。
 - 调试记录新增 `events.jsonl` 和异常 PNG：自动保存长条保险松手及松手后再次补救触控的帧；离线重放报告新增 `recorded/replayed_post_release_rescues`，以后可以直接量化同类回归。

@@ -5,6 +5,7 @@ import importlib.metadata
 import json
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -64,7 +65,13 @@ def native_core_version(mfa_root: Path) -> str:
 def static_versions() -> dict[str, str | int]:
     interface = load_json(INTERFACE_PATH)
     requirements = REQUIREMENTS_PATH.read_text(encoding="utf-8")
+    prefix = Path(sys.prefix)
     return {
+        "python": f"{sys.version_info.major}.{sys.version_info.minor}",
+        "environment_manager": (
+            "conda" if (prefix / "conda-meta").is_dir() else "not-conda"
+        ),
+        "conda_environment": prefix.name,
         "maafw_python": importlib.metadata.version("MaaFw"),
         "maafw_requirement": required_maafw_version(requirements),
         "project_interface": interface["interface_version"],

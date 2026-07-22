@@ -8,7 +8,7 @@
   "license": "GPL-3.0-only",
   "controller": [{"name": "Android", "label": "Android 模拟器（1280×720）", "type": "Adb", "display_short_side": 720}],
   "resource": [{"name": "Bilibili", "label": "哔哩哔哩服", "path": ["./resource"], "controller": ["Android"]}],
-  "agent": {"child_exec": "./.venv/Scripts/python.exe", "child_args": ["./agent/server.py"]},
+  "agent": {"child_exec": "python", "child_args": ["./agent/server.py"]},
   "task": [
     {"name": "AutoLive", "label": "自动演出", "description": "当前曲目或每轮随机选曲，按指定难度连续自动演出。", "entry": "AutoLive", "option": ["AutoLiveSongMode", "AutoLiveDifficulty", "AutoLiveCount"]},
     {"name": "RealtimeLive", "label": "实时演奏", "description": "机器人排练或正式演奏；正式演奏必须先完成相同环境和难度的校准。", "entry": "RealtimeMultiLive", "option": ["RealtimeMode", "RealtimeLiveSongMode", "RealtimeLiveDifficulty", "RealtimeLiveCount", "RealtimeLiveDebug"]},

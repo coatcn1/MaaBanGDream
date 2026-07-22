@@ -1,5 +1,7 @@
 param(
-    [string]$MfaRoot
+    [string]$MfaRoot,
+    [string]$CondaRoot,
+    [string]$EnvironmentName = 'maabangdream'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -8,13 +10,16 @@ $workspaceRoot = Split-Path -Parent $projectRoot
 if (-not $MfaRoot) {
     $MfaRoot = Join-Path $workspaceRoot '.tools\MFAAvalonia'
 }
+if (-not $CondaRoot) {
+    $CondaRoot = Join-Path $workspaceRoot '.tools\Miniconda3'
+}
 
 $mfaExe = Join-Path $MfaRoot 'MFAAvalonia.exe'
 $sourceInterface = Join-Path $projectRoot 'interface.json'
 $sourceResource = Join-Path $projectRoot 'resource'
 $deployedInterface = Join-Path $MfaRoot 'interface.json'
 $deployedResource = Join-Path $MfaRoot 'resource\resource'
-$python = Join-Path $projectRoot '.venv\Scripts\python.exe'
+$python = Join-Path $CondaRoot "envs\$EnvironmentName\python.exe"
 $agent = Join-Path $projectRoot 'agent\server.py'
 
 foreach ($required in ($mfaExe, $sourceInterface, $sourceResource, $python, $agent)) {
@@ -45,3 +50,4 @@ Start-Process -FilePath $mfaExe -WorkingDirectory $MfaRoot
 Write-Host "MFAAvalonia started with MaaBanGDream $($interface.version)"
 Write-Host "Project: $projectRoot"
 Write-Host "Deployment: $MfaRoot"
+Write-Host "Conda environment: $EnvironmentName ($python)"
