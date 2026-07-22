@@ -45,6 +45,7 @@ class RealtimePlanner:
         paired_hold_rescue_margin: float = 35,
         hold_max_seconds: float = 20,
         hold_restart_cooldown_seconds: float = 0.25,
+        post_release_rescue_seconds: float = 0.4,
     ):
         self.judgement_y = float(judgement_y)
         self.timing_offset = timing_offset_ms / 1000
@@ -58,6 +59,7 @@ class RealtimePlanner:
         self.paired_hold_rescue_margin = float(paired_hold_rescue_margin)
         self.hold_max_seconds = float(hold_max_seconds)
         self.hold_restart_cooldown_seconds = float(hold_restart_cooldown_seconds)
+        self.post_release_rescue_seconds = float(post_release_rescue_seconds)
         self._last_lane_sweep = float("-inf")
         self._previous: dict[tuple[NoteKind, int], ObservedNote] = {}
         self._last_trigger: dict[int, float] = {}
@@ -186,9 +188,16 @@ class RealtimePlanner:
                     and self._hold_head(previous) < self._trigger_y(previous, note) <= head
                 )
                 release_age = now - self._hold_released_at.get(note.lane, float("-inf"))
+                restart_allowed = (
+                    release_age >= self.hold_restart_cooldown_seconds
+                    and (
+                        should_cross
+                        or release_age >= self.post_release_rescue_seconds
+                    )
+                )
                 if (
                     note.lane not in self._active_hold_tail
-                    and release_age >= self.hold_restart_cooldown_seconds
+                    and restart_allowed
                     and (
                     should_rescue or should_cross or should_pair_rescue
                     )
@@ -253,6 +262,29 @@ class RealtimePlanner:
                 and (tracked.previous_y is None or crossed_rescue_line)
                 and note.y >= self.judgement_y - 5
             ):
+                release_age = now - self._hold_released_at.get(
+                    note.lane, float("-inf")
+                )
+                if release_age < self.post_release_rescue_seconds:
+                    target = self.judgement_y - tracked.velocity_y * self.timing_offset
+                    is_real_crossing = (
+                        tracked.previous_y is not None
+                        and tracked.velocity_y > 0
+                        and tracked.previous_y <= self.judgement_y - 25
+                        and tracked.previous_y < target <= note.y
+                    )
+                    self._note_tracker.mark_fired(tracked.track_id)
+                    if is_real_crossing:
+                        kind = (
+                            ActionKind.FLICK
+                            if note.kind == NoteKind.FLICK
+                            else ActionKind.TAP
+                        )
+                        actions.append(TouchAction(
+                            kind, note.lane, now,
+                            reason="crossing", track_id=tracked.track_id,
+                        ))
+                    continue
                 kind = ActionKind.FLICK if note.kind == NoteKind.FLICK else ActionKind.TAP
                 actions.append(TouchAction(
                     kind, note.lane, now, reason="rescue", track_id=tracked.track_id

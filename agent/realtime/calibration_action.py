@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import traceback
-import time
 from datetime import datetime
 from pathlib import Path
 
@@ -30,10 +29,26 @@ PLAY_NODES = {
 }
 
 
-def latest_result_report_after(root: Path, started_ns: int, song_id: str) -> dict:
-    candidates = sorted(root.glob("realtime-result-*.json"), key=lambda path: path.stat().st_mtime_ns, reverse=True)
+def result_report_snapshot(root: Path) -> dict[str, tuple[int, int]]:
+    return {
+        path.name: (path.stat().st_mtime_ns, path.stat().st_size)
+        for path in root.glob("realtime-result-*.json")
+    }
+
+
+def latest_result_report_since(
+    root: Path,
+    before: dict[str, tuple[int, int]],
+    song_id: str,
+) -> dict:
+    candidates = sorted(
+        root.glob("realtime-result-*.json"),
+        key=lambda path: path.name,
+        reverse=True,
+    )
     for path in candidates:
-        if path.stat().st_mtime_ns < started_ns:
+        signature = (path.stat().st_mtime_ns, path.stat().st_size)
+        if before.get(path.name) == signature:
             continue
         result = json.loads(path.read_text(encoding="utf-8"))
         return {**result, "song_id": song_id, "survived": True, "completed": True}
@@ -121,7 +136,7 @@ class RealtimeCalibration(CustomAction):
         def run_round(formal: bool, offset: int) -> dict:
             if context.tasker.stopping:
                 raise InterruptedError("校准已停止")
-            started_ns = time.time_ns()
+            reports_before = result_report_snapshot(PROJECT_ROOT / "screencap")
             play_params = {
                 "difficulty": difficulty, "require_profile": False,
                 "target_fps": 60, "timing_offset_ms": offset,
@@ -140,6 +155,9 @@ class RealtimeCalibration(CustomAction):
                 "RealtimeLiveDifficulty": {"target": DIFFICULTY_TARGETS[difficulty]},
                 "RealtimeLiveRehearsalStart": {"next": start_next},
                 "RealtimeLiveFormalStart": {"next": start_next},
+                "RealtimeLiveReturnHome": {
+                    "next": ["RealtimeCalibrationRoundComplete"]
+                },
                 play_node: {"custom_action_param": play_params},
             }
             if formal:
@@ -147,7 +165,9 @@ class RealtimeCalibration(CustomAction):
             detail = context.run_task("RealtimeMultiLive", override)
             if detail is None:
                 raise RuntimeError("校准单轮 Maa 任务执行失败")
-            return latest_result_report_after(PROJECT_ROOT / "screencap", started_ns, current_song_id())
+            return latest_result_report_since(
+                PROJECT_ROOT / "screencap", reports_before, current_song_id()
+            )
 
         runner = CalibrationRunner(run_round)
         offset, rehearsals, formal = runner.run(int(params.get("timing_offset_ms", 0)))

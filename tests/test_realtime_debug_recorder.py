@@ -28,3 +28,22 @@ def test_debug_recorder_writes_lossless_trace_and_replay_summary(tmp_path):
     assert summary["trace_frames"] == 2
     assert summary["video_frames"] == 2
     assert (recorder.output_dir / "playfield.avi").stat().st_size > 0
+
+
+def test_debug_recorder_saves_screenshot_for_post_release_rescue(tmp_path):
+    recorder = RealtimeDebugRecorder(tmp_path, video_fps=30)
+    frame = np.full((72, 128, 3), 127, dtype=np.uint8)
+    recorder.record(frame, 1.0, [], [
+        TouchAction(ActionKind.UP, 4, 1.0, contact=4, reason="tail-ring")
+    ], "alive")
+    recorder.record(frame, 1.3, [], [
+        TouchAction(ActionKind.TAP, 4, 1.3, reason="rescue", track_id=9)
+    ], "alive")
+    recorder.close()
+
+    events = [json.loads(line) for line in
+              (recorder.output_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert events[0]["kind"] == "post-release-rescue"
+    assert events[0]["lane"] == 4
+    assert events[0]["delay_seconds"] == 0.3
+    assert (recorder.output_dir / events[0]["screenshot"]).stat().st_size > 0

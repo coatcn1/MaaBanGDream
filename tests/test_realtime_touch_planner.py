@@ -386,3 +386,41 @@ def test_released_hold_cannot_restart_from_its_lingering_tail_geometry():
 
     assert [action.kind for action in released] == [ActionKind.UP]
     assert lingering == []
+
+
+def test_released_hold_tail_cannot_be_rescued_as_a_tap_on_the_same_lane():
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+    planner.update([
+        ObservedNote(NoteKind.HOLD, 4, 730, 405, 100, 320, 1.0)
+    ], now=1.0)
+    released = planner.update([
+        ObservedNote(NoteKind.HOLD, 4, 790, 572, 100, 18, 2.0)
+    ], now=2.0)
+    lingering_tail = planner.update([
+        ObservedNote(NoteKind.TAP, 4, 790, 562, 100, 18, 2.30)
+    ], now=2.30)
+
+    assert [action.kind for action in released] == [ActionKind.UP]
+    assert lingering_tail == []
+
+
+def test_real_crossing_note_after_hold_release_is_not_suppressed():
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+    planner.update([
+        ObservedNote(NoteKind.HOLD, 4, 730, 405, 100, 320, 1.0)
+    ], now=1.0)
+    planner.update([
+        ObservedNote(NoteKind.HOLD, 4, 790, 572, 100, 18, 2.0),
+        ObservedNote(NoteKind.TAP, 4, 790, 520, 80, 18, 2.0),
+    ], now=2.0)
+    actions = planner.update([
+        ObservedNote(NoteKind.TAP, 4, 790, 570, 80, 18, 2.10)
+    ], now=2.10)
+
+    assert [(action.kind, action.reason) for action in actions] == [
+        (ActionKind.TAP, "crossing")
+    ]

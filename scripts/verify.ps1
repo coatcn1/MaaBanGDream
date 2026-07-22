@@ -16,5 +16,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Runtime compatibility check failed.' }
 & $python -m pytest (Join-Path $projectRoot 'tests') -q
 if ($LASTEXITCODE -ne 0) { throw 'Tests failed.' }
 
-git -C $projectRoot diff --check
+# Codex and the interactive Windows account can own the shared worktree under
+# different local SIDs. Scope the trust exception to this one invocation; do
+# not mutate the user's global Git configuration.
+git -c "safe.directory=$projectRoot" -C $projectRoot diff --check
 if ($LASTEXITCODE -ne 0) { throw 'Git diff check failed.' }

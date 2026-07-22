@@ -28,6 +28,7 @@ def test_calibration_is_single_task_with_three_rehearsal_contract():
     nodes = load("resource/pipeline/realtime_calibration.json")
     assert nodes["RealtimeCalibrationRun"]["custom_action"] == "RealtimeCalibrationRun"
     assert nodes["CalibrationCaptureSong"]["custom_action"] == "CalibrationSongIdentity"
+    assert nodes["RealtimeCalibrationRoundComplete"]["action"] == "DoNothing"
 
 
 def test_challenge_points_and_profile_contract():

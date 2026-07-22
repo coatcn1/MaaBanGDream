@@ -1,6 +1,11 @@
 import json
+import os
 
-from agent.realtime.calibration_action import CalibrationRunner, latest_result_report_after
+from agent.realtime.calibration_action import (
+    CalibrationRunner,
+    latest_result_report_since,
+    result_report_snapshot,
+)
 
 
 def record(song, *, hit=100, miss=0, fast=0, slow=0, survived=True):
@@ -53,14 +58,30 @@ def test_calibration_is_bounded_when_no_three_valid_songs():
 
 
 def test_calibration_reuses_the_result_json_already_saved_by_the_play_action(tmp_path):
+    before = result_report_snapshot(tmp_path)
     result = record("ignored")
     result.pop("song_id")
     result.pop("survived")
     path = tmp_path / "realtime-result-1.json"
     path.write_text(json.dumps(result), encoding="utf-8")
 
-    loaded = latest_result_report_after(tmp_path, 0, "song-A")
+    loaded = latest_result_report_since(tmp_path, before, "song-A")
 
     assert loaded["song_id"] == "song-A"
     assert loaded["survived"] is True
     assert loaded["perfect"] == 100
+
+
+def test_calibration_report_selection_is_not_broken_by_filesystem_clock_skew(tmp_path):
+    before = result_report_snapshot(tmp_path)
+    path = tmp_path / "realtime-result-clock-skew.json"
+    path.write_text(json.dumps({
+        "perfect": 90, "great": 5, "good": 0, "bad": 0, "miss": 0,
+        "fast": 2, "slow": 3, "confidence": 1.0,
+    }), encoding="utf-8")
+    os.utime(path, (1, 1))
+
+    loaded = latest_result_report_since(tmp_path, before, "song-clock-skew")
+
+    assert loaded["song_id"] == "song-clock-skew"
+    assert loaded["perfect"] == 90

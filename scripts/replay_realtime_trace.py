@@ -25,6 +25,24 @@ def duplicate_judgements(actions: list[TouchAction], window: float = .12) -> int
     )
 
 
+def post_release_rescues(actions: list[TouchAction], window: float = .4) -> int:
+    total = 0
+    for index, released in enumerate(actions):
+        if released.kind != ActionKind.UP:
+            continue
+        for action in actions[index + 1:]:
+            delay = action.timestamp - released.timestamp
+            if delay > window:
+                break
+            if (
+                action.lane == released.lane
+                and action.kind in (ActionKind.TAP, ActionKind.DOWN, ActionKind.FLICK)
+                and action.reason == "rescue"
+            ):
+                total += 1
+    return total
+
+
 def replay(path: Path) -> dict[str, int]:
     planner = RealtimePlanner(
         judgement_y=565,
@@ -60,6 +78,8 @@ def replay(path: Path) -> dict[str, int]:
         "replayed_actions": len(replayed),
         "recorded_duplicate_judgements": duplicate_judgements(recorded),
         "replayed_duplicate_judgements": duplicate_judgements(replayed),
+        "recorded_post_release_rescues": post_release_rescues(recorded),
+        "replayed_post_release_rescues": post_release_rescues(replayed),
         "recorded_linked_tail_taps": sum(
             action.reason == "linked-tail" for action in recorded
         ),
