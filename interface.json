@@ -3,8 +3,8 @@
   "interface_version": 2,
   "name": "MaaBanGDream",
   "label": "BanG Dream! 自动化（MaaFramework）",
-  "version": "0.1.0",
-  "description": "BanG Dream! 的 MaaFramework 自动化项目；当前提供主页到选曲页的最小闭环。",
+  "version": "0.2.0",
+  "description": "BanG Dream! 的 MaaFramework 自动化项目；当前提供最小页面闭环和当前歌曲单轮自动演出。",
   "license": "GPL-3.0-only",
   "controller": [
     {
@@ -31,6 +31,12 @@
       "name": "MinimalNavigation",
       "label": "页面流连通性测试",
       "entry": "MinimalNavigation"
+    },
+    {
+      "name": "AutoLive",
+      "label": "单轮自动演出",
+      "description": "对游戏当前选中的歌曲执行一次自动演出，完成结算后返回主页。",
+      "entry": "AutoLive"
     }
   ]
 }

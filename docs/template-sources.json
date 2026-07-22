@@ -1,0 +1,17 @@
+{
+  "source": "BanGDreamAutoScript HEAD:assets/templates",
+  "sha256": {
+    "auto_live_exhausted.png": "86b2ee3df16a7e037f93887e44410334a4f988cd7819710d6e55d44d6c9e7de7",
+    "auto_live_off.png": "77bd583d2de39e5f97e5d0a19e09362ce1db1af523149ab2cc2783cc10e8a9d0",
+    "auto_live_on.png": "e69ee0b5b76f5278b58f959e35f8a8e0cfcfe47d6b9c0e1135351b9c361a0579",
+    "live_prepare.png": "10dcd5e62ed962119868c9b8f4a97acdad0fdf9fd32afb995bec97503fd10ee4",
+    "live_result.png": "4603bfc2cc1d22b6304fa96f20029dcc8d86f548a3ad078ced6cce1155261923",
+    "live_start.png": "cbd2ff3eb4d2463aa6f9059329c94d8838eb247a5d25f72ac3fbd182a484ecce",
+    "login_story_menu.png": "42643c934fe544e05f805d6addcf5147abd0bd7cba3d9026996675ab33bf30b7",
+    "login_story_skip.png": "9a5ed616a87984a5e064366ac4b349ecba78d7cef98a3353992592a6f89708ff",
+    "result_confirm.png": "067ae68ac4dcb341d2e44ad732f97b864672394220d4744e323a05bef778e933",
+    "reward_story_confirm.png": "d02512cf2efd4d04ab7f96ea4edb8706ea6ee62682270bc730277e48ab90a5f3",
+    "story_skip_confirm.png": "f221bb2769be4f7a760560a422a617982b481d29770f81ede1d493d87a35ce1a",
+    "story_skip_confirm_large.png": "2a7ae31fcfaf9f699690d49b488b25369c749a7d4ac0f3b78df1c072409727f5"
+  }
+}

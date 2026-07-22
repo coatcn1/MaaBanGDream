@@ -1,0 +1,236 @@
+{
+  "AutoLive": {
+    "recognition": "DirectHit",
+    "action": "StartApp",
+    "package": "com.bilibili.star.bili",
+    "next": [
+      "AutoLiveHomeMarker",
+      "AutoLiveLoginTap",
+      "AutoLiveLoginNext",
+      "AutoLiveCommonClose"
+    ],
+    "on_error": ["CommonRecover"]
+  },
+  "AutoLiveHomeMarker": {
+    "recognition": "TemplateMatch",
+    "template": "home_marker.png",
+    "threshold": 0.88,
+    "action": "DoNothing",
+    "next": ["AutoLiveHomeLive"],
+    "on_error": ["CommonRecover"]
+  },
+  "AutoLiveLoginTap": {
+    "recognition": "TemplateMatch",
+    "template": "login_tap_to_start.png",
+    "threshold": 0.90,
+    "action": "Click",
+    "next": [
+      "AutoLiveHomeMarker",
+      "AutoLiveLoginNext",
+      "AutoLiveCommonClose",
+      "AutoLiveLoginTap"
+    ],
+    "on_error": ["CommonRecover"]
+  },
+  "AutoLiveLoginNext": {
+    "recognition": "TemplateMatch",
+    "template": "login_next.png",
+    "threshold": 0.90,
+    "action": "Click",
+    "next": [
+      "AutoLiveHomeMarker",
+      "AutoLiveLoginNext",
+      "AutoLiveCommonClose"
+    ],
+    "on_error": ["CommonRecover"]
+  },
+  "AutoLiveCommonClose": {
+    "recognition": "TemplateMatch",
+    "template": "common_close.png",
+    "threshold": 0.90,
+    "action": "Click",
+    "next": [
+      "AutoLiveHomeMarker",
+      "AutoLiveLoginNext",
+      "AutoLiveCommonClose"
+    ],
+    "on_error": ["CommonRecover"]
+  },
+  "AutoLiveHomeLive": {
+    "recognition": "TemplateMatch",
+    "template": "home_live.png",
+    "threshold": 0.88,
+    "action": "Click",
+    "target": [1085, 580, 180, 130],
+    "next": [
+      "AutoLiveHomeMarker",
+      "AutoLiveFreeLive",
+      "AutoLiveNavigationClose"
+    ],
+    "on_error": ["CommonRecover"]
+  },
+  "AutoLiveNavigationClose": {
+    "recognition": "TemplateMatch",
+    "template": "common_close.png",
+    "threshold": 0.90,
+    "action": "Click",
+    "next": ["AutoLiveFreeLive", "AutoLiveNavigationClose"],
+    "on_error": ["CommonRecover"]
+  },
+  "AutoLiveFreeLive": {
+    "recognition": "TemplateMatch",
+    "template": "free_live.png",
+    "threshold": 0.88,
+    "action": "Click",
+    "next": [
+      "AutoLiveSongSelectMarker",
+      "AutoLivePrepare",
+      "AutoLiveNavigationClose"
+    ],
+    "on_error": ["CommonRecover"]
+  },
+  "AutoLiveSongSelectMarker": {
+    "recognition": "TemplateMatch",
+    "template": "song_select_marker.png",
+    "threshold": 0.92,
+    "action": "DoNothing",
+    "next": ["AutoLivePrepare"],
+    "on_error": ["CommonRecover"]
+  },
+  "AutoLivePrepare": {
+    "recognition": "TemplateMatch",
+    "template": "live_prepare.png",
+    "threshold": 0.88,
+    "action": "Click",
+    "target": [1040, 615, 100, 45],
+    "next": [
+      "AutoLiveQuotaExhausted",
+      "AutoLiveEnabled",
+      "AutoLiveDisabled",
+      "AutoLivePrepareClose"
+    ],
+    "on_error": ["CommonRecover"]
+  },
+  "AutoLivePrepareClose": {
+    "recognition": "TemplateMatch",
+    "template": "common_close.png",
+    "threshold": 0.90,
+    "action": "Click",
+    "next": [
+      "AutoLiveQuotaExhausted",
+      "AutoLiveEnabled",
+      "AutoLiveDisabled",
+      "AutoLivePrepareClose"
+    ],
+    "on_error": ["CommonRecover"]
+  },
+  "AutoLiveQuotaExhausted": {
+    "recognition": "TemplateMatch",
+    "template": "auto_live_exhausted.png",
+    "roi": [740, 520, 280, 100],
+    "threshold": 0.92,
+    "action": "StopTask"
+  },
+  "AutoLiveEnabled": {
+    "recognition": "TemplateMatch",
+    "template": "auto_live_on.png",
+    "threshold": 0.88,
+    "action": "DoNothing",
+    "next": ["AutoLiveStart"],
+    "on_error": ["CommonRecover"]
+  },
+  "AutoLiveDisabled": {
+    "recognition": "TemplateMatch",
+    "template": "auto_live_off.png",
+    "threshold": 0.88,
+    "action": "Click",
+    "target": true,
+    "max_hit": 3,
+    "next": [
+      "AutoLiveQuotaExhausted",
+      "AutoLiveEnabled",
+      "AutoLiveDisabled",
+      "AutoLivePrepareClose"
+    ],
+    "on_error": ["CommonRecover"]
+  },
+  "AutoLiveStart": {
+    "recognition": "TemplateMatch",
+    "template": "live_start.png",
+    "roi": [980, 530, 290, 190],
+    "threshold": 0.90,
+    "action": "Click",
+    "target": [1010, 545, 250, 165],
+    "timeout": 300000,
+    "next": ["AutoLiveResult"],
+    "on_error": ["CommonRecover"]
+  },
+  "AutoLiveResult": {
+    "recognition": "TemplateMatch",
+    "template": "live_result.png",
+    "threshold": 0.90,
+    "action": "Custom",
+    "custom_action": "CommonRecover",
+    "custom_action_param": {
+      "home_node": "AutoLiveHomeMarker",
+      "click_nodes": [
+        "AutoLiveResultConfirm",
+        "AutoLiveRewardStoryConfirm",
+        "AutoLiveStorySkipConfirmLarge",
+        "AutoLiveStorySkipConfirm",
+        "AutoLiveStorySkip",
+        "AutoLiveStoryMenu",
+        "AutoLiveLoginTap",
+        "AutoLiveLoginNext",
+        "AutoLiveCommonClose"
+      ],
+      "escape_interval_ms": 1500,
+      "escape_timeout_ms": 60000,
+      "restart_limit": 2,
+      "restart_wait_ms": 5000,
+      "package": "com.bilibili.star.bili"
+    }
+  },
+  "AutoLiveResultConfirm": {
+    "recognition": "TemplateMatch",
+    "template": "result_confirm.png",
+    "roi": [450, 450, 380, 170],
+    "threshold": 0.90,
+    "action": "DoNothing"
+  },
+  "AutoLiveRewardStoryConfirm": {
+    "recognition": "TemplateMatch",
+    "template": "reward_story_confirm.png",
+    "roi": [450, 250, 380, 270],
+    "threshold": 0.90,
+    "action": "DoNothing"
+  },
+  "AutoLiveStoryMenu": {
+    "recognition": "TemplateMatch",
+    "template": "login_story_menu.png",
+    "roi": [1080, 0, 200, 125],
+    "threshold": 0.90,
+    "action": "DoNothing"
+  },
+  "AutoLiveStorySkip": {
+    "recognition": "TemplateMatch",
+    "template": "login_story_skip.png",
+    "roi": [500, 0, 160, 115],
+    "threshold": 0.90,
+    "action": "DoNothing"
+  },
+  "AutoLiveStorySkipConfirm": {
+    "recognition": "TemplateMatch",
+    "template": "story_skip_confirm.png",
+    "roi": [300, 180, 680, 360],
+    "threshold": 0.90,
+    "action": "DoNothing"
+  },
+  "AutoLiveStorySkipConfirmLarge": {
+    "recognition": "TemplateMatch",
+    "template": "story_skip_confirm_large.png",
+    "roi": [300, 180, 680, 360],
+    "threshold": 0.90,
+    "action": "DoNothing"
+  }
+}

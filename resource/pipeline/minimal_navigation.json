@@ -47,6 +47,8 @@
       "escape_interval_ms": 1500,
       "escape_timeout_ms": 30000,
       "restart_limit": 2,
+      "restart_wait_ms": 5000,
+      "click_nodes": ["LoginTapToStart", "LoginNext", "CommonClose"],
       "package": "com.bilibili.star.bili"
     },
     "next": ["HomeMarker"]
