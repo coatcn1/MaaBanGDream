@@ -10,6 +10,10 @@ from maa.context import Context
 from maa.custom_action import CustomAction
 
 from .controller_touch import ControllerTouchDispatcher
+try:
+    from ..foreground_guard import require_game_foreground
+except ImportError:  # AgentServer imports realtime as a top-level package.
+    from foreground_guard import require_game_foreground
 from .engine import RealtimeEngine
 from .life_monitor import LifeDetector, LifeGuard
 from .note_detector import NoteDetector
@@ -72,7 +76,11 @@ class RealtimeEasyRehearsal(CustomAction):
         print("RealtimeEasyRehearsal stage=environment_ok", flush=True)
         if context.tasker.stopping:
             return False
-        touch = ControllerTouchDispatcher(controller, lambda: context.tasker.stopping)
+        touch = ControllerTouchDispatcher(
+            controller,
+            lambda: context.tasker.stopping,
+            before_input=lambda: require_game_foreground(controller),
+        )
         engine = RealtimeEngine(
             NoteDetector(),
             RealtimePlanner(

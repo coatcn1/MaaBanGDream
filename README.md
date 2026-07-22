@@ -8,6 +8,7 @@
 
 ## 当前能力
 
+- 前台应用输入保护会在恢复点击、BACK、正式预检、实时多点触控和结算恢复前，通过只读 `dumpsys window` 确认前台包仍为 `com.bilibili.star.bili`；前台切到其他游戏、桌面或查询失败时立即停止该控制路径并保持零输入。
 - Project Interface V2，可由 MFAAvalonia 加载。
 - MaaFramework Core 与 Python Agent 固定为 5.10.2。
 - MFA 首页只提供四个用户任务：自动演出、实时演奏、实时演奏校准、挑战演出；观察和诊断入口只保留在开发 Pipeline 中。
@@ -153,6 +154,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\launch-mfa.ps1
 
 ### 2026-07-22
 
+- 完成前台应用输入保护真机验收：自动演出在 BangDream 前台时正常完成主页和自由演出入口点击；切换到 `com.android.launcher3` 桌面后，下一次难度点击于门禁处安全失败，随后日志中没有 click、BACK、touch、`stop_app` 或 `start_app`，仅有 MaaFramework 的 `inactive` 收尾。该门禁可阻止向同一模拟器内其他应用发送输入，但 MFA/MaaBanGDream 与 ALAS 仍不得同时运行。
+- 修复首次真机前台门禁导致自动演出停在主页：Maa Agent 的跨进程 Controller 代理无法转发 `post_shell`，现优先使用 Controller Shell，并在代理不支持时从同一 Controller 的 `info` 读取 MFA 已绑定的 ADB 路径和序列号，只读执行 `dumpsys window windows`；不硬编码设备、不修改模拟器设置。真实设备输出已确认前台包为 `com.bilibili.star.bili`。
+- 新增统一前台包输入门禁：`CommonRecover`、正式演奏预检、实时触控调度和结算 BACK 在每次控制操作前重新确认 BangDream 仍位于前台；应用切换或前台状态未知时安全失败，不向碧蓝航线、桌面或其他应用发送坐标、按键和停止应用操作。新增对应零输入回归测试，并保留全部 `tasker.stopping` 检查。
 - 再次定位校准首曲后停在主页的真实根因：第一轮报告其实已成功读取，第二次 `context.run_task()` 复用了普通连续演奏的 `RealtimeLiveRoundGate(max_hit=1)`；MaaFramework 在同一个外层任务中保留该节点命中计数，导致第二轮尚未导航就被跳过。新增无 `max_hit` 的 `RealtimeCalibrationSingleLive` 专用入口，四轮嵌套调用均绕过共享计数器；同时检查嵌套任务真实状态，并永久记录每轮开始、完成、模式、偏移与歌曲 ID。
 - 将运行环境从依赖用户级 Python 的仓库 `.venv` 迁移到工作区独立 Miniconda：固定 Miniconda 26.5.3-1、环境名 `maabangdream`、Python 3.12 和 `conda-forge/nodefaults`。`setup.ps1`、`verify.ps1`、`launch-mfa.ps1` 与 MFA 部署配置全部改用该环境；README 记录完整路径、版本、哈希、重建和检查命令。
 - 验证脚本将 pytest 临时目录固定到仓库已忽略的 `.local/pytest-<进程号>` 并关闭跨账户缓存，避免 MFA、用户终端和 Codex 使用不同 Windows 账户时再次访问 AppData 或旧 `.pytest_cache` 失败。

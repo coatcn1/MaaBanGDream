@@ -10,6 +10,11 @@ from maa.agent.agent_server import AgentServer
 from maa.context import Context
 from maa.custom_action import CustomAction
 
+try:
+    from ..foreground_guard import require_game_foreground
+except ImportError:  # AgentServer imports realtime as a top-level package.
+    from foreground_guard import require_game_foreground
+
 
 def formal_live_mode_is_off(image) -> bool:
     hsv = cv2.cvtColor(image[615:700, 165:235], cv2.COLOR_BGR2HSV)
@@ -48,16 +53,19 @@ class RealtimeFormalPreflight(CustomAction):
                     if context.tasker.stopping:
                         return False
                     box = auto.box
+                    require_game_foreground(controller)
                     controller.post_click(box.x + box.w // 2, box.y + box.h // 2).wait()
                     if not _wait(context, 1):
                         return False
                     continue
                 if cut_in_is_checked(image):
+                    require_game_foreground(controller)
                     controller.post_click(500, 650).wait()
                     if not _wait(context, 1):
                         return False
                     continue
                 if not formal_live_mode_is_off(image):
+                    require_game_foreground(controller)
                     controller.post_click(200, 655).wait()
                     if not _wait(context, .5):
                         return False

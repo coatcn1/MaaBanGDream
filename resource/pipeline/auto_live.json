@@ -50,7 +50,8 @@
     "recognition": "TemplateMatch",
     "template": "login_tap_to_start.png",
     "threshold": 0.90,
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "next": [
       "AutoLiveHomeMarker",
       "AutoLiveLoginNext",
@@ -63,7 +64,8 @@
     "recognition": "TemplateMatch",
     "template": "login_next.png",
     "threshold": 0.90,
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "next": [
       "AutoLiveHomeMarker",
       "AutoLiveLoginNext",
@@ -75,7 +77,8 @@
     "recognition": "TemplateMatch",
     "template": "common_close.png",
     "threshold": 0.90,
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "next": [
       "AutoLiveHomeMarker",
       "AutoLiveLoginNext",
@@ -87,7 +90,8 @@
     "recognition": "TemplateMatch",
     "template": "home_live.png",
     "threshold": 0.88,
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "target": [1085, 580, 180, 130],
     "next": [
       "AutoLiveHomeMarker",
@@ -100,7 +104,8 @@
     "recognition": "TemplateMatch",
     "template": "common_close.png",
     "threshold": 0.90,
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "next": ["AutoLiveFreeLive", "AutoLiveNavigationClose"],
     "on_error": ["CommonRecover"]
   },
@@ -108,7 +113,8 @@
     "recognition": "TemplateMatch",
     "template": "free_live.png",
     "threshold": 0.88,
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "next": [
       "AutoLiveSongSelectMarker",
       "AutoLivePrepare",
@@ -126,14 +132,16 @@
   },
   "AutoLiveRandomSong": {
     "recognition": "DirectHit",
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "target": [687, 642],
     "post_delay": 1000,
     "next": ["AutoLiveDifficulty"]
   },
   "AutoLiveDifficulty": {
     "recognition": "DirectHit",
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "target": [715, 545],
     "post_delay": 500,
     "next": ["AutoLivePrepare"]
@@ -142,7 +150,8 @@
     "recognition": "TemplateMatch",
     "template": "live_prepare.png",
     "threshold": 0.88,
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "target": [1040, 615, 100, 45],
     "next": [
       "AutoLiveQuotaExhausted",
@@ -156,7 +165,8 @@
     "recognition": "TemplateMatch",
     "template": "common_close.png",
     "threshold": 0.90,
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "next": [
       "AutoLiveQuotaExhausted",
       "AutoLiveEnabled",
@@ -184,7 +194,8 @@
     "recognition": "TemplateMatch",
     "template": "auto_live_off.png",
     "threshold": 0.88,
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "target": true,
     "max_hit": 3,
     "next": [
@@ -200,7 +211,8 @@
     "template": "live_start.png",
     "roi": [980, 530, 290, 190],
     "threshold": 0.90,
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "target": true,
     "timeout": 300000,
     "next": ["AutoLiveResult"],

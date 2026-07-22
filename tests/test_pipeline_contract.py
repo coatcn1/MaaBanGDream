@@ -12,6 +12,12 @@ def load(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def test_all_pipeline_clicks_use_the_foreground_guard():
+    for path in (ROOT / "resource/pipeline").glob("*.json"):
+        for name, node in load(path).items():
+            assert node.get("action") != "Click", f"unguarded click: {path.name}:{name}"
+
+
 def test_interface_references_existing_entry_and_resource():
     interface = load(ROOT / "interface.json")
     assert interface["interface_version"] == 2

@@ -7,6 +7,11 @@ from datetime import datetime
 
 import cv2
 
+try:
+    from ..foreground_guard import require_game_foreground
+except ImportError:  # AgentServer imports realtime as a top-level package.
+    from foreground_guard import require_game_foreground
+
 from maa.agent.agent_server import AgentServer
 from maa.context import Context
 from maa.custom_action import CustomAction
@@ -45,6 +50,7 @@ def collect_result(
     interval_seconds: float = 1.5,
     parser: ResultParser | None = None,
     sleeper=time.sleep,
+    before_input=lambda: None,
 ) -> tuple[LiveResult, object]:
     """Press BACK one step at a time until a valid result panel is visible."""
     parser = parser or ResultParser()
@@ -59,6 +65,7 @@ def collect_result(
                 break
         if stopping():
             raise InterruptedError("任务停止，取消结算读取")
+        before_input()
         controller.post_click_key(4).wait()
         deadline = time.monotonic() + interval_seconds
         while time.monotonic() < deadline:
@@ -138,7 +145,11 @@ class RealtimeProfilePlay(CustomAction):
         )
         if recorder is not None:
             print(f"RealtimeProfilePlay debug={recorder.output_dir}", flush=True)
-        touch = ControllerTouchDispatcher(controller, lambda: context.tasker.stopping)
+        touch = ControllerTouchDispatcher(
+            controller,
+            lambda: context.tasker.stopping,
+            before_input=lambda: require_game_foreground(controller),
+        )
         engine = RealtimeEngine(
             NoteDetector(),
             RealtimePlanner(
@@ -177,6 +188,7 @@ class RealtimeProfilePlay(CustomAction):
                 lambda: context.tasker.stopping,
                 attempts=int(params.get("result_back_attempts", 30)),
                 interval_seconds=float(params.get("result_back_interval_seconds", 1.5)),
+                before_input=lambda: require_game_foreground(controller),
             )
             output = PROJECT_ROOT / "screencap"
             output.mkdir(parents=True, exist_ok=True)

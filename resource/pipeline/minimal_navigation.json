@@ -18,7 +18,8 @@
     "recognition": "TemplateMatch",
     "template": "home_live.png",
     "threshold": 0.88,
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "target": [1085, 580, 180, 130],
     "next": ["FreeLive", "CommonClose"],
     "on_error": ["CommonRecover"]
@@ -27,7 +28,8 @@
     "recognition": "TemplateMatch",
     "template": "free_live.png",
     "threshold": 0.88,
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "next": ["SongSelectMarker", "CommonClose"],
     "on_error": ["CommonRecover"]
   },

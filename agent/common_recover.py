@@ -8,6 +8,11 @@ from maa.agent.agent_server import AgentServer
 from maa.context import Context
 from maa.custom_action import CustomAction
 
+try:
+    from .foreground_guard import ForegroundAppMismatch, require_game_foreground
+except ImportError:  # AgentServer loads this module from the agent directory.
+    from foreground_guard import ForegroundAppMismatch, require_game_foreground
+
 
 def _params(raw: Any) -> dict[str, Any]:
     if isinstance(raw, dict):
@@ -49,6 +54,11 @@ class CommonRecover(CustomAction):
                 image = controller.post_screencap().wait().get()
                 if context.tasker.stopping:
                     return False
+                try:
+                    require_game_foreground(controller, package)
+                except ForegroundAppMismatch as exc:
+                    print(f"CommonRecover {exc}", flush=True)
+                    return False
                 result = context.run_recognition(home_node, image)
                 if result and result.hit:
                     return True
@@ -74,6 +84,11 @@ class CommonRecover(CustomAction):
                     return False
             if restart < restart_limit:
                 if context.tasker.stopping:
+                    return False
+                try:
+                    require_game_foreground(controller, package)
+                except ForegroundAppMismatch as exc:
+                    print(f"CommonRecover {exc}", flush=True)
                     return False
                 controller.post_stop_app(package).wait()
                 if context.tasker.stopping:

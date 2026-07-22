@@ -66,3 +66,20 @@ def test_result_collection_stops_without_back_input():
         collect_result(controller, lambda: True, parser=Parser())
 
     assert controller.backs == 0
+
+
+def test_result_collection_checks_foreground_before_back_input():
+    controller = Controller()
+
+    def reject_foreign_app():
+        raise RuntimeError("foreign foreground")
+
+    with pytest.raises(RuntimeError, match="foreign foreground"):
+        collect_result(
+            controller,
+            lambda: False,
+            parser=Parser(),
+            before_input=reject_foreign_app,
+        )
+
+    assert controller.backs == 0

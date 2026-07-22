@@ -18,13 +18,17 @@ class Job:
 
 
 class Controller:
-    def __init__(self):
+    def __init__(self, foreground="com.bilibili.star.bili"):
         self.image = object()
+        self.foreground = foreground
         self.captures = 0
         self.clicks = []
         self.keys = []
         self.stops = []
         self.starts = []
+
+    def post_shell(self, _command, _timeout=20000):
+        return Job(f"mCurrentFocus=Window{{123 u0 {self.foreground}/.MainActivity}}")
 
     def post_screencap(self):
         self.captures += 1
@@ -48,17 +52,17 @@ class Controller:
 
 
 class Tasker:
-    def __init__(self, stopping=False):
-        self.controller = Controller()
+    def __init__(self, stopping=False, foreground="com.bilibili.star.bili"):
+        self.controller = Controller(foreground)
         self.stopping = stopping
 
 
 class Context:
-    def __init__(self, recognitions=None, *, stopping=False):
+    def __init__(self, recognitions=None, *, stopping=False, foreground="com.bilibili.star.bili"):
         self.recognitions = {
             name: iter(results) for name, results in (recognitions or {}).items()
         }
-        self.tasker = Tasker(stopping)
+        self.tasker = Tasker(stopping, foreground)
 
     def run_recognition(self, node, _image):
         hit = next(self.recognitions.get(node, iter(())), False)
@@ -114,8 +118,22 @@ def test_stopping_exits_before_any_controller_operation():
     assert context.tasker.controller.starts == []
 
 
+def test_foreign_foreground_exits_without_input_or_app_control(monkeypatch):
+    context = Context(foreground="com.bilibili.azurlane")
+    ticks = iter(range(100))
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: next(ticks) / 1000)
+    monkeypatch.setattr(common_recover.time, "sleep", lambda _seconds: None)
+
+    assert not common_recover.CommonRecover().run(context, argv(escape_timeout_ms=20))
+    assert context.tasker.controller.captures == 1
+    assert context.tasker.controller.clicks == []
+    assert context.tasker.controller.keys == []
+    assert context.tasker.controller.stops == []
+    assert context.tasker.controller.starts == []
+
+
 def test_failure_path_restarts_only_up_to_limit(monkeypatch):
-    context = Context()
+    context = Context(foreground="test.package")
     ticks = iter(range(1000))
     monkeypatch.setattr(common_recover.time, "monotonic", lambda: next(ticks) / 1000)
     monkeypatch.setattr(common_recover.time, "sleep", lambda _seconds: None)

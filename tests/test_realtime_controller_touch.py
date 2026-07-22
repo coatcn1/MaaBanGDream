@@ -76,3 +76,21 @@ def test_close_always_releases_contacts():
     touch.close()
 
     assert controller.calls == [("up", 1), ("up", 6)]
+
+
+def test_foreign_foreground_blocks_all_native_touch_input():
+    controller = Controller()
+
+    def reject_foreign_app():
+        raise RuntimeError("foreign foreground")
+
+    touch = ControllerTouchDispatcher(
+        controller,
+        lambda: False,
+        before_input=reject_foreign_app,
+    )
+
+    with pytest.raises(RuntimeError, match="foreign foreground"):
+        touch.dispatch([TouchAction(ActionKind.TAP, 1, 1.0)])
+
+    assert controller.calls == []

@@ -16,7 +16,8 @@
     "recognition": "TemplateMatch",
     "template": "login_tap_to_start.png",
     "threshold": 0.90,
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "next": ["HomeMarker", "LoginNext", "CommonClose", "LoginTapToStart"],
     "on_error": ["CommonRecover"]
   },
@@ -24,7 +25,8 @@
     "recognition": "TemplateMatch",
     "template": "login_next.png",
     "threshold": 0.90,
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "next": ["HomeMarker", "LoginNext", "CommonClose"],
     "on_error": ["CommonRecover"]
   },
@@ -32,7 +34,8 @@
     "recognition": "TemplateMatch",
     "template": "common_close.png",
     "threshold": 0.90,
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "next": ["HomeMarker", "LoginNext", "CommonClose"],
     "on_error": ["CommonRecover"]
   },
