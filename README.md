@@ -69,11 +69,20 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\launch-mfa.ps1
 脚本会一次完成以下操作：
 
 1. 检查 MFAAvalonia、项目 `.venv`、Agent 和源码资源是否存在。
+   同时检查 `Microsoft.NETCore.App 10.x`；缺失时会停止并给出安装命令，不再打开误导性的下载页。
 2. 将仓库 `resource` 同步到 MFA 的 `resource/resource` 部署目录。
 3. 从仓库生成部署用 `interface.json`，将资源路径改为 `./resource/resource`，并将 Agent 路径指向仓库中的 `.venv` 和 `agent/server.py`。
 4. 关闭已有 MFAAvalonia 进程，以 MFA 安装目录作为工作目录重新启动。
 
 如果 MFA 显示“下载资源”而不是 MaaBanGDream 任务列表，不要点击下载；这表示启动了未同步的部署副本。关闭该页面并重新运行上述脚本。正常界面必须只显示：自动演出、实时演奏、实时演奏校准、挑战演出。
+
+如果启动后打开的是微软 `.NET` 下载网页并且 MFA 进程立即退出，则是缺少 MFAAvalonia 2.12.0 要求的 .NET 10 Runtime。执行：
+
+```powershell
+winget install --id Microsoft.DotNet.Runtime.10 --exact --accept-package-agreements --accept-source-agreements
+```
+
+安装完成后重新运行 `launch-mfa.ps1`。可用 `dotnet --list-runtimes` 确认存在 `Microsoft.NETCore.App 10.x`。
 
 如 MFAAvalonia 安装在其他位置，可显式传入：
 

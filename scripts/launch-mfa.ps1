@@ -23,6 +23,11 @@ foreach ($required in ($mfaExe, $sourceInterface, $sourceResource, $python, $age
     }
 }
 
+$dotnetRuntimes = & dotnet --list-runtimes 2>$null
+if (-not ($dotnetRuntimes -match '^Microsoft\.NETCore\.App 10\.')) {
+    throw 'MFAAvalonia 2.12.0 requires .NET Runtime 10. Install it with: winget install --id Microsoft.DotNet.Runtime.10 --exact'
+}
+
 # MFAAvalonia reads interface.json and resources beside its executable. Keep
 # source code in the repository, but always refresh this ignored deployment copy.
 New-Item -ItemType Directory -Force -Path $deployedResource | Out-Null
