@@ -28,7 +28,12 @@ class Controller:
         self.starts = []
 
     def post_shell(self, _command, _timeout=20000):
-        return Job(f"mCurrentFocus=Window{{123 u0 {self.foreground}/.MainActivity}}")
+        foreground = (
+            next(self.foreground)
+            if hasattr(self.foreground, "__next__")
+            else self.foreground
+        )
+        return Job(f"mCurrentFocus=Window{{123 u0 {foreground}/.MainActivity}}")
 
     def post_screencap(self):
         self.captures += 1
@@ -153,3 +158,33 @@ def test_failure_path_restarts_only_up_to_limit(monkeypatch):
     assert context.tasker.controller.keys
     assert context.tasker.controller.stops == ["test.package", "test.package"]
     assert context.tasker.controller.starts == ["test.package", "test.package"]
+
+
+def test_startup_grace_waits_without_sending_back(monkeypatch):
+    context = Context({"HomeMarker": [False, True]})
+    ticks = iter([0, 0, .001, .002, .003, .004, .005])
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(common_recover.time, "sleep", lambda _seconds: None)
+
+    assert common_recover.CommonRecover().run(
+        context,
+        argv(escape_interval_ms=0, escape_timeout_ms=10000, startup_grace_ms=5000),
+    )
+    assert context.tasker.controller.keys == []
+
+
+def test_startup_grace_allows_launcher_until_game_reaches_foreground(monkeypatch):
+    context = Context({"HomeMarker": [False, True]})
+    context.tasker.controller.foreground = iter([
+        "com.android.launcher3", "com.android.launcher3",
+        "com.bilibili.star.bili", "com.bilibili.star.bili"
+    ])
+    ticks = iter(value / 1000 for value in range(1000))
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(common_recover.time, "sleep", lambda _seconds: None)
+
+    assert common_recover.CommonRecover().run(
+        context,
+        argv(escape_interval_ms=0, escape_timeout_ms=10000, startup_grace_ms=5000),
+    )
+    assert context.tasker.controller.keys == []

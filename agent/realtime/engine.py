@@ -24,6 +24,7 @@ class EngineStats:
     stopped: bool
     aborted_for_life: bool = False
     completed: bool = False
+    life_depleted: bool = False
 
 
 class RealtimeEngine:
@@ -56,6 +57,9 @@ class RealtimeEngine:
         *,
         duration_seconds: float,
         target_fps: int,
+        continue_after_life_depleted: bool = False,
+        life_exit_threshold: int | None = None,
+        on_life_safety: Callable[[object], None] | None = None,
     ) -> EngineStats:
         if not 1 <= duration_seconds <= 600:
             raise ValueError("duration_seconds 必须在 1..600 之间")
@@ -68,6 +72,9 @@ class RealtimeEngine:
         was_stopped = False
         aborted_for_life = False
         completed = False
+        life_depleted = False
+        below_threshold_streak = 0
+        safety_reading = None
         try:
             while self.clock() < deadline:
                 if stopping():
@@ -88,9 +95,18 @@ class RealtimeEngine:
                     reading = self.life_detector.detect(image)
                     status = self.life_guard.update(reading)
                     life_status = status.value
+                    if life_exit_threshold is not None and self.life_guard.alive_confirmed:
+                        below_threshold_streak = below_threshold_streak + 1 if reading.value < life_exit_threshold else 0
+                        if below_threshold_streak >= 3:
+                            life_depleted = life_depleted or status is LifeStatus.DEAD
+                            aborted_for_life = True
+                            safety_reading = reading
+                            break
                     if status is LifeStatus.DEAD:
-                        aborted_for_life = True
-                        break
+                        life_depleted = True
+                        if not continue_after_life_depleted:
+                            aborted_for_life = True
+                            break
                     if (
                         self.completion_guard is not None
                         and self.completion_guard.update(
@@ -114,7 +130,8 @@ class RealtimeEngine:
                     actions_count += len(actions)
                 frames += 1
             return EngineStats(
-                frames, actions_count, was_stopped, aborted_for_life, completed
+                frames, actions_count, was_stopped, aborted_for_life, completed,
+                life_depleted,
             )
         finally:
             cleanup = self.planner.reset(self.clock())
@@ -125,5 +142,9 @@ class RealtimeEngine:
                 try:
                     self.touch.close()
                 finally:
-                    if self.debug_recorder is not None:
-                        self.debug_recorder.close()
+                    try:
+                        if on_life_safety is not None and safety_reading is not None:
+                            on_life_safety(safety_reading)
+                    finally:
+                        if self.debug_recorder is not None:
+                            self.debug_recorder.close()

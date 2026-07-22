@@ -145,6 +145,83 @@ def test_engine_aborts_and_cleans_up_after_confirmed_zero_life():
     assert touch.closed == 1
 
 
+def test_engine_can_continue_after_zero_life_until_completion():
+    engine, _, planner, touch, capture = build()
+
+    class DepletesThenEnds:
+        def __init__(self): self.frames = 0
+        def detect(self, image):
+            self.frames += 1
+            if self.frames <= 3: return LifeReading(True, 800)
+            if self.frames <= 6: return LifeReading(True, 0)
+            return LifeReading(False)
+
+    engine.life_detector = DepletesThenEnds()
+    engine.life_guard = LifeGuard(confirm_frames=3)
+    engine.completion_guard = PlayfieldCompletionGuard(missing_frames=3)
+
+    stats = engine.run(
+        capture, lambda: False, duration_seconds=10, target_fps=60,
+        continue_after_life_depleted=True,
+    )
+
+    assert stats.life_depleted
+    assert not stats.aborted_for_life
+    assert stats.completed
+    assert planner.resets == 1
+    assert touch.closed == 1
+
+
+def test_engine_invokes_life_safety_after_three_frames_below_threshold():
+    engine, _, _, touch, capture = build()
+    triggered = []
+
+    class FallingLife:
+        def __init__(self): self.frames = 0
+        def detect(self, image):
+            self.frames += 1
+            return LifeReading(True, 800 if self.frames <= 3 else 190)
+
+    engine.life_detector = FallingLife()
+    engine.life_guard = LifeGuard(confirm_frames=3)
+
+    stats = engine.run(
+        capture, lambda: False, duration_seconds=10, target_fps=60,
+        life_exit_threshold=200,
+        on_life_safety=lambda reading: triggered.append(reading.value),
+    )
+
+    assert stats.aborted_for_life
+    assert not stats.life_depleted
+    assert triggered == [190]
+    assert touch.closed == 1
+
+
+def test_zero_life_uses_safety_pause_callback_before_plain_abort():
+    engine, _, _, touch, capture = build()
+    triggered = []
+
+    class ZeroLife:
+        def __init__(self): self.frames = 0
+        def detect(self, image):
+            self.frames += 1
+            return LifeReading(True, 800 if self.frames <= 3 else 0)
+
+    engine.life_detector = ZeroLife()
+    engine.life_guard = LifeGuard(confirm_frames=3)
+
+    stats = engine.run(
+        capture, lambda: False, duration_seconds=10, target_fps=60,
+        life_exit_threshold=200,
+        on_life_safety=lambda reading: triggered.append(reading.value),
+    )
+
+    assert stats.aborted_for_life
+    assert stats.life_depleted
+    assert triggered == [0]
+    assert touch.closed == 1
+
+
 def test_engine_never_dispatches_before_alive_life_is_confirmed():
     engine, clock, planner, touch, _ = build()
 

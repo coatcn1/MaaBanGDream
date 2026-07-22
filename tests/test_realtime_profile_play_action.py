@@ -6,7 +6,12 @@ from types import SimpleNamespace
 import numpy as np
 
 from agent.realtime.engine import EngineStats
-from agent.realtime.profile_play_action import RealtimeProfilePlay
+from agent.realtime import profile_play_action
+from agent.realtime.profile_play_action import (
+    RealtimeLifeSafetyAbortCheck,
+    RealtimeProfilePlay,
+    pause_overlay_changed,
+)
 
 
 class Job:
@@ -64,3 +69,22 @@ def test_profile_play_reuses_one_agent_controller_proxy(monkeypatch):
     argv = SimpleNamespace(custom_action_param=json.dumps({"difficulty": "Easy"}))
     assert RealtimeProfilePlay()._run(context, argv)
     assert tasker.controller_reads == 1
+
+
+def test_pause_overlay_requires_a_material_screen_change():
+    before = np.zeros((720, 1280, 3), dtype=np.uint8)
+    unchanged = before.copy()
+    overlay = before.copy()
+    overlay[90:630, 160:1120] = 80
+
+    assert not pause_overlay_changed(before, unchanged)
+    assert pause_overlay_changed(before, overlay)
+
+
+def test_life_safety_abort_gate_only_matches_protected_abort(monkeypatch):
+    context = SimpleNamespace()
+    argv = SimpleNamespace(custom_action_param="{}")
+    monkeypatch.setattr(profile_play_action, "_LAST_LIFE_SAFETY_ABORT", False)
+    assert not RealtimeLifeSafetyAbortCheck().run(context, argv)
+    monkeypatch.setattr(profile_play_action, "_LAST_LIFE_SAFETY_ABORT", True)
+    assert RealtimeLifeSafetyAbortCheck().run(context, argv)

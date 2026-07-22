@@ -4,6 +4,8 @@ import json
 import hashlib
 from pathlib import Path
 
+from agent.realtime.difficulty_action import DIFFICULTY_TARGETS
+
 
 ROOT = Path(__file__).parents[1]
 
@@ -268,7 +270,9 @@ def test_realtime_multi_live_contract_and_options():
     for case in difficulty["cases"]:
         target, play_node = expected[case["name"]]
         override = case["pipeline_override"]
-        assert tuple(override["RealtimeLiveDifficulty"]["target"]) == target
+        selection = override["RealtimeLiveDifficulty"]["custom_action_param"]
+        assert selection == {"difficulty": case["name"], "max_attempts": 3}
+        assert target == tuple(DIFFICULTY_TARGETS[case["name"]])
         assert override["RealtimeLiveRehearsalStart"]["next"] == [play_node]
         params = nodes[play_node]["custom_action_param"]
         assert params["difficulty"] == case["name"]
@@ -284,6 +288,7 @@ def test_realtime_multi_live_contract_and_options():
     assert count["inputs"][0]["verify"] == "^(?:[1-9]|[1-9][0-9])$"
     assert count["pipeline_override"]["RealtimeLiveRoundGate"]["max_hit"] == "{Count}"
     assert nodes["RealtimeLivePrepare"]["next"] == ["RealtimeLiveFormalModeGate"]
+    assert nodes["RealtimeLiveDifficulty"]["custom_action"] == "RealtimeDifficultySelect"
     assert nodes["RealtimeLiveFormalModeGate"]["next"] == [
         "RealtimeLiveFormalMarker", "RealtimeLiveRehearsalMarker"
     ]

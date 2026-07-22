@@ -30,15 +30,37 @@ def test_calibration_collects_three_distinct_rehearsals_then_distinct_formal():
     assert [formal for formal, _ in calls] == [False, False, False, False, True]
 
 
-def test_failed_rehearsal_adjusts_offset_but_is_not_accepted():
+def test_failed_rehearsal_counts_and_adjusts_offset():
     records = iter([
         record("bad", hit=60, miss=40, slow=20),
-        record("A"), record("B"), record("C"), record("D"),
+        record("A"), record("B"), record("D"),
     ])
     offset, rehearsals, formal = CalibrationRunner(lambda *_: next(records)).run()
-    assert [item["song_id"] for item in rehearsals] == ["A", "B", "C"]
+    assert [item["song_id"] for item in rehearsals] == ["bad", "A", "B"]
+    assert rehearsals[0]["passed"] is False
     assert offset == 5
     assert formal["passed"]
+
+
+def test_three_failed_rehearsals_stop_before_formal():
+    calls = []
+    records = iter([
+        record("A", hit=60, miss=40),
+        record("B", hit=60, miss=40),
+        record("C", hit=60, miss=40),
+    ])
+
+    def run_round(formal, offset):
+        calls.append(formal)
+        return next(records)
+
+    try:
+        CalibrationRunner(run_round).run()
+    except RuntimeError as exc:
+        assert "三首排练全部失败" in str(exc)
+    else:
+        raise AssertionError("all failed rehearsals must stop calibration")
+    assert calls == [False, False, False]
 
 
 def test_formal_failure_returns_unaccepted_candidate():

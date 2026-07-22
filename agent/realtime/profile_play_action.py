@@ -29,12 +29,24 @@ from .touch_planner import RealtimePlanner
 from .runtime_options import debug_enabled
 
 
+_LAST_LIFE_SAFETY_ABORT = False
+
+
+def pause_overlay_changed(before, after) -> bool:
+    if before.shape != after.shape or before.size == 0:
+        return False
+    height, width = before.shape[:2]
+    roi = (slice(height // 8, height * 7 // 8), slice(width // 8, width * 7 // 8))
+    difference = cv2.absdiff(before[roi], after[roi])
+    return float(difference.mean()) >= 8.0
+
+
 def _write_calibration_report(path, *, result, stats, timing_offset_ms, song_id):
     payload = {
         **result.to_dict(),
         "timing_offset_ms": int(timing_offset_ms),
         "song_id": str(song_id),
-        "survived": not stats.aborted_for_life,
+        "survived": not stats.life_depleted,
         "completed": bool(stats.completed),
     }
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -122,6 +134,8 @@ class RealtimeProfilePlay(CustomAction):
             return False
 
     def _run(self, context: Context, argv: CustomAction.RunArg) -> bool:
+        global _LAST_LIFE_SAFETY_ABORT
+        _LAST_LIFE_SAFETY_ABORT = False
         params = json.loads(argv.custom_action_param or "{}")
         if context.tasker.stopping:
             return False
@@ -169,17 +183,47 @@ class RealtimeProfilePlay(CustomAction):
             ),
             debug_recorder=recorder,
         )
+        continue_after_depleted = bool(params.get("continue_after_life_depleted", False))
+        # Required-profile play is formal play (including challenge mode).
+        # Calibration and rehearsal use no required profile and ignore this option.
+        use_life_safety = bool(params.get("use_life_safety", require_profile))
+        runtime_options = RealtimeProfileStore(PROJECT_ROOT / "profiles").runtime_options()
+        life_threshold = (
+            int(runtime_options["life_exit_threshold"])
+            if use_life_safety and runtime_options["life_safety_enabled"] else None
+        )
+
+        def pause_for_life(reading) -> None:
+            global _LAST_LIFE_SAFETY_ABORT
+            _LAST_LIFE_SAFETY_ABORT = True
+            require_game_foreground(controller)
+            before = controller.post_screencap().wait().get()
+            controller.post_click(1237, 58).wait()
+            time.sleep(.4)
+            after = controller.post_screencap().wait().get()
+            confirmed = pause_overlay_changed(before, after)
+            print(
+                f"RealtimeProfilePlay life_safety value={reading.value} "
+                f"threshold={life_threshold} pause_confirmed={confirmed}",
+                flush=True,
+            )
+            if not confirmed:
+                raise RuntimeError("life safety triggered but pause overlay was not confirmed")
+
         stats = engine.run(
             lambda: controller.post_screencap().wait().get(),
             lambda: context.tasker.stopping,
             duration_seconds=float(params.get("duration_seconds", 30)),
             target_fps=target_fps,
+            continue_after_life_depleted=continue_after_depleted,
+            life_exit_threshold=life_threshold,
+            on_life_safety=pause_for_life if life_threshold is not None else None,
         )
         print(
             "RealtimeProfilePlay "
             f"frames={stats.processed_frames} actions={stats.dispatched_actions} "
             f"stopped={stats.stopped} life_abort={stats.aborted_for_life} "
-            f"completed={stats.completed}",
+            f"life_depleted={stats.life_depleted} completed={stats.completed}",
             flush=True,
         )
         if stats.completed and params.get("save_result_frame"):
@@ -228,3 +272,11 @@ class RealtimeProfilePlay(CustomAction):
         if params.get("require_completion"):
             success = success and stats.completed
         return success
+
+
+@AgentServer.custom_action("RealtimeLifeSafetyAbortCheck")
+class RealtimeLifeSafetyAbortCheck(CustomAction):
+    """Route a protected abort to StopTask while ordinary failures may recover."""
+
+    def run(self, context: Context, argv: CustomAction.RunArg) -> bool:
+        return _LAST_LIFE_SAFETY_ABORT

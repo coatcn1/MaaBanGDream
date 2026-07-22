@@ -30,6 +30,7 @@
       "escape_timeout_ms": 60000,
       "restart_limit": 2,
       "restart_wait_ms": 5000,
+      "startup_grace_ms": 12000,
       "package": "com.bilibili.star.bili"
     },
     "next": ["RealtimeLiveHomeMarker"]
@@ -89,9 +90,8 @@
   "RealtimeLiveDifficulty": {
     "recognition": "DirectHit",
     "action": "Custom",
-    "custom_action": "ForegroundClick",
-    "target": [715, 545],
-    "post_delay": 500,
+    "custom_action": "RealtimeDifficultySelect",
+    "custom_action_param": {"difficulty": "Easy", "max_attempts": 3},
     "next": ["RealtimeLivePrepare"]
   },
   "RealtimeLivePrepare": {

@@ -34,6 +34,7 @@
       "escape_timeout_ms": 60000,
       "restart_limit": 2,
       "restart_wait_ms": 5000,
+      "startup_grace_ms": 12000,
       "package": "com.bilibili.star.bili"
     },
     "next": ["AutoLiveHomeMarker"]

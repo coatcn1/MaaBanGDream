@@ -42,6 +42,11 @@ def handle_request(request: dict[str, Any], *, root: str | Path = PROJECT_ROOT /
             raise ValueError("settings 必须是 JSON 对象")
         updated = store.update_settings(str(request.get("profile", "")), **settings)
         return {"profile": _public(updated, None), "pinned": store._read_selection()}
+    if operation == "update-runtime-options":
+        options = request.get("runtime_options")
+        if not isinstance(options, dict):
+            raise ValueError("runtime_options 必须是 JSON 对象")
+        return {"runtime_options": store.update_runtime_options(options)}
     if operation != "list":
         raise ValueError(f"不支持的操作: {operation!r}")
 
@@ -61,6 +66,7 @@ def handle_request(request: dict[str, Any], *, root: str | Path = PROJECT_ROOT /
     return {
         "difficulty": difficulty, "compatible_difficulties": list(compatible),
         "pinned": pinned, "selection": selection,
+        "runtime_options": store.runtime_options(),
         "profiles": [_public(profile, signature) for profile in store.list_profiles()],
     }
 

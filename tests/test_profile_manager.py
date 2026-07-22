@@ -128,5 +128,46 @@ def test_selection_state_is_written_atomically(tmp_path):
     store.pin("Easy", path.name)
 
     state = json.loads((tmp_path / "selection.json").read_text(encoding="utf-8"))
-    assert state == {"version": 1, "pinned": {"Easy": path.name}}
+    assert state == {
+        "version": 1,
+        "pinned": {"Easy": path.name},
+        "runtime_options": {"life_safety_enabled": True, "life_exit_threshold": 200},
+    }
     assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_runtime_options_default_and_atomic_update_do_not_invalidate_profile(tmp_path):
+    store = RealtimeProfileStore(tmp_path)
+    path = store.write(payload(accepted=True))
+
+    listed = handle_request(
+        {"operation": "list", "difficulty": "Easy", "environment": SIGNATURE.to_mapping()},
+        root=tmp_path,
+    )
+    assert listed["runtime_options"] == {
+        "life_safety_enabled": True,
+        "life_exit_threshold": 200,
+    }
+
+    result = handle_request(
+        {
+            "operation": "update-runtime-options",
+            "runtime_options": {"life_safety_enabled": False, "life_exit_threshold": 350},
+        },
+        root=tmp_path,
+    )
+    assert result["runtime_options"]["life_exit_threshold"] == 350
+    assert store.load(path.name)["accepted"] is True
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+@pytest.mark.parametrize("threshold", [9, 991])
+def test_runtime_options_reject_invalid_life_threshold(tmp_path, threshold):
+    with pytest.raises(ValueError, match="life_exit_threshold"):
+        handle_request(
+            {
+                "operation": "update-runtime-options",
+                "runtime_options": {"life_safety_enabled": True, "life_exit_threshold": threshold},
+            },
+            root=tmp_path,
+        )

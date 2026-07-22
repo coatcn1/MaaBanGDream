@@ -23,6 +23,11 @@ $deployedResource = Join-Path $MfaRoot 'resource\resource'
 $python = Join-Path $CondaRoot "envs\$EnvironmentName\python.exe"
 $agent = Join-Path $projectRoot 'agent\server.py'
 $profileManager = Join-Path $projectRoot 'agent\profile_manager.py'
+$profileDirectory = Join-Path $projectRoot 'profiles'
+$recordingDirectory = Join-Path $projectRoot 'debug\recordings'
+$captureDirectory = Join-Path $projectRoot 'screencap'
+$maafwDebugDirectory = Join-Path $MfaRoot 'debug'
+$mfaLogDirectory = Join-Path $MfaRoot 'logs'
 
 foreach ($required in ($mfaExe, $sourceInterface, $sourceResource, $python, $agent, $profileManager)) {
     if (-not (Test-Path -LiteralPath $required)) {
@@ -38,6 +43,9 @@ if (-not ($dotnetRuntimes -match '^Microsoft\.NETCore\.App 10\.')) {
 # MFAAvalonia reads interface.json and resources beside its executable. Keep
 # source code in the repository, but always refresh this ignored deployment copy.
 New-Item -ItemType Directory -Force -Path $deployedResource | Out-Null
+foreach ($runtimeDirectory in ($profileDirectory, $recordingDirectory, $captureDirectory, $maafwDebugDirectory, $mfaLogDirectory)) {
+    New-Item -ItemType Directory -Force -Path $runtimeDirectory | Out-Null
+}
 Copy-Item -Path (Join-Path $sourceResource '*') -Destination $deployedResource -Recurse -Force
 
 $interface = Get-Content -LiteralPath $sourceInterface -Raw -Encoding utf8 | ConvertFrom-Json
@@ -58,6 +66,13 @@ $profileManagerConfig = [ordered]@{
         game_fps = 60
         render_quality = 'standard'
         note_speed = 2.0
+    }
+    artifact_paths = [ordered]@{
+        profiles = $profileDirectory
+        realtime_recordings = $recordingDirectory
+        result_captures = $captureDirectory
+        maafw_debug = $maafwDebugDirectory
+        mfa_logs = $mfaLogDirectory
     }
 }
 $profileManagerConfig | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $deployedProfileManager -Encoding utf8

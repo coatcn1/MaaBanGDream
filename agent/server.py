@@ -14,6 +14,7 @@ import realtime.rehearsal_action  # noqa: F401 - registration happens at import 
 import realtime.profile_play_action  # noqa: F401 - registration happens at import time
 import realtime.formal_preflight  # noqa: F401 - registration happens at import time
 import realtime.calibration_action  # noqa: F401 - registration happens at import time
+import realtime.difficulty_action  # noqa: F401 - registration happens at import time
 import realtime.runtime_options  # noqa: F401 - registration happens at import time
 
 

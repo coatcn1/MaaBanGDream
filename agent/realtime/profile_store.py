@@ -66,6 +66,7 @@ class RealtimeProfileStore:
     DIFFICULTIES = frozenset({"Easy", "Normal", "Hard", "Expert", "Special"})
     MAIN_DIFFICULTIES = ("Easy", "Normal", "Hard", "Expert")
     SELECTION_FILE = "selection.json"
+    DEFAULT_RUNTIME_OPTIONS = {"life_safety_enabled": True, "life_exit_threshold": 200}
 
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
@@ -118,23 +119,62 @@ class RealtimeProfileStore:
         return profiles
 
     def _read_selection(self) -> dict[str, str]:
+        return self._read_state()["pinned"]
+
+    def _read_state(self) -> dict[str, Any]:
         path = self.root / self.SELECTION_FILE
         if not path.exists():
-            return {}
+            return {"version": 1, "pinned": {}, "runtime_options": dict(self.DEFAULT_RUNTIME_OPTIONS)}
         try:
             state = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise ValueError(f"无法读取 Profile 选择状态: {exc}") from exc
         if not isinstance(state, dict) or state.get("version") != 1 or not isinstance(state.get("pinned"), dict):
             raise ValueError("Profile 选择状态格式无效")
-        return {str(key): str(value) for key, value in state["pinned"].items()}
+        return {
+            "version": 1,
+            "pinned": {str(key): str(value) for key, value in state["pinned"].items()},
+            "runtime_options": self._validated_runtime_options(
+                state.get("runtime_options", self.DEFAULT_RUNTIME_OPTIONS)
+            ),
+        }
 
     def _write_selection(self, pinned: dict[str, str]) -> None:
+        state = self._read_state()
+        state["pinned"] = pinned
+        self._write_state(state)
+
+    def _write_state(self, state: dict[str, Any]) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         path = self.root / self.SELECTION_FILE
         temporary = path.with_suffix(".json.tmp")
-        temporary.write_text(json.dumps({"version": 1, "pinned": pinned}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         os.replace(temporary, path)
+
+    @classmethod
+    def _validated_runtime_options(cls, options: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(options, dict):
+            raise ValueError("runtime_options 必须是 JSON 对象")
+        enabled = options.get("life_safety_enabled", True)
+        if not isinstance(enabled, bool):
+            raise ValueError("life_safety_enabled 必须是布尔值")
+        try:
+            threshold = int(options.get("life_exit_threshold", 200))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("life_exit_threshold 必须是整数") from exc
+        if not 10 <= threshold <= 990:
+            raise ValueError("life_exit_threshold 必须在 10..990 之间")
+        return {"life_safety_enabled": enabled, "life_exit_threshold": threshold}
+
+    def runtime_options(self) -> dict[str, Any]:
+        return dict(self._read_state()["runtime_options"])
+
+    def update_runtime_options(self, options: dict[str, Any]) -> dict[str, Any]:
+        validated = self._validated_runtime_options(options)
+        state = self._read_state()
+        state["runtime_options"] = validated
+        self._write_state(state)
+        return dict(validated)
 
     def pinned_profile(self, difficulty: str) -> str | None:
         self.compatible_difficulties(difficulty)

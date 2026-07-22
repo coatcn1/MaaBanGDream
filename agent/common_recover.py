@@ -9,9 +9,9 @@ from maa.context import Context
 from maa.custom_action import CustomAction
 
 try:
-    from .foreground_guard import ForegroundAppMismatch, require_game_foreground
+    from .foreground_guard import ForegroundAppMismatch, foreground_package, require_game_foreground
 except ImportError:  # AgentServer loads this module from the agent directory.
-    from foreground_guard import ForegroundAppMismatch, require_game_foreground
+    from foreground_guard import ForegroundAppMismatch, foreground_package, require_game_foreground
 
 
 def _params(raw: Any) -> dict[str, Any]:
@@ -43,10 +43,12 @@ class CommonRecover(CustomAction):
         package = str(params.get("package", "com.bilibili.star.bili"))
         restart_limit = int(params.get("restart_limit", 2))
         restart_wait = int(params.get("restart_wait_ms", 5000)) / 1000
+        startup_grace = int(params.get("startup_grace_ms", 0)) / 1000
         click_nodes = [str(node) for node in params.get("click_nodes", [])]
         controller = context.tasker.controller
 
         for restart in range(restart_limit + 1):
+            grace_deadline = time.monotonic() + startup_grace
             deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
                 if context.tasker.stopping:
@@ -57,6 +59,12 @@ class CommonRecover(CustomAction):
                 try:
                     require_game_foreground(controller, package)
                 except ForegroundAppMismatch as exc:
+                    actual = foreground_package(controller) or ""
+                    is_system_shell = actual.startswith("com.android.launcher") or actual == "com.android.systemui"
+                    if time.monotonic() < grace_deadline or is_system_shell:
+                        if not _wait_unless_stopping(context, interval):
+                            return False
+                        continue
                     print(f"CommonRecover {exc}", flush=True)
                     return False
                 result = context.run_recognition(home_node, image)
@@ -76,7 +84,7 @@ class CommonRecover(CustomAction):
                     ).wait()
                     clicked = True
                     break
-                if not clicked:
+                if not clicked and time.monotonic() >= grace_deadline:
                     if context.tasker.stopping:
                         return False
                     controller.post_click_key(4).wait()
@@ -85,15 +93,11 @@ class CommonRecover(CustomAction):
             if restart < restart_limit:
                 if context.tasker.stopping:
                     return False
-                try:
-                    require_game_foreground(controller, package)
-                except ForegroundAppMismatch as exc:
-                    print(f"CommonRecover {exc}", flush=True)
-                    return False
                 controller.post_stop_app(package).wait()
                 if context.tasker.stopping:
                     return False
                 controller.post_start_app(package).wait()
                 if not _wait_unless_stopping(context, restart_wait):
                     return False
+        print("自动登录未能到达主页；如停留在账号、验证码或实名页面，请人工完成后重试", flush=True)
         return False

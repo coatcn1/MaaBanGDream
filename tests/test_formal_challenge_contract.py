@@ -58,4 +58,7 @@ def test_challenge_points_and_profile_contract():
         assert nodes[name]["custom_action_param"]["require_profile"] is True
         assert nodes[name]["custom_action_param"]["result_back_attempts"] == 30
         assert nodes[name]["custom_action_param"]["result_back_interval_seconds"] == 1.5
-        assert nodes[name]["on_error"] == ["ChallengeReturnHome"]
+        assert nodes[name]["on_error"] == ["ChallengeLifeSafetyGate"]
+    assert nodes["ChallengeDifficulty"]["custom_action"] == "RealtimeDifficultySelect"
+    assert nodes["ChallengeLifeSafetyGate"]["custom_action"] == "RealtimeLifeSafetyAbortCheck"
+    assert nodes["ChallengeLifeSafetyStop"]["action"] == "StopTask"

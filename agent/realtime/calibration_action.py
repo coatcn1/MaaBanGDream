@@ -15,13 +15,10 @@ from .profile_store import EnvironmentSignature, RealtimeProfileStore
 from .rehearsal_action import frame_resolution
 from .result_parser import LiveResult, adjusted_timing_offset
 from .runtime_options import calibration_difficulty, debug_enabled
+from .difficulty_action import DIFFICULTY_TARGETS
 
 
 _CURRENT_SONG_ID = "unknown"
-DIFFICULTY_TARGETS = {
-    "Easy": [715, 545], "Normal": [827, 545], "Hard": [940, 545],
-    "Expert": [1051, 545], "Special": [1180, 545],
-}
 PLAY_NODES = {
     "Easy": "RealtimeLivePlay", "Normal": "RealtimeLivePlayNormal",
     "Hard": "RealtimeLivePlayHard", "Expert": "RealtimeLivePlayExpert",
@@ -100,11 +97,13 @@ class CalibrationRunner:
             result = result_from_mapping(record)
             offset = adjusted_timing_offset(offset, result)
             record = {**record, "passed": calibration_passed(result, bool(record["survived"])), "suggested_timing_offset_ms": offset}
-            if record["passed"] and record["song_id"] not in used:
+            if record["song_id"] not in used:
                 rehearsals.append(record)
                 used.add(record["song_id"])
         if len(rehearsals) != 3:
             raise RuntimeError("十次尝试内未取得三首不同歌曲的有效排练结果")
+        if not any(record["passed"] for record in rehearsals):
+            raise RuntimeError("三首排练全部失败，校准已终止")
         formal = None
         for _ in range(self.max_attempts):
             candidate = self.run_round(True, offset)
@@ -156,12 +155,19 @@ class RealtimeCalibration(CustomAction):
                 "wait_for_completion": True, "completion_missing_frames": 120,
                 "require_completion": True, "save_result_frame": True,
                 "result_back_attempts": 30, "result_back_interval_seconds": 1.5,
+                "continue_after_life_depleted": True,
+                "calibration_report": (
+                    "screencap/calibration-round-"
+                    f"{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.json"
+                ),
             }
             start_next = [play_node]
             override = {
                 "RealtimeLiveSongSelectMarker": {"next": ["RealtimeLiveRandomSong"]},
                 "RealtimeLiveRandomSong": {"next": ["CalibrationCaptureSong"]},
-                "RealtimeLiveDifficulty": {"target": DIFFICULTY_TARGETS[difficulty]},
+                "RealtimeLiveDifficulty": {
+                    "custom_action_param": {"difficulty": difficulty, "max_attempts": 3}
+                },
                 "RealtimeLiveRehearsalStart": {"next": start_next},
                 "RealtimeLiveFormalStart": {"next": start_next},
                 "RealtimeLiveReturnHome": {
@@ -175,8 +181,13 @@ class RealtimeCalibration(CustomAction):
             if detail is None or not detail.status.succeeded:
                 status = None if detail is None else detail.status
                 raise RuntimeError(f"校准单轮 Maa 任务执行失败: {status}")
-            report = latest_result_report_since(
-                PROJECT_ROOT / "screencap", reports_before, current_song_id()
+            report_path = PROJECT_ROOT / play_params["calibration_report"]
+            report = (
+                json.loads(report_path.read_text(encoding="utf-8"))
+                if report_path.exists()
+                else latest_result_report_since(
+                    PROJECT_ROOT / "screencap", reports_before, current_song_id()
+                )
             )
             print(
                 f"RealtimeCalibration round={round_number} complete "
