@@ -215,6 +215,19 @@ def test_realtime_observe_is_screenshot_only_and_bounded():
     )
     assert profile_play_task["entry"] == "RealtimeProfilePlay"
 
+    full_song = load(ROOT / "resource/pipeline/realtime_full_song.json")[
+        "RealtimeFullSong"
+    ]
+    assert full_song["custom_action"] == "RealtimeProfilePlay"
+    assert full_song["custom_action_param"]["duration_seconds"] == 300
+    assert full_song["custom_action_param"]["completion_missing_frames"] == 120
+    assert full_song["custom_action_param"]["require_completion"] is True
+    assert full_song["custom_action_param"]["result_back_attempts"] == 12
+    full_song_task = next(
+        task for task in interface["task"] if task["name"] == "RealtimeFullSong"
+    )
+    assert full_song_task["entry"] == "RealtimeFullSong"
+
 
 def test_imported_template_hashes_match_declared_sources():
     sources = load(ROOT / "docs/template-sources.json")

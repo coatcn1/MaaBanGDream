@@ -68,6 +68,12 @@
       "label": "Profile 驱动排练（Easy，30 秒）",
       "description": "仅加载最新且已通过用户真机验收的 Easy Profile；环境签名不一致时拒绝触控。",
       "entry": "RealtimeProfilePlay"
+    },
+    {
+      "name": "RealtimeFullSong",
+      "label": "完整歌曲排练与结算采集",
+      "description": "使用已验收 Easy Profile 演奏至生命条持续消失；释放触点后逐次 ESC 并识别结算，保存本机截图与 FAST/SLOW 时序建议；最长 300 秒。",
+      "entry": "RealtimeFullSong"
     }
   ],
   "option": {

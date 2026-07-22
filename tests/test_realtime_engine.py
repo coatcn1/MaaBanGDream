@@ -5,7 +5,7 @@ import pytest
 
 from agent.realtime.engine import RealtimeEngine
 from agent.realtime.touch_planner import ActionKind, TouchAction
-from agent.realtime.life_monitor import LifeGuard, LifeReading
+from agent.realtime.life_monitor import LifeGuard, LifeReading, PlayfieldCompletionGuard
 
 
 class Clock:
@@ -139,3 +139,26 @@ def test_engine_never_dispatches_before_alive_life_is_confirmed():
     assert not stats.aborted_for_life
     assert planner.updates == 0
     assert not [batch for batch in touch.batches if batch[0].kind is ActionKind.TAP]
+
+
+def test_engine_completes_after_confirmed_playfield_disappears():
+    engine, _, planner, touch, capture = build()
+
+    class EndsAfterAlive:
+        def __init__(self):
+            self.frames = 0
+
+        def detect(self, image):
+            self.frames += 1
+            return LifeReading(self.frames <= 4, 800)
+
+    engine.life_detector = EndsAfterAlive()
+    engine.life_guard = LifeGuard(confirm_frames=3)
+    engine.completion_guard = PlayfieldCompletionGuard(missing_frames=3)
+
+    stats = engine.run(capture, lambda: False, duration_seconds=10, target_fps=60)
+
+    assert stats.completed
+    assert not stats.aborted_for_life
+    assert planner.resets == 1
+    assert touch.closed == 1

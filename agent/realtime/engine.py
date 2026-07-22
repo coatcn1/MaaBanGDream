@@ -8,7 +8,7 @@ import numpy as np
 
 from .controller_touch import ControllerTouchDispatcher
 from .note_detector import NoteDetector
-from .life_monitor import LifeDetector, LifeGuard, LifeStatus
+from .life_monitor import LifeDetector, LifeGuard, LifeStatus, PlayfieldCompletionGuard
 from .touch_planner import RealtimePlanner
 
 
@@ -18,6 +18,7 @@ class EngineStats:
     dispatched_actions: int
     stopped: bool
     aborted_for_life: bool = False
+    completed: bool = False
 
 
 class RealtimeEngine:
@@ -31,6 +32,7 @@ class RealtimeEngine:
         clock: Callable[[], float] = time.monotonic,
         life_detector: LifeDetector | None = None,
         life_guard: LifeGuard | None = None,
+        completion_guard: PlayfieldCompletionGuard | None = None,
     ) -> None:
         self.detector = detector
         self.planner = planner
@@ -38,6 +40,7 @@ class RealtimeEngine:
         self.clock = clock
         self.life_detector = life_detector
         self.life_guard = life_guard
+        self.completion_guard = completion_guard
 
     def run(
         self,
@@ -57,6 +60,7 @@ class RealtimeEngine:
         frames = actions_count = 0
         was_stopped = False
         aborted_for_life = False
+        completed = False
         try:
             while self.clock() < deadline:
                 if stopping():
@@ -73,9 +77,18 @@ class RealtimeEngine:
                 if now - next_frame > interval:
                     next_frame = now + interval
                 if self.life_detector is not None and self.life_guard is not None:
-                    status = self.life_guard.update(self.life_detector.detect(image))
+                    reading = self.life_detector.detect(image)
+                    status = self.life_guard.update(reading)
                     if status is LifeStatus.DEAD:
                         aborted_for_life = True
+                        break
+                    if (
+                        self.completion_guard is not None
+                        and self.completion_guard.update(
+                            reading, alive_confirmed=self.life_guard.alive_confirmed
+                        )
+                    ):
+                        completed = True
                         break
                     # A custom action can start during a transition or on a
                     # non-playfield screen. Never interpret those pixels as
@@ -89,7 +102,9 @@ class RealtimeEngine:
                     self.touch.dispatch(actions)
                     actions_count += len(actions)
                 frames += 1
-            return EngineStats(frames, actions_count, was_stopped, aborted_for_life)
+            return EngineStats(
+                frames, actions_count, was_stopped, aborted_for_life, completed
+            )
         finally:
             cleanup = self.planner.reset(self.clock())
             try:

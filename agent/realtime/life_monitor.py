@@ -88,3 +88,20 @@ class LifeGuard:
         else:
             self.status = LifeStatus.NORMAL
         return self.status
+
+
+class PlayfieldCompletionGuard:
+    """Confirm that an active playfield disappeared at the end of a song."""
+
+    def __init__(self, missing_frames: int = 120) -> None:
+        if not 3 <= missing_frames <= 600:
+            raise ValueError("missing_frames 必须在 3..600 之间")
+        self.missing_frames = int(missing_frames)
+        self.streak = 0
+
+    def update(self, reading: LifeReading, *, alive_confirmed: bool) -> bool:
+        if not alive_confirmed:
+            self.streak = 0
+            return False
+        self.streak = 0 if reading.visible else self.streak + 1
+        return self.streak >= self.missing_frames

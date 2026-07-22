@@ -3,7 +3,13 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from agent.realtime.life_monitor import LifeDetector, LifeGuard, LifeReading, LifeStatus
+from agent.realtime.life_monitor import (
+    LifeDetector,
+    LifeGuard,
+    LifeReading,
+    LifeStatus,
+    PlayfieldCompletionGuard,
+)
 
 
 def life_frame(value: int | None):
@@ -58,3 +64,20 @@ def test_zero_readings_kill_after_alive_life_was_confirmed():
     for _ in range(2):
         assert guard.update(LifeReading(True, 0)) is not LifeStatus.DEAD
     assert guard.update(LifeReading(True, 0)) is LifeStatus.DEAD
+
+
+def test_playfield_completion_requires_alive_then_sustained_disappearance():
+    guard = PlayfieldCompletionGuard(missing_frames=3)
+    for _ in range(5):
+        assert not guard.update(LifeReading(False), alive_confirmed=False)
+    assert not guard.update(LifeReading(False), alive_confirmed=True)
+    assert not guard.update(LifeReading(False), alive_confirmed=True)
+    assert guard.update(LifeReading(False), alive_confirmed=True)
+
+
+def test_visible_life_resets_playfield_completion_streak():
+    guard = PlayfieldCompletionGuard(missing_frames=3)
+    guard.update(LifeReading(False), alive_confirmed=True)
+    guard.update(LifeReading(False), alive_confirmed=True)
+    assert not guard.update(LifeReading(True, 500), alive_confirmed=True)
+    assert not guard.update(LifeReading(False), alive_confirmed=True)
