@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-07-22T12:00:00",
+  "difficulty": "Easy",
+  "accepted": false,
+  "environment": {
+    "resolution": [1280, 720],
+    "dpi": 240,
+    "game_fps": 60,
+    "render_quality": "standard",
+    "note_speed": 2.0
+  },
+  "settings": {
+    "target_fps": 60,
+    "timing_offset_ms": 0,
+    "frame_timeout_ms": 150,
+    "playfield_timeout_ms": 1500
+  }
+}

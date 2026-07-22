@@ -3,7 +3,7 @@
   "interface_version": 2,
   "name": "MaaBanGDream",
   "label": "BanG Dream! 自动化（MaaFramework）",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "BanG Dream! 的 MaaFramework 自动化项目；支持当前或随机歌曲的多轮自动演出与难度选择。",
   "license": "GPL-3.0-only",
   "controller": [
@@ -38,6 +38,12 @@
       "description": "使用当前曲目或每轮随机选曲，按指定难度完成多轮自动演出。",
       "entry": "AutoLive",
       "option": ["AutoLiveSongMode", "AutoLiveDifficulty", "AutoLiveCount"]
+    },
+    {
+      "name": "RealtimeObserve",
+      "label": "实时取帧检查（零触控）",
+      "description": "仅连续截图 5 秒并输出帧率和最大取帧耗时，不点击、不滑动、不进入演出。",
+      "entry": "RealtimeObserve"
     }
   ],
   "option": {

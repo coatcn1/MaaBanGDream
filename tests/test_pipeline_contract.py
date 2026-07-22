@@ -15,7 +15,7 @@ def load(path: Path):
 def test_interface_references_existing_entry_and_resource():
     interface = load(ROOT / "interface.json")
     assert interface["interface_version"] == 2
-    assert interface["version"] == "0.3.0"
+    assert interface["version"] == "0.4.0"
     assert interface["resource"][0]["path"] == ["./resource"]
     nodes = {}
     for path in (ROOT / "resource/pipeline").glob("*.json"):
@@ -156,6 +156,19 @@ def test_difficulty_cases_override_only_the_difficulty_target():
         and list(case["pipeline_override"]["AutoLiveDifficulty"]) == ["target"]
         for case in cases
     )
+
+
+def test_realtime_observe_is_screenshot_only_and_bounded():
+    interface = load(ROOT / "interface.json")
+    task = next(task for task in interface["task"] if task["name"] == "RealtimeObserve")
+    assert task["entry"] == "RealtimeObserve"
+    node = load(ROOT / "resource/pipeline/realtime_observe.json")["RealtimeObserve"]
+    assert node["action"] == "Custom"
+    assert node["custom_action"] == "RealtimeObserve"
+    assert node["custom_action_param"] == {
+        "duration_seconds": 5,
+        "frame_timeout_ms": 150,
+    }
 
 
 def test_imported_template_hashes_match_declared_sources():
