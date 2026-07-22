@@ -24,14 +24,15 @@
   - 每 1.5 秒发送一次 BACK，最多持续 30 秒。
   - 仍无法返回首页时重启游戏，最多重启两次。
 - Pipeline 契约、资源完整性和恢复边界测试。
+- 可重复的 MaaFramework/MFAAvalonia 版本组合检查。
 - 环境安装、验证脚本及 Git 提交规范。
 
 ## 环境要求
 
 - Windows 10/11
 - Python 3.12
-- MaaFramework Core / Python binding 5.10.2（PyPI 包名 `MaaFw`）
-- MFAAvalonia 2.12.0（发行包内含 MaaFramework Runtime 5.10.2）
+- MaaFramework Native Core / Python binding 5.10.2（PyPI 包名 `MaaFw`）
+- MFAAvalonia 2.12.0（.NET Binding 5.8.0）
 - .NET Desktop Runtime 10
 - Android 设备分辨率 `1280×720`、DPI `240`
 
@@ -44,12 +45,21 @@
 
 将 `interface.json` 和 `resource` 复制到 MFAAvalonia 运行目录后启动 MFAAvalonia。发布前还必须完成真机连接、截图、点击、BACK、应用启停、最小页面闭环和故障恢复验收。
 
+完整运行时版本检查需要显式提供本机 MFAAvalonia 目录：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\check_runtime.py --mfa-root <MFAAvalonia目录>
+```
+
+已验收的精确组合记录在 `runtime-compatibility.json`。任一组件版本变化都视为新的组合，必须重新执行自动检查和真机验收，不能仅凭主版本相同推断兼容。
+
 ## 项目进度
 
 | 里程碑 | 状态 | 说明 |
 | --- | --- | --- |
 | 独立 MaaFramework 项目 | 已完成 | 与旧 BDAS 工作树分离，未带入旧仓库脏改动 |
 | 基础运行环境 | 已完成 | Python 3.12、MaaFw 5.10.2、MFAAvalonia 2.12.0、.NET 10 |
+| 运行时兼容性门禁 | 已完成 | 锁定并检查 Python、Core、MFA、.NET Binding 与 PI 组合 |
 | 最小页面闭环 | 已完成 | 已在真实雷电模拟器上验收 |
 | 故障恢复 | 已完成 | 已验证超时、BACK、重启及重启上限 |
 | GitHub 首次预发布 | 已完成 | 公开发布 `v0.1.0` prerelease |
@@ -61,6 +71,13 @@
 | 每日调度 | 未开始 | 最后接入，不迁移旧调度器 |
 
 ## 进度与变更记录
+
+### 2026-07-22
+
+- 新增 `runtime-compatibility.json`，记录已真机验证的精确运行时组合。
+- 新增 `scripts/check_runtime.py`，检查 MaaFw Python 包、requirements、Project Interface、MFAAvalonia、.NET Binding 和 Native Core。
+- 将静态版本门禁接入 `scripts/verify.ps1`，并确保任一步失败都会中止；完整 MFA 检查通过 `--mfa-root` 或 `MFAA_ROOT` 启用。
+- 增加版本解析、精确锁定和未验证组合拒绝测试；测试总数由 6 项增加至 10 项。
 
 ### 2026-07-21
 

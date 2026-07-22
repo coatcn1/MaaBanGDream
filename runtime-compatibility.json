@@ -1,0 +1,8 @@
+{
+  "maafw_python": "5.10.2",
+  "maafw_core": "5.10.2",
+  "mfaavalonia": "2.12.0",
+  "mfa_dotnet_binding": "5.8.0",
+  "project_interface": 2,
+  "validation": "live-device-verified"
+}
