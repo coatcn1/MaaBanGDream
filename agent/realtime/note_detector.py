@@ -157,7 +157,51 @@ class NoteDetector:
                 notes.append(ObservedNote(
                     kind, lane, float(x), float(y), int(width * 2), int(height * 2), timestamp
                 ))
-        return self._remove_stationary_feedback(notes)
+        return self._remove_stationary_feedback(self._merge_skill_hold_heads(notes))
+
+    @staticmethod
+    def _merge_skill_hold_heads(notes: list[ObservedNote]) -> list[ObservedNote]:
+        """Fold a yellow skill head into the green long note it starts.
+
+        The renderer uses two colour components for this one gameplay object.
+        Leaving both observations in the stream lets the ordinary-note tracker
+        emit a TAP immediately before the hold tracker emits DOWN.
+        """
+        consumed_skills: set[int] = set()
+        replacements: dict[int, ObservedNote] = {}
+        for skill_index, skill in enumerate(notes):
+            if skill.kind != NoteKind.SKILL:
+                continue
+            candidates = []
+            for hold_index, hold in enumerate(notes):
+                if hold.kind != NoteKind.HOLD or hold.lane != skill.lane:
+                    continue
+                hold_head = hold.y + hold.height / 2
+                if abs(skill.x - hold.x) <= max(55, skill.width) and abs(skill.y - hold_head) <= 38:
+                    candidates.append((abs(skill.y - hold_head), hold_index, hold))
+            if not candidates:
+                continue
+            _, hold_index, hold = min(candidates)
+            tail = hold.y - hold.height / 2
+            # The yellow ellipse is the playable head centre. The green mask
+            # often includes glow pixels below it, so keeping the green mask's
+            # lower edge would start the hold late.
+            head = skill.y
+            replacements[hold_index] = ObservedNote(
+                NoteKind.HOLD,
+                hold.lane,
+                skill.x,
+                (tail + head) / 2,
+                max(hold.width, skill.width),
+                max(1, int(round(head - tail))),
+                hold.timestamp,
+            )
+            consumed_skills.add(skill_index)
+        return [
+            replacements.get(index, note)
+            for index, note in enumerate(notes)
+            if index not in consumed_skills
+        ]
 
     def _remove_stationary_feedback(self, notes: list[ObservedNote]) -> list[ObservedNote]:
         """Suppress persistent judgement glyphs, while retaining moving notes.

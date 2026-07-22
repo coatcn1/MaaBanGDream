@@ -32,7 +32,7 @@ class RealtimePlanner:
         self,
         judgement_y: float = 565,
         timing_offset_ms: int = 10,
-        retrigger_seconds: float = 0.06,
+        retrigger_seconds: float = 0.12,
         hold_grace_seconds: float = 0.35,
         track_memory_seconds: float = 0.15,
         enable_slide: bool = True,
@@ -44,6 +44,7 @@ class RealtimePlanner:
         hold_release_y: float = 570,
         paired_hold_rescue_margin: float = 35,
         hold_max_seconds: float = 6,
+        hold_restart_cooldown_seconds: float = 0.25,
     ):
         self.judgement_y = float(judgement_y)
         self.timing_offset = timing_offset_ms / 1000
@@ -56,6 +57,7 @@ class RealtimePlanner:
         self.hold_release_y = float(hold_release_y)
         self.paired_hold_rescue_margin = float(paired_hold_rescue_margin)
         self.hold_max_seconds = float(hold_max_seconds)
+        self.hold_restart_cooldown_seconds = float(hold_restart_cooldown_seconds)
         self._last_lane_sweep = float("-inf")
         self._previous: dict[tuple[NoteKind, int], ObservedNote] = {}
         self._last_trigger: dict[int, float] = {}
@@ -63,6 +65,7 @@ class RealtimePlanner:
         self._active_hold_tail: dict[int, float] = {}
         self._hold_release_at: dict[int, float] = {}
         self._hold_started: dict[int, float] = {}
+        self._hold_released_at: dict[int, float] = {}
         self._note_tracker = MultiNoteTracker(memory_seconds=track_memory_seconds)
 
     def _predict_hold_release(
@@ -182,8 +185,13 @@ class RealtimePlanner:
                     and self._same_falling_note(previous, note)
                     and self._hold_head(previous) < self._trigger_y(previous, note) <= head
                 )
-                if note.lane not in self._active_hold_tail and (
+                release_age = now - self._hold_released_at.get(note.lane, float("-inf"))
+                if (
+                    note.lane not in self._active_hold_tail
+                    and release_age >= self.hold_restart_cooldown_seconds
+                    and (
                     should_rescue or should_cross or should_pair_rescue
+                    )
                 ):
                     self._active_hold_tail[note.lane] = tail
                     self._hold_started[note.lane] = now
@@ -214,6 +222,7 @@ class RealtimePlanner:
                         self._hold_seen.pop(note.lane, None)
                         self._hold_release_at.pop(note.lane, None)
                         self._hold_started.pop(note.lane, None)
+                        self._hold_released_at[note.lane] = now
                     elif previous_tail < self.hold_release_y <= tail:
                         actions.append(TouchAction(
                             ActionKind.UP, note.lane, now, note.lane, "tail-crossing"
@@ -222,6 +231,7 @@ class RealtimePlanner:
                         self._hold_seen.pop(note.lane, None)
                         self._hold_release_at.pop(note.lane, None)
                         self._hold_started.pop(note.lane, None)
+                        self._hold_released_at[note.lane] = now
                     else:
                         if note.height >= 40:
                             self._predict_hold_release(
@@ -271,6 +281,7 @@ class RealtimePlanner:
                 self._hold_seen.pop(lane, None)
                 self._hold_release_at.pop(lane, None)
                 self._hold_started.pop(lane, None)
+                self._hold_released_at[lane] = now
         for lane, started in list(self._hold_started.items()):
             if lane in self._active_hold_tail and now - started >= self.hold_max_seconds:
                 actions.append(TouchAction(
@@ -280,25 +291,7 @@ class RealtimePlanner:
                 self._hold_seen.pop(lane, None)
                 self._hold_release_at.pop(lane, None)
                 self._hold_started.pop(lane, None)
-        # A white connector can pair a long-note tail with a normal/flick
-        # head. The tail ring is often detected one frame before the partner's
-        # motion crossing. Pull near-line partners into the same action batch;
-        # MaaTouch commits partner DOWN and hold UP atomically.
-        if any(action.kind == ActionKind.UP for action in actions):
-            already_touched = {action.lane for action in actions}
-            for tracked in tracked_notes:
-                kind, lane, note = tracked.note.kind, tracked.note.lane, tracked.note
-                if tracked.fired or lane in already_touched:
-                    continue
-                if note.y < self.judgement_y - 45:
-                    continue
-                action_kind = ActionKind.FLICK if kind == NoteKind.FLICK else ActionKind.TAP
-                actions.append(TouchAction(
-                    action_kind, lane, now, reason="linked-tail",
-                    track_id=tracked.track_id,
-                ))
-                self._note_tracker.mark_fired(tracked.track_id)
-                already_touched.add(lane)
+                self._hold_released_at[lane] = now
         if (
             self.lane_sweep_interval is not None
             and now - self._last_lane_sweep >= self.lane_sweep_interval
@@ -323,7 +316,53 @@ class RealtimePlanner:
             if previous is None or abs(note.y - previous.y) >= .2:
                 remembered[key] = note
         self._previous = remembered
-        return actions
+        return self._suppress_redundant_judgements(actions, now)
+
+    def _suppress_redundant_judgements(
+        self, actions: list[TouchAction], now: float
+    ) -> list[TouchAction]:
+        """Use the game's adjacent-lane judgement instead of repeated input."""
+        structural = [
+            action for action in actions
+            if action.kind in (ActionKind.UP, ActionKind.DOWN, ActionKind.MOVE)
+        ]
+        current_down_lanes = {
+            action.lane for action in structural if action.kind == ActionKind.DOWN
+        }
+
+        transients = [
+            action for action in actions
+            if action.kind in (ActionKind.TAP, ActionKind.FLICK)
+            and action.reason != "lane-sweep"
+        ]
+        lane_sweeps = [action for action in actions if action.reason == "lane-sweep"]
+        # An upward flick begins with a press and can satisfy an adjacent tap;
+        # keep it before plain taps when both occupy one judgement window.
+        transients.sort(key=lambda action: (
+            0 if action.kind == ActionKind.FLICK else 1, action.lane
+        ))
+        kept: list[TouchAction] = []
+        for action in transients:
+            recently_covered = any(
+                abs(action.lane - lane) <= 1
+                and (
+                    abs(now - timestamp) <= 1e-9
+                    or (
+                        action.reason == "rescue"
+                        and now - timestamp < self.retrigger_seconds
+                    )
+                )
+                for lane, timestamp in self._last_trigger.items()
+            )
+            covered_by_hold_start = (
+                action.kind == ActionKind.TAP
+                and any(abs(action.lane - lane) <= 1 for lane in current_down_lanes)
+            )
+            if recently_covered or covered_by_hold_start:
+                continue
+            kept.append(action)
+            self._last_trigger[action.lane] = now
+        return structural + kept + lane_sweeps
 
     def reset(self, now: float) -> list[TouchAction]:
         actions = []
@@ -333,6 +372,7 @@ class RealtimePlanner:
         self._hold_seen.clear()
         self._hold_release_at.clear()
         self._hold_started.clear()
+        self._hold_released_at.clear()
         self._previous.clear()
         self._last_trigger.clear()
         self._note_tracker.reset()

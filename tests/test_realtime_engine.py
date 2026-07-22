@@ -99,6 +99,31 @@ def test_engine_exception_still_releases_everything():
     assert touch.closed == 1
 
 
+def test_engine_records_each_processed_frame_and_closes_debug_recorder():
+    engine, _, planner, _, capture = build()
+
+    class Recorder:
+        def __init__(self):
+            self.records = []
+            self.closed = 0
+
+        def record(self, image, timestamp, notes, actions, life_status):
+            self.records.append((timestamp, notes, actions, life_status))
+
+        def close(self):
+            self.closed += 1
+
+    recorder = Recorder()
+    engine.debug_recorder = recorder
+
+    stats = engine.run(capture, lambda: False, duration_seconds=1, target_fps=60)
+
+    assert len(recorder.records) == stats.processed_frames
+    assert len(recorder.records[0][1]) == 1
+    assert recorder.records[0][2][0].kind is ActionKind.TAP
+    assert recorder.closed == 1
+
+
 def test_engine_aborts_and_cleans_up_after_confirmed_zero_life():
     engine, _, planner, touch, capture = build()
 

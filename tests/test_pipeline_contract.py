@@ -223,10 +223,9 @@ def test_realtime_observe_is_screenshot_only_and_bounded():
     assert full_song["custom_action_param"]["completion_missing_frames"] == 120
     assert full_song["custom_action_param"]["require_completion"] is True
     assert full_song["custom_action_param"]["result_back_attempts"] == 12
-    full_song_task = next(
-        task for task in interface["task"] if task["name"] == "RealtimeFullSong"
-    )
-    assert full_song_task["entry"] == "RealtimeFullSong"
+    # The standalone entry remains available for development contracts, but is
+    # hidden from MFA so an old checked task cannot run before multi-rehearsal.
+    assert not any(task["name"] == "RealtimeFullSong" for task in interface["task"])
 
 
 def test_imported_template_hashes_match_declared_sources():
@@ -236,3 +235,65 @@ def test_imported_template_hashes_match_declared_sources():
         image = ROOT / "resource/image" / name
         actual = hashlib.sha256(image.read_bytes()).hexdigest()
         assert actual == expected, f"source hash mismatch for {name}"
+
+
+def test_realtime_multi_live_contract_and_options():
+    nodes = load(ROOT / "resource/pipeline/realtime_multi_live.json")
+    interface = load(ROOT / "interface.json")
+    task = next(task for task in interface["task"] if task["name"] == "RealtimeMultiLive")
+    assert task["option"] == [
+        "RealtimeLiveSongMode", "RealtimeLiveDifficulty", "RealtimeLiveCount",
+        "RealtimeLiveDebug",
+    ]
+    assert nodes["RealtimeMultiLive"]["next"] == ["RealtimeLiveRoundGate"]
+    assert nodes["RealtimeLiveRoundGate"]["max_hit"] == 1
+    assert nodes["RealtimeLiveReturnHome"]["next"] == [
+        "RealtimeLiveRoundGate", "RealtimeLiveComplete"
+    ]
+    assert not any("ProfileCheck" in name for name in nodes)
+    assert "RealtimeLiveAutoOn" not in nodes
+    assert "RealtimeLiveStart" not in nodes
+
+    expected = {
+        "Easy": ((715, 545), "RealtimeLivePlay"),
+        "Normal": ((827, 545), "RealtimeLivePlayNormal"),
+        "Hard": ((940, 545), "RealtimeLivePlayHard"),
+        "Expert": ((1051, 545), "RealtimeLivePlayExpert"),
+        "Special": ((1180, 545), "RealtimeLivePlaySpecial"),
+    }
+    difficulty = interface["option"]["RealtimeLiveDifficulty"]
+    for case in difficulty["cases"]:
+        target, play_node = expected[case["name"]]
+        override = case["pipeline_override"]
+        assert tuple(override["RealtimeLiveDifficulty"]["target"]) == target
+        assert override["RealtimeLiveRehearsalStart"]["next"] == [play_node]
+        params = nodes[play_node]["custom_action_param"]
+        assert params["difficulty"] == case["name"]
+        assert params["require_profile"] is False
+        assert params["debug_recording"] is False
+        assert params["require_completion"] is True
+        assert nodes[play_node]["next"] == ["RealtimeLiveReturnHome"]
+
+    song_mode = interface["option"]["RealtimeLiveSongMode"]
+    assert song_mode["cases"][0]["pipeline_override"]["RealtimeLiveSongSelectMarker"]["next"] == ["RealtimeLiveDifficulty"]
+    assert song_mode["cases"][1]["pipeline_override"]["RealtimeLiveSongSelectMarker"]["next"] == ["RealtimeLiveRandomSong"]
+    count = interface["option"]["RealtimeLiveCount"]
+    assert count["inputs"][0]["verify"] == "^(?:[1-9]|[1-9][0-9])$"
+    assert count["pipeline_override"]["RealtimeLiveRoundGate"]["max_hit"] == "{Count}"
+    assert nodes["RealtimeLivePrepare"]["next"][:2] == [
+        "RealtimeLiveFormalMarker", "RealtimeLiveRehearsalMarker"
+    ]
+    assert nodes["RealtimeLiveFormalMarker"]["target"] == [55, 520]
+    assert nodes["RealtimeLiveDemoSettingsMarker"]["target"] == [575, 385]
+    assert nodes["RealtimeLiveDemoModeOff"]["target"] == [640, 525]
+    assert nodes["RealtimeLiveRehearsalStart"]["template"] == "rehearsal_start.png"
+    debug = interface["option"]["RealtimeLiveDebug"]
+    enabled = next(case for case in debug["cases"] if case["name"] == "On")
+    assert set(enabled["pipeline_override"]) == set(expected_case[1] for expected_case in expected.values())
+    assert all(
+        override["custom_action_param"]["debug_recording"] is True
+        and override["custom_action_param"]["require_profile"] is False
+        and override["custom_action_param"]["duration_seconds"] == 300
+        for override in enabled["pipeline_override"].values()
+    )
+    assert not any(task["name"] == "RealtimeFullSong" for task in interface["task"])

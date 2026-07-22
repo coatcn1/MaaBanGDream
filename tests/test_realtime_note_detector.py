@@ -146,3 +146,19 @@ def test_detector_defaults_to_maa_bgr_frames():
     notes = NoteDetector().detect(image, timestamp=1.0)
 
     assert [(note.kind, note.lane) for note in notes] == [(NoteKind.TAP, 1)]
+
+
+def test_yellow_skill_head_connected_to_green_body_is_one_hold():
+    image = _frame()
+    # A skill-headed long note is rendered as a yellow head at the playable
+    # lower end of a separate green translucent body.  Treating both colour
+    # components independently produces TAP + DOWN and breaks the whole hold.
+    cv2.rectangle(image, (765, 250), (815, 500), (48, 145, 74), -1)
+    cv2.ellipse(image, (790, 500), (52, 13), 0, 0, 360, (70, 240, 110), -1)
+    cv2.ellipse(image, (790, 500), (43, 9), 0, 0, 360, (255, 205, 35), -1)
+
+    notes = NoteDetector(input_color_order="RGB").detect(image, timestamp=1.0)
+    lane_notes = [note for note in notes if note.lane == 4]
+
+    assert [note.kind for note in lane_notes] == [NoteKind.HOLD]
+    assert 488 <= lane_notes[0].y + lane_notes[0].height / 2 <= 512

@@ -70,10 +70,11 @@
       "entry": "RealtimeProfilePlay"
     },
     {
-      "name": "RealtimeFullSong",
-      "label": "完整歌曲排练与结算采集",
-      "description": "使用已验收 Easy Profile 演奏至生命条持续消失；释放触点后逐次 ESC 并识别结算，保存本机截图与 FAST/SLOW 时序建议；最长 300 秒。",
-      "entry": "RealtimeFullSong"
+      "name": "RealtimeMultiLive",
+      "label": "连续机器人排练",
+      "description": "在排练模式按当前曲目或每轮随机选曲，以指定难度连续演奏 1–99 次；无需 Profile，不开放正式演奏。可选整曲调试录制。",
+      "entry": "RealtimeMultiLive",
+      "option": ["RealtimeLiveSongMode", "RealtimeLiveDifficulty", "RealtimeLiveCount", "RealtimeLiveDebug"]
     }
   ],
   "option": {
@@ -128,6 +129,51 @@
       "pipeline_override": {
         "AutoLiveRoundGate": {"max_hit": "{Count}"}
       }
+    },
+    "RealtimeLiveSongMode": {
+      "type": "select",
+      "label": "歌曲选择",
+      "default_case": "Current",
+      "cases": [
+        {"name": "Current", "label": "当前曲目", "pipeline_override": {"RealtimeLiveSongSelectMarker": {"next": ["RealtimeLiveDifficulty"]}}},
+        {"name": "Random", "label": "每轮随机选曲", "pipeline_override": {"RealtimeLiveSongSelectMarker": {"next": ["RealtimeLiveRandomSong"]}}}
+      ]
+    },
+    "RealtimeLiveDifficulty": {
+      "type": "select",
+      "label": "难度",
+      "default_case": "Easy",
+      "cases": [
+        {"name": "Easy", "label": "Easy", "pipeline_override": {"RealtimeLiveDifficulty": {"target": [715, 545]}, "RealtimeLiveRehearsalStart": {"next": ["RealtimeLivePlay"]}}},
+        {"name": "Normal", "label": "Normal", "pipeline_override": {"RealtimeLiveDifficulty": {"target": [827, 545]}, "RealtimeLiveRehearsalStart": {"next": ["RealtimeLivePlayNormal"]}}},
+        {"name": "Hard", "label": "Hard", "pipeline_override": {"RealtimeLiveDifficulty": {"target": [940, 545]}, "RealtimeLiveRehearsalStart": {"next": ["RealtimeLivePlayHard"]}}},
+        {"name": "Expert", "label": "Expert", "pipeline_override": {"RealtimeLiveDifficulty": {"target": [1051, 545]}, "RealtimeLiveRehearsalStart": {"next": ["RealtimeLivePlayExpert"]}}},
+        {"name": "Special", "label": "Special", "pipeline_override": {"RealtimeLiveDifficulty": {"target": [1180, 545]}, "RealtimeLiveRehearsalStart": {"next": ["RealtimeLivePlaySpecial"]}}}
+      ]
+    },
+    "RealtimeLiveCount": {
+      "type": "input",
+      "label": "演奏次数",
+      "inputs": [
+        {"name": "Count", "label": "次数", "default": "1", "pipeline_type": "int", "verify": "^(?:[1-9]|[1-9][0-9])$", "pattern_msg": "请输入 1 到 99 的整数。"}
+      ],
+      "pipeline_override": {"RealtimeLiveRoundGate": {"max_hit": "{Count}"}}
+    },
+    "RealtimeLiveDebug": {
+      "type": "select",
+      "label": "调试录制",
+      "description": "开启后记录整曲逐帧音符、触控动作和回放视频，文件仅保存在本机 debug/recordings。",
+      "default_case": "Off",
+      "cases": [
+        {"name": "Off", "label": "关闭"},
+        {"name": "On", "label": "开启", "pipeline_override": {
+          "RealtimeLivePlay": {"custom_action_param": {"difficulty": "Easy", "require_profile": false, "target_fps": 60, "timing_offset_ms": 0, "debug_recording": true, "duration_seconds": 300, "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0, "wait_for_completion": true, "completion_missing_frames": 120, "require_completion": true, "save_result_frame": true, "result_back_attempts": 12, "result_back_interval_seconds": 1.0}},
+          "RealtimeLivePlayNormal": {"custom_action_param": {"difficulty": "Normal", "require_profile": false, "target_fps": 60, "timing_offset_ms": 0, "debug_recording": true, "duration_seconds": 300, "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0, "wait_for_completion": true, "completion_missing_frames": 120, "require_completion": true, "save_result_frame": true, "result_back_attempts": 12, "result_back_interval_seconds": 1.0}},
+          "RealtimeLivePlayHard": {"custom_action_param": {"difficulty": "Hard", "require_profile": false, "target_fps": 60, "timing_offset_ms": 0, "debug_recording": true, "duration_seconds": 300, "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0, "wait_for_completion": true, "completion_missing_frames": 120, "require_completion": true, "save_result_frame": true, "result_back_attempts": 12, "result_back_interval_seconds": 1.0}},
+          "RealtimeLivePlayExpert": {"custom_action_param": {"difficulty": "Expert", "require_profile": false, "target_fps": 60, "timing_offset_ms": 0, "debug_recording": true, "duration_seconds": 300, "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0, "wait_for_completion": true, "completion_missing_frames": 120, "require_completion": true, "save_result_frame": true, "result_back_attempts": 12, "result_back_interval_seconds": 1.0}},
+          "RealtimeLivePlaySpecial": {"custom_action_param": {"difficulty": "Special", "require_profile": false, "target_fps": 60, "timing_offset_ms": 0, "debug_recording": true, "duration_seconds": 300, "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0, "wait_for_completion": true, "completion_missing_frames": 120, "require_completion": true, "save_result_frame": true, "result_back_attempts": 12, "result_back_interval_seconds": 1.0}}
+        }}
+      ]
     }
   }
 }

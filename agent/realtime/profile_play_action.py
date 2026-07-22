@@ -12,6 +12,7 @@ from maa.context import Context
 from maa.custom_action import CustomAction
 
 from .controller_touch import ControllerTouchDispatcher
+from .debug_recorder import RealtimeDebugRecorder
 from .engine import RealtimeEngine
 from .life_monitor import LifeDetector, LifeGuard, PlayfieldCompletionGuard
 from .note_detector import NoteDetector
@@ -53,6 +54,40 @@ def collect_result(
     raise ValueError("连续按 BACK 后仍未识别到有效结算画面")
 
 
+def resolve_profile(context: Context, params: dict, *, controller=None):
+    controller = controller or context.tasker.controller
+    image = controller.post_screencap().wait().get()
+    signature = EnvironmentSignature(
+        frame_resolution(image),
+        int(params.get("dpi", 240)),
+        int(params.get("game_fps", 60)),
+        str(params.get("render_quality", "standard")),
+        float(params.get("note_speed", 2.0)),
+    )
+    return RealtimeProfileStore(PROJECT_ROOT / "profiles").resolve_latest(
+        difficulty=str(params.get("difficulty", "Easy")),
+        current_signature=signature,
+    )
+
+
+@AgentServer.custom_action("RealtimeProfileCheck")
+class RealtimeProfileCheck(CustomAction):
+    """Refuse to start a live before its accepted Profile is available."""
+
+    def run(self, context: Context, argv: CustomAction.RunArg) -> bool:
+        try:
+            if context.tasker.stopping:
+                return False
+            params = json.loads(argv.custom_action_param or "{}")
+            settings = resolve_profile(context, params)
+            print(f"RealtimeProfileCheck profile={settings.profile_path.name}", flush=True)
+            return not context.tasker.stopping
+        except Exception as exc:
+            traceback.print_exc()
+            print(f"RealtimeProfileCheck failed={type(exc).__name__}: {exc}", flush=True)
+            return False
+
+
 @AgentServer.custom_action("RealtimeProfilePlay")
 class RealtimeProfilePlay(CustomAction):
     """Run a bounded rehearsal using only a matching accepted local profile."""
@@ -70,27 +105,31 @@ class RealtimeProfilePlay(CustomAction):
         if context.tasker.stopping:
             return False
         controller = context.tasker.controller
-        image = controller.post_screencap().wait().get()
-        signature = EnvironmentSignature(
-            frame_resolution(image),
-            int(params.get("dpi", 240)),
-            int(params.get("game_fps", 60)),
-            str(params.get("render_quality", "standard")),
-            float(params.get("note_speed", 2.0)),
-        )
-        settings = RealtimeProfileStore(PROJECT_ROOT / "profiles").resolve_latest(
-            difficulty=str(params.get("difficulty", "Easy")),
-            current_signature=signature,
+        require_profile = bool(params.get("require_profile", True))
+        settings = (
+            resolve_profile(context, params, controller=controller)
+            if require_profile else None
         )
         if context.tasker.stopping:
             return False
-        print(f"RealtimeProfilePlay profile={settings.profile_path.name}", flush=True)
+        target_fps = settings.target_fps if settings else int(params.get("target_fps", 60))
+        timing_offset_ms = (
+            settings.timing_offset_ms if settings else int(params.get("timing_offset_ms", 0))
+        )
+        mode = f"profile={settings.profile_path.name}" if settings else "mode=rehearsal-defaults"
+        print(f"RealtimeProfilePlay {mode}", flush=True)
+        recorder = (
+            RealtimeDebugRecorder(PROJECT_ROOT / "debug" / "recordings")
+            if params.get("debug_recording") else None
+        )
+        if recorder is not None:
+            print(f"RealtimeProfilePlay debug={recorder.output_dir}", flush=True)
         touch = ControllerTouchDispatcher(controller, lambda: context.tasker.stopping)
         engine = RealtimeEngine(
             NoteDetector(),
             RealtimePlanner(
                 judgement_y=565,
-                timing_offset_ms=settings.timing_offset_ms,
+                timing_offset_ms=timing_offset_ms,
                 rescue_first_visible=True,
             ),
             touch,
@@ -103,12 +142,13 @@ class RealtimeProfilePlay(CustomAction):
                 if params.get("wait_for_completion")
                 else None
             ),
+            debug_recorder=recorder,
         )
         stats = engine.run(
             lambda: controller.post_screencap().wait().get(),
             lambda: context.tasker.stopping,
             duration_seconds=float(params.get("duration_seconds", 30)),
-            target_fps=settings.target_fps,
+            target_fps=target_fps,
         )
         print(
             "RealtimeProfilePlay "
@@ -130,13 +170,11 @@ class RealtimeProfilePlay(CustomAction):
             path = output / f"realtime-result-{stamp}.png"
             if not cv2.imwrite(str(path), result):
                 raise OSError(f"无法保存结算截图: {path}")
-            suggestion = adjusted_timing_offset(
-                settings.timing_offset_ms, result_data
-            )
+            suggestion = adjusted_timing_offset(timing_offset_ms, result_data)
             report = output / f"realtime-result-{stamp}.json"
             report.write_text(json.dumps({
                 **result_data.to_dict(),
-                "current_timing_offset_ms": settings.timing_offset_ms,
+                "current_timing_offset_ms": timing_offset_ms,
                 "suggested_timing_offset_ms": suggestion,
             }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             print(
@@ -144,7 +182,7 @@ class RealtimeProfilePlay(CustomAction):
                 f"perfect={result_data.perfect} great={result_data.great} "
                 f"good={result_data.good} bad={result_data.bad} miss={result_data.miss} "
                 f"fast={result_data.fast} slow={result_data.slow} "
-                f"timing_offset={settings.timing_offset_ms}->{suggestion}",
+                f"timing_offset={timing_offset_ms}->{suggestion}",
                 flush=True,
             )
         success = not stats.stopped and not stats.aborted_for_life

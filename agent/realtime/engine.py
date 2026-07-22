@@ -12,6 +12,11 @@ from .life_monitor import LifeDetector, LifeGuard, LifeStatus, PlayfieldCompleti
 from .touch_planner import RealtimePlanner
 
 
+class DebugRecorder:
+    def record(self, image, timestamp, notes, actions, life_status): ...
+    def close(self): ...
+
+
 @dataclass(frozen=True)
 class EngineStats:
     processed_frames: int
@@ -33,6 +38,7 @@ class RealtimeEngine:
         life_detector: LifeDetector | None = None,
         life_guard: LifeGuard | None = None,
         completion_guard: PlayfieldCompletionGuard | None = None,
+        debug_recorder: DebugRecorder | None = None,
     ) -> None:
         self.detector = detector
         self.planner = planner
@@ -41,6 +47,7 @@ class RealtimeEngine:
         self.life_detector = life_detector
         self.life_guard = life_guard
         self.completion_guard = completion_guard
+        self.debug_recorder = debug_recorder
 
     def run(
         self,
@@ -76,9 +83,11 @@ class RealtimeEngine:
                 next_frame += interval
                 if now - next_frame > interval:
                     next_frame = now + interval
+                life_status = None
                 if self.life_detector is not None and self.life_guard is not None:
                     reading = self.life_detector.detect(image)
                     status = self.life_guard.update(reading)
+                    life_status = status.value
                     if status is LifeStatus.DEAD:
                         aborted_for_life = True
                         break
@@ -98,6 +107,8 @@ class RealtimeEngine:
                         continue
                 notes = self.detector.detect(image, now)
                 actions = self.planner.update(notes, now)
+                if self.debug_recorder is not None:
+                    self.debug_recorder.record(image, now, notes, actions, life_status)
                 if actions:
                     self.touch.dispatch(actions)
                     actions_count += len(actions)
@@ -111,4 +122,8 @@ class RealtimeEngine:
                 if cleanup:
                     self.touch.dispatch(cleanup)
             finally:
-                self.touch.close()
+                try:
+                    self.touch.close()
+                finally:
+                    if self.debug_recorder is not None:
+                        self.debug_recorder.close()

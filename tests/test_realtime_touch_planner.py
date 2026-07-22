@@ -146,6 +146,32 @@ def test_rescue_mode_does_not_repeatedly_tap_a_persistent_bright_object():
     assert repeated == []
 
 
+def test_rescue_does_not_retap_skill_when_track_is_rebuilt_near_line():
+    planner = RealtimePlanner(
+        judgement_y=565, rescue_first_visible=True, track_memory_seconds=.05
+    )
+
+    first = planner.update([_note(NoteKind.SKILL, 4, 561, 1.0)], now=1.0)
+    planner.update([], now=1.06)
+    rebuilt = planner.update([_note(NoteKind.SKILL, 4, 563, 1.10)], now=1.10)
+
+    assert [(action.kind, action.lane) for action in first] == [(ActionKind.TAP, 4)]
+    assert rebuilt == []
+
+
+def test_one_tap_suppresses_same_window_notes_on_adjacent_lanes():
+    planner = RealtimePlanner(judgement_y=565, rescue_first_visible=True)
+
+    actions = planner.update([
+        _note(NoteKind.TAP, 3, 561, 1.0),
+        _note(NoteKind.SKILL, 4, 561, 1.0),
+    ], now=1.0)
+
+    assert [(action.kind, action.lane) for action in actions] == [
+        (ActionKind.TAP, 3)
+    ]
+
+
 def test_rescue_does_not_trigger_twenty_five_pixels_before_judgement_line():
     planner = RealtimePlanner(
         judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
@@ -316,7 +342,7 @@ def test_lane_sweep_covers_free_lanes_without_releasing_active_hold():
     assert all(a.kind == ActionKind.FLICK for a in actions if a.reason == "lane-sweep")
     assert not any(a.kind == ActionKind.UP for a in actions)
     assert planner.update([], now=1.12) == []
-def test_linked_tap_is_pulled_into_same_batch_as_hold_tail_release():
+def test_hold_tail_release_does_not_tap_a_nearby_note_again():
     planner = RealtimePlanner(judgement_y=565, timing_offset_ms=0)
     planner.update([
         ObservedNote(NoteKind.HOLD, 5, 940, 500, 80, 100, 1.0),
@@ -333,6 +359,26 @@ def test_linked_tap_is_pulled_into_same_batch_as_hold_tail_release():
     ], now=1.2)
 
     assert [(action.kind, action.lane) for action in actions] == [
-        (ActionKind.UP, 5), (ActionKind.TAP, 1),
+        (ActionKind.UP, 5),
     ]
-    assert actions[1].reason == "linked-tail"
+
+
+def test_released_hold_cannot_restart_from_its_lingering_tail_geometry():
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+    planner.update([
+        ObservedNote(NoteKind.HOLD, 4, 730, 405, 100, 320, 1.0)
+    ], now=1.0)
+    planner.update([
+        ObservedNote(NoteKind.HOLD, 4, 745, 450, 100, 300, 1.2)
+    ], now=1.2)
+    released = planner.update([
+        ObservedNote(NoteKind.HOLD, 4, 790, 572, 100, 18, 2.0)
+    ], now=2.0)
+    lingering = planner.update([
+        ObservedNote(NoteKind.HOLD, 4, 790, 520, 100, 100, 2.04)
+    ], now=2.04)
+
+    assert [action.kind for action in released] == [ActionKind.UP]
+    assert lingering == []
