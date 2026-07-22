@@ -30,6 +30,15 @@ def test_source_interface_defers_machine_specific_python_path_to_launcher():
     assert interface["agent"]["child_exec"] == "python"
 
 
+def test_launcher_generates_machine_local_profile_manager_configuration():
+    launch = (ROOT / "scripts/launch-mfa.ps1").read_text(encoding="utf-8")
+
+    assert "profile-manager.json" in launch
+    assert "agent\\profile_manager.py" in launch
+    assert "child_exec = $python" in launch
+    assert "resolution = @(1280, 720)" in launch
+
+
 def test_runtime_gate_requires_the_named_conda_environment():
     expected = json.loads(
         (ROOT / "runtime-compatibility.json").read_text(encoding="utf-8")

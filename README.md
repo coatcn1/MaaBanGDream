@@ -114,6 +114,19 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\launch-mfa.ps1
    同时检查 `Microsoft.NETCore.App 10.x`；缺失时会停止并给出安装命令，不再打开误导性的下载页。
 2. 将仓库 `resource` 同步到 MFA 的 `resource/resource` 部署目录。
 3. 从仓库生成部署用 `interface.json`，将资源路径改为 `./resource/resource`，并将 Agent 解释器指向 `maabangdream` Conda 环境、脚本指向仓库中的 `agent/server.py`。
+4. 在 MFA 目录生成本机专用且不提交的 `profile-manager.json`，其中包含 Profile 管理器的绝对 Python/脚本路径和当前演奏环境签名；MFA 的“设置→演出设置”只读取该文件，不硬编码用户名或仓库位置。
+
+### 实时演奏 Profile 管理
+
+定制 MFAAvalonia 的“设置→演出设置”会显示当前任务难度实际选用的 Profile、自动或钉选来源、环境信息、运行参数，以及三轮排练和正式验证记录。主难度按 `Easy → Normal → Hard → Expert` 向下兼容，自动选择优先精确难度、再选最近的更高难度；`Special` 不参与主难度兼容。
+
+点击“钉选当前”后，该任务难度只使用指定文件。钉选文件缺失、未验收或环境不匹配时不会自动回退，正式演奏和挑战演出都会在触控前停止。修改四项运行参数会保留校准记录和钉选状态，但将 `accepted` 设为 `false`，必须重新完成校准才能恢复正式演奏。
+
+管理器也可独立接收单个 stdin JSON 请求，例如：
+
+```powershell
+'{"operation":"list","difficulty":"Easy","environment":{"resolution":[1280,720],"dpi":240,"game_fps":60,"render_quality":"standard","note_speed":2.0}}' | python .\agent\profile_manager.py
+```
 4. 关闭已有 MFAAvalonia 进程，以 MFA 安装目录作为工作目录重新启动。
 
 如果 MFA 显示“下载资源”而不是 MaaBanGDream 任务列表，不要点击下载；这表示启动了未同步的部署副本。关闭该页面并重新运行上述脚本。正常界面必须只显示：自动演出、实时演奏、实时演奏校准、挑战演出。

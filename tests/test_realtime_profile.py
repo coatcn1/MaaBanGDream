@@ -95,6 +95,65 @@ def test_resolve_latest_rejects_when_no_profile_was_accepted(tmp_path):
         store.resolve_latest(difficulty="Easy", current_signature=SIGNATURE)
 
 
+def test_higher_main_difficulty_profile_is_compatible_and_nearest_wins(tmp_path):
+    store = RealtimeProfileStore(tmp_path)
+    expert = store.write(payload(difficulty="Expert", accepted=True))
+    hard = store.write(payload(difficulty="Hard", accepted=True))
+
+    settings = store.resolve_latest(difficulty="Normal", current_signature=SIGNATURE)
+
+    assert settings.profile_path == hard
+    assert settings.profile_path != expert
+
+
+def test_special_profile_is_isolated_from_main_difficulties(tmp_path):
+    store = RealtimeProfileStore(tmp_path)
+    store.write(payload(difficulty="Special", accepted=True))
+
+    with pytest.raises(ValueError, match="Normal Profile"):
+        store.resolve_latest(difficulty="Normal", current_signature=SIGNATURE)
+
+
+def test_pinned_invalid_profile_blocks_without_automatic_fallback(tmp_path):
+    store = RealtimeProfileStore(tmp_path)
+    accepted = store.write(payload(difficulty="Hard", accepted=True))
+    draft = store.write(payload(difficulty="Normal", accepted=False))
+    store.pin("Easy", draft.name)
+
+    with pytest.raises(ValueError, match="钉选.*尚未通过"):
+        store.resolve_latest(difficulty="Easy", current_signature=SIGNATURE)
+
+    assert accepted.exists()
+
+
+def test_edit_settings_invalidates_profile_and_preserves_records(tmp_path):
+    store = RealtimeProfileStore(tmp_path)
+    profile = payload(
+        difficulty="Easy",
+        accepted=True,
+        accepted_at="2026-07-22T13:00:00",
+        rehearsals=[{"song_id": "song-1", "passed": True}],
+    )
+    path = store.write(profile)
+    store.pin("Easy", path.name)
+
+    updated = store.update_settings(
+        path.name,
+        target_fps=60,
+        timing_offset_ms=-8,
+        frame_timeout_ms=160,
+        playfield_timeout_ms=1600,
+        modified_at="2026-07-22T23:59:00",
+    )
+
+    assert updated["accepted"] is False
+    assert updated["accepted_at"] == profile["accepted_at"]
+    assert updated["invalidated_reason"] == "manual_edit"
+    assert updated["modified_at"] == "2026-07-22T23:59:00"
+    assert updated["rehearsals"] == profile["rehearsals"]
+    assert store.pinned_profile("Easy") == path.name
+
+
 def test_profile_path_cannot_escape_local_directory(tmp_path):
     store = RealtimeProfileStore(tmp_path / "profiles")
 
