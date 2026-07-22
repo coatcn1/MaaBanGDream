@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import time
 from typing import Protocol
 
 from .touch_planner import ActionKind, TouchAction
@@ -21,9 +22,16 @@ class ControllerTouchDispatcher:
 
     LANE_CENTERS = (190, 340, 490, 640, 790, 940, 1090)
 
-    def __init__(self, controller: _Controller, stopping: Callable[[], bool]) -> None:
+    def __init__(
+        self,
+        controller: _Controller,
+        stopping: Callable[[], bool],
+        *,
+        sleeper: Callable[[float], None] = time.sleep,
+    ) -> None:
         self.controller = controller
         self.stopping = stopping
+        self.sleeper = sleeper
         self.active_contacts: set[int] = set()
 
     def _ensure_running(self) -> None:
@@ -61,11 +69,22 @@ class ControllerTouchDispatcher:
                 contact = 0 if action.contact is None else action.contact
                 self.controller.post_touch_up(contact).wait()
                 self.active_contacts.discard(contact)
-            for action, contact in transient_contacts:
-                if action.kind == ActionKind.FLICK:
+            flick_contacts = [
+                (action, contact) for action, contact in transient_contacts
+                if action.kind == ActionKind.FLICK
+            ]
+            # A zero-duration Down/Move/Up sequence can collapse into a tap at
+            # the game's input sampling boundary. Move all members of a flick
+            # chord together over three short phases so at least two game
+            # frames observe a genuine upward gesture.
+            for y in (545, 490, 455):
+                if not flick_contacts:
+                    break
+                self.sleeper(.012)
+                for action, contact in flick_contacts:
                     self._ensure_running()
                     self.controller.post_touch_move(
-                        self.LANE_CENTERS[action.lane], 490, contact, 50
+                        self.LANE_CENTERS[action.lane], y, contact, 50
                     ).wait()
             for _, contact in transient_contacts:
                 self._ensure_running()

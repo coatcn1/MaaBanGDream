@@ -30,7 +30,8 @@ class Controller:
 
 def test_native_dispatch_keeps_hold_contact_while_tapping_and_flicking():
     controller = Controller()
-    touch = ControllerTouchDispatcher(controller, lambda: False)
+    delays = []
+    touch = ControllerTouchDispatcher(controller, lambda: False, sleeper=delays.append)
     touch.dispatch([TouchAction(ActionKind.DOWN, 3, 1.0, 3)])
     touch.dispatch([
         TouchAction(ActionKind.TAP, 2, 1.1),
@@ -39,7 +40,13 @@ def test_native_dispatch_keeps_hold_contact_while_tapping_and_flicking():
 
     assert ("up", 3) not in controller.calls
     assert touch.active_contacts == {3}
-    assert any(call[0] == "move" for call in controller.calls)
+    flick_moves = [call for call in controller.calls if call[0] == "move"]
+    assert [call[3] for call in flick_moves] == [545, 490, 455]
+    assert sum(delays) >= .03
+    flick_contact = flick_moves[0][1]
+    down_index = next(i for i, call in enumerate(controller.calls) if call[:2] == ("down", flick_contact))
+    up_index = next(i for i, call in enumerate(controller.calls) if call == ("up", flick_contact))
+    assert down_index < controller.calls.index(flick_moves[0]) < up_index
 
 
 def test_stop_during_dispatch_releases_every_active_contact():

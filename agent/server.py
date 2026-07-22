@@ -10,6 +10,7 @@ import realtime.frame_observer  # noqa: F401 - registration happens at import ti
 import realtime.note_observer  # noqa: F401 - registration happens at import time
 import realtime.profile_action  # noqa: F401 - registration happens at import time
 import realtime.rehearsal_action  # noqa: F401 - registration happens at import time
+import realtime.profile_play_action  # noqa: F401 - registration happens at import time
 
 
 def main() -> None:

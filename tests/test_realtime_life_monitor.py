@@ -42,3 +42,19 @@ def test_missing_life_bar_is_unknown_not_dead():
     for _ in range(5):
         guard.update(LifeReading(False))
     assert guard.status is LifeStatus.UNKNOWN
+
+
+def test_zero_readings_cannot_kill_before_alive_life_was_confirmed():
+    guard = LifeGuard(confirm_frames=3)
+
+    for _ in range(10):
+        assert guard.update(LifeReading(True, 0)) is not LifeStatus.DEAD
+
+
+def test_zero_readings_kill_after_alive_life_was_confirmed():
+    guard = LifeGuard(confirm_frames=3)
+    for _ in range(3):
+        guard.update(LifeReading(True, 800))
+    for _ in range(2):
+        assert guard.update(LifeReading(True, 0)) is not LifeStatus.DEAD
+    assert guard.update(LifeReading(True, 0)) is LifeStatus.DEAD

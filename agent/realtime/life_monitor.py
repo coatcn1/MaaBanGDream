@@ -57,21 +57,29 @@ class LifeGuard:
         self.critical = critical
         self.confirm_frames = confirm_frames
         self.visible_streak = 0
+        self.alive_streak = 0
+        self.alive_confirmed = False
         self.zero_streak = 0
         self.status = LifeStatus.UNKNOWN
         self.minimum: int | None = None
 
     def update(self, reading: LifeReading) -> LifeStatus:
         if not reading.visible:
-            self.visible_streak = self.zero_streak = 0
+            self.visible_streak = self.alive_streak = self.zero_streak = 0
             self.status = LifeStatus.UNKNOWN
             return self.status
         self.visible_streak += 1
+        if reading.value >= 20:
+            self.alive_streak += 1
+            if self.alive_streak >= self.confirm_frames:
+                self.alive_confirmed = True
+        else:
+            self.alive_streak = 0
         if self.visible_streak < self.confirm_frames:
             return self.status
         self.minimum = reading.value if self.minimum is None else min(self.minimum, reading.value)
         self.zero_streak = self.zero_streak + 1 if reading.value < 20 else 0
-        if self.zero_streak >= self.confirm_frames:
+        if self.alive_confirmed and self.zero_streak >= self.confirm_frames:
             self.status = LifeStatus.DEAD
         elif reading.value < self.critical:
             self.status = LifeStatus.CRITICAL

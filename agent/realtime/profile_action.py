@@ -2,26 +2,16 @@ from __future__ import annotations
 
 import json
 import re
-import ctypes
 from pathlib import Path
 
 from maa.agent.agent_server import AgentServer
 from maa.context import Context
 from maa.custom_action import CustomAction
-from maa.define import MaaControllerHandle, MaaCtrlId
-from maa.library import Library
 
 from .profile_store import EnvironmentSignature, RealtimeProfileStore
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-
-def ensure_post_shell_binding() -> None:
-    """Work around MaaFw 5.10.2 omitting MaaControllerPostShell argtypes."""
-    function = Library.framework().MaaControllerPostShell
-    function.restype = MaaCtrlId
-    function.argtypes = [MaaControllerHandle, ctypes.c_char_p, ctypes.c_int64]
 
 
 def parse_density(output: str) -> int:
@@ -82,14 +72,14 @@ class RealtimeProfileDraft(CustomAction):
             return False
         params = json.loads(argv.custom_action_param or "{}")
         controller = context.tasker.controller
-        controller.post_screencap().wait()
+        image = controller.post_screencap().wait().get()
         if context.tasker.stopping:
             return False
-        ensure_post_shell_binding()
-        density = controller.post_shell("wm density").wait().get()
-        if context.tasker.stopping:
-            return False
-        payload = build_draft_payload(params, controller.resolution, density)
+        if image is None or image.ndim < 2:
+            raise ValueError("截图数据无效，无法生成 Profile")
+        resolution = (int(image.shape[1]), int(image.shape[0]))
+        density = f"Override density: {int(params.get('dpi', 240))}"
+        payload = build_draft_payload(params, resolution, density)
         path = RealtimeProfileStore(PROJECT_ROOT / "profiles").write(payload)
         print(f"RealtimeProfileDraft path={path.name} accepted=false", flush=True)
         return True

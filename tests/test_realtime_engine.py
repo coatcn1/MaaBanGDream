@@ -103,8 +103,12 @@ def test_engine_aborts_and_cleans_up_after_confirmed_zero_life():
     engine, _, planner, touch, capture = build()
 
     class ZeroLife:
+        def __init__(self):
+            self.frames = 0
+
         def detect(self, image):
-            return LifeReading(True, 0)
+            self.frames += 1
+            return LifeReading(True, 800 if self.frames <= 3 else 0)
 
     engine.life_detector = ZeroLife()
     engine.life_guard = LifeGuard(confirm_frames=3)
@@ -114,3 +118,24 @@ def test_engine_aborts_and_cleans_up_after_confirmed_zero_life():
     assert stats.aborted_for_life
     assert planner.resets == 1
     assert touch.closed == 1
+
+
+def test_engine_never_dispatches_before_alive_life_is_confirmed():
+    engine, clock, planner, touch, _ = build()
+
+    class NeverAlive:
+        def detect(self, image):
+            return LifeReading(True, 0)
+
+    engine.life_detector = NeverAlive()
+    engine.life_guard = LifeGuard(confirm_frames=3)
+
+    def capture():
+        clock.value += 0.02
+        return np.zeros((720, 1280, 3), dtype=np.uint8)
+
+    stats = engine.run(capture, lambda: False, duration_seconds=1, target_fps=60)
+
+    assert not stats.aborted_for_life
+    assert planner.updates == 0
+    assert not [batch for batch in touch.batches if batch[0].kind is ActionKind.TAP]

@@ -77,6 +77,12 @@ class RealtimeEngine:
                     if status is LifeStatus.DEAD:
                         aborted_for_life = True
                         break
+                    # A custom action can start during a transition or on a
+                    # non-playfield screen. Never interpret those pixels as
+                    # notes until a non-zero life bar has been confirmed.
+                    if not self.life_guard.alive_confirmed:
+                        frames += 1
+                        continue
                 notes = self.detector.detect(image, now)
                 actions = self.planner.update(notes, now)
                 if actions:

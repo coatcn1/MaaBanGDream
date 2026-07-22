@@ -20,6 +20,8 @@
 
 新 Profile 默认应为 `accepted: false`。只有用户完成真机验收并明确确认后，后续校准流程才可以将其标记为 `true`。仓库中的 `docs/realtime-profile-v1.example.json` 仅展示格式，不能用于正式实时演奏。
 
-## 下一步
+## 当前接入状态
 
-下一里程碑是 MaaController 只观察取帧：统计最新帧延迟、实际帧率与连续丢帧，不发送触控。结果将作为 Profile 校准输入，并用于判断 MaaController 是否满足实时处理要求。
+MaaController 取帧、音符观察、30 秒机器人排练和 Easy 真机验收已经完成。Profile 草稿从实际截图确认 1280×720，并使用本机锁定的 DPI、游戏帧率、画质与音符速度形成环境签名；只有原子验收后的最新匹配 Profile 可以驱动触控。
+
+下一步是完成整首排练并解析结算 FAST/SLOW 数据，在用户再次确认后调整 `timing_offset_ms`。

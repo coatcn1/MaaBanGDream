@@ -189,6 +189,7 @@ def test_realtime_observe_is_screenshot_only_and_bounded():
     ]
     assert profile["custom_action"] == "RealtimeProfileDraft"
     assert profile["custom_action_param"]["difficulty"] == "Easy"
+    assert profile["custom_action_param"]["dpi"] == 240
 
     rehearsal = load(ROOT / "resource/pipeline/realtime_rehearsal.json")[
         "RealtimeEasyRehearsal"
@@ -202,6 +203,17 @@ def test_realtime_observe_is_screenshot_only_and_bounded():
         "note_speed": 2.0,
         "timing_offset_ms": 0,
     }
+
+    profile_play = load(ROOT / "resource/pipeline/realtime_profile_play.json")[
+        "RealtimeProfilePlay"
+    ]
+    assert profile_play["custom_action"] == "RealtimeProfilePlay"
+    assert profile_play["custom_action_param"]["difficulty"] == "Easy"
+    assert profile_play["custom_action_param"]["duration_seconds"] == 30
+    profile_play_task = next(
+        task for task in interface["task"] if task["name"] == "RealtimeProfilePlay"
+    )
+    assert profile_play_task["entry"] == "RealtimeProfilePlay"
 
 
 def test_imported_template_hashes_match_declared_sources():

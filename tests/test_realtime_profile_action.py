@@ -2,14 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-import ctypes
-
-from maa.define import MaaControllerHandle
-from maa.library import Library
-
 from agent.realtime.profile_action import (
     build_draft_payload,
-    ensure_post_shell_binding,
     parse_density,
 )
 
@@ -45,10 +39,3 @@ def test_profile_draft_is_never_accepted_automatically():
         "render_quality": "standard",
         "note_speed": 2.0,
     }
-
-
-def test_maafw_5102_shell_binding_uses_full_controller_handle():
-    ensure_post_shell_binding()
-    function = Library.framework().MaaControllerPostShell
-
-    assert function.argtypes == [MaaControllerHandle, ctypes.c_char_p, ctypes.c_int64]

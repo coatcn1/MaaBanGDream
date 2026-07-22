@@ -163,6 +163,55 @@ class RealtimeProfileStore:
             profile_path=profile["_path"],
         )
 
+    def resolve_latest(
+        self,
+        *,
+        difficulty: str,
+        current_signature: EnvironmentSignature,
+    ) -> RuntimeSettings:
+        candidates = [
+            profile for profile in self.list_profiles(accepted_only=True)
+            if profile.get("difficulty") == difficulty
+        ]
+        if not candidates:
+            raise ValueError(f"没有已验收的 {difficulty} Profile")
+        return self.resolve(
+            candidates[0]["_path"].name,
+            difficulty=difficulty,
+            current_signature=current_signature,
+        )
+
+    def accept_latest(
+        self,
+        *,
+        difficulty: str,
+        current_signature: EnvironmentSignature,
+        accepted_at: str | None = None,
+    ) -> Path:
+        """Atomically accept the newest matching draft after user approval."""
+        if difficulty not in self.DIFFICULTIES:
+            raise ValueError(f"不支持的难度: {difficulty}")
+        candidates = [
+            profile for profile in self.list_profiles()
+            if profile.get("difficulty") == difficulty
+            and profile.get("accepted") is not True
+        ]
+        if not candidates:
+            raise ValueError(f"没有可验收的 {difficulty} Profile 草稿")
+        profile = candidates[0]
+        saved = EnvironmentSignature.from_mapping(profile.get("environment", {}))
+        if saved != current_signature:
+            raise ValueError("Profile 草稿与当前环境不匹配，不能验收")
+        path = profile.pop("_path")
+        profile["accepted"] = True
+        profile["accepted_at"] = accepted_at or datetime.now().isoformat(timespec="seconds")
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps(profile, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        os.replace(temporary, path)
+        return path
+
     def write(self, payload: dict[str, Any]) -> Path:
         difficulty = str(payload.get("difficulty", ""))
         if difficulty not in self.DIFFICULTIES:

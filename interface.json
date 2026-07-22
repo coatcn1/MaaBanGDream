@@ -62,6 +62,12 @@
       "label": "机器人排练（Easy，30 秒）",
       "description": "实验功能：请手动进入 Easy 排练、关闭游戏演示，并确认标准画质、60 FPS、音符速度 2.0。任务会真实触控并在 30 秒后释放全部触点。",
       "entry": "RealtimeEasyRehearsal"
+    },
+    {
+      "name": "RealtimeProfilePlay",
+      "label": "Profile 驱动排练（Easy，30 秒）",
+      "description": "仅加载最新且已通过用户真机验收的 Easy Profile；环境签名不一致时拒绝触控。",
+      "entry": "RealtimeProfilePlay"
     }
   ],
   "option": {
