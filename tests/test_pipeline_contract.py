@@ -218,7 +218,8 @@ def test_realtime_observe_is_screenshot_only_and_bounded():
     assert full_song["custom_action_param"]["duration_seconds"] == 300
     assert full_song["custom_action_param"]["completion_missing_frames"] == 120
     assert full_song["custom_action_param"]["require_completion"] is True
-    assert full_song["custom_action_param"]["result_back_attempts"] == 12
+    assert full_song["custom_action_param"]["result_back_attempts"] == 30
+    assert full_song["custom_action_param"]["result_back_interval_seconds"] == 1.5
     # The standalone entry remains available for development contracts, but is
     # hidden from MFA so an old checked task cannot run before multi-rehearsal.
     assert not any(task["name"] == "RealtimeFullSong" for task in interface["task"])

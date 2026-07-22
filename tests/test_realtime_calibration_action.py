@@ -1,4 +1,6 @@
-from agent.realtime.calibration_action import CalibrationRunner
+import json
+
+from agent.realtime.calibration_action import CalibrationRunner, latest_result_report_after
 
 
 def record(song, *, hit=100, miss=0, fast=0, slow=0, survived=True):
@@ -48,3 +50,17 @@ def test_calibration_is_bounded_when_no_three_valid_songs():
         assert "三首不同歌曲" in str(exc)
     else:
         raise AssertionError("calibration should be bounded")
+
+
+def test_calibration_reuses_the_result_json_already_saved_by_the_play_action(tmp_path):
+    result = record("ignored")
+    result.pop("song_id")
+    result.pop("survived")
+    path = tmp_path / "realtime-result-1.json"
+    path.write_text(json.dumps(result), encoding="utf-8")
+
+    loaded = latest_result_report_after(tmp_path, 0, "song-A")
+
+    assert loaded["song_id"] == "song-A"
+    assert loaded["survived"] is True
+    assert loaded["perfect"] == 100

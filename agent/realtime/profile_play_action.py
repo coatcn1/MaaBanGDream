@@ -41,8 +41,8 @@ def collect_result(
     controller,
     stopping,
     *,
-    attempts: int = 12,
-    interval_seconds: float = 1.0,
+    attempts: int = 30,
+    interval_seconds: float = 1.5,
     parser: ResultParser | None = None,
     sleeper=time.sleep,
 ) -> tuple[LiveResult, object]:
@@ -175,8 +175,8 @@ class RealtimeProfilePlay(CustomAction):
             result_data, result = collect_result(
                 controller,
                 lambda: context.tasker.stopping,
-                attempts=int(params.get("result_back_attempts", 12)),
-                interval_seconds=float(params.get("result_back_interval_seconds", 1.0)),
+                attempts=int(params.get("result_back_attempts", 30)),
+                interval_seconds=float(params.get("result_back_interval_seconds", 1.5)),
             )
             output = PROJECT_ROOT / "screencap"
             output.mkdir(parents=True, exist_ok=True)

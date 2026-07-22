@@ -14,8 +14,8 @@
       "completion_missing_frames": 120,
       "require_completion": true,
       "save_result_frame": true,
-      "result_back_attempts": 12,
-      "result_back_interval_seconds": 1.0
+      "result_back_attempts": 30,
+      "result_back_interval_seconds": 1.5
     }
   }
 }

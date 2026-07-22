@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import traceback
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -27,6 +28,16 @@ PLAY_NODES = {
     "Hard": "RealtimeLivePlayHard", "Expert": "RealtimeLivePlayExpert",
     "Special": "RealtimeLivePlaySpecial",
 }
+
+
+def latest_result_report_after(root: Path, started_ns: int, song_id: str) -> dict:
+    candidates = sorted(root.glob("realtime-result-*.json"), key=lambda path: path.stat().st_mtime_ns, reverse=True)
+    for path in candidates:
+        if path.stat().st_mtime_ns < started_ns:
+            continue
+        result = json.loads(path.read_text(encoding="utf-8"))
+        return {**result, "song_id": song_id, "survived": True, "completed": True}
+    raise RuntimeError("校准单轮未找到本轮已保存的结算报告")
 
 
 def current_song_id() -> str:
@@ -104,14 +115,13 @@ class RealtimeCalibration(CustomAction):
         difficulty = calibration_difficulty()
         if difficulty not in DIFFICULTY_TARGETS:
             raise ValueError(f"不支持的难度: {difficulty}")
-        report = PROJECT_ROOT / "profiles" / ".calibration-round.json"
         play_node = PLAY_NODES[difficulty]
         calibration_debug = debug_enabled()
 
         def run_round(formal: bool, offset: int) -> dict:
             if context.tasker.stopping:
                 raise InterruptedError("校准已停止")
-            report.unlink(missing_ok=True)
+            started_ns = time.time_ns()
             play_params = {
                 "difficulty": difficulty, "require_profile": False,
                 "target_fps": 60, "timing_offset_ms": offset,
@@ -120,8 +130,7 @@ class RealtimeCalibration(CustomAction):
                 "render_quality": "standard", "note_speed": 2.0,
                 "wait_for_completion": True, "completion_missing_frames": 120,
                 "require_completion": True, "save_result_frame": True,
-                "result_back_attempts": 12, "result_back_interval_seconds": 1.0,
-                "calibration_report": "profiles/.calibration-round.json",
+                "result_back_attempts": 30, "result_back_interval_seconds": 1.5,
             }
             start_next = [play_node]
             override = {
@@ -136,9 +145,9 @@ class RealtimeCalibration(CustomAction):
             if formal:
                 override["RealtimeLiveFormalModeGate"] = {"next": ["RealtimeLiveRehearsalToFormal", "RealtimeLiveFormalReady"]}
             detail = context.run_task("RealtimeMultiLive", override)
-            if detail is None or not report.is_file():
-                raise RuntimeError("校准单轮未生成有效结算报告")
-            return json.loads(report.read_text(encoding="utf-8"))
+            if detail is None:
+                raise RuntimeError("校准单轮 Maa 任务执行失败")
+            return latest_result_report_after(PROJECT_ROOT / "screencap", started_ns, current_song_id())
 
         runner = CalibrationRunner(run_round)
         offset, rehearsals, formal = runner.run(int(params.get("timing_offset_ms", 0)))
@@ -155,6 +164,5 @@ class RealtimeCalibration(CustomAction):
             "formal": formal,
         }
         path = RealtimeProfileStore(PROJECT_ROOT / "profiles").write(payload)
-        report.unlink(missing_ok=True)
         print(f"RealtimeCalibration profile={path.name} accepted={payload['accepted']} offset={offset}ms", flush=True)
         return bool(payload["accepted"])

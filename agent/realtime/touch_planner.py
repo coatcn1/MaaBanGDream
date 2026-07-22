@@ -41,9 +41,9 @@ class RealtimePlanner:
         # Real rehearsal frames bracketed the valid tail window: 590 released
         # The tail ring is centred near y=572 when it overlaps the visual line;
         # the body mask's far edge reaches about y=590 at the same instant.
-        hold_release_y: float = 570,
+        hold_release_y: float = 555,
         paired_hold_rescue_margin: float = 35,
-        hold_max_seconds: float = 6,
+        hold_max_seconds: float = 20,
         hold_restart_cooldown_seconds: float = 0.25,
     ):
         self.judgement_y = float(judgement_y)

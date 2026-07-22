@@ -17,6 +17,8 @@ def test_formal_mode_requires_profile_and_uses_distinct_profile_nodes():
     assert nodes["RealtimeLiveRequireProfile"]["custom_action"] == "RealtimeProfileCheck"
     for name in ("RealtimeLiveFormalPlay", "RealtimeLiveFormalPlayNormal", "RealtimeLiveFormalPlayHard", "RealtimeLiveFormalPlayExpert", "RealtimeLiveFormalPlaySpecial"):
         assert nodes[name]["custom_action_param"]["require_profile"] is True
+        assert nodes[name]["custom_action_param"]["result_back_attempts"] == 30
+        assert nodes[name]["custom_action_param"]["result_back_interval_seconds"] == 1.5
 
 
 def test_calibration_is_single_task_with_three_rehearsal_contract():
@@ -40,4 +42,6 @@ def test_challenge_points_and_profile_contract():
     assert nodes["ChallengeStart"]["next"] == ["ChallengePlay"]
     for name in ("ChallengePlay", "ChallengePlayNormal", "ChallengePlayHard", "ChallengePlayExpert", "ChallengePlaySpecial"):
         assert nodes[name]["custom_action_param"]["require_profile"] is True
+        assert nodes[name]["custom_action_param"]["result_back_attempts"] == 30
+        assert nodes[name]["custom_action_param"]["result_back_interval_seconds"] == 1.5
         assert nodes[name]["on_error"] == ["ChallengeReturnHome"]

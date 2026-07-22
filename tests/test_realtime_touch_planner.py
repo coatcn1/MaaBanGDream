@@ -48,27 +48,31 @@ def test_planner_releases_a_hold_from_head_motion_when_tail_is_then_lost():
     down = planner.update([_note(NoteKind.HOLD, 2, 580, 1.02)], now=1.02)
 
     assert [action.kind for action in down] == [ActionKind.DOWN]
-    assert planner.update([], now=1.05) == []
-    released = planner.update([], now=1.07)
+    released = planner.update([], now=1.05)
     assert [(action.kind, action.reason) for action in released] == [
         (ActionKind.UP, "predicted-tail")
     ]
 
 
-def test_planner_failsafe_never_leaves_an_untracked_hold_pressed_forever():
+def test_planner_does_not_release_a_legitimate_long_hold_at_six_seconds():
     planner = RealtimePlanner(
-        judgement_y=565, rescue_first_visible=True, hold_max_seconds=6
+        judgement_y=565, rescue_first_visible=True, hold_max_seconds=20
     )
     down = planner.update([
         ObservedNote(NoteKind.HOLD, 2, 490, 520, 100, 100, 1.0)
     ], now=1.0)
 
     assert [action.kind for action in down] == [ActionKind.DOWN]
-    assert planner.update([], now=6.99) == []
-    released = planner.update([], now=7.01)
+    assert planner.update([], now=7.01) == []
+    released = planner.update([], now=21.01)
     assert [(action.kind, action.reason) for action in released] == [
         (ActionKind.UP, "hold-failsafe")
     ]
+
+
+def test_production_hold_release_line_is_before_the_judgement_line():
+    planner = RealtimePlanner(judgement_y=565)
+    assert planner.hold_release_y == 555
 
 
 def test_planner_releases_a_hold_when_its_tail_reaches_the_judgement_line():
@@ -295,8 +299,8 @@ def test_hold_releases_at_predicted_tail_crossing_when_body_disappears():
         ObservedNote(NoteKind.HOLD, 4, 745, 450, 100, 300, 1.2)
     ], now=1.2)
 
-    assert planner.update([], now=2.17) == []
-    released = planner.update([], now=2.19)
+    assert planner.update([], now=2.12) == []
+    released = planner.update([], now=2.14)
 
     assert [(action.kind, action.reason) for action in released] == [
         (ActionKind.UP, "predicted-tail")
