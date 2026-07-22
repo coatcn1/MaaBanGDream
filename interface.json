@@ -3,177 +3,70 @@
   "interface_version": 2,
   "name": "MaaBanGDream",
   "label": "BanG Dream! 自动化（MaaFramework）",
-  "version": "0.4.0",
-  "description": "BanG Dream! 的 MaaFramework 自动化项目；支持当前或随机歌曲的多轮自动演出与难度选择。",
+  "version": "0.5.0",
+  "description": "支持自动演出、机器人实时演奏、智能校准和挑战演出。",
   "license": "GPL-3.0-only",
-  "controller": [
-    {
-      "name": "Android",
-      "label": "Android 模拟器（1280×720）",
-      "type": "Adb",
-      "display_short_side": 720
-    }
-  ],
-  "resource": [
-    {
-      "name": "Bilibili",
-      "label": "哔哩哔哩服",
-      "path": ["./resource"],
-      "controller": ["Android"]
-    }
-  ],
-  "agent": {
-    "child_exec": "./.venv/Scripts/python.exe",
-    "child_args": ["./agent/server.py"]
-  },
+  "controller": [{"name": "Android", "label": "Android 模拟器（1280×720）", "type": "Adb", "display_short_side": 720}],
+  "resource": [{"name": "Bilibili", "label": "哔哩哔哩服", "path": ["./resource"], "controller": ["Android"]}],
+  "agent": {"child_exec": "./.venv/Scripts/python.exe", "child_args": ["./agent/server.py"]},
   "task": [
-    {
-      "name": "MinimalNavigation",
-      "label": "页面流连通性测试",
-      "entry": "MinimalNavigation"
-    },
-    {
-      "name": "AutoLive",
-      "label": "自动演出",
-      "description": "使用当前曲目或每轮随机选曲，按指定难度完成多轮自动演出。",
-      "entry": "AutoLive",
-      "option": ["AutoLiveSongMode", "AutoLiveDifficulty", "AutoLiveCount"]
-    },
-    {
-      "name": "RealtimeObserve",
-      "label": "实时取帧检查（零触控）",
-      "description": "仅连续截图 5 秒并输出帧率和最大取帧耗时，不点击、不滑动、不进入演出。",
-      "entry": "RealtimeObserve"
-    },
-    {
-      "name": "RealtimeNoteObserve",
-      "label": "实时音符观察（零触控）",
-      "description": "请先手动进入排练演出；任务只观察 10 秒并统计音符类型和轨道，不执行任何触控。",
-      "entry": "RealtimeNoteObserve"
-    },
-    {
-      "name": "RealtimeProfileDraft",
-      "label": "生成实时演奏 Profile 草稿",
-      "description": "读取设备分辨率和 DPI，生成本机未验收草稿；不会触控，也不会授予正式演奏权限。",
-      "entry": "RealtimeProfileDraft"
-    },
-    {
-      "name": "RealtimeEasyRehearsal",
-      "label": "机器人排练（Easy，30 秒）",
-      "description": "实验功能：请手动进入 Easy 排练、关闭游戏演示，并确认标准画质、60 FPS、音符速度 2.0。任务会真实触控并在 30 秒后释放全部触点。",
-      "entry": "RealtimeEasyRehearsal"
-    },
-    {
-      "name": "RealtimeProfilePlay",
-      "label": "Profile 驱动排练（Easy，30 秒）",
-      "description": "仅加载最新且已通过用户真机验收的 Easy Profile；环境签名不一致时拒绝触控。",
-      "entry": "RealtimeProfilePlay"
-    },
-    {
-      "name": "RealtimeMultiLive",
-      "label": "连续机器人排练",
-      "description": "在排练模式按当前曲目或每轮随机选曲，以指定难度连续演奏 1–99 次；无需 Profile，不开放正式演奏。可选整曲调试录制。",
-      "entry": "RealtimeMultiLive",
-      "option": ["RealtimeLiveSongMode", "RealtimeLiveDifficulty", "RealtimeLiveCount", "RealtimeLiveDebug"]
-    }
+    {"name": "AutoLive", "label": "自动演出", "description": "当前曲目或每轮随机选曲，按指定难度连续自动演出。", "entry": "AutoLive", "option": ["AutoLiveSongMode", "AutoLiveDifficulty", "AutoLiveCount"]},
+    {"name": "RealtimeLive", "label": "实时演奏", "description": "机器人排练或正式演奏；正式演奏必须先完成相同环境和难度的校准。", "entry": "RealtimeMultiLive", "option": ["RealtimeMode", "RealtimeLiveSongMode", "RealtimeLiveDifficulty", "RealtimeLiveCount", "RealtimeLiveDebug"]},
+    {"name": "RealtimeCalibration", "label": "实时演奏校准", "description": "三首不同随机曲排练逐曲调整延迟，再用第四首不同歌曲正式验证并自动启用 Profile。", "entry": "RealtimeCalibration", "option": ["CalibrationDifficulty", "CalibrationDebug"]},
+    {"name": "ChallengeLive", "label": "挑战演出", "description": "使用已校准的实时引擎演奏当前活动挑战曲。", "entry": "ChallengeLive", "option": ["ChallengeDifficulty", "ChallengePoints", "ChallengeCount", "ChallengeDebug"]}
   ],
   "option": {
-    "AutoLiveSongMode": {
-      "type": "select",
-      "label": "歌曲选择",
-      "default_case": "Current",
-      "cases": [
-        {
-          "name": "Current",
-          "label": "当前曲目",
-          "pipeline_override": {
-            "AutoLiveSongSelectMarker": {"next": ["AutoLiveDifficulty"]}
-          }
-        },
-        {
-          "name": "Random",
-          "label": "随机选曲",
-          "description": "每轮进入选曲页后重新随机一次。",
-          "pipeline_override": {
-            "AutoLiveSongSelectMarker": {"next": ["AutoLiveRandomSong"]}
-          }
-        }
-      ]
-    },
-    "AutoLiveDifficulty": {
-      "type": "select",
-      "label": "难度",
-      "default_case": "Easy",
-      "cases": [
-        {"name": "Easy", "label": "Easy", "pipeline_override": {"AutoLiveDifficulty": {"target": [715, 545]}}},
-        {"name": "Normal", "label": "Normal", "pipeline_override": {"AutoLiveDifficulty": {"target": [827, 545]}}},
-        {"name": "Hard", "label": "Hard", "pipeline_override": {"AutoLiveDifficulty": {"target": [940, 545]}}},
-        {"name": "Expert", "label": "Expert", "pipeline_override": {"AutoLiveDifficulty": {"target": [1051, 545]}}},
-        {"name": "Special", "label": "Special", "pipeline_override": {"AutoLiveDifficulty": {"target": [1180, 545]}}}
-      ]
-    },
-    "AutoLiveCount": {
-      "type": "input",
-      "label": "演出次数",
-      "description": "允许 1 到 99 轮；次数耗尽时仍会立即安全停止。",
-      "inputs": [
-        {
-          "name": "Count",
-          "label": "次数",
-          "default": "1",
-          "pipeline_type": "int",
-          "verify": "^(?:[1-9]|[1-9][0-9])$",
-          "pattern_msg": "请输入 1 到 99 的整数。"
-        }
-      ],
-      "pipeline_override": {
-        "AutoLiveRoundGate": {"max_hit": "{Count}"}
-      }
-    },
-    "RealtimeLiveSongMode": {
-      "type": "select",
-      "label": "歌曲选择",
-      "default_case": "Current",
-      "cases": [
-        {"name": "Current", "label": "当前曲目", "pipeline_override": {"RealtimeLiveSongSelectMarker": {"next": ["RealtimeLiveDifficulty"]}}},
-        {"name": "Random", "label": "每轮随机选曲", "pipeline_override": {"RealtimeLiveSongSelectMarker": {"next": ["RealtimeLiveRandomSong"]}}}
-      ]
-    },
-    "RealtimeLiveDifficulty": {
-      "type": "select",
-      "label": "难度",
-      "default_case": "Easy",
-      "cases": [
-        {"name": "Easy", "label": "Easy", "pipeline_override": {"RealtimeLiveDifficulty": {"target": [715, 545]}, "RealtimeLiveRehearsalStart": {"next": ["RealtimeLivePlay"]}}},
-        {"name": "Normal", "label": "Normal", "pipeline_override": {"RealtimeLiveDifficulty": {"target": [827, 545]}, "RealtimeLiveRehearsalStart": {"next": ["RealtimeLivePlayNormal"]}}},
-        {"name": "Hard", "label": "Hard", "pipeline_override": {"RealtimeLiveDifficulty": {"target": [940, 545]}, "RealtimeLiveRehearsalStart": {"next": ["RealtimeLivePlayHard"]}}},
-        {"name": "Expert", "label": "Expert", "pipeline_override": {"RealtimeLiveDifficulty": {"target": [1051, 545]}, "RealtimeLiveRehearsalStart": {"next": ["RealtimeLivePlayExpert"]}}},
-        {"name": "Special", "label": "Special", "pipeline_override": {"RealtimeLiveDifficulty": {"target": [1180, 545]}, "RealtimeLiveRehearsalStart": {"next": ["RealtimeLivePlaySpecial"]}}}
-      ]
-    },
-    "RealtimeLiveCount": {
-      "type": "input",
-      "label": "演奏次数",
-      "inputs": [
-        {"name": "Count", "label": "次数", "default": "1", "pipeline_type": "int", "verify": "^(?:[1-9]|[1-9][0-9])$", "pattern_msg": "请输入 1 到 99 的整数。"}
-      ],
-      "pipeline_override": {"RealtimeLiveRoundGate": {"max_hit": "{Count}"}}
-    },
-    "RealtimeLiveDebug": {
-      "type": "select",
-      "label": "调试录制",
-      "description": "开启后记录整曲逐帧音符、触控动作和回放视频，文件仅保存在本机 debug/recordings。",
-      "default_case": "Off",
-      "cases": [
-        {"name": "Off", "label": "关闭"},
-        {"name": "On", "label": "开启", "pipeline_override": {
-          "RealtimeLivePlay": {"custom_action_param": {"difficulty": "Easy", "require_profile": false, "target_fps": 60, "timing_offset_ms": 0, "debug_recording": true, "duration_seconds": 300, "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0, "wait_for_completion": true, "completion_missing_frames": 120, "require_completion": true, "save_result_frame": true, "result_back_attempts": 12, "result_back_interval_seconds": 1.0}},
-          "RealtimeLivePlayNormal": {"custom_action_param": {"difficulty": "Normal", "require_profile": false, "target_fps": 60, "timing_offset_ms": 0, "debug_recording": true, "duration_seconds": 300, "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0, "wait_for_completion": true, "completion_missing_frames": 120, "require_completion": true, "save_result_frame": true, "result_back_attempts": 12, "result_back_interval_seconds": 1.0}},
-          "RealtimeLivePlayHard": {"custom_action_param": {"difficulty": "Hard", "require_profile": false, "target_fps": 60, "timing_offset_ms": 0, "debug_recording": true, "duration_seconds": 300, "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0, "wait_for_completion": true, "completion_missing_frames": 120, "require_completion": true, "save_result_frame": true, "result_back_attempts": 12, "result_back_interval_seconds": 1.0}},
-          "RealtimeLivePlayExpert": {"custom_action_param": {"difficulty": "Expert", "require_profile": false, "target_fps": 60, "timing_offset_ms": 0, "debug_recording": true, "duration_seconds": 300, "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0, "wait_for_completion": true, "completion_missing_frames": 120, "require_completion": true, "save_result_frame": true, "result_back_attempts": 12, "result_back_interval_seconds": 1.0}},
-          "RealtimeLivePlaySpecial": {"custom_action_param": {"difficulty": "Special", "require_profile": false, "target_fps": 60, "timing_offset_ms": 0, "debug_recording": true, "duration_seconds": 300, "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0, "wait_for_completion": true, "completion_missing_frames": 120, "require_completion": true, "save_result_frame": true, "result_back_attempts": 12, "result_back_interval_seconds": 1.0}}
-        }}
-      ]
-    }
+    "AutoLiveSongMode": {"type": "select", "label": "歌曲选择", "default_case": "Current", "cases": [
+      {"name": "Current", "label": "当前曲目", "pipeline_override": {"AutoLiveSongSelectMarker": {"next": ["AutoLiveDifficulty"]}}},
+      {"name": "Random", "label": "每轮随机选曲", "pipeline_override": {"AutoLiveSongSelectMarker": {"next": ["AutoLiveRandomSong"]}}}
+    ]},
+    "AutoLiveDifficulty": {"type": "select", "label": "难度", "default_case": "Easy", "cases": [
+      {"name": "Easy", "label": "Easy", "pipeline_override": {"AutoLiveDifficulty": {"target": [715, 545]}}},
+      {"name": "Normal", "label": "Normal", "pipeline_override": {"AutoLiveDifficulty": {"target": [827, 545]}}},
+      {"name": "Hard", "label": "Hard", "pipeline_override": {"AutoLiveDifficulty": {"target": [940, 545]}}},
+      {"name": "Expert", "label": "Expert", "pipeline_override": {"AutoLiveDifficulty": {"target": [1051, 545]}}},
+      {"name": "Special", "label": "Special", "pipeline_override": {"AutoLiveDifficulty": {"target": [1180, 545]}}}
+    ]},
+    "AutoLiveCount": {"type": "input", "label": "演出次数", "inputs": [{"name": "Count", "label": "次数", "default": "1", "pipeline_type": "int", "verify": "^(?:[1-9]|[1-9][0-9])$", "pattern_msg": "请输入 1 到 99 的整数。"}], "pipeline_override": {"AutoLiveRoundGate": {"max_hit": "{Count}"}}},
+    "RealtimeMode": {"type": "select", "label": "演奏模式", "default_case": "Rehearsal", "cases": [
+      {"name": "Rehearsal", "label": "机器人排练"},
+      {"name": "Formal", "label": "机器人正式演奏", "pipeline_override": {"RealtimeLiveFormalModeGate": {"next": ["RealtimeLiveRequireProfile"]}}}
+    ]},
+    "RealtimeLiveSongMode": {"type": "select", "label": "歌曲选择", "default_case": "Current", "cases": [
+      {"name": "Current", "label": "当前曲目", "pipeline_override": {"RealtimeLiveSongSelectMarker": {"next": ["RealtimeLiveDifficulty"]}}},
+      {"name": "Random", "label": "每轮随机选曲", "pipeline_override": {"RealtimeLiveSongSelectMarker": {"next": ["RealtimeLiveRandomSong"]}}}
+    ]},
+    "RealtimeLiveDifficulty": {"type": "select", "label": "难度", "default_case": "Easy", "cases": [
+      {"name": "Easy", "label": "Easy", "pipeline_override": {"RealtimeLiveDifficulty": {"target": [715, 545]}, "RealtimeLiveRehearsalStart": {"next": ["RealtimeLivePlay"]}, "RealtimeLiveFormalStart": {"next": ["RealtimeLiveFormalPlay"]}, "RealtimeLiveRequireProfile": {"custom_action_param": {"difficulty": "Easy", "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0}}}},
+      {"name": "Normal", "label": "Normal", "pipeline_override": {"RealtimeLiveDifficulty": {"target": [827, 545]}, "RealtimeLiveRehearsalStart": {"next": ["RealtimeLivePlayNormal"]}, "RealtimeLiveFormalStart": {"next": ["RealtimeLiveFormalPlayNormal"]}, "RealtimeLiveRequireProfile": {"custom_action_param": {"difficulty": "Normal", "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0}}}},
+      {"name": "Hard", "label": "Hard", "pipeline_override": {"RealtimeLiveDifficulty": {"target": [940, 545]}, "RealtimeLiveRehearsalStart": {"next": ["RealtimeLivePlayHard"]}, "RealtimeLiveFormalStart": {"next": ["RealtimeLiveFormalPlayHard"]}, "RealtimeLiveRequireProfile": {"custom_action_param": {"difficulty": "Hard", "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0}}}},
+      {"name": "Expert", "label": "Expert", "pipeline_override": {"RealtimeLiveDifficulty": {"target": [1051, 545]}, "RealtimeLiveRehearsalStart": {"next": ["RealtimeLivePlayExpert"]}, "RealtimeLiveFormalStart": {"next": ["RealtimeLiveFormalPlayExpert"]}, "RealtimeLiveRequireProfile": {"custom_action_param": {"difficulty": "Expert", "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0}}}},
+      {"name": "Special", "label": "Special", "pipeline_override": {"RealtimeLiveDifficulty": {"target": [1180, 545]}, "RealtimeLiveRehearsalStart": {"next": ["RealtimeLivePlaySpecial"]}, "RealtimeLiveFormalStart": {"next": ["RealtimeLiveFormalPlaySpecial"]}, "RealtimeLiveRequireProfile": {"custom_action_param": {"difficulty": "Special", "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0}}}}
+    ]},
+    "RealtimeLiveCount": {"type": "input", "label": "演奏次数", "inputs": [{"name": "Count", "label": "次数", "default": "1", "pipeline_type": "int", "verify": "^(?:[1-9]|[1-9][0-9])$", "pattern_msg": "请输入 1 到 99 的整数。"}], "pipeline_override": {"RealtimeLiveRoundGate": {"max_hit": "{Count}"}}},
+    "RealtimeLiveDebug": {"type": "select", "label": "调试记录", "default_case": "Off", "cases": [{"name": "Off", "label": "关闭"}, {"name": "On", "label": "开启", "pipeline_override": {"RealtimeLiveDebugGate": {"custom_action_param": {"debug_recording": true}}}}]},
+    "CalibrationDifficulty": {"type": "select", "label": "校准难度", "default_case": "Easy", "cases": [
+      {"name": "Easy", "label": "Easy", "pipeline_override": {"CalibrationDifficultySetting": {"custom_action_param": {"difficulty": "Easy"}}}},
+      {"name": "Normal", "label": "Normal", "pipeline_override": {"CalibrationDifficultySetting": {"custom_action_param": {"difficulty": "Normal"}}}},
+      {"name": "Hard", "label": "Hard", "pipeline_override": {"CalibrationDifficultySetting": {"custom_action_param": {"difficulty": "Hard"}}}},
+      {"name": "Expert", "label": "Expert", "pipeline_override": {"CalibrationDifficultySetting": {"custom_action_param": {"difficulty": "Expert"}}}},
+      {"name": "Special", "label": "Special", "pipeline_override": {"CalibrationDifficultySetting": {"custom_action_param": {"difficulty": "Special"}}}}
+    ]},
+    "CalibrationDebug": {"type": "select", "label": "调试记录", "default_case": "Off", "cases": [{"name": "Off", "label": "关闭"}, {"name": "On", "label": "开启", "pipeline_override": {"CalibrationDebugSetting": {"custom_action_param": {"debug_recording": true}}}}]},
+    "ChallengeDifficulty": {"type": "select", "label": "难度", "default_case": "Easy", "cases": [
+      {"name": "Easy", "label": "Easy", "pipeline_override": {"ChallengeDifficulty": {"target": [715, 545]}, "ChallengeProfileCheck": {"custom_action_param": {"difficulty": "Easy", "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0}}, "ChallengeStart": {"next": ["ChallengePlay"]}}},
+      {"name": "Normal", "label": "Normal", "pipeline_override": {"ChallengeDifficulty": {"target": [827, 545]}, "ChallengeProfileCheck": {"custom_action_param": {"difficulty": "Normal", "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0}}, "ChallengeStart": {"next": ["ChallengePlayNormal"]}}},
+      {"name": "Hard", "label": "Hard", "pipeline_override": {"ChallengeDifficulty": {"target": [940, 545]}, "ChallengeProfileCheck": {"custom_action_param": {"difficulty": "Hard", "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0}}, "ChallengeStart": {"next": ["ChallengePlayHard"]}}},
+      {"name": "Expert", "label": "Expert", "pipeline_override": {"ChallengeDifficulty": {"target": [1051, 545]}, "ChallengeProfileCheck": {"custom_action_param": {"difficulty": "Expert", "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0}}, "ChallengeStart": {"next": ["ChallengePlayExpert"]}}},
+      {"name": "Special", "label": "Special", "pipeline_override": {"ChallengeDifficulty": {"target": [1180, 545]}, "ChallengeProfileCheck": {"custom_action_param": {"difficulty": "Special", "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0}}, "ChallengeStart": {"next": ["ChallengePlaySpecial"]}}}
+    ]},
+    "ChallengePoints": {"type": "select", "label": "挑战点数", "default_case": "200", "cases": [
+      {"name": "200", "label": "200", "pipeline_override": {"ChallengePointSelect": {"target": [875, 212]}}},
+      {"name": "400", "label": "400", "pipeline_override": {"ChallengePointSelect": {"target": [875, 286]}}},
+      {"name": "800", "label": "800", "pipeline_override": {"ChallengePointSelect": {"target": [875, 359]}}},
+      {"name": "1600", "label": "1600", "pipeline_override": {"ChallengePointSelect": {"target": [875, 431]}}}
+    ]},
+    "ChallengeCount": {"type": "input", "label": "挑战次数", "inputs": [{"name": "Count", "label": "次数", "default": "1", "pipeline_type": "int", "verify": "^(?:[1-9]|[1-9][0-9])$", "pattern_msg": "请输入 1 到 99 的整数。"}], "pipeline_override": {"ChallengeRoundGate": {"max_hit": "{Count}"}}},
+    "ChallengeDebug": {"type": "select", "label": "调试记录", "default_case": "Off", "cases": [{"name": "Off", "label": "关闭"}, {"name": "On", "label": "开启", "pipeline_override": {"ChallengeDebugGate": {"custom_action_param": {"debug_recording": true}}}}]}
   }
 }

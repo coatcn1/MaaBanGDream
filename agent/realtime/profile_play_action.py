@@ -21,6 +21,20 @@ from .profile_store import EnvironmentSignature, RealtimeProfileStore
 from .rehearsal_action import frame_resolution
 from .result_parser import LiveResult, ResultParser, adjusted_timing_offset
 from .touch_planner import RealtimePlanner
+from .runtime_options import debug_enabled
+
+
+def _write_calibration_report(path, *, result, stats, timing_offset_ms, song_id):
+    payload = {
+        **result.to_dict(),
+        "timing_offset_ms": int(timing_offset_ms),
+        "song_id": str(song_id),
+        "survived": not stats.aborted_for_life,
+        "completed": bool(stats.completed),
+    }
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(path)
 
 
 def collect_result(
@@ -120,7 +134,7 @@ class RealtimeProfilePlay(CustomAction):
         print(f"RealtimeProfilePlay {mode}", flush=True)
         recorder = (
             RealtimeDebugRecorder(PROJECT_ROOT / "debug" / "recordings")
-            if params.get("debug_recording") else None
+            if (params.get("debug_recording") or debug_enabled()) else None
         )
         if recorder is not None:
             print(f"RealtimeProfilePlay debug={recorder.output_dir}", flush=True)
@@ -185,6 +199,19 @@ class RealtimeProfilePlay(CustomAction):
                 f"timing_offset={timing_offset_ms}->{suggestion}",
                 flush=True,
             )
+            calibration_report = params.get("calibration_report")
+            if calibration_report:
+                from .calibration_action import current_song_id
+
+                report_path = PROJECT_ROOT / str(calibration_report)
+                report_path.parent.mkdir(parents=True, exist_ok=True)
+                _write_calibration_report(
+                    report_path,
+                    result=result_data,
+                    stats=stats,
+                    timing_offset_ms=timing_offset_ms,
+                    song_id=current_song_id(),
+                )
         success = not stats.stopped and not stats.aborted_for_life
         if params.get("require_completion"):
             success = success and stats.completed

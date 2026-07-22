@@ -15,7 +15,10 @@ def load(path: Path):
 def test_interface_references_existing_entry_and_resource():
     interface = load(ROOT / "interface.json")
     assert interface["interface_version"] == 2
-    assert interface["version"] == "0.4.0"
+    assert interface["version"] == "0.5.0"
+    assert [task["name"] for task in interface["task"]] == [
+        "AutoLive", "RealtimeLive", "RealtimeCalibration", "ChallengeLive"
+    ]
     assert interface["resource"][0]["path"] == ["./resource"]
     nodes = {}
     for path in (ROOT / "resource/pipeline").glob("*.json"):
@@ -160,8 +163,7 @@ def test_difficulty_cases_override_only_the_difficulty_target():
 
 def test_realtime_observe_is_screenshot_only_and_bounded():
     interface = load(ROOT / "interface.json")
-    task = next(task for task in interface["task"] if task["name"] == "RealtimeObserve")
-    assert task["entry"] == "RealtimeObserve"
+    assert not any(task["name"] == "RealtimeObserve" for task in interface["task"])
     node = load(ROOT / "resource/pipeline/realtime_observe.json")["RealtimeObserve"]
     assert node["action"] == "Custom"
     assert node["custom_action"] == "RealtimeObserve"
@@ -170,10 +172,7 @@ def test_realtime_observe_is_screenshot_only_and_bounded():
         "frame_timeout_ms": 150,
     }
 
-    note_task = next(
-        task for task in interface["task"] if task["name"] == "RealtimeNoteObserve"
-    )
-    assert note_task["entry"] == "RealtimeNoteObserve"
+    assert not any(task["name"] == "RealtimeNoteObserve" for task in interface["task"])
     note_node = load(ROOT / "resource/pipeline/realtime_note_observe.json")[
         "RealtimeNoteObserve"
     ]
@@ -210,10 +209,7 @@ def test_realtime_observe_is_screenshot_only_and_bounded():
     assert profile_play["custom_action"] == "RealtimeProfilePlay"
     assert profile_play["custom_action_param"]["difficulty"] == "Easy"
     assert profile_play["custom_action_param"]["duration_seconds"] == 30
-    profile_play_task = next(
-        task for task in interface["task"] if task["name"] == "RealtimeProfilePlay"
-    )
-    assert profile_play_task["entry"] == "RealtimeProfilePlay"
+    assert not any(task["name"] == "RealtimeProfilePlay" for task in interface["task"])
 
     full_song = load(ROOT / "resource/pipeline/realtime_full_song.json")[
         "RealtimeFullSong"
@@ -240,17 +236,17 @@ def test_imported_template_hashes_match_declared_sources():
 def test_realtime_multi_live_contract_and_options():
     nodes = load(ROOT / "resource/pipeline/realtime_multi_live.json")
     interface = load(ROOT / "interface.json")
-    task = next(task for task in interface["task"] if task["name"] == "RealtimeMultiLive")
+    task = next(task for task in interface["task"] if task["name"] == "RealtimeLive")
     assert task["option"] == [
-        "RealtimeLiveSongMode", "RealtimeLiveDifficulty", "RealtimeLiveCount",
-        "RealtimeLiveDebug",
+        "RealtimeMode", "RealtimeLiveSongMode", "RealtimeLiveDifficulty",
+        "RealtimeLiveCount", "RealtimeLiveDebug",
     ]
     assert nodes["RealtimeMultiLive"]["next"] == ["RealtimeLiveRoundGate"]
     assert nodes["RealtimeLiveRoundGate"]["max_hit"] == 1
     assert nodes["RealtimeLiveReturnHome"]["next"] == [
         "RealtimeLiveRoundGate", "RealtimeLiveComplete"
     ]
-    assert not any("ProfileCheck" in name for name in nodes)
+    assert nodes["RealtimeLiveRequireProfile"]["custom_action"] == "RealtimeProfileCheck"
     assert "RealtimeLiveAutoOn" not in nodes
     assert "RealtimeLiveStart" not in nodes
 
@@ -280,7 +276,8 @@ def test_realtime_multi_live_contract_and_options():
     count = interface["option"]["RealtimeLiveCount"]
     assert count["inputs"][0]["verify"] == "^(?:[1-9]|[1-9][0-9])$"
     assert count["pipeline_override"]["RealtimeLiveRoundGate"]["max_hit"] == "{Count}"
-    assert nodes["RealtimeLivePrepare"]["next"][:2] == [
+    assert nodes["RealtimeLivePrepare"]["next"] == ["RealtimeLiveFormalModeGate"]
+    assert nodes["RealtimeLiveFormalModeGate"]["next"] == [
         "RealtimeLiveFormalMarker", "RealtimeLiveRehearsalMarker"
     ]
     assert nodes["RealtimeLiveFormalMarker"]["target"] == [55, 520]
@@ -289,11 +286,5 @@ def test_realtime_multi_live_contract_and_options():
     assert nodes["RealtimeLiveRehearsalStart"]["template"] == "rehearsal_start.png"
     debug = interface["option"]["RealtimeLiveDebug"]
     enabled = next(case for case in debug["cases"] if case["name"] == "On")
-    assert set(enabled["pipeline_override"]) == set(expected_case[1] for expected_case in expected.values())
-    assert all(
-        override["custom_action_param"]["debug_recording"] is True
-        and override["custom_action_param"]["require_profile"] is False
-        and override["custom_action_param"]["duration_seconds"] == 300
-        for override in enabled["pipeline_override"].values()
-    )
+    assert enabled["pipeline_override"]["RealtimeLiveDebugGate"]["custom_action_param"] == {"debug_recording": True}
     assert not any(task["name"] == "RealtimeFullSong" for task in interface["task"])

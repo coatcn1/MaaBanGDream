@@ -222,6 +222,10 @@ class RealtimeProfileStore:
             raise ValueError("created_at 必须包含完整日期和时间")
         self.root.mkdir(parents=True, exist_ok=True)
         target = self._path(f"{difficulty.lower()}-{stamp}.json")
+        suffix = 1
+        while target.exists():
+            target = self._path(f"{difficulty.lower()}-{stamp}-{suffix}.json")
+            suffix += 1
         temporary = target.with_suffix(".json.tmp")
         data = {"schema_version": self.SCHEMA_VERSION, **payload}
         temporary.write_text(

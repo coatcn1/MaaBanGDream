@@ -1,6 +1,10 @@
 {
   "source": "BanGDreamAutoScript HEAD:assets/templates",
   "sha256": {
+    "challenge_band_marker.png": "2aa1ae093fce0219b784916ac3665ddd1d70774cb5d7b47ea8226ec0519f714e",
+    "challenge_live.png": "b127c57b3b6738aa7382ae0541367e7bab199b95b087493b98b30ef896680bde",
+    "challenge_points_marker.png": "3a96c310e2eb99d1baabe31e14e13faf40cc93d1a39393d9fadb0dfc47805e03",
+    "challenge_song_select_marker.png": "eebcf999f2f6a2fdb98523247659db31ff65d8414c9a53932a680203d9d2688d",
     "auto_live_exhausted.png": "86b2ee3df16a7e037f93887e44410334a4f988cd7819710d6e55d44d6c9e7de7",
     "auto_live_off.png": "77bd583d2de39e5f97e5d0a19e09362ce1db1af523149ab2cc2783cc10e8a9d0",
     "auto_live_on.png": "e69ee0b5b76f5278b58f959e35f8a8e0cfcfe47d6b9c0e1135351b9c361a0579",
