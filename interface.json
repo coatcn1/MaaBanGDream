@@ -3,8 +3,8 @@
   "interface_version": 2,
   "name": "MaaBanGDream",
   "label": "BanG Dream! 自动化（MaaFramework）",
-  "version": "0.2.0",
-  "description": "BanG Dream! 的 MaaFramework 自动化项目；当前提供最小页面闭环和当前歌曲单轮自动演出。",
+  "version": "0.3.0",
+  "description": "BanG Dream! 的 MaaFramework 自动化项目；支持当前或随机歌曲的多轮自动演出与难度选择。",
   "license": "GPL-3.0-only",
   "controller": [
     {
@@ -34,9 +34,64 @@
     },
     {
       "name": "AutoLive",
-      "label": "单轮自动演出",
-      "description": "对游戏当前选中的歌曲执行一次自动演出，完成结算后返回主页。",
-      "entry": "AutoLive"
+      "label": "自动演出",
+      "description": "使用当前曲目或每轮随机选曲，按指定难度完成多轮自动演出。",
+      "entry": "AutoLive",
+      "option": ["AutoLiveSongMode", "AutoLiveDifficulty", "AutoLiveCount"]
     }
-  ]
+  ],
+  "option": {
+    "AutoLiveSongMode": {
+      "type": "select",
+      "label": "歌曲选择",
+      "default_case": "Current",
+      "cases": [
+        {
+          "name": "Current",
+          "label": "当前曲目",
+          "pipeline_override": {
+            "AutoLiveSongSelectMarker": {"next": ["AutoLiveDifficulty"]}
+          }
+        },
+        {
+          "name": "Random",
+          "label": "随机选曲",
+          "description": "每轮进入选曲页后重新随机一次。",
+          "pipeline_override": {
+            "AutoLiveSongSelectMarker": {"next": ["AutoLiveRandomSong"]}
+          }
+        }
+      ]
+    },
+    "AutoLiveDifficulty": {
+      "type": "select",
+      "label": "难度",
+      "default_case": "Easy",
+      "cases": [
+        {"name": "Easy", "label": "Easy", "pipeline_override": {"AutoLiveDifficulty": {"target": [715, 545]}}},
+        {"name": "Normal", "label": "Normal", "pipeline_override": {"AutoLiveDifficulty": {"target": [827, 545]}}},
+        {"name": "Hard", "label": "Hard", "pipeline_override": {"AutoLiveDifficulty": {"target": [940, 545]}}},
+        {"name": "Expert", "label": "Expert", "pipeline_override": {"AutoLiveDifficulty": {"target": [1051, 545]}}},
+        {"name": "Special", "label": "Special", "pipeline_override": {"AutoLiveDifficulty": {"target": [1180, 545]}}}
+      ]
+    },
+    "AutoLiveCount": {
+      "type": "input",
+      "label": "演出次数",
+      "description": "允许 1 到 99 轮；次数耗尽时仍会立即安全停止。",
+      "inputs": [
+        {
+          "name": "Count",
+          "label": "次数",
+          "default": "1",
+          "pipeline_type": "int",
+          "verify": "^(?:[1-9]|[1-9][0-9])$",
+          "pattern_msg": "请输入 1 到 99 的整数。"
+        }
+      ],
+      "pipeline_override": {
+        "AutoLiveRoundGate": {"max_hit": "{Count}"}
+      }
+    }
+  }
 }

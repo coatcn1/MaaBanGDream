@@ -3,13 +3,40 @@
     "recognition": "DirectHit",
     "action": "StartApp",
     "package": "com.bilibili.star.bili",
-    "next": [
-      "AutoLiveHomeMarker",
-      "AutoLiveLoginTap",
-      "AutoLiveLoginNext",
-      "AutoLiveCommonClose"
-    ],
-    "on_error": ["CommonRecover"]
+    "next": ["AutoLiveRoundGate"]
+  },
+  "AutoLiveRoundGate": {
+    "recognition": "DirectHit",
+    "action": "DoNothing",
+    "max_hit": 1,
+    "next": ["AutoLiveEnsureHome"]
+  },
+  "AutoLiveComplete": {
+    "recognition": "DirectHit",
+    "action": "DoNothing"
+  },
+  "AutoLiveEnsureHome": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "CommonRecover",
+    "custom_action_param": {
+      "home_node": "AutoLiveHomeMarker",
+      "click_nodes": [
+        "AutoLiveLoginTap",
+        "AutoLiveLoginNext",
+        "AutoLiveCommonClose",
+        "AutoLiveStorySkipConfirmLarge",
+        "AutoLiveStorySkipConfirm",
+        "AutoLiveStorySkip",
+        "AutoLiveStoryMenu"
+      ],
+      "escape_interval_ms": 1500,
+      "escape_timeout_ms": 60000,
+      "restart_limit": 2,
+      "restart_wait_ms": 5000,
+      "package": "com.bilibili.star.bili"
+    },
+    "next": ["AutoLiveHomeMarker"]
   },
   "AutoLiveHomeMarker": {
     "recognition": "TemplateMatch",
@@ -94,8 +121,22 @@
     "template": "song_select_marker.png",
     "threshold": 0.92,
     "action": "DoNothing",
-    "next": ["AutoLivePrepare"],
+    "next": ["AutoLiveDifficulty"],
     "on_error": ["CommonRecover"]
+  },
+  "AutoLiveRandomSong": {
+    "recognition": "DirectHit",
+    "action": "Click",
+    "target": [687, 642],
+    "post_delay": 1000,
+    "next": ["AutoLiveDifficulty"]
+  },
+  "AutoLiveDifficulty": {
+    "recognition": "DirectHit",
+    "action": "Click",
+    "target": [715, 545],
+    "post_delay": 500,
+    "next": ["AutoLivePrepare"]
   },
   "AutoLivePrepare": {
     "recognition": "TemplateMatch",
@@ -160,7 +201,7 @@
     "roi": [980, 530, 290, 190],
     "threshold": 0.90,
     "action": "Click",
-    "target": [1010, 545, 250, 165],
+    "target": true,
     "timeout": 300000,
     "next": ["AutoLiveResult"],
     "on_error": ["CommonRecover"]
@@ -189,7 +230,8 @@
       "restart_limit": 2,
       "restart_wait_ms": 5000,
       "package": "com.bilibili.star.bili"
-    }
+    },
+    "next": ["AutoLiveRoundGate", "AutoLiveComplete"]
   },
   "AutoLiveResultConfirm": {
     "recognition": "TemplateMatch",
