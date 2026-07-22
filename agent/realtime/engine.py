@@ -8,6 +8,7 @@ import numpy as np
 
 from .controller_touch import ControllerTouchDispatcher
 from .note_detector import NoteDetector
+from .life_monitor import LifeDetector, LifeGuard, LifeStatus
 from .touch_planner import RealtimePlanner
 
 
@@ -16,6 +17,7 @@ class EngineStats:
     processed_frames: int
     dispatched_actions: int
     stopped: bool
+    aborted_for_life: bool = False
 
 
 class RealtimeEngine:
@@ -27,11 +29,15 @@ class RealtimeEngine:
         planner: RealtimePlanner,
         touch: ControllerTouchDispatcher,
         clock: Callable[[], float] = time.monotonic,
+        life_detector: LifeDetector | None = None,
+        life_guard: LifeGuard | None = None,
     ) -> None:
         self.detector = detector
         self.planner = planner
         self.touch = touch
         self.clock = clock
+        self.life_detector = life_detector
+        self.life_guard = life_guard
 
     def run(
         self,
@@ -50,6 +56,7 @@ class RealtimeEngine:
         next_frame = self.clock()
         frames = actions_count = 0
         was_stopped = False
+        aborted_for_life = False
         try:
             while self.clock() < deadline:
                 if stopping():
@@ -65,13 +72,18 @@ class RealtimeEngine:
                 next_frame += interval
                 if now - next_frame > interval:
                     next_frame = now + interval
+                if self.life_detector is not None and self.life_guard is not None:
+                    status = self.life_guard.update(self.life_detector.detect(image))
+                    if status is LifeStatus.DEAD:
+                        aborted_for_life = True
+                        break
                 notes = self.detector.detect(image, now)
                 actions = self.planner.update(notes, now)
                 if actions:
                     self.touch.dispatch(actions)
                     actions_count += len(actions)
                 frames += 1
-            return EngineStats(frames, actions_count, was_stopped)
+            return EngineStats(frames, actions_count, was_stopped, aborted_for_life)
         finally:
             cleanup = self.planner.reset(self.clock())
             try:

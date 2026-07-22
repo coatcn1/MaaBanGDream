@@ -5,6 +5,7 @@ import pytest
 
 from agent.realtime.engine import RealtimeEngine
 from agent.realtime.touch_planner import ActionKind, TouchAction
+from agent.realtime.life_monitor import LifeGuard, LifeReading
 
 
 class Clock:
@@ -94,5 +95,22 @@ def test_engine_exception_still_releases_everything():
     with pytest.raises(RuntimeError, match="detector failed"):
         engine.run(capture, lambda: False, duration_seconds=1, target_fps=60)
 
+    assert planner.resets == 1
+    assert touch.closed == 1
+
+
+def test_engine_aborts_and_cleans_up_after_confirmed_zero_life():
+    engine, _, planner, touch, capture = build()
+
+    class ZeroLife:
+        def detect(self, image):
+            return LifeReading(True, 0)
+
+    engine.life_detector = ZeroLife()
+    engine.life_guard = LifeGuard(confirm_frames=3)
+
+    stats = engine.run(capture, lambda: False, duration_seconds=10, target_fps=60)
+
+    assert stats.aborted_for_life
     assert planner.resets == 1
     assert touch.closed == 1

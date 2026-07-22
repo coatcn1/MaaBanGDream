@@ -10,6 +10,8 @@
     "tests/test_realtime_touch_planner.py": "tests/test_realtime_planner.py",
     "tests/test_realtime_multi_note_planner.py": "tests/test_realtime_multi_note_planner.py",
     "agent/realtime/touch_protocol.py": "bdas/realtime/touch.py (protocol core rewritten)",
-    "tests/test_realtime_touch_protocol.py": "tests/test_realtime_touch.py"
+    "tests/test_realtime_touch_protocol.py": "tests/test_realtime_touch.py",
+    "agent/realtime/life_monitor.py": "bdas/realtime/life.py (synchronous guard rewritten)",
+    "tests/test_realtime_life_monitor.py": "tests/test_realtime_life.py"
   }
 }

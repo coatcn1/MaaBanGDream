@@ -50,6 +50,18 @@
       "label": "实时音符观察（零触控）",
       "description": "请先手动进入排练演出；任务只观察 10 秒并统计音符类型和轨道，不执行任何触控。",
       "entry": "RealtimeNoteObserve"
+    },
+    {
+      "name": "RealtimeProfileDraft",
+      "label": "生成实时演奏 Profile 草稿",
+      "description": "读取设备分辨率和 DPI，生成本机未验收草稿；不会触控，也不会授予正式演奏权限。",
+      "entry": "RealtimeProfileDraft"
+    },
+    {
+      "name": "RealtimeEasyRehearsal",
+      "label": "机器人排练（Easy，30 秒）",
+      "description": "实验功能：请手动进入 Easy 排练、关闭游戏演示，并确认标准画质、60 FPS、音符速度 2.0。任务会真实触控并在 30 秒后释放全部触点。",
+      "entry": "RealtimeEasyRehearsal"
     }
   ],
   "option": {

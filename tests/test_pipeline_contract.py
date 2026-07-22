@@ -184,6 +184,25 @@ def test_realtime_observe_is_screenshot_only_and_bounded():
         "target_fps": 60,
     }
 
+    profile = load(ROOT / "resource/pipeline/realtime_profile.json")[
+        "RealtimeProfileDraft"
+    ]
+    assert profile["custom_action"] == "RealtimeProfileDraft"
+    assert profile["custom_action_param"]["difficulty"] == "Easy"
+
+    rehearsal = load(ROOT / "resource/pipeline/realtime_rehearsal.json")[
+        "RealtimeEasyRehearsal"
+    ]
+    assert rehearsal["custom_action"] == "RealtimeEasyRehearsal"
+    assert rehearsal["custom_action_param"] == {
+        "duration_seconds": 30,
+        "dpi": 240,
+        "game_fps": 60,
+        "render_quality": "standard",
+        "note_speed": 2.0,
+        "timing_offset_ms": 0,
+    }
+
 
 def test_imported_template_hashes_match_declared_sources():
     sources = load(ROOT / "docs/template-sources.json")
