@@ -53,6 +53,34 @@
 
 把 `interface.json` 和 `resource` 部署到 MFAAvalonia 项目目录后即可启动。发布前还必须完成连接、截图、点击、BACK、应用启停、相关页面闭环及停止任务安全性真机验收。本机 ADB 路径、设备序列号、日志、截图、Profile、虚拟环境和 MFAAvalonia 运行目录均不得提交。
 
+## 正确启动 MFAAvalonia
+
+本机存在两个不同目录，不能混用：
+
+- `D:\Documents\workplace\MaaBanGDream` 是 Git 仓库和唯一源码目录。
+- `D:\Documents\workplace\.tools\MFAAvalonia` 是被 Git 忽略的 MFAAvalonia 运行目录，其中的 `interface.json` 和 `resource/resource` 只是部署副本。
+
+MFAAvalonia 不会直接读取仓库中的新版资源。修改代码后如果只重启 EXE，可能继续显示旧任务，或进入资源下载引导页。标准启动方式是从仓库执行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\launch-mfa.ps1
+```
+
+脚本会一次完成以下操作：
+
+1. 检查 MFAAvalonia、项目 `.venv`、Agent 和源码资源是否存在。
+2. 将仓库 `resource` 同步到 MFA 的 `resource/resource` 部署目录。
+3. 从仓库生成部署用 `interface.json`，将资源路径改为 `./resource/resource`，并将 Agent 路径指向仓库中的 `.venv` 和 `agent/server.py`。
+4. 关闭已有 MFAAvalonia 进程，以 MFA 安装目录作为工作目录重新启动。
+
+如果 MFA 显示“下载资源”而不是 MaaBanGDream 任务列表，不要点击下载；这表示启动了未同步的部署副本。关闭该页面并重新运行上述脚本。正常界面必须只显示：自动演出、实时演奏、实时演奏校准、挑战演出。
+
+如 MFAAvalonia 安装在其他位置，可显式传入：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\launch-mfa.ps1 -MfaRoot <MFAAvalonia目录>
+```
+
 ## 项目进度
 
 | 里程碑 | 状态 | 说明 |
@@ -75,6 +103,7 @@
 
 ### 2026-07-22
 
+- 修复 MFA 启动流程：明确区分 Git 源码与 MFA 部署副本，新增 `scripts/launch-mfa.ps1` 自动同步 Interface/资源、写入部署路径并重启 MFA；README 增加下载引导页故障处理，禁止再手工启动未同步副本。
 - 建立本地 `feature/formal-calibration-challenge`，将已通过验收的连续机器人排练快进合入本地 `main`；未推送 GitHub。
 - MFA 首页收敛为四项任务，隐藏开发/观察入口但保留底层 Pipeline 和测试。
 - 实时演奏增加正式模式：开始前严格匹配 Profile，自动切换正式并关闭自动演出、3D Cut-in 和 3D/MV 显示。
