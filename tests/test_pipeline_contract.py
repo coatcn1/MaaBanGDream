@@ -15,7 +15,7 @@ def load(path: Path):
 def test_interface_references_existing_entry_and_resource():
     interface = load(ROOT / "interface.json")
     assert interface["interface_version"] == 2
-    assert interface["version"] == "0.2.0"
+    assert interface["version"] == "0.3.0"
     assert interface["resource"][0]["path"] == ["./resource"]
     nodes = {}
     for path in (ROOT / "resource/pipeline").glob("*.json"):
@@ -96,10 +96,65 @@ def test_auto_live_safety_and_timeout_contract():
     ]
     assert incoming_to_start == ["AutoLiveEnabled"]
     assert nodes["AutoLiveStart"]["timeout"] == 300000
+    assert nodes["AutoLiveStart"]["target"] is True
     assert nodes["AutoLiveStart"]["next"] == ["AutoLiveResult"]
     assert nodes["AutoLiveResult"]["custom_action"] == "CommonRecover"
     assert nodes["AutoLiveResult"]["custom_action_param"]["home_node"] == (
         "AutoLiveHomeMarker"
+    )
+
+
+def test_auto_live_entry_recovers_to_home_before_navigation():
+    nodes = load(ROOT / "resource/pipeline/auto_live.json")
+    assert nodes["AutoLive"]["next"] == ["AutoLiveRoundGate"]
+    assert nodes["AutoLiveRoundGate"]["next"] == ["AutoLiveEnsureHome"]
+    recover = nodes["AutoLiveEnsureHome"]
+    assert recover["custom_action"] == "CommonRecover"
+    assert recover["custom_action_param"]["home_node"] == "AutoLiveHomeMarker"
+    assert recover["custom_action_param"]["escape_interval_ms"] == 1500
+    assert recover["custom_action_param"]["escape_timeout_ms"] == 60000
+    assert recover["custom_action_param"]["restart_limit"] == 2
+    assert recover["next"] == ["AutoLiveHomeMarker"]
+
+
+def test_multi_live_options_and_loop_contract():
+    interface = load(ROOT / "interface.json")
+    task = next(task for task in interface["task"] if task["name"] == "AutoLive")
+    assert task["option"] == [
+        "AutoLiveSongMode",
+        "AutoLiveDifficulty",
+        "AutoLiveCount",
+    ]
+    song_mode = interface["option"]["AutoLiveSongMode"]
+    assert [case["name"] for case in song_mode["cases"]] == ["Current", "Random"]
+    count = interface["option"]["AutoLiveCount"]
+    assert count["inputs"][0]["verify"] == "^(?:[1-9]|[1-9][0-9])$"
+    assert count["pipeline_override"]["AutoLiveRoundGate"]["max_hit"] == "{Count}"
+
+    nodes = load(ROOT / "resource/pipeline/auto_live.json")
+    assert nodes["AutoLiveRoundGate"]["max_hit"] == 1
+    assert nodes["AutoLiveRandomSong"]["target"] == [687, 642]
+    assert nodes["AutoLiveResult"]["next"] == [
+        "AutoLiveRoundGate",
+        "AutoLiveComplete",
+    ]
+    assert nodes["AutoLiveComplete"]["action"] == "DoNothing"
+
+
+def test_difficulty_cases_override_only_the_difficulty_target():
+    interface = load(ROOT / "interface.json")
+    cases = interface["option"]["AutoLiveDifficulty"]["cases"]
+    assert [case["name"] for case in cases] == [
+        "Easy",
+        "Normal",
+        "Hard",
+        "Expert",
+        "Special",
+    ]
+    assert all(
+        list(case["pipeline_override"]) == ["AutoLiveDifficulty"]
+        and list(case["pipeline_override"]["AutoLiveDifficulty"]) == ["target"]
+        for case in cases
     )
 
 
