@@ -42,6 +42,7 @@ def test_note_observer_throttles_detection_and_never_controls_device():
     assert stats.captured_frames > stats.processed_frames
     assert stats.detections == {"tap": stats.processed_frames}
     assert stats.lanes == {3: stats.processed_frames}
+    assert stats.unique_tracks == {"tap": 1}
     assert controls == []
 
 

@@ -12,6 +12,7 @@ from maa.context import Context
 from maa.custom_action import CustomAction
 
 from .note_detector import NoteDetector
+from .note_tracker import MultiNoteTracker
 
 
 @dataclass(frozen=True)
@@ -20,15 +21,22 @@ class NoteObservationStats:
     processed_frames: int
     detections: dict[str, int]
     lanes: dict[int, int]
+    unique_tracks: dict[str, int]
     stopped: bool
 
 
 class NoteObserver:
     """Run note detection at a bounded rate without issuing controller input."""
 
-    def __init__(self, detector: NoteDetector, clock: Callable[[], float] = time.monotonic):
+    def __init__(
+        self,
+        detector: NoteDetector,
+        clock: Callable[[], float] = time.monotonic,
+        tracker: MultiNoteTracker | None = None,
+    ):
         self.detector = detector
         self.clock = clock
+        self.tracker = tracker or MultiNoteTracker()
 
     def run(
         self,
@@ -48,6 +56,7 @@ class NoteObserver:
         captured = processed = 0
         kinds: Counter[str] = Counter()
         lanes: Counter[int] = Counter()
+        track_kinds: dict[int, str] = {}
         stopped = False
         while self.clock() < deadline:
             if stopping():
@@ -67,14 +76,18 @@ class NoteObserver:
             if not isinstance(image, np.ndarray) or image.ndim != 3 or image.size == 0:
                 continue
             notes = self.detector.detect(image, now)
+            tracked = self.tracker.update(notes, now)
             processed += 1
             kinds.update(note.kind.value for note in notes)
             lanes.update(note.lane for note in notes)
+            for item in tracked:
+                track_kinds.setdefault(item.track_id, item.note.kind.value)
         return NoteObservationStats(
             captured_frames=captured,
             processed_frames=processed,
             detections=dict(sorted(kinds.items())),
             lanes=dict(sorted(lanes.items())),
+            unique_tracks=dict(sorted(Counter(track_kinds.values()).items())),
             stopped=stopped,
         )
 
@@ -96,7 +109,9 @@ class RealtimeNoteObserve(CustomAction):
             "RealtimeNoteObserve "
             f"captured={stats.captured_frames} processed={stats.processed_frames} "
             f"detections={json.dumps(stats.detections, sort_keys=True)} "
-            f"lanes={json.dumps(stats.lanes, sort_keys=True)} stopped={stats.stopped}",
+            f"lanes={json.dumps(stats.lanes, sort_keys=True)} "
+            f"unique_tracks={json.dumps(stats.unique_tracks, sort_keys=True)} "
+            f"stopped={stats.stopped}",
             flush=True,
         )
         return not stats.stopped and stats.processed_frames > 0

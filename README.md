@@ -71,6 +71,11 @@
 
 ### 2026-07-22
 
+- 开始本地分支 `feature/realtime-note-tracking`：迁移同轨多音符 Track ID、唯一帧速度回归和短时轨迹记忆；观察日志增加 Tap/Skill/Flick 唯一轨迹计数，仍不触控。
+- 连续迁移触控规划与 MaaTouch 协议核心：覆盖和弦去重、Flick、双长条、尾端释放、预测释放、六秒强制释放、连接音符同批提交以及停止时全部触点复位；当前仍未连接真实 MaaTouch 服务。
+- MaaFramework 5.10.2 已原生提供多点 `TouchDown/TouchMove/TouchUp`，新增 Controller 调度适配层，停止、异常和关闭时都会尝试释放所有活动触点；优先采用框架原生输入，不依赖本机 ADB 路径。
+- 新增尚未暴露到 MFA 任务列表的实时引擎核心，串联取帧、检测、规划和原生触控；正常结束、用户停止和内部异常均通过 `finally` 执行规划器复位与触点关闭。
+- 旧项目没有持续使用 Git；后续将其整体作为参考源码审查，不再以旧工作树的 tracked/untracked 状态判断可迁移性，但继续排除日志、截图、本机配置和缓存。
 - 开始本地分支 `feature/realtime-note-observe`：只迁移音符视觉检测，不迁移未跟踪的旧多音符跟踪器，也不发送触控。
 - 从旧仓库干净 `HEAD` 导入七轨 Tap、Skill、Hold、Flick 检测与离线几何测试，并记录 GPL-3.0-only 来源映射；运行依赖使用无 GUI 的 OpenCV。
 - 新增 MaaController 实时音符观察入口，按 60 FPS 上限处理 BGR 截图并输出类型/轨道统计；任务不调用任何控制器输入 API。
