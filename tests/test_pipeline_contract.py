@@ -170,6 +170,20 @@ def test_realtime_observe_is_screenshot_only_and_bounded():
         "frame_timeout_ms": 150,
     }
 
+    note_task = next(
+        task for task in interface["task"] if task["name"] == "RealtimeNoteObserve"
+    )
+    assert note_task["entry"] == "RealtimeNoteObserve"
+    note_node = load(ROOT / "resource/pipeline/realtime_note_observe.json")[
+        "RealtimeNoteObserve"
+    ]
+    assert note_node["action"] == "Custom"
+    assert note_node["custom_action"] == "RealtimeNoteObserve"
+    assert note_node["custom_action_param"] == {
+        "duration_seconds": 10,
+        "target_fps": 60,
+    }
+
 
 def test_imported_template_hashes_match_declared_sources():
     sources = load(ROOT / "docs/template-sources.json")

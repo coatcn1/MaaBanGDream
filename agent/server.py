@@ -7,6 +7,7 @@ from maa.tasker import Tasker
 
 import common_recover  # noqa: F401 - registration happens at import time
 import realtime.frame_observer  # noqa: F401 - registration happens at import time
+import realtime.note_observer  # noqa: F401 - registration happens at import time
 
 
 def main() -> None:

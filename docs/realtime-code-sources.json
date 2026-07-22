@@ -1,0 +1,8 @@
+{
+  "source": "BanGDreamAutoScript HEAD",
+  "license": "GPL-3.0-only",
+  "files": {
+    "agent/realtime/note_detector.py": "bdas/realtime/vision.py",
+    "tests/test_realtime_note_detector.py": "tests/test_realtime_vision.py"
+  }
+}

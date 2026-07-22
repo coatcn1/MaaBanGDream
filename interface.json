@@ -44,6 +44,12 @@
       "label": "实时取帧检查（零触控）",
       "description": "仅连续截图 5 秒并输出帧率和最大取帧耗时，不点击、不滑动、不进入演出。",
       "entry": "RealtimeObserve"
+    },
+    {
+      "name": "RealtimeNoteObserve",
+      "label": "实时音符观察（零触控）",
+      "description": "请先手动进入排练演出；任务只观察 10 秒并统计音符类型和轨道，不执行任何触控。",
+      "entry": "RealtimeNoteObserve"
     }
   ],
   "option": {
