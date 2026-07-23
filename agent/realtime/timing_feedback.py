@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import deque
+from collections import Counter, deque
 from enum import Enum
 
 import cv2
@@ -43,12 +43,12 @@ class AdaptiveTimingController:
         self,
         initial_offset_ms: int,
         *,
-        step_ms: int = 2,
-        minimum_samples: int = 5,
-        imbalance: int = 4,
-        window_size: int = 7,
-        maximum_live_adjustment_ms: int = 50,
-        adjustment_cooldown_seconds: float = 1.0,
+        step_ms: int = 1,
+        minimum_samples: int = 12,
+        imbalance: int = 8,
+        window_size: int = 16,
+        maximum_live_adjustment_ms: int = 12,
+        adjustment_cooldown_seconds: float = 2.0,
     ) -> None:
         self.initial_offset_ms = int(initial_offset_ms)
         self.current_offset_ms = int(initial_offset_ms)
@@ -59,6 +59,9 @@ class AdaptiveTimingController:
         self.adjustment_cooldown_seconds = float(adjustment_cooldown_seconds)
         self.fast_samples = 0
         self.slow_samples = 0
+        self.valid_samples = 0
+        self.ignored_samples = 0
+        self._ignored_reasons: Counter[str] = Counter()
         self._samples: deque[TimingFeedback] = deque(maxlen=int(window_size))
         self._visible: TimingFeedback | None = None
         self._last_adjusted_at = float("-inf")
@@ -67,6 +70,9 @@ class AdaptiveTimingController:
         self,
         feedback: TimingFeedback | None,
         now: float,
+        *,
+        eligible: bool = True,
+        ignored_reason: str = "ineligible",
     ) -> int | None:
         if feedback is None:
             self._visible = None
@@ -74,6 +80,11 @@ class AdaptiveTimingController:
         if feedback == self._visible:
             return None
         self._visible = feedback
+        if not eligible:
+            self.ignored_samples += 1
+            self._ignored_reasons[ignored_reason] += 1
+            return None
+        self.valid_samples += 1
         self._samples.append(feedback)
         if feedback is TimingFeedback.FAST:
             self.fast_samples += 1
@@ -104,3 +115,7 @@ class AdaptiveTimingController:
         self.current_offset_ms = adjusted
         self._last_adjusted_at = float(now)
         return adjusted
+
+    @property
+    def ignored_reasons(self) -> dict[str, int]:
+        return dict(self._ignored_reasons)

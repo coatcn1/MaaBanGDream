@@ -1,0 +1,71 @@
+[
+  {
+    "timestamp": 0.00,
+    "notes": [
+      {"kind": "hold", "lane": 2, "x": 502.0, "y": 308.0, "width": 222, "height": 506}
+    ]
+  },
+  {
+    "timestamp": 0.02,
+    "notes": [
+      {"kind": "hold", "lane": 2, "x": 498.0, "y": 328.0, "width": 200, "height": 502},
+      {"kind": "tap", "lane": 1, "x": 408.4, "y": 548.0, "width": 70, "height": 58}
+    ]
+  },
+  {
+    "timestamp": 0.04,
+    "notes": [
+      {"kind": "hold", "lane": 2, "x": 500.0, "y": 316.0, "width": 208, "height": 498},
+      {"kind": "tap", "lane": 1, "x": 410.4, "y": 551.0, "width": 72, "height": 58}
+    ]
+  },
+  {
+    "timestamp": 0.06,
+    "notes": [
+      {"kind": "hold", "lane": 2, "x": 503.0, "y": 322.0, "width": 236, "height": 494},
+      {"kind": "tap", "lane": 1, "x": 401.2, "y": 560.0, "width": 62, "height": 44}
+    ]
+  },
+  {
+    "timestamp": 0.25,
+    "notes": [
+      {"kind": "hold", "lane": 2, "x": 487.0, "y": 306.0, "width": 242, "height": 478},
+      {"kind": "tap", "lane": 1, "x": 406.8, "y": 565.0, "width": 58, "height": 36}
+    ]
+  },
+  {
+    "timestamp": 0.45,
+    "notes": [
+      {"kind": "hold", "lane": 2, "x": 493.0, "y": 328.0, "width": 230, "height": 454},
+      {"kind": "tap", "lane": 1, "x": 405.6, "y": 564.0, "width": 58, "height": 38}
+    ]
+  },
+  {
+    "timestamp": 0.65,
+    "notes": [
+      {"kind": "hold", "lane": 2, "x": 491.0, "y": 340.0, "width": 238, "height": 426},
+      {"kind": "tap", "lane": 1, "x": 406.8, "y": 556.0, "width": 72, "height": 60}
+    ]
+  },
+  {
+    "timestamp": 0.85,
+    "notes": [
+      {"kind": "hold", "lane": 2, "x": 496.0, "y": 355.0, "width": 236, "height": 380},
+      {"kind": "tap", "lane": 1, "x": 407.7, "y": 558.0, "width": 66, "height": 52}
+    ]
+  },
+  {
+    "timestamp": 1.05,
+    "notes": [
+      {"kind": "hold", "lane": 2, "x": 490.0, "y": 382.0, "width": 228, "height": 330},
+      {"kind": "tap", "lane": 1, "x": 407.4, "y": 565.0, "width": 58, "height": 36}
+    ]
+  },
+  {
+    "timestamp": 1.25,
+    "notes": [
+      {"kind": "hold", "lane": 2, "x": 506.0, "y": 421.0, "width": 206, "height": 268},
+      {"kind": "tap", "lane": 1, "x": 409.8, "y": 565.0, "width": 56, "height": 36}
+    ]
+  }
+]

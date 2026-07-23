@@ -15,7 +15,26 @@ def test_debug_recorder_writes_lossless_trace_and_replay_summary(tmp_path):
     note = ObservedNote(NoteKind.HOLD, 4, 790, 400, 70, 200, 1.25)
     action = TouchAction(ActionKind.DOWN, 4, 1.25, contact=4, reason="hold")
 
-    recorder.record(frame, 1.25, [note], [action], "alive")
+    recorder.record(
+        frame,
+        1.25,
+        [note],
+        [action],
+        "alive",
+        [{
+            "event": "hold_start",
+            "lane": 4,
+            "body_confirmed": True,
+            "timestamp": 1.25,
+        }],
+        {
+            "initial_offset_ms": 0,
+            "current_offset_ms": 1,
+            "valid_samples": 12,
+            "ignored_samples": 3,
+            "ignored_reasons": {"active_hold": 3},
+        },
+    )
     recorder.record(frame, 1.27, [], [], "alive")
     recorder.close()
 
@@ -25,8 +44,12 @@ def test_debug_recorder_writes_lossless_trace_and_replay_summary(tmp_path):
     assert len(trace) == 2
     assert trace[0]["notes"][0]["kind"] == "hold"
     assert trace[0]["actions"][0]["kind"] == "down"
+    assert trace[0]["diagnostics"][0]["event"] == "hold_start"
+    assert trace[0]["timing_feedback"]["current_offset_ms"] == 1
     assert summary["trace_frames"] == 2
     assert summary["video_frames"] == 2
+    assert summary["diagnostic_counts"] == {"hold_start": 1}
+    assert summary["timing_feedback"]["current_offset_ms"] == 1
     assert (recorder.output_dir / "playfield.avi").stat().st_size > 0
 
 

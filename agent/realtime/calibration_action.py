@@ -95,9 +95,19 @@ class CalibrationRunner:
                 break
             record = self.run_round(False, offset)
             result = result_from_mapping(record)
-            effective_offset = int(record.get("timing_offset_ms", offset))
-            offset = adjusted_timing_offset(effective_offset, result)
-            record = {**record, "passed": calibration_passed(result, bool(record["survived"])), "suggested_timing_offset_ms": offset}
+            round_initial_offset = offset
+            effective_offset = int(record.get("timing_offset_ms", round_initial_offset))
+            suggested_offset = adjusted_timing_offset(effective_offset, result)
+            offset = max(
+                round_initial_offset - 5,
+                min(round_initial_offset + 5, suggested_offset),
+            )
+            record = {
+                **record,
+                "passed": calibration_passed(result, bool(record["survived"])),
+                "initial_timing_offset_ms": round_initial_offset,
+                "suggested_timing_offset_ms": offset,
+            }
             if record["song_id"] not in used:
                 rehearsals.append(record)
                 used.add(record["song_id"])

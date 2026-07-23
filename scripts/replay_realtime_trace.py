@@ -43,14 +43,15 @@ def post_release_rescues(actions: list[TouchAction], window: float = .4) -> int:
     return total
 
 
-def replay(path: Path) -> dict[str, int]:
+def replay(path: Path, *, timing_offset_ms: int = 0) -> dict[str, object]:
     planner = RealtimePlanner(
         judgement_y=565,
-        timing_offset_ms=0,
+        timing_offset_ms=timing_offset_ms,
         rescue_first_visible=True,
     )
     recorded: list[TouchAction] = []
     replayed: list[TouchAction] = []
+    diagnostics: list[dict[str, object]] = []
     with path.open(encoding="utf-8") as stream:
         for line in stream:
             frame = json.loads(line)
@@ -71,11 +72,20 @@ def replay(path: Path) -> dict[str, int]:
                 action.get("contact"),
                 str(action.get("reason", "")),
                 action.get("track_id"),
-            ) for action in frame["actions"])
+            ) for action in frame.get("actions", []))
             replayed.extend(planner.update(notes, now))
+            diagnostics.extend(planner.drain_diagnostics())
     return {
         "recorded_actions": len(recorded),
         "replayed_actions": len(replayed),
+        "recorded_transient_actions": sum(
+            action.kind in (ActionKind.TAP, ActionKind.FLICK)
+            for action in recorded
+        ),
+        "replayed_transient_actions": sum(
+            action.kind in (ActionKind.TAP, ActionKind.FLICK)
+            for action in replayed
+        ),
         "recorded_duplicate_judgements": duplicate_judgements(recorded),
         "replayed_duplicate_judgements": duplicate_judgements(replayed),
         "recorded_post_release_rescues": post_release_rescues(recorded),
@@ -86,14 +96,33 @@ def replay(path: Path) -> dict[str, int]:
         "replayed_linked_tail_taps": sum(
             action.reason == "linked-tail" for action in replayed
         ),
+        "filtered_adjacent_artifacts": planner.filtered_adjacent_artifacts,
+        "rejected_hold_candidates": planner.rejected_hold_candidates,
+        "predicted_releases_under_200_ms": sum(
+            event.get("event") == "hold_release"
+            and event.get("release_method") == "predicted-tail"
+            and int(event.get("duration_ms", 0)) < 200
+            for event in diagnostics
+        ),
+        "diagnostic_counts": {
+            event: sum(item.get("event") == event for item in diagnostics)
+            for event in sorted({
+                str(item.get("event", "unknown")) for item in diagnostics
+            })
+        },
     }
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Replay a realtime debug JSONL trace")
     parser.add_argument("trace", type=Path)
+    parser.add_argument("--timing-offset-ms", type=int, default=0)
     args = parser.parse_args()
-    print(json.dumps(replay(args.trace), ensure_ascii=False, indent=2))
+    print(json.dumps(
+        replay(args.trace, timing_offset_ms=args.timing_offset_ms),
+        ensure_ascii=False,
+        indent=2,
+    ))
 
 
 if __name__ == "__main__":

@@ -10,8 +10,10 @@ from agent.realtime import profile_play_action
 from agent.realtime.profile_play_action import (
     RealtimeLifeSafetyAbortCheck,
     RealtimeProfilePlay,
+    _write_calibration_report,
     pause_overlay_changed,
 )
+from agent.realtime.result_parser import LiveResult
 
 
 class Job:
@@ -88,3 +90,37 @@ def test_life_safety_abort_gate_only_matches_protected_abort(monkeypatch):
     assert not RealtimeLifeSafetyAbortCheck().run(context, argv)
     monkeypatch.setattr(profile_play_action, "_LAST_LIFE_SAFETY_ABORT", True)
     assert RealtimeLifeSafetyAbortCheck().run(context, argv)
+
+
+def test_calibration_report_contains_replay_diagnostics(tmp_path):
+    report = tmp_path / "round.json"
+    stats = EngineStats(
+        100,
+        20,
+        False,
+        completed=True,
+        timing_feedback_fast=2,
+        timing_feedback_slow=7,
+        initial_timing_offset_ms=3,
+        final_timing_offset_ms=5,
+        timing_feedback_valid=9,
+        timing_feedback_ignored=4,
+        timing_feedback_ignored_reasons={"active_hold": 4},
+        filtered_adjacent_artifacts=7,
+        rejected_hold_candidates=2,
+    )
+
+    _write_calibration_report(
+        report,
+        result=LiveResult(90, 5, 2, 1, 2, 2, 7),
+        stats=stats,
+        timing_offset_ms=5,
+        song_id="song-a",
+    )
+
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["initial_timing_offset_ms"] == 3
+    assert payload["timing_offset_ms"] == 5
+    assert payload["realtime_feedback_ignored_reasons"] == {"active_hold": 4}
+    assert payload["filtered_adjacent_artifacts"] == 7
+    assert payload["rejected_hold_candidates"] == 2

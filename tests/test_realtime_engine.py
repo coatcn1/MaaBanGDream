@@ -32,6 +32,7 @@ class Planner:
         self.resets = 0
         self.timing_offset_ms = 0
         self.offset_changes = []
+        self.has_active_holds = False
 
     def update(self, notes, now):
         self.updates += 1
@@ -44,6 +45,9 @@ class Planner:
     def set_timing_offset_ms(self, value):
         self.timing_offset_ms = value
         self.offset_changes.append(value)
+
+    def drain_diagnostics(self):
+        return []
 
 
 class Touch:
@@ -113,7 +117,10 @@ def test_engine_records_each_processed_frame_and_closes_debug_recorder():
             self.records = []
             self.closed = 0
 
-        def record(self, image, timestamp, notes, actions, life_status):
+        def record(
+            self, image, timestamp, notes, actions, life_status,
+            diagnostics, timing_state,
+        ):
             self.records.append((timestamp, notes, actions, life_status))
 
         def close(self):
@@ -287,10 +294,14 @@ def test_engine_applies_live_timing_feedback_to_the_planner():
         current_offset_ms = 0
         fast_samples = 0
         slow_samples = 0
+        valid_samples = 0
+        ignored_samples = 0
+        ignored_reasons = {}
 
-        def update(self, feedback, now):
+        def update(self, feedback, now, *, eligible, ignored_reason):
             if feedback == "slow":
                 self.slow_samples += 1
+                self.valid_samples += 1
             if feedback == "slow" and self.slow_samples == 5:
                 self.current_offset_ms = 2
                 return 2
@@ -305,3 +316,33 @@ def test_engine_applies_live_timing_feedback_to_the_planner():
     assert stats.initial_timing_offset_ms == 0
     assert stats.final_timing_offset_ms == 2
     assert stats.timing_feedback_slow == 25
+
+
+def test_engine_ignores_feedback_while_a_hold_is_active():
+    from agent.realtime.timing_feedback import AdaptiveTimingController
+
+    engine, _, planner, _, capture = build()
+    planner.has_active_holds = True
+
+    class FeedbackDetector:
+        def __init__(self):
+            self.index = 0
+
+        def detect(self, image):
+            self.index += 1
+            return "slow" if self.index % 2 else None
+
+    engine.timing_feedback_detector = FeedbackDetector()
+    engine.timing_controller = AdaptiveTimingController(
+        0,
+        minimum_samples=3,
+        imbalance=3,
+        adjustment_cooldown_seconds=0,
+    )
+
+    stats = engine.run(capture, lambda: False, duration_seconds=1, target_fps=60)
+
+    assert planner.offset_changes == []
+    assert stats.timing_feedback_valid == 0
+    assert stats.timing_feedback_ignored == 25
+    assert stats.timing_feedback_ignored_reasons == {"active_hold": 25}

@@ -49,3 +49,19 @@ def test_duplicate_frame_does_not_pollute_velocity_regression():
     assert duplicate.sample_count == 2
     assert fresh.sample_count == 3
     assert 900 <= fresh.velocity_y <= 1100
+
+
+def test_tracker_exposes_origin_motion_and_trigger_metadata():
+    tracker = MultiNoteTracker(memory_seconds=.3)
+    first = tracker.update([note(470, 1.0)], 1.0)[0]
+    second = tracker.update([note(520, 1.05)], 1.05)[0]
+    tracker.mark_fired(second.track_id, 1.05)
+    fired = tracker.update([note(560, 1.10)], 1.10)[0]
+
+    assert first.first_y == 470
+    assert second.minimum_y == 470
+    assert second.motion_samples == 2
+    assert second.downward_motion_frames == 1
+    assert fired.downward_motion_frames == 2
+    assert fired.fired
+    assert fired.last_fired_at == 1.05

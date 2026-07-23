@@ -36,7 +36,9 @@ def test_detector_distinguishes_fast_slow_and_no_feedback():
 
 
 def test_controller_counts_one_visible_label_once_and_adjusts_after_a_streak():
-    controller = AdaptiveTimingController(10, minimum_samples=5, imbalance=4)
+    controller = AdaptiveTimingController(
+        10, minimum_samples=5, imbalance=4, adjustment_cooldown_seconds=0,
+    )
 
     assert controller.update(TimingFeedback.SLOW, 0.0) is None
     assert controller.update(TimingFeedback.SLOW, 0.1) is None
@@ -44,8 +46,8 @@ def test_controller_counts_one_visible_label_once_and_adjusts_after_a_streak():
         controller.update(None, index)
         changed = controller.update(TimingFeedback.SLOW, index + .1)
 
-    assert changed == 12
-    assert controller.current_offset_ms == 12
+    assert changed == 11
+    assert controller.current_offset_ms == 11
     assert controller.slow_samples == 5
     assert controller.fast_samples == 0
 
@@ -67,3 +69,33 @@ def test_controller_reverses_for_fast_and_clamps_live_adjustment():
 
     assert controller.current_offset_ms == -10
     assert controller.fast_samples == 12
+
+
+def test_default_controller_never_moves_more_than_twelve_ms():
+    controller = AdaptiveTimingController(20)
+
+    for index in range(200):
+        controller.update(None, index * .25)
+        controller.update(TimingFeedback.SLOW, index * .25 + .01)
+
+    assert controller.current_offset_ms == 32
+
+
+def test_ineligible_feedback_is_recorded_but_never_adjusts():
+    controller = AdaptiveTimingController(
+        0, minimum_samples=3, imbalance=3, adjustment_cooldown_seconds=0,
+    )
+
+    for index in range(6):
+        controller.update(None, index)
+        controller.update(
+            TimingFeedback.SLOW,
+            index + .1,
+            eligible=False,
+            ignored_reason="active_hold",
+        )
+
+    assert controller.current_offset_ms == 0
+    assert controller.valid_samples == 0
+    assert controller.ignored_samples == 6
+    assert controller.ignored_reasons == {"active_hold": 6}

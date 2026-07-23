@@ -14,6 +14,11 @@ class _Track:
     samples: list[ObservedNote] = field(default_factory=list)
     last_seen: float = 0.0
     fired: bool = False
+    first_y: float = 0.0
+    minimum_y: float = 0.0
+    motion_samples: int = 1
+    downward_motion_frames: int = 0
+    fired_at: float | None = None
 
 
 @dataclass(frozen=True)
@@ -24,6 +29,11 @@ class TrackedNote:
     velocity_y: float
     sample_count: int
     fired: bool
+    first_y: float
+    minimum_y: float
+    motion_samples: int
+    downward_motion_frames: int
+    last_fired_at: float | None
 
 
 class MultiNoteTracker:
@@ -137,12 +147,26 @@ class MultiNoteTracker:
                 if abs(note.y - latest.y) >= .2 or abs(note.x - latest.x) >= .2:
                     track.samples.append(note)
                     track.samples = track.samples[-self.max_samples:]
+                    track.motion_samples += 1
+                    track.downward_motion_frames = (
+                        track.downward_motion_frames + 1
+                        if note.y > latest.y else 0
+                    )
+                track.minimum_y = min(track.minimum_y, note.y)
                 track.last_seen = now
                 current_ids.add(track.track_id)
             for note in candidates:
                 if id(note) in assigned_notes:
                     continue
-                track = _Track(self._next_id, kind, lane, [note], now)
+                track = _Track(
+                    self._next_id,
+                    kind,
+                    lane,
+                    [note],
+                    now,
+                    first_y=note.y,
+                    minimum_y=note.y,
+                )
                 self._tracks[track.track_id] = track
                 current_ids.add(track.track_id)
                 self._next_id += 1
@@ -157,12 +181,18 @@ class MultiNoteTracker:
                 self._velocity(track.samples),
                 len(track.samples),
                 track.fired,
+                track.first_y,
+                track.minimum_y,
+                track.motion_samples,
+                track.downward_motion_frames,
+                track.fired_at,
             ))
         return result
 
-    def mark_fired(self, track_id: int) -> None:
+    def mark_fired(self, track_id: int, now: float | None = None) -> None:
         if track_id in self._tracks:
             self._tracks[track_id].fired = True
+            self._tracks[track_id].fired_at = now
 
     def reset(self) -> None:
         self._tracks.clear()

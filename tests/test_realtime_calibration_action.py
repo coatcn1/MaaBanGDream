@@ -58,8 +58,8 @@ def test_next_round_starts_from_the_live_adjusted_offset():
     offset, _, _ = CalibrationRunner(run_round).run()
 
     assert calls[0] == (False, 0)
-    assert calls[1] == (False, 30)
-    assert offset == 30
+    assert calls[1] == (False, 5)
+    assert offset == 5
 
 
 def test_three_failed_rehearsals_stop_before_formal():

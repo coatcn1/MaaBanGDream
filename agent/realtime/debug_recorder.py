@@ -36,6 +36,8 @@ class RealtimeDebugRecorder:
         self._error: BaseException | None = None
         self._event_count = 0
         self._released_at: dict[int, float] = {}
+        self._diagnostic_counts: dict[str, int] = {}
+        self._last_timing_state: dict[str, object] = {}
         self._thread = threading.Thread(target=self._encode_video, daemon=True)
         self._thread.start()
 
@@ -54,14 +56,25 @@ class RealtimeDebugRecorder:
         notes: list[ObservedNote],
         actions: list[TouchAction],
         life_status: str | None,
+        diagnostics: list[dict[str, object]] | None = None,
+        timing_state: dict[str, object] | None = None,
     ) -> None:
+        diagnostics = diagnostics or []
+        timing_state = timing_state or {}
         self._trace.write(json.dumps({
             "frame": self._trace_frames,
             "timestamp": timestamp,
             "life_status": life_status,
             "notes": [self._serialise(note) for note in notes],
             "actions": [self._serialise(action) for action in actions],
+            "diagnostics": diagnostics,
+            "timing_feedback": timing_state,
         }, ensure_ascii=False, separators=(",", ":")) + "\n")
+        for diagnostic in diagnostics:
+            event = str(diagnostic.get("event", "unknown"))
+            self._diagnostic_counts[event] = self._diagnostic_counts.get(event, 0) + 1
+        if timing_state:
+            self._last_timing_state = dict(timing_state)
         for action in actions:
             if action.kind.value == "up":
                 self._released_at[action.lane] = timestamp
@@ -153,6 +166,8 @@ class RealtimeDebugRecorder:
             "dropped_video_frames": self._dropped_video_frames,
             "video_fps": self.video_fps,
             "event_screenshots": self._event_count,
+            "diagnostic_counts": self._diagnostic_counts,
+            "timing_feedback": self._last_timing_state,
         }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         if self._error is not None:
             raise RuntimeError("实时调试录像写入失败") from self._error

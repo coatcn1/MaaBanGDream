@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -14,7 +14,10 @@ from .touch_planner import RealtimePlanner
 
 
 class DebugRecorder:
-    def record(self, image, timestamp, notes, actions, life_status): ...
+    def record(
+        self, image, timestamp, notes, actions, life_status,
+        diagnostics=None, timing_state=None,
+    ): ...
     def close(self): ...
 
 
@@ -30,6 +33,11 @@ class EngineStats:
     timing_feedback_slow: int = 0
     initial_timing_offset_ms: int = 0
     final_timing_offset_ms: int = 0
+    timing_feedback_valid: int = 0
+    timing_feedback_ignored: int = 0
+    timing_feedback_ignored_reasons: dict[str, int] = field(default_factory=dict)
+    filtered_adjacent_artifacts: int = 0
+    rejected_hold_candidates: int = 0
 
 
 class RealtimeEngine:
@@ -87,6 +95,8 @@ class RealtimeEngine:
         initial_timing_offset_ms = int(
             getattr(self.planner, "timing_offset_ms", 0)
         )
+        last_transient_action_at = float("-inf")
+        hold_feedback_block_until = float("-inf")
         try:
             while self.clock() < deadline:
                 if stopping():
@@ -134,12 +144,38 @@ class RealtimeEngine:
                         frames += 1
                         continue
                 notes = self.detector.detect(image, now)
+                actions = self.planner.update(notes, now)
+                if any(
+                    action.kind.value in {"tap", "flick"} for action in actions
+                ):
+                    last_transient_action_at = now
+                if any(action.kind.value == "up" for action in actions):
+                    hold_feedback_block_until = max(
+                        hold_feedback_block_until, now + .4
+                    )
                 if (
                     self.timing_feedback_detector is not None
                     and self.timing_controller is not None
                 ):
                     feedback = self.timing_feedback_detector.detect(image)
-                    adjusted = self.timing_controller.update(feedback, now)
+                    if self.planner.has_active_holds:
+                        eligible = False
+                        ignored_reason = "active_hold"
+                    elif now < hold_feedback_block_until:
+                        eligible = False
+                        ignored_reason = "recent_hold_release"
+                    elif now - last_transient_action_at > .6:
+                        eligible = False
+                        ignored_reason = "no_recent_transient_input"
+                    else:
+                        eligible = True
+                        ignored_reason = ""
+                    adjusted = self.timing_controller.update(
+                        feedback,
+                        now,
+                        eligible=eligible,
+                        ignored_reason=ignored_reason,
+                    )
                     if adjusted is not None:
                         self.planner.set_timing_offset_ms(adjusted)
                         print(
@@ -149,9 +185,22 @@ class RealtimeEngine:
                             f"offset={adjusted}ms",
                             flush=True,
                         )
-                actions = self.planner.update(notes, now)
+                diagnostics = self.planner.drain_diagnostics()
                 if self.debug_recorder is not None:
-                    self.debug_recorder.record(image, now, notes, actions, life_status)
+                    timing_state = (
+                        {
+                            "initial_offset_ms": initial_timing_offset_ms,
+                            "current_offset_ms": self.timing_controller.current_offset_ms,
+                            "valid_samples": self.timing_controller.valid_samples,
+                            "ignored_samples": self.timing_controller.ignored_samples,
+                            "ignored_reasons": self.timing_controller.ignored_reasons,
+                        }
+                        if self.timing_controller is not None else {}
+                    )
+                    self.debug_recorder.record(
+                        image, now, notes, actions, life_status,
+                        diagnostics, timing_state,
+                    )
                 if actions:
                     self.touch.dispatch(actions)
                     actions_count += len(actions)
@@ -173,6 +222,20 @@ class RealtimeEngine:
                     if self.timing_controller is not None
                     else int(getattr(self.planner, "timing_offset_ms", 0))
                 ),
+                (
+                    self.timing_controller.valid_samples
+                    if self.timing_controller is not None else 0
+                ),
+                (
+                    self.timing_controller.ignored_samples
+                    if self.timing_controller is not None else 0
+                ),
+                (
+                    self.timing_controller.ignored_reasons
+                    if self.timing_controller is not None else {}
+                ),
+                int(getattr(self.planner, "filtered_adjacent_artifacts", 0)),
+                int(getattr(self.planner, "rejected_hold_candidates", 0)),
             )
         finally:
             cleanup = self.planner.reset(self.clock())

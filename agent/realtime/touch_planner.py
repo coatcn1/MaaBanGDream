@@ -68,7 +68,16 @@ class RealtimePlanner:
         self._hold_release_at: dict[int, float] = {}
         self._hold_started: dict[int, float] = {}
         self._hold_released_at: dict[int, float] = {}
+        self._hold_confirmed: set[int] = set()
+        self._last_hold_rejection: dict[int, float] = {}
+        self._diagnostics: list[dict[str, object]] = []
+        self.filtered_adjacent_artifacts = 0
+        self.rejected_hold_candidates = 0
         self._note_tracker = MultiNoteTracker(memory_seconds=track_memory_seconds)
+
+    @property
+    def has_active_holds(self) -> bool:
+        return bool(self._active_hold_tail)
 
     @property
     def timing_offset_ms(self) -> int:
@@ -89,7 +98,37 @@ class RealtimePlanner:
         velocity = (tail - previous_tail) / elapsed
         if 80 <= velocity <= 3000:
             release_at = now + (self.hold_release_y - tail) / velocity
-            self._hold_release_at[lane] = max(now + .02, release_at)
+            started = self._hold_started.get(lane, now)
+            self._hold_release_at[lane] = max(
+                now + .02,
+                started + .30,
+                release_at,
+            )
+
+    def _record_diagnostic(self, event: str, now: float, **fields: object) -> None:
+        self._diagnostics.append({"event": event, "timestamp": now, **fields})
+
+    def drain_diagnostics(self) -> list[dict[str, object]]:
+        result = self._diagnostics
+        self._diagnostics = []
+        return result
+
+    def _finish_hold(self, lane: int, now: float, reason: str) -> None:
+        started = self._hold_started.get(lane, now)
+        self._record_diagnostic(
+            "hold_release",
+            now,
+            lane=lane,
+            release_method=reason,
+            duration_ms=round(max(0.0, now - started) * 1000),
+            body_confirmed=lane in self._hold_confirmed,
+        )
+        self._active_hold_tail.pop(lane, None)
+        self._hold_seen.pop(lane, None)
+        self._hold_release_at.pop(lane, None)
+        self._hold_started.pop(lane, None)
+        self._hold_confirmed.discard(lane)
+        self._hold_released_at[lane] = now
 
     def _trigger_y(self, previous: ObservedNote, note: ObservedNote) -> float:
         elapsed = note.timestamp - previous.timestamp
@@ -196,23 +235,57 @@ class RealtimePlanner:
                     and self._same_falling_note(previous, note)
                     and self._hold_head(previous) < self._trigger_y(previous, note) <= head
                 )
-                release_age = now - self._hold_released_at.get(note.lane, float("-inf"))
-                restart_allowed = (
-                    release_age >= self.hold_restart_cooldown_seconds
-                    and (
+                body_confirmed = (
+                    note.height >= 80
+                    or (
                         should_cross
-                        or release_age >= self.post_release_rescue_seconds
+                        and previous is not None
+                        and previous.height >= 30
+                        and note.height >= 30
+                    )
+                )
+                release_age = now - self._hold_released_at.get(note.lane, float("-inf"))
+                strong_new_crossing = (
+                    should_cross
+                    and previous is not None
+                    and self._hold_head(previous) <= self.judgement_y - 25
+                )
+                restart_allowed = (
+                    note.lane not in self._hold_released_at
+                    or (
+                        release_age >= self.hold_restart_cooldown_seconds
+                        and strong_new_crossing
                     )
                 )
                 if (
                     note.lane not in self._active_hold_tail
                     and restart_allowed
+                    and body_confirmed
                     and (
                     should_rescue or should_cross or should_pair_rescue
                     )
                 ):
                     self._active_hold_tail[note.lane] = tail
                     self._hold_started[note.lane] = now
+                    self._hold_confirmed.add(note.lane)
+                    start_reason = (
+                        "rescue" if should_rescue else
+                        "paired-rescue" if should_pair_rescue else "crossing"
+                    )
+                    self._record_diagnostic(
+                        "hold_start",
+                        now,
+                        lane=note.lane,
+                        start_reason=start_reason,
+                        body_confirmed=True,
+                        height=round(note.height, 2),
+                    )
+                    self._record_diagnostic(
+                        "hold_body_confirmed",
+                        now,
+                        lane=note.lane,
+                        height=round(note.height, 2),
+                    )
                     if previous is not None:
                         self._predict_hold_release(
                             note.lane, self._hold_tail(previous),
@@ -220,36 +293,44 @@ class RealtimePlanner:
                         )
                     actions.append(TouchAction(
                         ActionKind.DOWN, note.lane, now, note.lane,
-                        (
-                            "rescue" if should_rescue else
-                            "paired-rescue" if should_pair_rescue else "crossing"
-                        ),
+                        start_reason,
                     ))
+                elif (
+                    note.lane not in self._active_hold_tail
+                    and head >= self.judgement_y - 5
+                    and not body_confirmed
+                ):
+                    last_rejected = self._last_hold_rejection.get(
+                        note.lane, float("-inf")
+                    )
+                    if now - last_rejected > self.track_memory_seconds:
+                        self.rejected_hold_candidates += 1
+                        self._last_hold_rejection[note.lane] = now
+                        self._record_diagnostic(
+                            "hold_candidate_rejected",
+                            now,
+                            lane=note.lane,
+                            height=round(note.height, 2),
+                            reason="unconfirmed-short-fragment",
+                        )
                 elif note.lane in self._active_hold_tail:
                     previous_tail = self._active_hold_tail[note.lane]
                     tail_ring_at_line = (
                         note.height <= 30
                         and note.width >= 70
                         and note.y >= 555
+                        and note.lane in self._hold_confirmed
                     )
                     if tail_ring_at_line:
                         actions.append(TouchAction(
                             ActionKind.UP, note.lane, now, note.lane, "tail-ring"
                         ))
-                        self._active_hold_tail.pop(note.lane, None)
-                        self._hold_seen.pop(note.lane, None)
-                        self._hold_release_at.pop(note.lane, None)
-                        self._hold_started.pop(note.lane, None)
-                        self._hold_released_at[note.lane] = now
+                        self._finish_hold(note.lane, now, "tail-ring")
                     elif previous_tail < self.hold_release_y <= tail:
                         actions.append(TouchAction(
                             ActionKind.UP, note.lane, now, note.lane, "tail-crossing"
                         ))
-                        self._active_hold_tail.pop(note.lane, None)
-                        self._hold_seen.pop(note.lane, None)
-                        self._hold_release_at.pop(note.lane, None)
-                        self._hold_started.pop(note.lane, None)
-                        self._hold_released_at[note.lane] = now
+                        self._finish_hold(note.lane, now, "tail-crossing")
                     else:
                         if note.height >= 40:
                             self._predict_hold_release(
@@ -261,6 +342,33 @@ class RealtimePlanner:
         for tracked in sorted(tracked_notes, key=lambda item: (item.note.lane, item.note.y)):
             note = tracked.note
             if tracked.fired:
+                continue
+            adjacent_to_hold = any(
+                abs(note.lane - lane) == 1 for lane in self._active_hold_tail
+            )
+            trusted_adjacent_track = (
+                tracked.minimum_y <= self.judgement_y - 40
+                and tracked.motion_samples >= 3
+                and tracked.downward_motion_frames >= 2
+                and tracked.velocity_y > 0
+            )
+            if (
+                adjacent_to_hold
+                and note.y >= self.judgement_y - 20
+                and not trusted_adjacent_track
+            ):
+                self._note_tracker.mark_fired(tracked.track_id, now)
+                self.filtered_adjacent_artifacts += 1
+                self._record_diagnostic(
+                    "adjacent_artifact_filtered",
+                    now,
+                    lane=note.lane,
+                    track_id=tracked.track_id,
+                    first_y=round(tracked.first_y, 2),
+                    minimum_y=round(tracked.minimum_y, 2),
+                    motion_samples=tracked.motion_samples,
+                    downward_motion_frames=tracked.downward_motion_frames,
+                )
                 continue
             crossed_rescue_line = (
                 tracked.previous_y is not None
@@ -282,7 +390,7 @@ class RealtimePlanner:
                         and tracked.previous_y <= self.judgement_y - 25
                         and tracked.previous_y < target <= note.y
                     )
-                    self._note_tracker.mark_fired(tracked.track_id)
+                    self._note_tracker.mark_fired(tracked.track_id, now)
                     if is_real_crossing:
                         kind = (
                             ActionKind.FLICK
@@ -298,7 +406,7 @@ class RealtimePlanner:
                 actions.append(TouchAction(
                     kind, note.lane, now, reason="rescue", track_id=tracked.track_id
                 ))
-                self._note_tracker.mark_fired(tracked.track_id)
+                self._note_tracker.mark_fired(tracked.track_id, now)
                 continue
             if tracked.previous_y is None or tracked.velocity_y <= 0:
                 continue
@@ -308,7 +416,7 @@ class RealtimePlanner:
                 actions.append(TouchAction(
                     kind, note.lane, now, reason="crossing", track_id=tracked.track_id
                 ))
-                self._note_tracker.mark_fired(tracked.track_id)
+                self._note_tracker.mark_fired(tracked.track_id, now)
         # Losing the green mask is not evidence that the tail has ended. Skill
         # animations and judgement text can cover a long bar for many frames.
         # Release only on an observed tail crossing, or via reset/failsafe when
@@ -318,21 +426,13 @@ class RealtimePlanner:
                 actions.append(TouchAction(
                     ActionKind.UP, lane, now, lane, "predicted-tail"
                 ))
-                self._active_hold_tail.pop(lane, None)
-                self._hold_seen.pop(lane, None)
-                self._hold_release_at.pop(lane, None)
-                self._hold_started.pop(lane, None)
-                self._hold_released_at[lane] = now
+                self._finish_hold(lane, now, "predicted-tail")
         for lane, started in list(self._hold_started.items()):
             if lane in self._active_hold_tail and now - started >= self.hold_max_seconds:
                 actions.append(TouchAction(
                     ActionKind.UP, lane, now, lane, "hold-failsafe"
                 ))
-                self._active_hold_tail.pop(lane, None)
-                self._hold_seen.pop(lane, None)
-                self._hold_release_at.pop(lane, None)
-                self._hold_started.pop(lane, None)
-                self._hold_released_at[lane] = now
+                self._finish_hold(lane, now, "hold-failsafe")
         if (
             self.lane_sweep_interval is not None
             and now - self._last_lane_sweep >= self.lane_sweep_interval
@@ -414,6 +514,8 @@ class RealtimePlanner:
         self._hold_release_at.clear()
         self._hold_started.clear()
         self._hold_released_at.clear()
+        self._hold_confirmed.clear()
+        self._last_hold_rejection.clear()
         self._previous.clear()
         self._last_trigger.clear()
         self._note_tracker.reset()

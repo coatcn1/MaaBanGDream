@@ -46,9 +46,17 @@ def _write_calibration_report(path, *, result, stats, timing_offset_ms, song_id)
     payload = {
         **result.to_dict(),
         "timing_offset_ms": int(timing_offset_ms),
+        "initial_timing_offset_ms": stats.initial_timing_offset_ms,
         "song_id": str(song_id),
         "survived": not stats.life_depleted,
         "completed": bool(stats.completed),
+        "realtime_feedback_fast": stats.timing_feedback_fast,
+        "realtime_feedback_slow": stats.timing_feedback_slow,
+        "realtime_feedback_valid": stats.timing_feedback_valid,
+        "realtime_feedback_ignored": stats.timing_feedback_ignored,
+        "realtime_feedback_ignored_reasons": stats.timing_feedback_ignored_reasons,
+        "filtered_adjacent_artifacts": stats.filtered_adjacent_artifacts,
+        "rejected_hold_candidates": stats.rejected_hold_candidates,
     }
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -229,6 +237,10 @@ class RealtimeProfilePlay(CustomAction):
             f"life_depleted={stats.life_depleted} completed={stats.completed} "
             f"feedback_fast={stats.timing_feedback_fast} "
             f"feedback_slow={stats.timing_feedback_slow} "
+            f"feedback_valid={stats.timing_feedback_valid} "
+            f"feedback_ignored={stats.timing_feedback_ignored} "
+            f"filtered_adjacent={stats.filtered_adjacent_artifacts} "
+            f"rejected_holds={stats.rejected_hold_candidates} "
             f"timing_offset={stats.initial_timing_offset_ms}"
             f"->{stats.final_timing_offset_ms}",
             flush=True,
@@ -259,6 +271,11 @@ class RealtimeProfilePlay(CustomAction):
                 "suggested_timing_offset_ms": suggestion,
                 "realtime_feedback_fast": stats.timing_feedback_fast,
                 "realtime_feedback_slow": stats.timing_feedback_slow,
+                "realtime_feedback_valid": stats.timing_feedback_valid,
+                "realtime_feedback_ignored": stats.timing_feedback_ignored,
+                "realtime_feedback_ignored_reasons": stats.timing_feedback_ignored_reasons,
+                "filtered_adjacent_artifacts": stats.filtered_adjacent_artifacts,
+                "rejected_hold_candidates": stats.rejected_hold_candidates,
             }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             print(
                 f"RealtimeProfilePlay result_frame={path.name} "

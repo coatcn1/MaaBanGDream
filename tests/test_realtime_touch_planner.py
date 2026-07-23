@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from agent.realtime.note_detector import NoteKind, ObservedNote
 from agent.realtime.touch_planner import ActionKind, RealtimePlanner
 
@@ -42,13 +45,14 @@ def test_planner_keeps_a_hold_pressed_through_short_detection_gaps():
     assert gap == []
 
 
-def test_planner_releases_a_hold_from_head_motion_when_tail_is_then_lost():
+def test_planner_does_not_predict_hold_release_before_three_hundred_ms():
     planner = RealtimePlanner(judgement_y=620, timing_offset_ms=0, hold_grace_seconds=.35)
     planner.update([_note(NoteKind.HOLD, 2, 560, 1.00)], now=1.00)
     down = planner.update([_note(NoteKind.HOLD, 2, 580, 1.02)], now=1.02)
 
     assert [action.kind for action in down] == [ActionKind.DOWN]
-    released = planner.update([], now=1.05)
+    assert planner.update([], now=1.05) == []
+    released = planner.update([], now=1.33)
     assert [(action.kind, action.reason) for action in released] == [
         (ActionKind.UP, "predicted-tail")
     ]
@@ -424,3 +428,119 @@ def test_real_crossing_note_after_hold_release_is_not_suppressed():
     assert [(action.kind, action.reason) for action in actions] == [
         (ActionKind.TAP, "crossing")
     ]
+
+
+def test_latest_hold_replay_filters_all_late_born_adjacent_taps():
+    fixture = Path(__file__).parent / "fixtures" / "latest_hold_adjacent_replay.json"
+    frames = json.loads(fixture.read_text(encoding="utf-8"))
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+    adjacent = []
+
+    for frame in frames:
+        timestamp = float(frame["timestamp"])
+        notes = [
+            ObservedNote(
+                NoteKind(item["kind"]),
+                item["lane"],
+                item["x"],
+                item["y"],
+                item["width"],
+                item["height"],
+                timestamp,
+            )
+            for item in frame["notes"]
+        ]
+        adjacent.extend(
+            action
+            for action in planner.update(notes, timestamp)
+            if action.kind in (ActionKind.TAP, ActionKind.FLICK)
+            and action.lane == 1
+        )
+
+    assert adjacent == []
+    assert planner.filtered_adjacent_artifacts == 7
+
+
+def test_adjacent_note_tracked_from_above_is_kept_during_hold():
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+    planner.update([
+        ObservedNote(NoteKind.HOLD, 2, 500, 310, 220, 510, 1.0),
+        ObservedNote(NoteKind.TAP, 1, 400, 470, 60, 30, 1.0),
+    ], now=1.0)
+    planner.update([
+        ObservedNote(NoteKind.HOLD, 2, 500, 330, 220, 500, 1.05),
+        ObservedNote(NoteKind.TAP, 1, 405, 525, 65, 35, 1.05),
+    ], now=1.05)
+    actions = planner.update([
+        ObservedNote(NoteKind.HOLD, 2, 500, 350, 220, 490, 1.10),
+        ObservedNote(NoteKind.TAP, 1, 410, 570, 70, 40, 1.10),
+    ], now=1.10)
+
+    assert [(action.kind, action.lane) for action in actions] == [
+        (ActionKind.TAP, 1)
+    ]
+
+
+def test_adjacent_track_with_reversed_motion_is_filtered_during_hold():
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+    frames = [
+        (1.00, 500),
+        (1.04, 540),
+        (1.08, 530),
+        (1.12, 570),
+    ]
+    actions = []
+    for timestamp, tap_y in frames:
+        actions.extend(planner.update([
+            ObservedNote(NoteKind.HOLD, 2, 500, 310, 220, 510, timestamp),
+            ObservedNote(NoteKind.TAP, 1, 400, tap_y, 60, 30, timestamp),
+        ], now=timestamp))
+
+    assert not [
+        action for action in actions
+        if action.kind in (ActionKind.TAP, ActionKind.FLICK) and action.lane == 1
+    ]
+    assert planner.filtered_adjacent_artifacts == 1
+
+
+def test_predicted_hold_release_waits_at_least_three_hundred_ms():
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+    down = planner.update([
+        ObservedNote(NoteKind.HOLD, 3, 640, 500, 100, 140, 1.0)
+    ], now=1.0)
+    planner.update([
+        ObservedNote(NoteKind.HOLD, 3, 640, 550, 100, 120, 1.05)
+    ], now=1.05)
+
+    assert [action.kind for action in down] == [ActionKind.DOWN]
+    assert planner.update([], now=1.20) == []
+    release = planner.update([], now=1.31)
+    assert [(action.kind, action.reason) for action in release] == [
+        (ActionKind.UP, "predicted-tail")
+    ]
+
+
+def test_released_hold_cannot_restart_from_clear_lingering_body_after_window():
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+    planner.update([
+        ObservedNote(NoteKind.HOLD, 4, 730, 405, 100, 320, 1.0)
+    ], now=1.0)
+    planner.update([
+        ObservedNote(NoteKind.HOLD, 4, 790, 572, 100, 18, 2.0)
+    ], now=2.0)
+
+    lingering = planner.update([
+        ObservedNote(NoteKind.HOLD, 4, 790, 520, 100, 100, 2.6)
+    ], now=2.6)
+
+    assert lingering == []
