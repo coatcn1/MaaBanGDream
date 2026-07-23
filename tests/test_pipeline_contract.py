@@ -128,6 +128,25 @@ def test_auto_live_entry_recovers_to_home_before_navigation():
     assert recover["next"] == ["AutoLiveHomeMarker"]
 
 
+def test_cold_login_uses_stable_menu_marker_before_back():
+    auto = load(ROOT / "resource/pipeline/auto_live.json")
+    marker = auto["AutoLiveLoginScreenMarker"]
+    assert marker["template"] == "login_menu_marker.png"
+    assert marker["roi"] == [1150, 590, 130, 130]
+
+    for path, node_name in (
+        ("auto_live.json", "AutoLiveEnsureHome"),
+        ("realtime_multi_live.json", "RealtimeLiveEnsureHome"),
+        ("challenge_live.json", "ChallengeEnsureHome"),
+    ):
+        params = load(ROOT / "resource/pipeline" / path)[node_name][
+            "custom_action_param"
+        ]
+        assert params["login_start_node"] == "AutoLiveLoginScreenMarker"
+        assert params["login_start_target"] == [640, 635]
+        assert params["escape_after_login_start"] is True
+
+
 def test_multi_live_options_and_loop_contract():
     interface = load(ROOT / "interface.json")
     task = next(task for task in interface["task"] if task["name"] == "AutoLive")

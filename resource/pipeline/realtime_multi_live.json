@@ -31,6 +31,9 @@
       "restart_limit": 2,
       "restart_wait_ms": 5000,
       "startup_grace_ms": 12000,
+      "login_start_node": "AutoLiveLoginScreenMarker",
+      "login_start_target": [640, 635],
+      "escape_after_login_start": true,
       "package": "com.bilibili.star.bili"
     },
     "next": ["RealtimeLiveHomeMarker"]

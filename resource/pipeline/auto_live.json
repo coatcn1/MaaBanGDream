@@ -35,6 +35,9 @@
       "restart_limit": 2,
       "restart_wait_ms": 5000,
       "startup_grace_ms": 12000,
+      "login_start_node": "AutoLiveLoginScreenMarker",
+      "login_start_target": [640, 635],
+      "escape_after_login_start": true,
       "package": "com.bilibili.star.bili"
     },
     "next": ["AutoLiveHomeMarker"]
@@ -46,6 +49,13 @@
     "action": "DoNothing",
     "next": ["AutoLiveHomeLive"],
     "on_error": ["CommonRecover"]
+  },
+  "AutoLiveLoginScreenMarker": {
+    "recognition": "TemplateMatch",
+    "template": "login_menu_marker.png",
+    "roi": [1150, 590, 130, 130],
+    "threshold": 0.90,
+    "action": "DoNothing"
   },
   "AutoLiveLoginTap": {
     "recognition": "TemplateMatch",

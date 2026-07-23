@@ -37,7 +37,8 @@ class Controller:
 
     def post_screencap(self):
         self.captures += 1
-        return Job(self.image)
+        image = next(self.image) if hasattr(self.image, "__next__") else self.image
+        return Job(image)
 
     def post_click(self, x, y):
         self.clicks.append((x, y))
@@ -188,3 +189,49 @@ def test_startup_grace_allows_launcher_until_game_reaches_foreground(monkeypatch
         argv(escape_interval_ms=0, escape_timeout_ms=10000, startup_grace_ms=5000),
     )
     assert context.tasker.controller.keys == []
+
+
+def test_login_mode_never_sends_back_before_start_is_detected(monkeypatch):
+    context = Context({
+        "HomeMarker": [False, False, True],
+        "LoginScreenMarker": [False, False],
+    })
+    ticks = iter(value / 1000 for value in range(1000))
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(common_recover.time, "sleep", lambda _seconds: None)
+
+    assert common_recover.CommonRecover().run(
+        context,
+        argv(
+            escape_interval_ms=0,
+            escape_timeout_ms=100,
+            login_start_node="LoginScreenMarker",
+            login_start_target=[640, 635],
+            escape_after_login_start=True,
+        ),
+    )
+    assert context.tasker.controller.clicks == []
+    assert context.tasker.controller.keys == []
+
+
+def test_login_mode_clicks_start_before_using_back(monkeypatch):
+    context = Context({
+        "HomeMarker": [False, False, True],
+        "LoginScreenMarker": [True, False],
+    })
+    ticks = iter(value / 1000 for value in range(1000))
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(common_recover.time, "sleep", lambda _seconds: None)
+
+    assert common_recover.CommonRecover().run(
+        context,
+        argv(
+            escape_interval_ms=0,
+            escape_timeout_ms=100,
+            login_start_node="LoginScreenMarker",
+            login_start_target=[640, 635],
+            escape_after_login_start=True,
+        ),
+    )
+    assert context.tasker.controller.clicks == [(640, 635)]
+    assert context.tasker.controller.keys == [4]

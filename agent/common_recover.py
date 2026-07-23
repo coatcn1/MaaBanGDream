@@ -45,9 +45,19 @@ class CommonRecover(CustomAction):
         restart_wait = int(params.get("restart_wait_ms", 5000)) / 1000
         startup_grace = int(params.get("startup_grace_ms", 0)) / 1000
         click_nodes = [str(node) for node in params.get("click_nodes", [])]
+        login_start_node = str(params.get("login_start_node", ""))
+        login_start_target = params.get("login_start_target")
+        escape_after_login_start = bool(params.get("escape_after_login_start", False))
+        login_mode = (
+            escape_after_login_start
+            and bool(login_start_node)
+            and isinstance(login_start_target, (list, tuple))
+            and len(login_start_target) == 2
+        )
         controller = context.tasker.controller
 
         for restart in range(restart_limit + 1):
+            login_started = not login_mode
             grace_deadline = time.monotonic() + startup_grace
             deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
@@ -71,7 +81,22 @@ class CommonRecover(CustomAction):
                 if result and result.hit:
                     return True
                 clicked = False
+                if login_mode:
+                    result = context.run_recognition(login_start_node, image)
+                    if result and result.hit:
+                        if context.tasker.stopping:
+                            return False
+                        x, y = (int(value) for value in login_start_target)
+                        controller.post_click(x, y).wait()
+                        login_started = True
+                        clicked = True
+                        print(
+                            f"CommonRecover login screen detected; clicked ({x}, {y})",
+                            flush=True,
+                        )
                 for node in click_nodes:
+                    if clicked:
+                        break
                     result = context.run_recognition(node, image)
                     if not result or not result.hit or not result.box:
                         continue
@@ -82,9 +107,14 @@ class CommonRecover(CustomAction):
                         box.x + box.w // 2,
                         box.y + box.h // 2,
                     ).wait()
+                    login_started = True
                     clicked = True
                     break
-                if not clicked and time.monotonic() >= grace_deadline:
+                if (
+                    not clicked
+                    and login_started
+                    and time.monotonic() >= grace_deadline
+                ):
                     if context.tasker.stopping:
                         return False
                     controller.post_click_key(4).wait()
