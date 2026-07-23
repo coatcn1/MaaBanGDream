@@ -57,6 +57,21 @@ def test_profile_play_reuses_one_agent_controller_proxy(monkeypatch):
         "agent.realtime.profile_play_action.RealtimeProfileStore.resolve_latest",
         lambda *args, **kwargs: settings,
     )
+    foreground_checks = []
+    dispatcher_options = []
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.require_game_foreground",
+        lambda controller: foreground_checks.append(controller),
+    )
+
+    class Dispatcher:
+        def __init__(self, controller, stopping, **kwargs):
+            dispatcher_options.append(kwargs)
+
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.ControllerTouchDispatcher",
+        Dispatcher,
+    )
 
     class Engine:
         def __init__(self, *args, **kwargs):
@@ -71,6 +86,8 @@ def test_profile_play_reuses_one_agent_controller_proxy(monkeypatch):
     argv = SimpleNamespace(custom_action_param=json.dumps({"difficulty": "Easy"}))
     assert RealtimeProfilePlay()._run(context, argv)
     assert tasker.controller_reads == 1
+    assert foreground_checks == [tasker._controller]
+    assert dispatcher_options == [{}]
 
 
 def test_pause_overlay_requires_a_material_screen_change():

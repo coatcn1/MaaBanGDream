@@ -76,10 +76,10 @@ class RealtimeEasyRehearsal(CustomAction):
         print("RealtimeEasyRehearsal stage=environment_ok", flush=True)
         if context.tasker.stopping:
             return False
+        require_game_foreground(controller)
         touch = ControllerTouchDispatcher(
             controller,
             lambda: context.tasker.stopping,
-            before_input=lambda: require_game_foreground(controller),
         )
         engine = RealtimeEngine(
             NoteDetector(),

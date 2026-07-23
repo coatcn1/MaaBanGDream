@@ -28,12 +28,10 @@ class ControllerTouchDispatcher:
         stopping: Callable[[], bool],
         *,
         sleeper: Callable[[float], None] = time.sleep,
-        before_input: Callable[[], None] = lambda: None,
     ) -> None:
         self.controller = controller
         self.stopping = stopping
         self.sleeper = sleeper
-        self.before_input = before_input
         self.active_contacts: set[int] = set()
 
     def _ensure_running(self) -> None:
@@ -43,7 +41,6 @@ class ControllerTouchDispatcher:
 
     def _down(self, action: TouchAction, contact: int) -> None:
         self._ensure_running()
-        self.before_input()
         self.controller.post_touch_down(
             self.LANE_CENTERS[action.lane], 590, contact, 50
         ).wait()
@@ -69,7 +66,6 @@ class ControllerTouchDispatcher:
                 if action.kind != ActionKind.UP:
                     continue
                 self._ensure_running()
-                self.before_input()
                 contact = 0 if action.contact is None else action.contact
                 self.controller.post_touch_up(contact).wait()
                 self.active_contacts.discard(contact)
@@ -87,13 +83,11 @@ class ControllerTouchDispatcher:
                 self.sleeper(.012)
                 for action, contact in flick_contacts:
                     self._ensure_running()
-                    self.before_input()
                     self.controller.post_touch_move(
                         self.LANE_CENTERS[action.lane], y, contact, 50
                     ).wait()
             for _, contact in transient_contacts:
                 self._ensure_running()
-                self.before_input()
                 self.controller.post_touch_up(contact).wait()
                 self.active_contacts.discard(contact)
         except BaseException:
@@ -103,7 +97,6 @@ class ControllerTouchDispatcher:
     def reset(self) -> None:
         for contact in sorted(self.active_contacts):
             try:
-                self.before_input()
                 self.controller.post_touch_up(contact).wait()
             except Exception:
                 pass

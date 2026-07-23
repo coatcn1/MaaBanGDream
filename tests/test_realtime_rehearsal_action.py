@@ -52,6 +52,8 @@ def test_rehearsal_callback_reports_failure_instead_of_leaking_exception(monkeyp
 
 def test_rehearsal_enables_near_line_rescue_for_short_lived_skill_notes(monkeypatch):
     captured = {}
+    foreground_checks = []
+    dispatcher_options = []
 
     class FakeScreenshot:
         def wait(self):
@@ -76,7 +78,19 @@ def test_rehearsal_enables_near_line_rescue_for_short_lived_skill_notes(monkeypa
                 "aborted_for_life": False,
             })()
 
+    class FakeDispatcher:
+        def __init__(self, controller, stopping, **kwargs):
+            dispatcher_options.append(kwargs)
+
     monkeypatch.setattr("agent.realtime.rehearsal_action.RealtimeEngine", FakeEngine)
+    monkeypatch.setattr(
+        "agent.realtime.rehearsal_action.ControllerTouchDispatcher",
+        FakeDispatcher,
+    )
+    monkeypatch.setattr(
+        "agent.realtime.rehearsal_action.require_game_foreground",
+        lambda controller: foreground_checks.append(controller),
+    )
     context = type("Context", (), {
         "tasker": type("Tasker", (), {
             "stopping": False,
@@ -87,3 +101,5 @@ def test_rehearsal_enables_near_line_rescue_for_short_lived_skill_notes(monkeypa
 
     assert RealtimeEasyRehearsal().run(context, argv) is True
     assert captured["planner"].rescue_first_visible is True
+    assert len(foreground_checks) == 1
+    assert dispatcher_options == [{}]

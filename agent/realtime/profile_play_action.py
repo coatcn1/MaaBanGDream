@@ -168,10 +168,13 @@ class RealtimeProfilePlay(CustomAction):
         )
         if recorder is not None:
             print(f"RealtimeProfilePlay debug={recorder.output_dir}", flush=True)
+        # Foreground verification is intentionally outside the realtime touch
+        # hot path. A dumpsys query before every down/move/up blocks capture for
+        # 100-450 ms and turns otherwise correct notes into SLOW judgements.
+        require_game_foreground(controller)
         touch = ControllerTouchDispatcher(
             controller,
             lambda: context.tasker.stopping,
-            before_input=lambda: require_game_foreground(controller),
         )
         engine = RealtimeEngine(
             NoteDetector(),
