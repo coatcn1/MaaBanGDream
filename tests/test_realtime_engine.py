@@ -279,6 +279,40 @@ def test_engine_completes_after_confirmed_playfield_disappears():
     assert touch.closed == 1
 
 
+def test_invisible_transition_frames_do_not_trigger_life_safety():
+    engine, _, planner, touch, capture = build()
+    triggered = []
+
+    class EndsWithDefaultInvisibleReading:
+        def __init__(self):
+            self.frames = 0
+
+        def detect(self, image):
+            self.frames += 1
+            if self.frames <= 4:
+                return LifeReading(True, 800)
+            return LifeReading(False)
+
+    engine.life_detector = EndsWithDefaultInvisibleReading()
+    engine.life_guard = LifeGuard(confirm_frames=3)
+    engine.completion_guard = PlayfieldCompletionGuard(missing_frames=4)
+
+    stats = engine.run(
+        capture,
+        lambda: False,
+        duration_seconds=10,
+        target_fps=60,
+        life_exit_threshold=200,
+        on_life_safety=lambda reading: triggered.append(reading.value),
+    )
+
+    assert stats.completed
+    assert not stats.aborted_for_life
+    assert triggered == []
+    assert planner.resets == 1
+    assert touch.closed == 1
+
+
 def test_engine_applies_live_timing_feedback_to_the_planner():
     engine, _, planner, _, capture = build()
 

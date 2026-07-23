@@ -117,18 +117,6 @@ class RealtimeEngine:
                     reading = self.life_detector.detect(image)
                     status = self.life_guard.update(reading)
                     life_status = status.value
-                    if life_exit_threshold is not None and self.life_guard.alive_confirmed:
-                        below_threshold_streak = below_threshold_streak + 1 if reading.value < life_exit_threshold else 0
-                        if below_threshold_streak >= 3:
-                            life_depleted = life_depleted or status is LifeStatus.DEAD
-                            aborted_for_life = True
-                            safety_reading = reading
-                            break
-                    if status is LifeStatus.DEAD:
-                        life_depleted = True
-                        if not continue_after_life_depleted:
-                            aborted_for_life = True
-                            break
                     if (
                         self.completion_guard is not None
                         and self.completion_guard.update(
@@ -137,6 +125,30 @@ class RealtimeEngine:
                     ):
                         completed = True
                         break
+                    if (
+                        life_exit_threshold is not None
+                        and self.life_guard.alive_confirmed
+                        and reading.visible
+                    ):
+                        below_threshold_streak = (
+                            below_threshold_streak + 1
+                            if reading.value < life_exit_threshold else 0
+                        )
+                        if below_threshold_streak >= 3:
+                            life_depleted = life_depleted or status is LifeStatus.DEAD
+                            aborted_for_life = True
+                            safety_reading = reading
+                            break
+                    elif not reading.visible:
+                        # The default value of an invisible reading is zero.
+                        # Song-end fades must contribute to completion, not to
+                        # the low-life debounce.
+                        below_threshold_streak = 0
+                    if status is LifeStatus.DEAD:
+                        life_depleted = True
+                        if not continue_after_life_depleted:
+                            aborted_for_life = True
+                            break
                     # A custom action can start during a transition or on a
                     # non-playfield screen. Never interpret those pixels as
                     # notes until a non-zero life bar has been confirmed.
