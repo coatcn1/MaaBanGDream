@@ -31,6 +31,7 @@ class _HoldOrigin:
     first_seen: float
     last_seen: float
     samples: int
+    last_tail: float
 
 
 class RealtimePlanner:
@@ -162,13 +163,16 @@ class RealtimePlanner:
             existing = candidates.get(note.lane)
             if existing is None or note.width * note.height > existing.width * existing.height:
                 candidates[note.lane] = note
-        for lane in candidates:
+        for lane, note in candidates.items():
             origin = self._upper_hold_origins.get(lane)
             if origin is None or now - origin.last_seen > .45:
-                self._upper_hold_origins[lane] = _HoldOrigin(now, now, 1)
+                self._upper_hold_origins[lane] = _HoldOrigin(
+                    now, now, 1, self._hold_tail(note)
+                )
             elif now - origin.last_seen > 1e-6:
                 origin.last_seen = now
                 origin.samples += 1
+                origin.last_tail = self._hold_tail(note)
         self._upper_hold_origins = {
             lane: origin
             for lane, origin in self._upper_hold_origins.items()
@@ -225,9 +229,10 @@ class RealtimePlanner:
             previous_tail = self._active_hold_tail[contact]
             previous_seen = self._hold_seen.get(contact, now)
             elapsed = max(0.0, now - previous_seen)
+            current_lane = self._active_hold_lane.get(contact, contact)
             previous_x = self._active_hold_x.get(
                 contact,
-                190 + 150 * self._active_hold_lane.get(contact, contact),
+                190 + 150 * current_lane,
             )
             maximum_forward = 25 + elapsed * 1200
             maximum_x_delta = 120 + elapsed * 1800
@@ -237,7 +242,10 @@ class RealtimePlanner:
                 if index not in used_notes
                 and previous_tail - 20 <= self._hold_tail(note)
                 <= previous_tail + maximum_forward
-                and abs(note.x - previous_x) <= maximum_x_delta
+                and (
+                    note.lane == current_lane
+                    or abs(note.x - previous_x) <= maximum_x_delta
+                )
             ]
             if not plausible:
                 continue
@@ -289,11 +297,13 @@ class RealtimePlanner:
 
             if continuing:
                 previous_tail = self._active_hold_tail[contact]
+                hold_age = now - self._hold_started.get(contact, now)
                 tail_ring_at_line = (
                     note.height <= 30
                     and note.width >= 70
                     and note.y >= 555
                     and contact in self._hold_confirmed
+                    and hold_age >= .30
                 )
                 if tail_ring_at_line:
                     actions.append(TouchAction(
@@ -301,7 +311,10 @@ class RealtimePlanner:
                     ))
                     self._finish_hold(contact, now, "tail-ring")
                     continue
-                if previous_tail < self.hold_release_y <= tail:
+                if (
+                    hold_age >= .30
+                    and previous_tail < self.hold_release_y <= tail
+                ):
                     actions.append(TouchAction(
                         ActionKind.UP, note.lane, now, contact, "tail-crossing"
                     ))
@@ -318,16 +331,19 @@ class RealtimePlanner:
                 last_moved = self._hold_last_moved_at.get(
                     contact, float("-inf")
                 )
+                near_judgement_line = head >= self.judgement_y - 45
                 should_move = (
                     self.enable_slide
+                    and near_judgement_line
                     and (
                         note.lane != previous_lane
                         or abs(target_x - previous_x) >= 18
                     )
                     and now - last_moved >= .03
                 )
-                self._active_hold_lane[contact] = note.lane
-                self._active_hold_x[contact] = float(target_x)
+                if near_judgement_line:
+                    self._active_hold_lane[contact] = note.lane
+                    self._active_hold_x[contact] = float(target_x)
                 self._upper_hold_origins.pop(note.lane, None)
                 if should_move:
                     self._hold_last_moved_at[contact] = now
@@ -426,7 +442,13 @@ class RealtimePlanner:
                     or should_upper_origin_rescue
                     )
                 ):
-                    self._active_hold_tail[contact] = tail
+                    origin = self._upper_hold_origins.get(note.lane)
+                    initial_tail = (
+                        origin.last_tail
+                        if should_upper_origin_rescue and origin is not None
+                        else tail
+                    )
+                    self._active_hold_tail[contact] = initial_tail
                     self._hold_started[contact] = now
                     self._hold_confirmed.add(contact)
                     target_x = self._touch_x(note)
@@ -455,13 +477,11 @@ class RealtimePlanner:
                         lane=note.lane,
                         height=round(note.height, 2),
                     )
-                    if previous is not None:
+                    if previous is not None and not should_upper_origin_rescue:
                         self._predict_hold_release(
                             contact, self._hold_tail(previous),
                             previous.timestamp, tail, now,
                         )
-                    if should_upper_origin_rescue:
-                        self._hold_release_at.setdefault(contact, now + .30)
                     self._upper_hold_origins.pop(note.lane, None)
                     actions.append(TouchAction(
                         ActionKind.DOWN,
@@ -569,12 +589,19 @@ class RealtimePlanner:
                     kind, note.lane, now, reason="crossing", track_id=tracked.track_id
                 ))
                 self._note_tracker.mark_fired(tracked.track_id, now)
-        # Losing the green mask is not evidence that the tail has ended. Skill
-        # animations and judgement text can cover a long bar for many frames.
-        # Release only on an observed tail crossing, or via reset/failsafe when
-        # the realtime engine itself exits.
+        # Losing the green mask is not immediate evidence that the tail ended.
+        # Skill animations can cover a long bar for many frames, so a predicted
+        # release is valid only after the body has remained absent for a full
+        # grace window. Visible bodies always override stale predictions.
         for contact, release_at in list(self._hold_release_at.items()):
-            if contact in self._active_hold_tail and now >= release_at:
+            unseen_for = now - self._hold_seen.get(contact, now)
+            held_for = now - self._hold_started.get(contact, now)
+            if (
+                contact in self._active_hold_tail
+                and now >= release_at
+                and unseen_for >= self.hold_grace_seconds
+                and held_for >= .30
+            ):
                 lane = self._active_hold_lane.get(contact, contact)
                 actions.append(TouchAction(
                     ActionKind.UP, lane, now, contact, "predicted-tail"

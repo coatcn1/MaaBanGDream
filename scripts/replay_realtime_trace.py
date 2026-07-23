@@ -76,6 +76,10 @@ def replay(path: Path, *, timing_offset_ms: int = 0) -> dict[str, object]:
             ) for action in frame.get("actions", []))
             replayed.extend(planner.update(notes, now))
             diagnostics.extend(planner.drain_diagnostics())
+    hold_releases = [
+        event for event in diagnostics
+        if event.get("event") == "hold_release"
+    ]
     return {
         "recorded_actions": len(recorded),
         "replayed_actions": len(replayed),
@@ -113,6 +117,24 @@ def replay(path: Path, *, timing_offset_ms: int = 0) -> dict[str, object]:
             and int(event.get("duration_ms", 0)) < 200
             for event in diagnostics
         ),
+        "replayed_releases_under_300_ms": sum(
+            int(event.get("duration_ms", 0)) < 300
+            for event in hold_releases
+        ),
+        "minimum_replayed_hold_duration_ms": min(
+            (int(event.get("duration_ms", 0)) for event in hold_releases),
+            default=None,
+        ),
+        "replayed_release_methods": {
+            method: sum(
+                event.get("release_method") == method
+                for event in hold_releases
+            )
+            for method in sorted({
+                str(event.get("release_method", "unknown"))
+                for event in hold_releases
+            })
+        },
         "diagnostic_counts": {
             event: sum(item.get("event") == event for item in diagnostics)
             for event in sorted({

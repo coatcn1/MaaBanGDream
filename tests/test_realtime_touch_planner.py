@@ -52,7 +52,8 @@ def test_planner_does_not_predict_hold_release_before_three_hundred_ms():
 
     assert [action.kind for action in down] == [ActionKind.DOWN]
     assert planner.update([], now=1.05) == []
-    released = planner.update([], now=1.33)
+    assert planner.update([], now=1.33) == []
+    released = planner.update([], now=1.38)
     assert [(action.kind, action.reason) for action in released] == [
         (ActionKind.UP, "predicted-tail")
     ]
@@ -84,7 +85,7 @@ def test_planner_releases_a_hold_when_its_tail_reaches_the_judgement_line():
     # Centroid moves down.  The lower edge is the head; upper edge is tail.
     planner.update([ObservedNote(NoteKind.HOLD, 2, 490, 540, 60, 100, 1.0)], now=1.0)
     down = planner.update([ObservedNote(NoteKind.HOLD, 2, 490, 575, 60, 100, 1.1)], now=1.1)
-    up = planner.update([ObservedNote(NoteKind.HOLD, 2, 490, 689, 60, 100, 1.2)], now=1.2)
+    up = planner.update([ObservedNote(NoteKind.HOLD, 2, 490, 689, 60, 100, 1.5)], now=1.5)
 
     assert [action.kind for action in down] == [ActionKind.DOWN]
     assert [action.kind for action in up] == [ActionKind.UP]
@@ -362,9 +363,9 @@ def test_hold_tail_release_does_not_tap_a_nearby_note_again():
     ], now=1.1)
 
     actions = planner.update([
-        ObservedNote(NoteKind.HOLD, 5, 940, 571, 100, 18, 1.2),
-        ObservedNote(NoteKind.TAP, 1, 340, 535, 80, 25, 1.2),
-    ], now=1.2)
+        ObservedNote(NoteKind.HOLD, 5, 940, 571, 100, 18, 1.5),
+        ObservedNote(NoteKind.TAP, 1, 340, 535, 80, 25, 1.5),
+    ], now=1.5)
 
     assert [(action.kind, action.lane) for action in actions] == [
         (ActionKind.UP, 5),
@@ -522,7 +523,8 @@ def test_predicted_hold_release_waits_at_least_three_hundred_ms():
 
     assert [action.kind for action in down] == [ActionKind.DOWN]
     assert planner.update([], now=1.20) == []
-    release = planner.update([], now=1.31)
+    assert planner.update([], now=1.31) == []
+    release = planner.update([], now=1.41)
     assert [(action.kind, action.reason) for action in release] == [
         (ActionKind.UP, "predicted-tail")
     ]
@@ -611,3 +613,75 @@ def test_latest_slanted_hold_replay_moves_one_existing_contact():
     assert structural[0].contact == structural[1].contact == 5
     assert structural[1].lane == 6
     assert structural[1].target_x == 1013
+
+
+def test_upper_origin_hold_tracks_perspective_body_until_real_tail():
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+    for timestamp, y in ((0.0, 40), (0.05, 43), (0.10, 46)):
+        planner.update([
+            ObservedNote(
+                NoteKind.HOLD, 5, 653, y, 18, 20, timestamp
+            )
+        ], timestamp)
+    down = planner.update([
+        ObservedNote(NoteKind.HOLD, 5, 655, 48, 20, 22, .35),
+        ObservedNote(NoteKind.HOLD, 5, 954, 570, 32, 10, .35),
+    ], .35)
+
+    assert [(action.kind, action.reason) for action in down] == [
+        (ActionKind.DOWN, "upper-origin-rescue")
+    ]
+    assert planner.update([
+        ObservedNote(NoteKind.HOLD, 5, 655, 51, 22, 24, .40),
+        # The bright playable head persists for another frame. It is not the
+        # far tail and must never produce the 32 ms release seen on device.
+        ObservedNote(NoteKind.HOLD, 5, 954, 570, 80, 12, .40),
+    ], .40) == []
+    for timestamp, y in ((.45, 55), (.50, 60)):
+        assert planner.update([
+            ObservedNote(
+                NoteKind.HOLD, 5, 655, y, 22, 24, timestamp
+            )
+        ], timestamp) == []
+
+    assert planner.update([], .70) == []
+    released = planner.update([
+        ObservedNote(NoteKind.HOLD, 5, 954, 570, 80, 12, 1.0)
+    ], 1.0)
+    assert [(action.kind, action.reason) for action in released] == [
+        (ActionKind.UP, "tail-ring")
+    ]
+
+
+def test_upper_body_x_shift_from_perspective_does_not_move_contact():
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+    down = planner.update([
+        ObservedNote(NoteKind.HOLD, 5, 940, 300, 180, 540, 1.0)
+    ], 1.0)
+    continued = planner.update([
+        ObservedNote(NoteKind.HOLD, 5, 655, 100, 80, 80, 1.05)
+    ], 1.05)
+
+    assert [action.kind for action in down] == [ActionKind.DOWN]
+    assert continued == []
+    assert planner._active_hold_tail[5] == 60
+
+
+def test_visible_hold_body_blocks_stale_predicted_release():
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+    planner.update([
+        ObservedNote(NoteKind.HOLD, 4, 730, 405, 100, 320, 1.0)
+    ], 1.0)
+    planner.update([
+        ObservedNote(NoteKind.HOLD, 4, 745, 450, 100, 300, 1.2)
+    ], 1.2)
+
+    assert planner.update([
+        ObservedNote(NoteKind.HOLD, 4, 745, 450, 100, 300, 2.14)
+    ], 2.14) == []
