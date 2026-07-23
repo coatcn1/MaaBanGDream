@@ -39,15 +39,21 @@ class ControllerTouchDispatcher:
             self.reset()
             raise InterruptedError("任务正在停止，已释放全部触点")
 
+    def _x(self, action: TouchAction) -> int:
+        if action.target_x is None:
+            return self.LANE_CENTERS[action.lane]
+        return max(120, min(1160, int(action.target_x)))
+
     def _down(self, action: TouchAction, contact: int) -> None:
         self._ensure_running()
         self.controller.post_touch_down(
-            self.LANE_CENTERS[action.lane], 590, contact, 50
+            self._x(action), 590, contact, 50
         ).wait()
         self.active_contacts.add(contact)
 
     def dispatch(self, actions: list[TouchAction]) -> None:
         persistent = [action for action in actions if action.kind == ActionKind.DOWN]
+        moves = [action for action in actions if action.kind == ActionKind.MOVE]
         transients = [
             action for action in actions if action.kind in (ActionKind.TAP, ActionKind.FLICK)
         ]
@@ -62,6 +68,16 @@ class ControllerTouchDispatcher:
                 self._down(action, 0 if action.contact is None else action.contact)
             for action, contact in transient_contacts:
                 self._down(action, contact)
+            for action in moves:
+                self._ensure_running()
+                contact = 0 if action.contact is None else action.contact
+                if contact not in self.active_contacts:
+                    raise RuntimeError(
+                        f"cannot move inactive touch contact {contact}"
+                    )
+                self.controller.post_touch_move(
+                    self._x(action), 590, contact, 50
+                ).wait()
             for action in actions:
                 if action.kind != ActionKind.UP:
                     continue

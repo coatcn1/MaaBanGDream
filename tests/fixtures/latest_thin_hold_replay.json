@@ -1,0 +1,26 @@
+[
+  {
+    "timestamp": 0.00,
+    "notes": [
+      {"kind": "hold", "lane": 6, "x": 745.0, "y": 136.0, "width": 32, "height": 18}
+    ]
+  },
+  {
+    "timestamp": 0.05,
+    "notes": [
+      {"kind": "hold", "lane": 6, "x": 745.0, "y": 133.0, "width": 32, "height": 16}
+    ]
+  },
+  {
+    "timestamp": 0.10,
+    "notes": [
+      {"kind": "hold", "lane": 6, "x": 743.0, "y": 135.0, "width": 16, "height": 12}
+    ]
+  },
+  {
+    "timestamp": 0.35,
+    "notes": [
+      {"kind": "hold", "lane": 6, "x": 1093.0, "y": 567.0, "width": 52, "height": 12}
+    ]
+  }
+]

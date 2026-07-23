@@ -544,3 +544,70 @@ def test_released_hold_cannot_restart_from_clear_lingering_body_after_window():
     ], now=2.6)
 
     assert lingering == []
+
+
+def test_latest_thin_hold_replay_starts_after_upper_origin_survives_gap():
+    fixture = Path(__file__).parent / "fixtures" / "latest_thin_hold_replay.json"
+    frames = json.loads(fixture.read_text(encoding="utf-8"))
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+    actions = []
+
+    for frame in frames:
+        timestamp = float(frame["timestamp"])
+        notes = [
+            ObservedNote(
+                NoteKind(item["kind"]),
+                item["lane"],
+                item["x"],
+                item["y"],
+                item["width"],
+                item["height"],
+                timestamp,
+            )
+            for item in frame["notes"]
+        ]
+        actions.extend(planner.update(notes, timestamp))
+
+    assert [
+        (action.kind, action.lane, action.reason) for action in actions
+        if action.kind is ActionKind.DOWN
+    ] == [(ActionKind.DOWN, 6, "upper-origin-rescue")]
+
+
+def test_latest_slanted_hold_replay_moves_one_existing_contact():
+    fixture = Path(__file__).parent / "fixtures" / "latest_slanted_hold_replay.json"
+    frames = json.loads(fixture.read_text(encoding="utf-8"))
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+    actions = []
+
+    for frame in frames:
+        timestamp = float(frame["timestamp"])
+        notes = [
+            ObservedNote(
+                NoteKind(item["kind"]),
+                item["lane"],
+                item["x"],
+                item["y"],
+                item["width"],
+                item["height"],
+                timestamp,
+            )
+            for item in frame["notes"]
+        ]
+        actions.extend(planner.update(notes, timestamp))
+
+    structural = [
+        action for action in actions
+        if action.kind in (ActionKind.DOWN, ActionKind.MOVE, ActionKind.UP)
+    ]
+    assert [action.kind for action in structural] == [
+        ActionKind.DOWN,
+        ActionKind.MOVE,
+    ]
+    assert structural[0].contact == structural[1].contact == 5
+    assert structural[1].lane == 6
+    assert structural[1].target_x == 1013

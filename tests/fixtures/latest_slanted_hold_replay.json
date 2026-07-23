@@ -1,0 +1,20 @@
+[
+  {
+    "timestamp": 0.00,
+    "notes": [
+      {"kind": "hold", "lane": 5, "x": 921.0, "y": 450.0, "width": 188, "height": 230}
+    ]
+  },
+  {
+    "timestamp": 0.05,
+    "notes": [
+      {"kind": "hold", "lane": 5, "x": 929.0, "y": 467.0, "width": 192, "height": 224}
+    ]
+  },
+  {
+    "timestamp": 0.15,
+    "notes": [
+      {"kind": "hold", "lane": 6, "x": 1013.0, "y": 499.0, "width": 202, "height": 136}
+    ]
+  }
+]

@@ -76,3 +76,26 @@ def test_close_always_releases_contacts():
     touch.close()
 
     assert controller.calls == [("up", 1), ("up", 6)]
+
+
+def test_move_keeps_the_existing_hold_contact_and_uses_detected_x():
+    controller = Controller()
+    touch = ControllerTouchDispatcher(controller, lambda: False)
+
+    touch.dispatch([
+        TouchAction(
+            ActionKind.DOWN, 5, 1.0, contact=5, reason="hold",
+            target_x=921,
+        )
+    ])
+    touch.dispatch([
+        TouchAction(
+            ActionKind.MOVE, 6, 1.1, contact=5, reason="hold-follow",
+            target_x=1013,
+        )
+    ])
+
+    assert controller.calls == [
+        ("down", 5, 921, 590, 50),
+        ("move", 5, 1013, 590, 50),
+    ]

@@ -21,6 +21,37 @@ def test_reads_mfa_and_binding_versions_from_deps():
     assert check_runtime.deps_versions(deps) == ("2.12.0", "5.8.0")
 
 
+def test_selects_native_runtime_for_current_architecture(tmp_path, monkeypatch):
+    x64 = tmp_path / "runtimes" / "win-x64" / "native"
+    arm64 = tmp_path / "runtimes" / "win-arm64" / "native"
+    x64.mkdir(parents=True)
+    arm64.mkdir(parents=True)
+    (x64 / "MaaFramework.dll").touch()
+    (arm64 / "MaaFramework.dll").touch()
+    monkeypatch.setattr(
+        check_runtime,
+        "current_runtime_identifier",
+        lambda: "win-x64",
+    )
+
+    assert check_runtime.native_directory(tmp_path) == x64
+
+
+@pytest.mark.parametrize(
+    ("platform_name", "machine", "expected"),
+    [
+        ("win32", "AMD64", "win-x64"),
+        ("win32", "ARM64", "win-arm64"),
+        ("linux", "x86_64", "linux-x64"),
+        ("darwin", "aarch64", "osx-arm64"),
+    ],
+)
+def test_maps_host_to_runtime_identifier(platform_name, machine, expected):
+    assert check_runtime.current_runtime_identifier(
+        platform_name, machine
+    ) == expected
+
+
 def test_rejects_unvalidated_version_tuple():
     with pytest.raises(RuntimeError, match="maafw_core"):
         check_runtime.verify(

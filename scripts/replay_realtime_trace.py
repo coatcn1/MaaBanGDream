@@ -72,12 +72,21 @@ def replay(path: Path, *, timing_offset_ms: int = 0) -> dict[str, object]:
                 action.get("contact"),
                 str(action.get("reason", "")),
                 action.get("track_id"),
+                action.get("target_x"),
             ) for action in frame.get("actions", []))
             replayed.extend(planner.update(notes, now))
             diagnostics.extend(planner.drain_diagnostics())
     return {
         "recorded_actions": len(recorded),
         "replayed_actions": len(replayed),
+        "recorded_structural_actions": {
+            kind.value: sum(action.kind == kind for action in recorded)
+            for kind in (ActionKind.DOWN, ActionKind.MOVE, ActionKind.UP)
+        },
+        "replayed_structural_actions": {
+            kind.value: sum(action.kind == kind for action in replayed)
+            for kind in (ActionKind.DOWN, ActionKind.MOVE, ActionKind.UP)
+        },
         "recorded_transient_actions": sum(
             action.kind in (ActionKind.TAP, ActionKind.FLICK)
             for action in recorded

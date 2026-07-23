@@ -4,6 +4,7 @@ import argparse
 import importlib.metadata
 import json
 import os
+import platform
 import re
 import sys
 from pathlib import Path
@@ -44,10 +45,40 @@ def deps_versions(deps: dict[str, Any]) -> tuple[str, str]:
     return mfa_versions[0], binding_versions[0]
 
 
+def current_runtime_identifier(
+    platform_name: str | None = None,
+    machine: str | None = None,
+) -> str:
+    platform_key = platform_name or sys.platform
+    machine_key = (machine or platform.machine()).lower()
+    operating_system = {
+        "win32": "win",
+        "linux": "linux",
+        "darwin": "osx",
+    }.get(platform_key)
+    architecture = {
+        "amd64": "x64",
+        "x86_64": "x64",
+        "arm64": "arm64",
+        "aarch64": "arm64",
+    }.get(machine_key)
+    if operating_system is None or architecture is None:
+        raise ValueError(
+            f"unsupported runtime platform: {platform_key}/{machine_key}"
+        )
+    return f"{operating_system}-{architecture}"
+
+
 def native_directory(mfa_root: Path) -> Path:
+    runtime_id = current_runtime_identifier()
+    current = mfa_root / "runtimes" / runtime_id / "native" / "MaaFramework.dll"
+    if current.is_file():
+        return current.parent
     matches = list(mfa_root.glob("runtimes/*/native/MaaFramework.dll"))
     if len(matches) != 1:
-        raise ValueError("unable to identify one MaaFramework.dll")
+        raise ValueError(
+            f"unable to identify MaaFramework.dll for {runtime_id}"
+        )
     return matches[0].parent
 
 
