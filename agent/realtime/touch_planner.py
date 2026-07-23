@@ -70,6 +70,15 @@ class RealtimePlanner:
         self._hold_released_at: dict[int, float] = {}
         self._note_tracker = MultiNoteTracker(memory_seconds=track_memory_seconds)
 
+    @property
+    def timing_offset_ms(self) -> int:
+        return round(self.timing_offset * 1000)
+
+    def set_timing_offset_ms(self, value: int) -> None:
+        if not -250 <= int(value) <= 250:
+            raise ValueError("timing offset must be between -250 and 250 ms")
+        self.timing_offset = int(value) / 1000
+
     def _predict_hold_release(
         self, lane: int, previous_tail: float, previous_time: float,
         tail: float, now: float,

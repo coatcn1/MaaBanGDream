@@ -25,6 +25,7 @@ from .profile_action import PROJECT_ROOT
 from .profile_store import EnvironmentSignature, RealtimeProfileStore
 from .rehearsal_action import frame_resolution
 from .result_parser import LiveResult, ResultParser, adjusted_timing_offset
+from .timing_feedback import AdaptiveTimingController, TimingFeedbackDetector
 from .touch_planner import RealtimePlanner
 from .runtime_options import debug_enabled
 
@@ -182,6 +183,8 @@ class RealtimeProfilePlay(CustomAction):
                 else None
             ),
             debug_recorder=recorder,
+            timing_feedback_detector=TimingFeedbackDetector(),
+            timing_controller=AdaptiveTimingController(timing_offset_ms),
         )
         continue_after_depleted = bool(params.get("continue_after_life_depleted", False))
         # Required-profile play is formal play (including challenge mode).
@@ -223,7 +226,11 @@ class RealtimeProfilePlay(CustomAction):
             "RealtimeProfilePlay "
             f"frames={stats.processed_frames} actions={stats.dispatched_actions} "
             f"stopped={stats.stopped} life_abort={stats.aborted_for_life} "
-            f"life_depleted={stats.life_depleted} completed={stats.completed}",
+            f"life_depleted={stats.life_depleted} completed={stats.completed} "
+            f"feedback_fast={stats.timing_feedback_fast} "
+            f"feedback_slow={stats.timing_feedback_slow} "
+            f"timing_offset={stats.initial_timing_offset_ms}"
+            f"->{stats.final_timing_offset_ms}",
             flush=True,
         )
         if stats.completed and params.get("save_result_frame"):
@@ -240,19 +247,26 @@ class RealtimeProfilePlay(CustomAction):
             path = output / f"realtime-result-{stamp}.png"
             if not cv2.imwrite(str(path), result):
                 raise OSError(f"无法保存结算截图: {path}")
-            suggestion = adjusted_timing_offset(timing_offset_ms, result_data)
+            effective_timing_offset_ms = stats.final_timing_offset_ms
+            suggestion = adjusted_timing_offset(
+                effective_timing_offset_ms, result_data,
+            )
             report = output / f"realtime-result-{stamp}.json"
             report.write_text(json.dumps({
                 **result_data.to_dict(),
-                "current_timing_offset_ms": timing_offset_ms,
+                "initial_timing_offset_ms": timing_offset_ms,
+                "current_timing_offset_ms": effective_timing_offset_ms,
                 "suggested_timing_offset_ms": suggestion,
+                "realtime_feedback_fast": stats.timing_feedback_fast,
+                "realtime_feedback_slow": stats.timing_feedback_slow,
             }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             print(
                 f"RealtimeProfilePlay result_frame={path.name} "
                 f"perfect={result_data.perfect} great={result_data.great} "
                 f"good={result_data.good} bad={result_data.bad} miss={result_data.miss} "
                 f"fast={result_data.fast} slow={result_data.slow} "
-                f"timing_offset={timing_offset_ms}->{suggestion}",
+                f"timing_offset={timing_offset_ms}"
+                f"->{effective_timing_offset_ms}->{suggestion}",
                 flush=True,
             )
             calibration_report = params.get("calibration_report")
@@ -265,7 +279,7 @@ class RealtimeProfilePlay(CustomAction):
                     report_path,
                     result=result_data,
                     stats=stats,
-                    timing_offset_ms=timing_offset_ms,
+                    timing_offset_ms=effective_timing_offset_ms,
                     song_id=current_song_id(),
                 )
         success = not stats.stopped and not stats.aborted_for_life

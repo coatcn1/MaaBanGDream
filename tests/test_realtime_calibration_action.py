@@ -42,6 +42,26 @@ def test_failed_rehearsal_counts_and_adjusts_offset():
     assert formal["passed"]
 
 
+def test_next_round_starts_from_the_live_adjusted_offset():
+    records = iter([
+        {**record("A"), "timing_offset_ms": 30},
+        record("B"),
+        record("C"),
+        record("D"),
+    ])
+    calls = []
+
+    def run_round(formal, offset):
+        calls.append((formal, offset))
+        return next(records)
+
+    offset, _, _ = CalibrationRunner(run_round).run()
+
+    assert calls[0] == (False, 0)
+    assert calls[1] == (False, 30)
+    assert offset == 30
+
+
 def test_three_failed_rehearsals_stop_before_formal():
     calls = []
     records = iter([

@@ -9,6 +9,7 @@ import numpy as np
 from .controller_touch import ControllerTouchDispatcher
 from .note_detector import NoteDetector
 from .life_monitor import LifeDetector, LifeGuard, LifeStatus, PlayfieldCompletionGuard
+from .timing_feedback import AdaptiveTimingController, TimingFeedbackDetector
 from .touch_planner import RealtimePlanner
 
 
@@ -25,6 +26,10 @@ class EngineStats:
     aborted_for_life: bool = False
     completed: bool = False
     life_depleted: bool = False
+    timing_feedback_fast: int = 0
+    timing_feedback_slow: int = 0
+    initial_timing_offset_ms: int = 0
+    final_timing_offset_ms: int = 0
 
 
 class RealtimeEngine:
@@ -40,6 +45,8 @@ class RealtimeEngine:
         life_guard: LifeGuard | None = None,
         completion_guard: PlayfieldCompletionGuard | None = None,
         debug_recorder: DebugRecorder | None = None,
+        timing_feedback_detector: TimingFeedbackDetector | None = None,
+        timing_controller: AdaptiveTimingController | None = None,
     ) -> None:
         self.detector = detector
         self.planner = planner
@@ -49,6 +56,8 @@ class RealtimeEngine:
         self.life_guard = life_guard
         self.completion_guard = completion_guard
         self.debug_recorder = debug_recorder
+        self.timing_feedback_detector = timing_feedback_detector
+        self.timing_controller = timing_controller
 
     def run(
         self,
@@ -75,6 +84,9 @@ class RealtimeEngine:
         life_depleted = False
         below_threshold_streak = 0
         safety_reading = None
+        initial_timing_offset_ms = int(
+            getattr(self.planner, "timing_offset_ms", 0)
+        )
         try:
             while self.clock() < deadline:
                 if stopping():
@@ -122,6 +134,21 @@ class RealtimeEngine:
                         frames += 1
                         continue
                 notes = self.detector.detect(image, now)
+                if (
+                    self.timing_feedback_detector is not None
+                    and self.timing_controller is not None
+                ):
+                    feedback = self.timing_feedback_detector.detect(image)
+                    adjusted = self.timing_controller.update(feedback, now)
+                    if adjusted is not None:
+                        self.planner.set_timing_offset_ms(adjusted)
+                        print(
+                            "RealtimeTimingAdjust "
+                            f"fast={self.timing_controller.fast_samples} "
+                            f"slow={self.timing_controller.slow_samples} "
+                            f"offset={adjusted}ms",
+                            flush=True,
+                        )
                 actions = self.planner.update(notes, now)
                 if self.debug_recorder is not None:
                     self.debug_recorder.record(image, now, notes, actions, life_status)
@@ -132,6 +159,20 @@ class RealtimeEngine:
             return EngineStats(
                 frames, actions_count, was_stopped, aborted_for_life, completed,
                 life_depleted,
+                (
+                    self.timing_controller.fast_samples
+                    if self.timing_controller is not None else 0
+                ),
+                (
+                    self.timing_controller.slow_samples
+                    if self.timing_controller is not None else 0
+                ),
+                initial_timing_offset_ms,
+                (
+                    self.timing_controller.current_offset_ms
+                    if self.timing_controller is not None
+                    else int(getattr(self.planner, "timing_offset_ms", 0))
+                ),
             )
         finally:
             cleanup = self.planner.reset(self.clock())

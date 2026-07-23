@@ -30,6 +30,8 @@ class Planner:
     def __init__(self):
         self.updates = 0
         self.resets = 0
+        self.timing_offset_ms = 0
+        self.offset_changes = []
 
     def update(self, notes, now):
         self.updates += 1
@@ -38,6 +40,10 @@ class Planner:
     def reset(self, now):
         self.resets += 1
         return [TouchAction(ActionKind.UP, 5, now, 5)]
+
+    def set_timing_offset_ms(self, value):
+        self.timing_offset_ms = value
+        self.offset_changes.append(value)
 
 
 class Touch:
@@ -264,3 +270,38 @@ def test_engine_completes_after_confirmed_playfield_disappears():
     assert not stats.aborted_for_life
     assert planner.resets == 1
     assert touch.closed == 1
+
+
+def test_engine_applies_live_timing_feedback_to_the_planner():
+    engine, _, planner, _, capture = build()
+
+    class FeedbackDetector:
+        def __init__(self):
+            self.index = 0
+
+        def detect(self, image):
+            self.index += 1
+            return "slow" if self.index % 2 else None
+
+    class FeedbackController:
+        current_offset_ms = 0
+        fast_samples = 0
+        slow_samples = 0
+
+        def update(self, feedback, now):
+            if feedback == "slow":
+                self.slow_samples += 1
+            if feedback == "slow" and self.slow_samples == 5:
+                self.current_offset_ms = 2
+                return 2
+            return None
+
+    engine.timing_feedback_detector = FeedbackDetector()
+    engine.timing_controller = FeedbackController()
+
+    stats = engine.run(capture, lambda: False, duration_seconds=1, target_fps=60)
+
+    assert planner.offset_changes == [2]
+    assert stats.initial_timing_offset_ms == 0
+    assert stats.final_timing_offset_ms == 2
+    assert stats.timing_feedback_slow == 25
