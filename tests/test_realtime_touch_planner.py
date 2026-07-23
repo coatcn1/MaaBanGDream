@@ -4,11 +4,23 @@ import json
 from pathlib import Path
 
 from agent.realtime.note_detector import NoteKind, ObservedNote
-from agent.realtime.touch_planner import ActionKind, RealtimePlanner
+from agent.realtime.touch_planner import (
+    ActionKind,
+    RealtimePlanner,
+    sliding_holds_enabled,
+)
 
 
 def _note(kind, lane, y, timestamp):
     return ObservedNote(kind, lane, 190 + lane * 150, y, 60, 100, timestamp)
+
+
+def test_only_sliding_chart_difficulties_enable_cross_lane_holds():
+    assert not sliding_holds_enabled("Easy")
+    assert not sliding_holds_enabled("Normal")
+    assert sliding_holds_enabled("Hard")
+    assert sliding_holds_enabled("Expert")
+    assert sliding_holds_enabled("Special")
 
 
 def test_planner_batches_a_chord_once_when_notes_cross_the_judgement_line():
@@ -530,7 +542,7 @@ def test_predicted_hold_release_waits_at_least_three_hundred_ms():
     ]
 
 
-def test_released_hold_cannot_restart_from_clear_lingering_body_after_window():
+def test_released_hold_cannot_restart_from_lingering_body_during_cooldown():
     planner = RealtimePlanner(
         judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
     )
@@ -542,13 +554,13 @@ def test_released_hold_cannot_restart_from_clear_lingering_body_after_window():
     ], now=2.0)
 
     lingering = planner.update([
-        ObservedNote(NoteKind.HOLD, 4, 790, 520, 100, 100, 2.6)
-    ], now=2.6)
+        ObservedNote(NoteKind.HOLD, 4, 790, 520, 100, 100, 2.1)
+    ], now=2.1)
 
     assert lingering == []
 
 
-def test_latest_thin_hold_replay_starts_after_upper_origin_survives_gap():
+def test_upper_green_body_does_not_turn_thin_judgement_fragment_into_hold():
     fixture = Path(__file__).parent / "fixtures" / "latest_thin_hold_replay.json"
     frames = json.loads(fixture.read_text(encoding="utf-8"))
     planner = RealtimePlanner(
@@ -575,7 +587,7 @@ def test_latest_thin_hold_replay_starts_after_upper_origin_survives_gap():
     assert [
         (action.kind, action.lane, action.reason) for action in actions
         if action.kind is ActionKind.DOWN
-    ] == [(ActionKind.DOWN, 6, "upper-origin-rescue")]
+    ] == []
 
 
 def test_latest_slanted_hold_replay_moves_one_existing_contact():
@@ -615,7 +627,7 @@ def test_latest_slanted_hold_replay_moves_one_existing_contact():
     assert structural[1].target_x == 1013
 
 
-def test_upper_origin_hold_tracks_perspective_body_until_real_tail():
+def test_disconnected_short_fragments_cannot_start_or_release_hold():
     planner = RealtimePlanner(
         judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
     )
@@ -630,13 +642,9 @@ def test_upper_origin_hold_tracks_perspective_body_until_real_tail():
         ObservedNote(NoteKind.HOLD, 5, 954, 570, 32, 10, .35),
     ], .35)
 
-    assert [(action.kind, action.reason) for action in down] == [
-        (ActionKind.DOWN, "upper-origin-rescue")
-    ]
+    assert down == []
     assert planner.update([
         ObservedNote(NoteKind.HOLD, 5, 655, 51, 22, 24, .40),
-        # The bright playable head persists for another frame. It is not the
-        # far tail and must never produce the 32 ms release seen on device.
         ObservedNote(NoteKind.HOLD, 5, 954, 570, 80, 12, .40),
     ], .40) == []
     for timestamp, y in ((.45, 55), (.50, 60)):
@@ -647,12 +655,9 @@ def test_upper_origin_hold_tracks_perspective_body_until_real_tail():
         ], timestamp) == []
 
     assert planner.update([], .70) == []
-    released = planner.update([
+    assert planner.update([
         ObservedNote(NoteKind.HOLD, 5, 954, 570, 80, 12, 1.0)
-    ], 1.0)
-    assert [(action.kind, action.reason) for action in released] == [
-        (ActionKind.UP, "tail-ring")
-    ]
+    ], 1.0) == []
 
 
 def test_upper_body_x_shift_from_perspective_does_not_move_contact():
@@ -685,3 +690,53 @@ def test_visible_hold_body_blocks_stale_predicted_release():
     assert planner.update([
         ObservedNote(NoteKind.HOLD, 4, 745, 450, 100, 300, 2.14)
     ], 2.14) == []
+
+
+def test_real_body_can_restart_hold_on_released_lane():
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+
+    first = planner.update([
+        ObservedNote(NoteKind.HOLD, 5, 940, 500, 220, 140, .35)
+    ], .35)
+    released = planner.update([
+        ObservedNote(NoteKind.HOLD, 5, 954, 570, 80, 12, 1.0)
+    ], 1.0)
+
+    second = planner.update([
+        ObservedNote(NoteKind.HOLD, 5, 940, 500, 220, 140, 2.35)
+    ], 2.35)
+
+    assert [(action.kind, action.reason) for action in first] == [
+        (ActionKind.DOWN, "rescue")
+    ]
+    assert [(action.kind, action.reason) for action in released] == [
+        (ActionKind.UP, "tail-ring")
+    ]
+    assert [(action.kind, action.reason) for action in second] == [
+        (ActionKind.DOWN, "rescue")
+    ]
+
+
+def test_non_sliding_chart_does_not_steal_adjacent_hold_component():
+    planner = RealtimePlanner(
+        judgement_y=565,
+        timing_offset_ms=0,
+        rescue_first_visible=True,
+        enable_slide=False,
+    )
+    first = planner.update([
+        ObservedNote(NoteKind.HOLD, 1, 340, 500, 100, 140, 1.0)
+    ], 1.0)
+    second = planner.update([
+        ObservedNote(NoteKind.HOLD, 2, 490, 510, 100, 140, 1.05)
+    ], 1.05)
+
+    assert [(action.kind, action.lane, action.contact) for action in first] == [
+        (ActionKind.DOWN, 1, 1)
+    ]
+    assert [(action.kind, action.lane, action.contact) for action in second] == [
+        (ActionKind.DOWN, 2, 2)
+    ]
+    assert planner._active_hold_lane == {1: 1, 2: 2}

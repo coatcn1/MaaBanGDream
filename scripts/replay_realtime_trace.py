@@ -10,7 +10,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from agent.realtime.note_detector import NoteKind, ObservedNote
-from agent.realtime.touch_planner import ActionKind, RealtimePlanner, TouchAction
+from agent.realtime.touch_planner import (
+    ActionKind,
+    RealtimePlanner,
+    TouchAction,
+    sliding_holds_enabled,
+)
 
 
 def duplicate_judgements(actions: list[TouchAction], window: float = .12) -> int:
@@ -43,11 +48,17 @@ def post_release_rescues(actions: list[TouchAction], window: float = .4) -> int:
     return total
 
 
-def replay(path: Path, *, timing_offset_ms: int = 0) -> dict[str, object]:
+def replay(
+    path: Path,
+    *,
+    timing_offset_ms: int = 0,
+    difficulty: str = "Hard",
+) -> dict[str, object]:
     planner = RealtimePlanner(
         judgement_y=565,
         timing_offset_ms=timing_offset_ms,
         rescue_first_visible=True,
+        enable_slide=sliding_holds_enabled(difficulty),
     )
     recorded: list[TouchAction] = []
     replayed: list[TouchAction] = []
@@ -125,6 +136,21 @@ def replay(path: Path, *, timing_offset_ms: int = 0) -> dict[str, object]:
             (int(event.get("duration_ms", 0)) for event in hold_releases),
             default=None,
         ),
+        "maximum_replayed_hold_duration_ms": max(
+            (int(event.get("duration_ms", 0)) for event in hold_releases),
+            default=None,
+        ),
+        "average_replayed_hold_duration_ms": (
+            round(sum(
+                int(event.get("duration_ms", 0))
+                for event in hold_releases
+            ) / len(hold_releases))
+            if hold_releases else None
+        ),
+        "cross_lane_releases": sum(
+            event.get("contact") != event.get("final_lane")
+            for event in hold_releases
+        ),
         "replayed_release_methods": {
             method: sum(
                 event.get("release_method") == method
@@ -148,9 +174,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Replay a realtime debug JSONL trace")
     parser.add_argument("trace", type=Path)
     parser.add_argument("--timing-offset-ms", type=int, default=0)
+    parser.add_argument("--difficulty", default="Hard")
     args = parser.parse_args()
     print(json.dumps(
-        replay(args.trace, timing_offset_ms=args.timing_offset_ms),
+        replay(
+            args.trace,
+            timing_offset_ms=args.timing_offset_ms,
+            difficulty=args.difficulty,
+        ),
         ensure_ascii=False,
         indent=2,
     ))

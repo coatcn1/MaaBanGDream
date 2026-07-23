@@ -15,6 +15,10 @@ class ActionKind(str, Enum):
     FLICK = "flick"
 
 
+def sliding_holds_enabled(difficulty: str) -> bool:
+    return str(difficulty).strip().lower() in {"hard", "expert", "special"}
+
+
 @dataclass(frozen=True)
 class TouchAction:
     kind: ActionKind
@@ -24,14 +28,6 @@ class TouchAction:
     reason: str = ""
     track_id: int | None = None
     target_x: int | None = None
-
-
-@dataclass
-class _HoldOrigin:
-    first_seen: float
-    last_seen: float
-    samples: int
-    last_tail: float
 
 
 class RealtimePlanner:
@@ -79,7 +75,6 @@ class RealtimePlanner:
         self._hold_released_at: dict[int, float] = {}
         self._hold_confirmed: set[int] = set()
         self._last_hold_rejection: dict[int, float] = {}
-        self._upper_hold_origins: dict[int, _HoldOrigin] = {}
         self._active_hold_lane: dict[int, int] = {}
         self._active_hold_x: dict[int, float] = {}
         self._hold_last_moved_at: dict[int, float] = {}
@@ -150,44 +145,6 @@ class RealtimePlanner:
         self._active_hold_x.pop(contact, None)
         self._hold_last_moved_at.pop(contact, None)
 
-    def _remember_upper_hold_origins(
-        self, notes: list[ObservedNote], now: float
-    ) -> None:
-        active_lanes = set(self._active_hold_lane.values())
-        candidates: dict[int, ObservedNote] = {}
-        for note in notes:
-            if note.lane in active_lanes:
-                continue
-            if self._hold_head(note) > self.judgement_y - 80:
-                continue
-            existing = candidates.get(note.lane)
-            if existing is None or note.width * note.height > existing.width * existing.height:
-                candidates[note.lane] = note
-        for lane, note in candidates.items():
-            origin = self._upper_hold_origins.get(lane)
-            if origin is None or now - origin.last_seen > .45:
-                self._upper_hold_origins[lane] = _HoldOrigin(
-                    now, now, 1, self._hold_tail(note)
-                )
-            elif now - origin.last_seen > 1e-6:
-                origin.last_seen = now
-                origin.samples += 1
-                origin.last_tail = self._hold_tail(note)
-        self._upper_hold_origins = {
-            lane: origin
-            for lane, origin in self._upper_hold_origins.items()
-            if now - origin.last_seen <= 1.2
-        }
-
-    def _has_qualified_upper_origin(self, lane: int, now: float) -> bool:
-        origin = self._upper_hold_origins.get(lane)
-        return bool(
-            origin is not None
-            and origin.samples >= 3
-            and origin.last_seen - origin.first_seen >= .04
-            and now - origin.last_seen <= 1.2
-        )
-
     @staticmethod
     def _touch_x(note: ObservedNote) -> int:
         return max(120, min(1160, round(note.x)))
@@ -218,7 +175,6 @@ class RealtimePlanner:
         actions: list[TouchAction] = []
         tracked_notes = self._note_tracker.update(notes, now)
         hold_notes = [note for note in notes if note.kind == NoteKind.HOLD]
-        self._remember_upper_hold_origins(hold_notes, now)
 
         # A slanted hold crosses lane boundaries while the finger contact must
         # remain the same. Match every visible component to an existing contact
@@ -230,6 +186,27 @@ class RealtimePlanner:
             previous_seen = self._hold_seen.get(contact, now)
             elapsed = max(0.0, now - previous_seen)
             current_lane = self._active_hold_lane.get(contact, contact)
+            hold_age = now - self._hold_started.get(contact, now)
+            # The tail ring is often disconnected from the translucent body.
+            # Do not require it to match the stale body-tail coordinate: doing
+            # so made the planner fall through to an early predicted release.
+            direct_tail_rings = [
+                (index, note)
+                for index, note in enumerate(hold_notes)
+                if index not in used_notes
+                and note.lane == current_lane
+                and note.height <= 30
+                and note.width >= 70
+                and note.y >= 555
+                and hold_age >= .30
+            ]
+            if direct_tail_rings:
+                selected_index, selected = max(
+                    direct_tail_rings, key=lambda item: item[1].y
+                )
+                current_holds[contact] = (selected, True)
+                used_notes.add(selected_index)
+                continue
             previous_x = self._active_hold_x.get(
                 contact,
                 190 + 150 * current_lane,
@@ -244,7 +221,10 @@ class RealtimePlanner:
                 <= previous_tail + maximum_forward
                 and (
                     note.lane == current_lane
-                    or abs(note.x - previous_x) <= maximum_x_delta
+                    or (
+                        self.enable_slide
+                        and abs(note.x - previous_x) <= maximum_x_delta
+                    )
                 )
             ]
             if not plausible:
@@ -290,6 +270,11 @@ class RealtimePlanner:
         ):
             key = (NoteKind.HOLD, note.lane)
             previous = self._previous.get(key)
+            if (
+                previous is not None
+                and now - previous.timestamp > self.track_memory_seconds
+            ):
+                previous = None
             previous_seen = self._hold_seen.get(contact)
             self._hold_seen[contact] = now
             head = self._hold_head(note)
@@ -344,7 +329,6 @@ class RealtimePlanner:
                 if near_judgement_line:
                     self._active_hold_lane[contact] = note.lane
                     self._active_hold_x[contact] = float(target_x)
-                self._upper_hold_origins.pop(note.lane, None)
                 if should_move:
                     self._hold_last_moved_at[contact] = now
                     actions.append(TouchAction(
@@ -409,15 +393,6 @@ class RealtimePlanner:
                         and note.height >= 30
                     )
                 )
-                upper_origin_qualified = self._has_qualified_upper_origin(
-                    note.lane, now
-                )
-                should_upper_origin_rescue = (
-                    self.rescue_first_visible
-                    and upper_origin_qualified
-                    and head >= self.judgement_y - 5
-                )
-                body_confirmed = body_confirmed or upper_origin_qualified
                 release_age = now - self._hold_released_at.get(note.lane, float("-inf"))
                 strong_new_crossing = (
                     should_cross
@@ -428,7 +403,11 @@ class RealtimePlanner:
                     note.lane not in self._hold_released_at
                     or (
                         release_age >= self.hold_restart_cooldown_seconds
-                        and strong_new_crossing
+                        and (
+                            strong_new_crossing
+                            or should_rescue
+                            or should_pair_rescue
+                        )
                     )
                 )
                 if (
@@ -439,16 +418,9 @@ class RealtimePlanner:
                     should_rescue
                     or should_cross
                     or should_pair_rescue
-                    or should_upper_origin_rescue
                     )
                 ):
-                    origin = self._upper_hold_origins.get(note.lane)
-                    initial_tail = (
-                        origin.last_tail
-                        if should_upper_origin_rescue and origin is not None
-                        else tail
-                    )
-                    self._active_hold_tail[contact] = initial_tail
+                    self._active_hold_tail[contact] = tail
                     self._hold_started[contact] = now
                     self._hold_confirmed.add(contact)
                     target_x = self._touch_x(note)
@@ -457,8 +429,7 @@ class RealtimePlanner:
                     start_reason = (
                         "rescue" if should_rescue else
                         "paired-rescue" if should_pair_rescue else
-                        "upper-origin-rescue" if should_upper_origin_rescue
-                        else "crossing"
+                        "crossing"
                     )
                     self._record_diagnostic(
                         "hold_start",
@@ -469,7 +440,6 @@ class RealtimePlanner:
                         height=round(note.height, 2),
                         contact=contact,
                         target_x=target_x,
-                        upper_origin_qualified=upper_origin_qualified,
                     )
                     self._record_diagnostic(
                         "hold_body_confirmed",
@@ -477,12 +447,11 @@ class RealtimePlanner:
                         lane=note.lane,
                         height=round(note.height, 2),
                     )
-                    if previous is not None and not should_upper_origin_rescue:
+                    if previous is not None:
                         self._predict_hold_release(
                             contact, self._hold_tail(previous),
                             previous.timestamp, tail, now,
                         )
-                    self._upper_hold_origins.pop(note.lane, None)
                     actions.append(TouchAction(
                         ActionKind.DOWN,
                         note.lane,
@@ -703,7 +672,6 @@ class RealtimePlanner:
         self._hold_released_at.clear()
         self._hold_confirmed.clear()
         self._last_hold_rejection.clear()
-        self._upper_hold_origins.clear()
         self._active_hold_lane.clear()
         self._active_hold_x.clear()
         self._hold_last_moved_at.clear()

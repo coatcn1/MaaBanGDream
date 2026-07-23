@@ -19,7 +19,7 @@ from .life_monitor import LifeDetector, LifeGuard
 from .note_detector import NoteDetector
 from .profile_action import parse_density
 from .profile_store import EnvironmentSignature
-from .touch_planner import RealtimePlanner
+from .touch_planner import RealtimePlanner, sliding_holds_enabled
 
 
 SUPPORTED_SIGNATURE = EnvironmentSignature((1280, 720), 240, 60, "standard", 2.0)
@@ -86,6 +86,9 @@ class RealtimeEasyRehearsal(CustomAction):
             RealtimePlanner(
                 judgement_y=565,
                 timing_offset_ms=int(params.get("timing_offset_ms", 0)),
+                enable_slide=sliding_holds_enabled(
+                    str(params.get("difficulty", "Easy"))
+                ),
                 # Bright skill notes can enter the colour range for only one
                 # fresh frame near the judgement line. The detector has
                 # already validated their colour, geometry, and lane, so a

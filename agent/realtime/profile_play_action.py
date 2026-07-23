@@ -26,7 +26,7 @@ from .profile_store import EnvironmentSignature, RealtimeProfileStore
 from .rehearsal_action import frame_resolution
 from .result_parser import LiveResult, ResultParser, adjusted_timing_offset
 from .timing_feedback import AdaptiveTimingController, TimingFeedbackDetector
-from .touch_planner import RealtimePlanner
+from .touch_planner import RealtimePlanner, sliding_holds_enabled
 from .runtime_options import debug_enabled
 
 
@@ -182,6 +182,9 @@ class RealtimeProfilePlay(CustomAction):
                 judgement_y=565,
                 timing_offset_ms=timing_offset_ms,
                 rescue_first_visible=True,
+                enable_slide=sliding_holds_enabled(
+                    str(params.get("difficulty", "Easy"))
+                ),
             ),
             touch,
             life_detector=LifeDetector(),
