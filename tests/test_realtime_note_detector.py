@@ -26,6 +26,33 @@ def test_detector_finds_simultaneous_tap_notes_by_lane():
     ]
 
 
+def test_detector_splits_slow_stacked_taps_joined_by_colour_bridge():
+    image = _frame()
+    cv2.ellipse(image, (370, 500), (65, 10), 0, 0, 360, (55, 185, 255), -1)
+    cv2.ellipse(image, (350, 555), (78, 11), 0, 0, 360, (55, 185, 255), -1)
+    cv2.rectangle(image, (345, 508), (355, 547), (55, 185, 255), -1)
+
+    notes = [
+        note for note in NoteDetector(input_color_order="RGB").detect(image, 1.0)
+        if note.kind == NoteKind.TAP
+    ]
+
+    assert [note.lane for note in notes] == [1, 1]
+    assert notes[1].y - notes[0].y >= 40
+
+
+def test_detector_does_not_split_one_large_ring_into_top_and_bottom_notes():
+    image = _frame()
+    cv2.ellipse(image, (640, 540), (90, 24), 0, 0, 360, (55, 185, 255), 7)
+
+    notes = [
+        note for note in NoteDetector(input_color_order="RGB").detect(image, 1.0)
+        if note.kind == NoteKind.TAP
+    ]
+
+    assert len(notes) <= 1
+
+
 def test_detector_classifies_skill_hold_and_flick_on_a_different_background():
     image = _frame(background=(75, 48, 92))
     cv2.rectangle(image, (460, 420), (520, 445), (255, 220, 45), -1)

@@ -131,7 +131,11 @@ def test_selection_state_is_written_atomically(tmp_path):
     assert state == {
         "version": 1,
         "pinned": {"Easy": path.name},
-        "runtime_options": {"life_safety_enabled": True, "life_exit_threshold": 200},
+        "runtime_options": {
+            "life_safety_enabled": True,
+            "life_exit_threshold": 200,
+            "rehearsal_ignore_life_safety": True,
+        },
     }
     assert not list(tmp_path.glob("*.tmp"))
 
@@ -147,16 +151,22 @@ def test_runtime_options_default_and_atomic_update_do_not_invalidate_profile(tmp
     assert listed["runtime_options"] == {
         "life_safety_enabled": True,
         "life_exit_threshold": 200,
+        "rehearsal_ignore_life_safety": True,
     }
 
     result = handle_request(
         {
             "operation": "update-runtime-options",
-            "runtime_options": {"life_safety_enabled": False, "life_exit_threshold": 350},
+            "runtime_options": {
+                "life_safety_enabled": False,
+                "life_exit_threshold": 350,
+                "rehearsal_ignore_life_safety": False,
+            },
         },
         root=tmp_path,
     )
     assert result["runtime_options"]["life_exit_threshold"] == 350
+    assert result["runtime_options"]["rehearsal_ignore_life_safety"] is False
     assert store.load(path.name)["accepted"] is True
     assert not list(tmp_path.glob("*.tmp"))
 

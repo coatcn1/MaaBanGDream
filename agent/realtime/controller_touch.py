@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import math
 import time
 from typing import Protocol
 
@@ -28,11 +29,14 @@ class ControllerTouchDispatcher:
         stopping: Callable[[], bool],
         *,
         sleeper: Callable[[float], None] = time.sleep,
+        maximum_move_step: int = 80,
     ) -> None:
         self.controller = controller
         self.stopping = stopping
         self.sleeper = sleeper
+        self.maximum_move_step = max(20, int(maximum_move_step))
         self.active_contacts: set[int] = set()
+        self.active_positions: dict[int, int] = {}
 
     def _ensure_running(self) -> None:
         if self.stopping():
@@ -46,10 +50,12 @@ class ControllerTouchDispatcher:
 
     def _down(self, action: TouchAction, contact: int) -> None:
         self._ensure_running()
+        x = self._x(action)
         self.controller.post_touch_down(
-            self._x(action), 590, contact, 50
+            x, 590, contact, 50
         ).wait()
         self.active_contacts.add(contact)
+        self.active_positions[contact] = x
 
     def dispatch(self, actions: list[TouchAction]) -> None:
         persistent = [action for action in actions if action.kind == ActionKind.DOWN]
@@ -75,9 +81,20 @@ class ControllerTouchDispatcher:
                     raise RuntimeError(
                         f"cannot move inactive touch contact {contact}"
                     )
-                self.controller.post_touch_move(
-                    self._x(action), 590, contact, 50
-                ).wait()
+                target_x = self._x(action)
+                previous_x = self.active_positions.get(contact, target_x)
+                steps = max(
+                    1,
+                    math.ceil(abs(target_x - previous_x) / self.maximum_move_step),
+                )
+                for step in range(1, steps + 1):
+                    interpolated_x = round(
+                        previous_x + (target_x - previous_x) * step / steps
+                    )
+                    self.controller.post_touch_move(
+                        interpolated_x, 590, contact, 50
+                    ).wait()
+                self.active_positions[contact] = target_x
             for action in actions:
                 if action.kind != ActionKind.UP:
                     continue
@@ -85,6 +102,7 @@ class ControllerTouchDispatcher:
                 contact = 0 if action.contact is None else action.contact
                 self.controller.post_touch_up(contact).wait()
                 self.active_contacts.discard(contact)
+                self.active_positions.pop(contact, None)
             flick_contacts = [
                 (action, contact) for action, contact in transient_contacts
                 if action.kind == ActionKind.FLICK
@@ -106,6 +124,7 @@ class ControllerTouchDispatcher:
                 self._ensure_running()
                 self.controller.post_touch_up(contact).wait()
                 self.active_contacts.discard(contact)
+                self.active_positions.pop(contact, None)
         except BaseException:
             self.reset()
             raise
@@ -117,6 +136,7 @@ class ControllerTouchDispatcher:
             except Exception:
                 pass
         self.active_contacts.clear()
+        self.active_positions.clear()
 
     def close(self) -> None:
         self.reset()

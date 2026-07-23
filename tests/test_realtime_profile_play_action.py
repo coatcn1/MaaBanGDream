@@ -12,6 +12,7 @@ from agent.realtime.profile_play_action import (
     RealtimeProfilePlay,
     _write_calibration_report,
     pause_overlay_changed,
+    resolve_life_policy,
 )
 from agent.realtime.result_parser import LiveResult
 
@@ -107,6 +108,45 @@ def test_life_safety_abort_gate_only_matches_protected_abort(monkeypatch):
     assert not RealtimeLifeSafetyAbortCheck().run(context, argv)
     monkeypatch.setattr(profile_play_action, "_LAST_LIFE_SAFETY_ABORT", True)
     assert RealtimeLifeSafetyAbortCheck().run(context, argv)
+
+
+def test_rehearsal_life_policy_can_ignore_depletion():
+    policy = resolve_life_policy(
+        {"require_profile": False, "rehearsal_mode": True},
+        {
+            "life_safety_enabled": True,
+            "life_exit_threshold": 200,
+            "rehearsal_ignore_life_safety": True,
+        },
+    )
+
+    assert policy == (True, True, None)
+
+
+def test_rehearsal_life_policy_can_enable_normal_protection():
+    policy = resolve_life_policy(
+        {"require_profile": False, "rehearsal_mode": True},
+        {
+            "life_safety_enabled": True,
+            "life_exit_threshold": 200,
+            "rehearsal_ignore_life_safety": False,
+        },
+    )
+
+    assert policy == (True, False, 200)
+
+
+def test_formal_calibration_round_uses_life_protection():
+    policy = resolve_life_policy(
+        {"require_profile": False, "rehearsal_mode": False},
+        {
+            "life_safety_enabled": True,
+            "life_exit_threshold": 200,
+            "rehearsal_ignore_life_safety": True,
+        },
+    )
+
+    assert policy == (False, False, 200)
 
 
 def test_calibration_report_contains_replay_diagnostics(tmp_path):

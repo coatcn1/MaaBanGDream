@@ -298,6 +298,12 @@ def test_realtime_multi_live_contract_and_options():
         assert params["require_profile"] is False
         assert params["debug_recording"] is False
         assert params["require_completion"] is True
+        assert params["note_speed"] == (
+            5.0 if case["name"] in {"Expert", "Special"} else 2.0
+        )
+        assert override["RealtimeLiveRequireProfile"]["custom_action_param"][
+            "note_speed"
+        ] == params["note_speed"]
         assert nodes[play_node]["next"] == ["RealtimeLiveReturnHome"]
 
     song_mode = interface["option"]["RealtimeLiveSongMode"]

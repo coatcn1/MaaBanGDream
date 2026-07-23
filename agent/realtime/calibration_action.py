@@ -141,6 +141,7 @@ class RealtimeCalibration(CustomAction):
         difficulty = calibration_difficulty()
         if difficulty not in DIFFICULTY_TARGETS:
             raise ValueError(f"不支持的难度: {difficulty}")
+        note_speed = 5.0 if difficulty in {"Expert", "Special"} else 2.0
         play_node = PLAY_NODES[difficulty]
         calibration_debug = debug_enabled()
         round_number = 0
@@ -162,11 +163,11 @@ class RealtimeCalibration(CustomAction):
                 "target_fps": 60, "timing_offset_ms": offset,
                 "debug_recording": calibration_debug,
                 "duration_seconds": 300, "dpi": 240, "game_fps": 60,
-                "render_quality": "standard", "note_speed": 2.0,
+                "render_quality": "standard", "note_speed": note_speed,
                 "wait_for_completion": True, "completion_missing_frames": 120,
                 "require_completion": True, "save_result_frame": True,
                 "result_back_attempts": 30, "result_back_interval_seconds": 1.5,
-                "continue_after_life_depleted": True,
+                "rehearsal_mode": not formal,
                 "calibration_report": (
                     "screencap/calibration-round-"
                     f"{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.json"
@@ -210,7 +211,9 @@ class RealtimeCalibration(CustomAction):
         runner = CalibrationRunner(run_round)
         offset, rehearsals, formal = runner.run(int(params.get("timing_offset_ms", 0)))
         image = context.tasker.controller.post_screencap().wait().get()
-        signature = EnvironmentSignature(frame_resolution(image), 240, 60, "standard", 2.0)
+        signature = EnvironmentSignature(
+            frame_resolution(image), 240, 60, "standard", note_speed,
+        )
         payload = {
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "difficulty": difficulty,

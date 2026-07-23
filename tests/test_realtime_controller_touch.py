@@ -80,7 +80,9 @@ def test_close_always_releases_contacts():
 
 def test_move_keeps_the_existing_hold_contact_and_uses_detected_x():
     controller = Controller()
-    touch = ControllerTouchDispatcher(controller, lambda: False)
+    touch = ControllerTouchDispatcher(
+        controller, lambda: False, maximum_move_step=100,
+    )
 
     touch.dispatch([
         TouchAction(
@@ -99,3 +101,32 @@ def test_move_keeps_the_existing_hold_contact_and_uses_detected_x():
         ("down", 5, 921, 590, 50),
         ("move", 5, 1013, 590, 50),
     ]
+
+
+def test_long_hold_move_is_interpolated_into_continuous_steps():
+    controller = Controller()
+    touch = ControllerTouchDispatcher(
+        controller, lambda: False, maximum_move_step=80,
+    )
+
+    touch.dispatch([
+        TouchAction(
+            ActionKind.DOWN, 1, 1.0, contact=3, reason="hold",
+            target_x=200,
+        )
+    ])
+    touch.dispatch([
+        TouchAction(
+            ActionKind.MOVE, 4, 1.1, contact=3, reason="hold-follow",
+            target_x=605,
+        )
+    ])
+
+    moves = [call for call in controller.calls if call[0] == "move"]
+    positions = [200, *(call[2] for call in moves)]
+    assert moves[-1] == ("move", 3, 605, 590, 50)
+    assert all(
+        0 < right - left <= 80
+        for left, right in zip(positions, positions[1:])
+    )
+    assert touch.active_positions == {3: 605}

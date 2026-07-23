@@ -66,7 +66,11 @@ class RealtimeProfileStore:
     DIFFICULTIES = frozenset({"Easy", "Normal", "Hard", "Expert", "Special"})
     MAIN_DIFFICULTIES = ("Easy", "Normal", "Hard", "Expert")
     SELECTION_FILE = "selection.json"
-    DEFAULT_RUNTIME_OPTIONS = {"life_safety_enabled": True, "life_exit_threshold": 200}
+    DEFAULT_RUNTIME_OPTIONS = {
+        "life_safety_enabled": True,
+        "life_exit_threshold": 200,
+        "rehearsal_ignore_life_safety": True,
+    }
 
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
@@ -158,13 +162,20 @@ class RealtimeProfileStore:
         enabled = options.get("life_safety_enabled", True)
         if not isinstance(enabled, bool):
             raise ValueError("life_safety_enabled 必须是布尔值")
+        rehearsal_ignore = options.get("rehearsal_ignore_life_safety", True)
+        if not isinstance(rehearsal_ignore, bool):
+            raise ValueError("rehearsal_ignore_life_safety 必须是布尔值")
         try:
             threshold = int(options.get("life_exit_threshold", 200))
         except (TypeError, ValueError) as exc:
             raise ValueError("life_exit_threshold 必须是整数") from exc
         if not 10 <= threshold <= 990:
             raise ValueError("life_exit_threshold 必须在 10..990 之间")
-        return {"life_safety_enabled": enabled, "life_exit_threshold": threshold}
+        return {
+            "life_safety_enabled": enabled,
+            "life_exit_threshold": threshold,
+            "rehearsal_ignore_life_safety": rehearsal_ignore,
+        }
 
     def runtime_options(self) -> dict[str, Any]:
         return dict(self._read_state()["runtime_options"])

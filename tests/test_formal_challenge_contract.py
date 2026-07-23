@@ -16,9 +16,13 @@ def test_formal_mode_requires_profile_and_uses_distinct_profile_nodes():
     assert formal["pipeline_override"]["RealtimeLiveFormalModeGate"]["next"] == ["RealtimeLiveRequireProfile"]
     assert nodes["RealtimeLiveRequireProfile"]["custom_action"] == "RealtimeProfileCheck"
     for name in ("RealtimeLiveFormalPlay", "RealtimeLiveFormalPlayNormal", "RealtimeLiveFormalPlayHard", "RealtimeLiveFormalPlayExpert", "RealtimeLiveFormalPlaySpecial"):
-        assert nodes[name]["custom_action_param"]["require_profile"] is True
-        assert nodes[name]["custom_action_param"]["result_back_attempts"] == 30
-        assert nodes[name]["custom_action_param"]["result_back_interval_seconds"] == 1.5
+        params = nodes[name]["custom_action_param"]
+        assert params["require_profile"] is True
+        assert params["result_back_attempts"] == 30
+        assert params["result_back_interval_seconds"] == 1.5
+        assert params["note_speed"] == (
+            5.0 if name.endswith(("Expert", "Special")) else 2.0
+        )
 
 
 def test_calibration_is_single_task_with_three_rehearsal_contract():
@@ -55,9 +59,13 @@ def test_challenge_points_and_profile_contract():
     assert nodes["ChallengePointStillOpen"]["action"] == "StopTask"
     assert nodes["ChallengeStart"]["next"] == ["ChallengePlay"]
     for name in ("ChallengePlay", "ChallengePlayNormal", "ChallengePlayHard", "ChallengePlayExpert", "ChallengePlaySpecial"):
-        assert nodes[name]["custom_action_param"]["require_profile"] is True
-        assert nodes[name]["custom_action_param"]["result_back_attempts"] == 30
-        assert nodes[name]["custom_action_param"]["result_back_interval_seconds"] == 1.5
+        params = nodes[name]["custom_action_param"]
+        assert params["require_profile"] is True
+        assert params["result_back_attempts"] == 30
+        assert params["result_back_interval_seconds"] == 1.5
+        assert params["note_speed"] == (
+            5.0 if name.endswith(("Expert", "Special")) else 2.0
+        )
         assert nodes[name]["on_error"] == ["ChallengeLifeSafetyGate"]
     assert nodes["ChallengeDifficulty"]["custom_action"] == "RealtimeDifficultySelect"
     assert nodes["ChallengeLifeSafetyGate"]["custom_action"] == "RealtimeLifeSafetyAbortCheck"

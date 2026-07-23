@@ -33,6 +33,29 @@ from .runtime_options import debug_enabled
 _LAST_LIFE_SAFETY_ABORT = False
 
 
+def resolve_life_policy(
+    params: dict,
+    runtime_options: dict,
+) -> tuple[bool, bool, int | None]:
+    """Return rehearsal mode, continue-after-depletion and safety threshold."""
+    require_profile = bool(params.get("require_profile", True))
+    is_rehearsal = bool(params.get("rehearsal_mode", not require_profile))
+    ignore_rehearsal_life = bool(
+        runtime_options.get("rehearsal_ignore_life_safety", True)
+    )
+    continue_after_depleted = bool(params.get(
+        "continue_after_life_depleted",
+        is_rehearsal and ignore_rehearsal_life,
+    ))
+    default_use_safety = not (is_rehearsal and ignore_rehearsal_life)
+    use_life_safety = bool(params.get("use_life_safety", default_use_safety))
+    life_threshold = (
+        int(runtime_options["life_exit_threshold"])
+        if use_life_safety and runtime_options["life_safety_enabled"] else None
+    )
+    return is_rehearsal, continue_after_depleted, life_threshold
+
+
 def pause_overlay_changed(before, after) -> bool:
     if before.shape != after.shape or before.size == 0:
         return False
@@ -200,14 +223,16 @@ class RealtimeProfilePlay(CustomAction):
             timing_feedback_detector=TimingFeedbackDetector(),
             timing_controller=AdaptiveTimingController(timing_offset_ms),
         )
-        continue_after_depleted = bool(params.get("continue_after_life_depleted", False))
-        # Required-profile play is formal play (including challenge mode).
-        # Calibration and rehearsal use no required profile and ignore this option.
-        use_life_safety = bool(params.get("use_life_safety", require_profile))
         runtime_options = RealtimeProfileStore(PROJECT_ROOT / "profiles").runtime_options()
-        life_threshold = (
-            int(runtime_options["life_exit_threshold"])
-            if use_life_safety and runtime_options["life_safety_enabled"] else None
+        is_rehearsal, continue_after_depleted, life_threshold = resolve_life_policy(
+            params, runtime_options,
+        )
+        print(
+            "RealtimeProfilePlay life_policy "
+            f"rehearsal={is_rehearsal} "
+            f"continue_after_depleted={continue_after_depleted} "
+            f"threshold={life_threshold}",
+            flush=True,
         )
 
         def pause_for_life(reading) -> None:

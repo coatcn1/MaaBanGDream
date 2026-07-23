@@ -71,6 +71,70 @@ class NoteDetector:
         )))
         return tuple(640 + (center - 640) * progress for center in self.lane_centers)
 
+    def _split_stacked_ordinary_component(
+        self,
+        component: np.ndarray,
+        *,
+        left: int,
+        top: int,
+        kind: NoteKind,
+        timestamp: float,
+    ) -> list[ObservedNote]:
+        """Recover vertically stacked heads joined by a thin colour bridge."""
+        width = component.shape[1]
+        horizontal = cv2.morphologyEx(
+            component.astype(np.uint8) * 255,
+            cv2.MORPH_OPEN,
+            np.ones((1, max(7, round(width * .2))), np.uint8),
+        )
+        count, _, stats, centroids = cv2.connectedComponentsWithStats(horizontal)
+        candidates: list[ObservedNote] = []
+        for label in range(1, count):
+            _, _, local_width, local_height, area = stats[label]
+            original_width = int(local_width * 2)
+            original_height = int(local_height * 2)
+            if (
+                area * 4 < 180
+                or original_height > 32
+                or original_width / max(original_height, 1) < 2.5
+            ):
+                continue
+            local_x, local_y = centroids[label]
+            x = (left + local_x) * 2
+            y = (top + local_y) * 2 + self.PLAYFIELD_TOP
+            centers = self.centers_at(y)
+            lane = min(range(len(centers)), key=lambda i: abs(x - centers[i]))
+            lane_spacing = max(24.0, abs(centers[1] - centers[0]))
+            if abs(x - centers[lane]) > lane_spacing * .46:
+                continue
+            progress = min(1.0, max(0.0, (y - self.VANISHING_Y) / (
+                self.JUDGEMENT_Y - self.VANISHING_Y
+            )))
+            minimum_width = (
+                10 + progress * 35
+                if kind == NoteKind.FLICK
+                else 12 + progress * 45
+            )
+            if original_width < minimum_width:
+                continue
+            candidates.append(ObservedNote(
+                kind,
+                lane,
+                float(x),
+                float(y),
+                original_width,
+                max(4, original_height),
+                timestamp,
+            ))
+        candidates.sort(key=lambda note: note.y)
+        if len(candidates) < 2:
+            return []
+        separated = [
+            note for index, note in enumerate(candidates)
+            if index == 0 or note.y - candidates[index - 1].y >= 50
+        ]
+        return separated if len(separated) >= 2 else []
+
     def detect(self, image: np.ndarray, timestamp: float) -> list[ObservedNote]:
         # Colour segmentation does not need full-resolution pixels.  Processing
         # the playfield at half size cuts HSV/connected-component work to 25%,
@@ -95,6 +159,22 @@ class NoteDetector:
                     continue
                 if kind != NoteKind.HOLD and width / max(height, 1) < 1.15:
                     continue
+                component = labels[top:top + height, left:left + width] == label
+                if (
+                    kind != NoteKind.HOLD
+                    and width * 2 >= 80
+                    and height * 2 >= 45
+                ):
+                    split = self._split_stacked_ordinary_component(
+                        component,
+                        left=left,
+                        top=top,
+                        kind=kind,
+                        timestamp=timestamp,
+                    )
+                    if split:
+                        notes.extend(split)
+                        continue
                 maximum_height = 270 if kind == NoteKind.HOLD else 55
                 maximum_width = 320 if kind == NoteKind.HOLD else 150
                 if width > maximum_width or height > maximum_height:
@@ -107,7 +187,6 @@ class NoteDetector:
                 # of the falling component. Use that run for both lane and
                 # crossing time while retaining full body height for its tail.
                 if kind == NoteKind.HOLD:
-                    component = labels[top:top + height, left:left + width] == label
                     lower_start = min(height - 1, max(0, int(height * .45)))
                     row_counts = component[lower_start:].sum(axis=1)
                     head_row = lower_start + int(np.argmax(row_counts))
