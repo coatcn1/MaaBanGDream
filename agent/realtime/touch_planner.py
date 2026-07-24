@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from .note_detector import NoteKind, ObservedNote
-from .note_tracker import MultiNoteTracker
+from .note_tracker import MultiNoteTracker, TrackedNote
 
 
 class ActionKind(str, Enum):
@@ -50,7 +50,6 @@ class RealtimePlanner:
         paired_hold_rescue_margin: float = 35,
         hold_max_seconds: float = 20,
         hold_restart_cooldown_seconds: float = 0.25,
-        post_release_rescue_seconds: float = 0.4,
     ):
         self.judgement_y = float(judgement_y)
         self.timing_offset = timing_offset_ms / 1000
@@ -64,10 +63,9 @@ class RealtimePlanner:
         self.paired_hold_rescue_margin = float(paired_hold_rescue_margin)
         self.hold_max_seconds = float(hold_max_seconds)
         self.hold_restart_cooldown_seconds = float(hold_restart_cooldown_seconds)
-        self.post_release_rescue_seconds = float(post_release_rescue_seconds)
         self._last_lane_sweep = float("-inf")
         self._previous: dict[tuple[NoteKind, int], ObservedNote] = {}
-        self._last_trigger: dict[int, float] = {}
+        self._last_trigger: dict[int, tuple[float, NoteKind | None]] = {}
         self._hold_seen: dict[int, float] = {}
         self._active_hold_tail: dict[int, float] = {}
         self._hold_release_at: dict[int, float] = {}
@@ -511,44 +509,6 @@ class RealtimePlanner:
                     downward_motion_frames=tracked.downward_motion_frames,
                 )
                 continue
-            crossed_rescue_line = (
-                tracked.previous_y is not None
-                and tracked.previous_y < self.judgement_y - 5 <= note.y
-            )
-            if (
-                self.rescue_first_visible
-                and (tracked.previous_y is None or crossed_rescue_line)
-                and note.y >= self.judgement_y - 5
-            ):
-                release_age = now - self._hold_released_at.get(
-                    note.lane, float("-inf")
-                )
-                if release_age < self.post_release_rescue_seconds:
-                    target = self.judgement_y - tracked.velocity_y * self.timing_offset
-                    is_real_crossing = (
-                        tracked.previous_y is not None
-                        and tracked.velocity_y > 0
-                        and tracked.previous_y <= self.judgement_y - 25
-                        and tracked.previous_y < target <= note.y
-                    )
-                    self._note_tracker.mark_fired(tracked.track_id, now)
-                    if is_real_crossing:
-                        kind = (
-                            ActionKind.FLICK
-                            if note.kind == NoteKind.FLICK
-                            else ActionKind.TAP
-                        )
-                        actions.append(TouchAction(
-                            kind, note.lane, now,
-                            reason="crossing", track_id=tracked.track_id,
-                        ))
-                    continue
-                kind = ActionKind.FLICK if note.kind == NoteKind.FLICK else ActionKind.TAP
-                actions.append(TouchAction(
-                    kind, note.lane, now, reason="rescue", track_id=tracked.track_id
-                ))
-                self._note_tracker.mark_fired(tracked.track_id, now)
-                continue
             if tracked.previous_y is None or tracked.velocity_y <= 0:
                 continue
             target = self.judgement_y - tracked.velocity_y * self.timing_offset
@@ -610,10 +570,17 @@ class RealtimePlanner:
             if previous is None or abs(note.y - previous.y) >= .2:
                 remembered[key] = note
         self._previous = remembered
-        return self._suppress_redundant_judgements(actions, now)
+        return self._suppress_redundant_judgements(
+            actions,
+            now,
+            {tracked.track_id: tracked for tracked in tracked_notes},
+        )
 
     def _suppress_redundant_judgements(
-        self, actions: list[TouchAction], now: float
+        self,
+        actions: list[TouchAction],
+        now: float,
+        tracked_by_id: dict[int, TrackedNote],
     ) -> list[TouchAction]:
         """Use the game's adjacent-lane judgement instead of repeated input."""
         structural = [
@@ -637,16 +604,32 @@ class RealtimePlanner:
         ))
         kept: list[TouchAction] = []
         for action in transients:
+            current_track = tracked_by_id.get(action.track_id)
+            current_kind = (
+                current_track.note.kind if current_track is not None else None
+            )
+            late_born = (
+                current_track is not None
+                and current_track.minimum_y >= self.judgement_y - 20
+            )
             recently_covered = any(
-                abs(action.lane - lane) <= 1
-                and (
-                    abs(now - timestamp) <= 1e-9
-                    or (
-                        action.reason == "rescue"
-                        and now - timestamp < self.retrigger_seconds
+                (
+                    action.lane == lane
+                    and now - timestamp < self.retrigger_seconds
+                    and (
+                        late_born
+                        or (
+                            current_kind is not None
+                            and previous_kind is not None
+                            and current_kind != previous_kind
+                        )
                     )
                 )
-                for lane, timestamp in self._last_trigger.items()
+                or (
+                    abs(action.lane - lane) <= 1
+                    and abs(now - timestamp) <= 1e-9
+                )
+                for lane, (timestamp, previous_kind) in self._last_trigger.items()
             )
             covered_by_hold_start = (
                 action.kind == ActionKind.TAP
@@ -655,7 +638,7 @@ class RealtimePlanner:
             if recently_covered or covered_by_hold_start:
                 continue
             kept.append(action)
-            self._last_trigger[action.lane] = now
+            self._last_trigger[action.lane] = (now, current_kind)
         return structural + kept + lane_sweeps
 
     def reset(self, now: float) -> list[TouchAction]:

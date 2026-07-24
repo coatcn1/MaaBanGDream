@@ -89,10 +89,8 @@ class RealtimeEasyRehearsal(CustomAction):
                 enable_slide=sliding_holds_enabled(
                     str(params.get("difficulty", "Easy"))
                 ),
-                # Bright skill notes can enter the colour range for only one
-                # fresh frame near the judgement line. The detector has
-                # already validated their colour, geometry, and lane, so a
-                # first-visible rescue is safe and prevents silent misses.
+                # First-visible rescue is restricted to confirmed long-note
+                # bodies. Ordinary Tap/Flick/Skill notes must cross the line.
                 rescue_first_visible=True,
             ),
             touch,

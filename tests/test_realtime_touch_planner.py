@@ -46,6 +46,23 @@ def test_planner_batches_a_chord_once_when_notes_cross_the_judgement_line():
     assert duplicate == []
 
 
+def test_reclassified_crossing_cannot_retap_same_lane_within_retrigger_window():
+    planner = RealtimePlanner(
+        judgement_y=565,
+        timing_offset_ms=0,
+        retrigger_seconds=.12,
+    )
+    planner.update([_note(NoteKind.TAP, 2, 520, 1.00)], now=1.00)
+    first = planner.update([_note(NoteKind.TAP, 2, 570, 1.05)], now=1.05)
+    planner.update([_note(NoteKind.SKILL, 2, 560, 1.06)], now=1.06)
+    rebuilt = planner.update([_note(NoteKind.SKILL, 2, 570, 1.10)], now=1.10)
+
+    assert [(action.kind, action.reason) for action in first] == [
+        (ActionKind.TAP, "crossing")
+    ]
+    assert rebuilt == []
+
+
 def test_planner_keeps_a_hold_pressed_through_short_detection_gaps():
     planner = RealtimePlanner(judgement_y=620, timing_offset_ms=0, hold_grace_seconds=.35)
 
@@ -141,7 +158,7 @@ def test_planner_rescues_both_sides_of_slightly_asymmetric_double_hold():
     assert actions[1].reason == "paired-rescue"
 
 
-def test_rescue_mode_hits_intermittently_detected_notes_near_the_line():
+def test_first_visible_rescue_is_restricted_to_confirmed_hold_bodies():
     planner = RealtimePlanner(
         judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
     )
@@ -151,23 +168,38 @@ def test_rescue_mode_hits_intermittently_detected_notes_near_the_line():
     flick = planner.update([_note(NoteKind.FLICK, 5, 562, 1.06)], now=1.06)
     hold = planner.update([_note(NoteKind.HOLD, 3, 560, 1.09)], now=1.09)
 
-    assert [(action.kind, action.lane) for action in tap] == [(ActionKind.TAP, 2)]
-    assert [(action.kind, action.lane) for action in flick] == [(ActionKind.FLICK, 5)]
+    assert tap == []
+    assert flick == []
     assert [(action.kind, action.lane) for action in hold] == [(ActionKind.DOWN, 3)]
 
 
-def test_rescue_mode_does_not_repeatedly_tap_a_persistent_bright_object():
+def test_first_visible_bright_object_does_not_generate_tap():
     planner = RealtimePlanner(judgement_y=565, rescue_first_visible=True)
     note = _note(NoteKind.TAP, 2, 561, 1.0)
 
     first = planner.update([note], now=1.0)
     repeated = planner.update([_note(NoteKind.TAP, 2, 561, 1.1)], now=1.1)
 
-    assert len(first) == 1
+    assert first == []
     assert repeated == []
 
 
-def test_rescue_does_not_retap_skill_when_track_is_rebuilt_near_line():
+def test_near_line_artifact_cannot_retrigger_after_tracker_memory_expires():
+    planner = RealtimePlanner(
+        judgement_y=565,
+        rescue_first_visible=True,
+        track_memory_seconds=.15,
+    )
+
+    first = planner.update([_note(NoteKind.TAP, 2, 561, 1.0)], now=1.0)
+    planner.update([], now=1.20)
+    rebuilt = planner.update([_note(NoteKind.TAP, 2, 562, 1.48)], now=1.48)
+
+    assert first == []
+    assert rebuilt == []
+
+
+def test_rebuilt_near_line_skill_does_not_generate_tap():
     planner = RealtimePlanner(
         judgement_y=565, rescue_first_visible=True, track_memory_seconds=.05
     )
@@ -176,16 +208,20 @@ def test_rescue_does_not_retap_skill_when_track_is_rebuilt_near_line():
     planner.update([], now=1.06)
     rebuilt = planner.update([_note(NoteKind.SKILL, 4, 563, 1.10)], now=1.10)
 
-    assert [(action.kind, action.lane) for action in first] == [(ActionKind.TAP, 4)]
+    assert first == []
     assert rebuilt == []
 
 
-def test_one_tap_suppresses_same_window_notes_on_adjacent_lanes():
+def test_one_crossing_suppresses_same_window_notes_on_adjacent_lanes():
     planner = RealtimePlanner(judgement_y=565, rescue_first_visible=True)
 
+    planner.update([
+        _note(NoteKind.TAP, 3, 520, .95),
+        _note(NoteKind.SKILL, 4, 520, .95),
+    ], now=.95)
     actions = planner.update([
-        _note(NoteKind.TAP, 3, 561, 1.0),
-        _note(NoteKind.SKILL, 4, 561, 1.0),
+        _note(NoteKind.TAP, 3, 570, 1.0),
+        _note(NoteKind.SKILL, 4, 570, 1.0),
     ], now=1.0)
 
     assert [(action.kind, action.lane) for action in actions] == [
@@ -193,15 +229,17 @@ def test_one_tap_suppresses_same_window_notes_on_adjacent_lanes():
     ]
 
 
-def test_rescue_does_not_trigger_twenty_five_pixels_before_judgement_line():
+def test_note_must_cross_judgement_line_before_triggering():
     planner = RealtimePlanner(
         judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
     )
 
     assert planner.update([_note(NoteKind.TAP, 2, 545, 1.0)], now=1.0) == []
-    tap = planner.update([_note(NoteKind.TAP, 2, 561, 1.05)], now=1.05)
+    tap = planner.update([_note(NoteKind.TAP, 2, 570, 1.05)], now=1.05)
 
-    assert [(action.kind, action.lane) for action in tap] == [(ActionKind.TAP, 2)]
+    assert [(action.kind, action.lane, action.reason) for action in tap] == [
+        (ActionKind.TAP, 2, "crossing")
+    ]
 
 
 def test_planner_tracks_a_falling_note_across_a_short_detection_gap():
