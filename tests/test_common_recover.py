@@ -235,3 +235,28 @@ def test_login_mode_clicks_start_before_using_back(monkeypatch):
     )
     assert context.tasker.controller.clicks == [(640, 635)]
     assert context.tasker.controller.keys == [4]
+
+
+def test_login_start_marker_false_positive_is_clicked_only_once(monkeypatch):
+    context = Context({
+        "HomeMarker": [False, False, True],
+        # The bottom-right menu-shaped marker also occurs on ordinary game
+        # pages. It must not suppress BACK forever when it is a false positive.
+        "LoginScreenMarker": [True, True],
+    })
+    ticks = iter(value / 1000 for value in range(1000))
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(common_recover.time, "sleep", lambda _seconds: None)
+
+    assert common_recover.CommonRecover().run(
+        context,
+        argv(
+            escape_interval_ms=0,
+            escape_timeout_ms=100,
+            login_start_node="LoginScreenMarker",
+            login_start_target=[640, 635],
+            escape_after_login_start=True,
+        ),
+    )
+    assert context.tasker.controller.clicks == [(640, 635)]
+    assert context.tasker.controller.keys == [4]

@@ -39,7 +39,10 @@ class LifeDetector:
         bx1, by1, bx2, by2 = self.BAR
         bar = image[by1:by2, bx1:bx2]
         hsv = cv2.cvtColor(bar, cv2.COLOR_BGR2HSV)
-        green = cv2.inRange(hsv, (35, 70, 55), (95, 255, 255))
+        # The fill shifts from green to yellow-green as life falls. The
+        # previous lower hue bound (35) turned a real 250/1000 bar (H≈25)
+        # into zero and caused a false safety abort.
+        green = cv2.inRange(hsv, (20, 40, 55), (95, 255, 255))
         columns = np.count_nonzero(green, axis=0) >= max(3, bar.shape[0] // 5)
         filled = 0
         for present in columns:

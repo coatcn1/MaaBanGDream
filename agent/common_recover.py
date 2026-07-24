@@ -81,7 +81,7 @@ class CommonRecover(CustomAction):
                 if result and result.hit:
                     return True
                 clicked = False
-                if login_mode:
+                if login_mode and not login_started:
                     result = context.run_recognition(login_start_node, image)
                     if result and result.hit:
                         if context.tasker.stopping:

@@ -12,7 +12,7 @@ from agent.realtime.life_monitor import (
 )
 
 
-def life_frame(value: int | None):
+def life_frame(value: int | None, *, fill_hsv=(64, 209, 220)):
     image = np.zeros((720, 1280, 3), dtype=np.uint8)
     if value is None:
         return image
@@ -20,7 +20,10 @@ def life_frame(value: int | None):
     cv2.rectangle(image, (968, 29), (1184, 55), (210, 210, 210), 2)
     width = round(212 * value / 1000)
     if width:
-        cv2.rectangle(image, (970, 32), (970 + width - 1, 52), (80, 220, 40), -1)
+        fill = cv2.cvtColor(
+            np.uint8([[fill_hsv]]), cv2.COLOR_HSV2BGR
+        )[0, 0].tolist()
+        cv2.rectangle(image, (970, 32), (970 + width - 1, 52), fill, -1)
     return image
 
 
@@ -30,6 +33,15 @@ def test_life_detector_reads_maa_bgr_frames():
         reading = detector.detect(life_frame(expected))
         assert reading.visible
         assert abs(reading.value - expected) <= 30
+
+
+def test_life_detector_reads_low_life_yellow_green_fill():
+    reading = LifeDetector().detect(
+        life_frame(250, fill_hsv=(25, 161, 188))
+    )
+
+    assert reading.visible
+    assert 220 <= reading.value <= 280
 
 
 def test_life_guard_requires_three_visible_zero_frames():
