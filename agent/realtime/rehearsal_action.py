@@ -89,8 +89,9 @@ class RealtimeEasyRehearsal(CustomAction):
                 enable_slide=sliding_holds_enabled(
                     str(params.get("difficulty", "Easy"))
                 ),
-                # First-visible rescue is restricted to confirmed long-note
-                # bodies. Ordinary Tap/Flick/Skill notes must cross the line.
+                # Ordinary notes that only become visible at the judgement
+                # line are rescued once; the post-release suppression window
+                # keeps hold tail-ring residue from retriggering taps.
                 rescue_first_visible=True,
             ),
             touch,

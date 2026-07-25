@@ -50,6 +50,7 @@ class RealtimePlanner:
         paired_hold_rescue_margin: float = 35,
         hold_max_seconds: float = 20,
         hold_restart_cooldown_seconds: float = 0.25,
+        post_release_rescue_seconds: float = 0.4,
     ):
         self.judgement_y = float(judgement_y)
         self.timing_offset = timing_offset_ms / 1000
@@ -63,14 +64,16 @@ class RealtimePlanner:
         self.paired_hold_rescue_margin = float(paired_hold_rescue_margin)
         self.hold_max_seconds = float(hold_max_seconds)
         self.hold_restart_cooldown_seconds = float(hold_restart_cooldown_seconds)
+        self.post_release_rescue_seconds = float(post_release_rescue_seconds)
         self._last_lane_sweep = float("-inf")
         self._previous: dict[tuple[NoteKind, int], ObservedNote] = {}
-        self._last_trigger: dict[int, tuple[float, NoteKind | None]] = {}
+        self._last_trigger: dict[int, float] = {}
         self._hold_seen: dict[int, float] = {}
         self._active_hold_tail: dict[int, float] = {}
         self._hold_release_at: dict[int, float] = {}
         self._hold_started: dict[int, float] = {}
         self._hold_released_at: dict[int, float] = {}
+        self._hold_chord_partner: dict[int, int] = {}
         self._hold_confirmed: set[int] = set()
         self._last_hold_rejection: dict[int, float] = {}
         self._active_hold_lane: dict[int, int] = {}
@@ -142,6 +145,41 @@ class RealtimePlanner:
         self._active_hold_lane.pop(contact, None)
         self._active_hold_x.pop(contact, None)
         self._hold_last_moved_at.pop(contact, None)
+
+    def _release_hold(
+        self,
+        contact: int,
+        lane: int,
+        now: float,
+        reason: str,
+        actions: list[TouchAction],
+    ) -> None:
+        """Release a hold, releasing its chord partner in the same frame.
+
+        Double long notes share one white connector: both contacts must lift
+        together. When the partner's tail is also within the rescue margin of
+        the release line, holding it any longer only drags one half of the
+        chord past its judgement.
+        """
+        actions.append(TouchAction(ActionKind.UP, lane, now, contact, reason))
+        self._finish_hold(contact, now, reason)
+        # The UP action reports the hold's current observed lane, which can
+        # differ from the last recorded active lane after a slide. Record the
+        # release under the action lane too, or the post-release suppression
+        # window will miss residue appearing where the finger actually lifted.
+        self._hold_released_at[lane] = now
+        partner = self._hold_chord_partner.pop(contact, None)
+        if partner is None or partner not in self._active_hold_tail:
+            return
+        partner_tail = self._active_hold_tail[partner]
+        if partner_tail < self.hold_release_y - self.paired_hold_rescue_margin:
+            return
+        partner_lane = self._active_hold_lane.get(partner, partner)
+        actions.append(TouchAction(
+            ActionKind.UP, partner_lane, now, partner, f"{reason}-paired"
+        ))
+        self._finish_hold(partner, now, f"{reason}-paired")
+        self._hold_chord_partner.pop(partner, None)
 
     @staticmethod
     def _touch_x(note: ObservedNote) -> int:
@@ -266,6 +304,9 @@ class RealtimePlanner:
         for contact, (note, continuing) in sorted(
             current_holds.items(), key=lambda item: item[1][0].lane
         ):
+            if continuing and contact not in self._active_hold_tail:
+                # Already released as a chord partner earlier in this frame.
+                continue
             key = (NoteKind.HOLD, note.lane)
             previous = self._previous.get(key)
             if (
@@ -289,19 +330,15 @@ class RealtimePlanner:
                     and hold_age >= .30
                 )
                 if tail_ring_at_line:
-                    actions.append(TouchAction(
-                        ActionKind.UP, note.lane, now, contact, "tail-ring"
-                    ))
-                    self._finish_hold(contact, now, "tail-ring")
+                    self._release_hold(contact, note.lane, now, "tail-ring", actions)
                     continue
                 if (
                     hold_age >= .30
                     and previous_tail < self.hold_release_y <= tail
                 ):
-                    actions.append(TouchAction(
-                        ActionKind.UP, note.lane, now, contact, "tail-crossing"
-                    ))
-                    self._finish_hold(contact, now, "tail-crossing")
+                    self._release_hold(
+                        contact, note.lane, now, "tail-crossing", actions
+                    )
                     continue
                 if note.height >= 40:
                     self._predict_hold_release(
@@ -421,6 +458,17 @@ class RealtimePlanner:
                     self._active_hold_tail[contact] = tail
                     self._hold_started[contact] = now
                     self._hold_confirmed.add(contact)
+                    # Holds whose heads arrive together share one connector;
+                    # link them so the release side can lift both contacts in
+                    # the same frame later.
+                    for other_contact, other_started in self._hold_started.items():
+                        if (
+                            other_contact != contact
+                            and other_contact in self._active_hold_tail
+                            and now - other_started <= 0.08
+                        ):
+                            self._hold_chord_partner[contact] = other_contact
+                            self._hold_chord_partner[other_contact] = contact
                     target_x = self._touch_x(note)
                     self._active_hold_lane[contact] = note.lane
                     self._active_hold_x[contact] = float(target_x)
@@ -509,6 +557,87 @@ class RealtimePlanner:
                     downward_motion_frames=tracked.downward_motion_frames,
                 )
                 continue
+            # One physical pink flick often segments into a FLICK track plus
+            # trailing TAP/SKILL fragments on the same lane. Never let a
+            # plainer fragment judge the note first: the game's flick
+            # judgement covers the press, the reverse downgrades it.
+            flick_shadowed = (
+                note.kind != NoteKind.FLICK
+                and any(
+                    other.note.kind == NoteKind.FLICK
+                    and other.note.lane == note.lane
+                    and not other.fired
+                    and abs(other.note.y - note.y) <= 60
+                    for other in tracked_notes
+                )
+            )
+            if flick_shadowed:
+                self._note_tracker.mark_fired(tracked.track_id, now)
+                continue
+            # Bright skill heads and briefly occluded notes can stay outside
+            # the colour ranges until they reach the judgement line, so their
+            # first tracked sample already sits at the line with no usable
+            # velocity. Without a guarded first-visible rescue these notes
+            # silently miss. The post-release window is what keeps the hold
+            # tail-ring residue from retriggering: it stays suppressive.
+            crossed_rescue_line = (
+                tracked.previous_y is not None
+                and tracked.previous_y < self.judgement_y - 5 <= note.y
+            )
+            if (
+                self.rescue_first_visible
+                and (tracked.previous_y is None or crossed_rescue_line)
+                and note.y >= self.judgement_y - 5
+            ):
+                if (
+                    tracked.previous_y is None
+                    and note.y >= self.judgement_y + 8
+                ):
+                    # Tap-effect ripples and hold-tail residue park a flat
+                    # fragment just below the line (around judgement + 9)
+                    # with no prior motion. A real head is always first seen
+                    # at the line itself, so a first sample this low is
+                    # never a note: swallow it before it becomes a phantom
+                    # tap on an idle lane.
+                    self._note_tracker.mark_fired(tracked.track_id, now)
+                    self._record_diagnostic(
+                        "below_line_residue_suppressed",
+                        now,
+                        lane=note.lane,
+                        y=round(note.y, 2),
+                        width=note.width,
+                        height=note.height,
+                    )
+                    continue
+                release_age = now - self._hold_released_at.get(
+                    note.lane, float("-inf")
+                )
+                if release_age < self.post_release_rescue_seconds:
+                    target = self.judgement_y - tracked.velocity_y * self.timing_offset
+                    is_real_crossing = (
+                        tracked.previous_y is not None
+                        and tracked.velocity_y > 0
+                        and tracked.previous_y <= self.judgement_y - 25
+                        and tracked.previous_y < target <= note.y
+                    )
+                    self._note_tracker.mark_fired(tracked.track_id, now)
+                    if is_real_crossing:
+                        kind = (
+                            ActionKind.FLICK
+                            if note.kind == NoteKind.FLICK
+                            else ActionKind.TAP
+                        )
+                        actions.append(TouchAction(
+                            kind, note.lane, now,
+                            reason="crossing", track_id=tracked.track_id,
+                        ))
+                    continue
+                kind = ActionKind.FLICK if note.kind == NoteKind.FLICK else ActionKind.TAP
+                actions.append(TouchAction(
+                    kind, note.lane, now, reason="rescue", track_id=tracked.track_id
+                ))
+                self._note_tracker.mark_fired(tracked.track_id, now)
+                continue
             if tracked.previous_y is None or tracked.velocity_y <= 0:
                 continue
             target = self.judgement_y - tracked.velocity_y * self.timing_offset
@@ -532,20 +661,14 @@ class RealtimePlanner:
                 and held_for >= .30
             ):
                 lane = self._active_hold_lane.get(contact, contact)
-                actions.append(TouchAction(
-                    ActionKind.UP, lane, now, contact, "predicted-tail"
-                ))
-                self._finish_hold(contact, now, "predicted-tail")
+                self._release_hold(contact, lane, now, "predicted-tail", actions)
         for contact, started in list(self._hold_started.items()):
             if (
                 contact in self._active_hold_tail
                 and now - started >= self.hold_max_seconds
             ):
                 lane = self._active_hold_lane.get(contact, contact)
-                actions.append(TouchAction(
-                    ActionKind.UP, lane, now, contact, "hold-failsafe"
-                ))
-                self._finish_hold(contact, now, "hold-failsafe")
+                self._release_hold(contact, lane, now, "hold-failsafe", actions)
         if (
             self.lane_sweep_interval is not None
             and now - self._last_lane_sweep >= self.lane_sweep_interval
@@ -582,7 +705,14 @@ class RealtimePlanner:
         now: float,
         tracked_by_id: dict[int, TrackedNote],
     ) -> list[TouchAction]:
-        """Use the game's adjacent-lane judgement instead of repeated input."""
+        """Fire validated chord partners together; merge only fragments.
+
+        Notes joined by the white connector must be judged at the same
+        instant, so same-frame neighbours each backed by a validated track
+        (or a detector-validated rescue) all fire. A single physical note
+        rebuilt as a second fragmented track in the adjacent lane has no
+        such evidence and is still merged into one press.
+        """
         structural = [
             action for action in actions
             if action.kind in (ActionKind.UP, ActionKind.DOWN, ActionKind.MOVE)
@@ -602,43 +732,80 @@ class RealtimePlanner:
         transients.sort(key=lambda action: (
             0 if action.kind == ActionKind.FLICK else 1, action.lane
         ))
+
+        def trusted(action: TouchAction) -> bool:
+            if action.reason == "rescue":
+                return True
+            track = tracked_by_id.get(action.track_id)
+            return (
+                track is not None
+                and track.minimum_y <= self.judgement_y - 40
+                and track.motion_samples >= 3
+                and track.downward_motion_frames >= 2
+                and track.velocity_y > 0
+            )
+
+        # Union same-frame neighbours, then keep every validated member of
+        # each group. Groups with no validated member keep their first action,
+        # preserving the old single-press behaviour for ambiguous clusters.
+        parent = list(range(len(transients)))
+
+        def find(index: int) -> int:
+            while parent[index] != index:
+                parent[index] = parent[parent[index]]
+                index = parent[index]
+            return index
+
+        for first in range(len(transients)):
+            for second in range(first + 1, len(transients)):
+                if abs(transients[first].lane - transients[second].lane) <= 1:
+                    first_root, second_root = find(first), find(second)
+                    if first_root != second_root:
+                        parent[second_root] = first_root
+
+        grouped: dict[int, list[TouchAction]] = {}
+        for index, action in enumerate(transients):
+            grouped.setdefault(find(index), []).append(action)
+        survivors: list[TouchAction] = []
+        for members in grouped.values():
+            validated = [action for action in members if trusted(action)]
+            survivors.extend(validated if validated else members[:1])
+
         kept: list[TouchAction] = []
-        for action in transients:
-            current_track = tracked_by_id.get(action.track_id)
-            current_kind = (
-                current_track.note.kind if current_track is not None else None
-            )
-            late_born = (
-                current_track is not None
-                and current_track.minimum_y >= self.judgement_y - 20
-            )
+        for action in survivors:
+            # Same-lane retrigger: only an unvalidated fragment is swallowed;
+            # validated tracks (including a real flick shadowed by its own
+            # tap fragment) always fire again. A rescue never follows a
+            # recent same/adjacent-lane trigger: the note was already judged.
+            # Same-frame chord partners sit on different lanes by definition,
+            # so a same-lane rescue is a fragment even at an identical
+            # timestamp.
             recently_covered = any(
                 (
                     action.lane == lane
                     and now - timestamp < self.retrigger_seconds
-                    and (
-                        late_born
-                        or (
-                            current_kind is not None
-                            and previous_kind is not None
-                            and current_kind != previous_kind
-                        )
-                    )
+                    and not trusted(action)
                 )
                 or (
-                    abs(action.lane - lane) <= 1
-                    and abs(now - timestamp) <= 1e-9
+                    action.reason == "rescue"
+                    and abs(action.lane - lane) <= 1
+                    and now - timestamp < self.retrigger_seconds
+                    and (
+                        action.lane == lane
+                        or 1e-9 < now - timestamp
+                    )
                 )
-                for lane, (timestamp, previous_kind) in self._last_trigger.items()
+                for lane, timestamp in self._last_trigger.items()
             )
             covered_by_hold_start = (
                 action.kind == ActionKind.TAP
+                and not trusted(action)
                 and any(abs(action.lane - lane) <= 1 for lane in current_down_lanes)
             )
             if recently_covered or covered_by_hold_start:
                 continue
             kept.append(action)
-            self._last_trigger[action.lane] = (now, current_kind)
+            self._last_trigger[action.lane] = now
         return structural + kept + lane_sweeps
 
     def reset(self, now: float) -> list[TouchAction]:
@@ -653,6 +820,7 @@ class RealtimePlanner:
         self._hold_release_at.clear()
         self._hold_started.clear()
         self._hold_released_at.clear()
+        self._hold_chord_partner.clear()
         self._hold_confirmed.clear()
         self._last_hold_rejection.clear()
         self._active_hold_lane.clear()

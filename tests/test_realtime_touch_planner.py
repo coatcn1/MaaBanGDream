@@ -158,7 +158,96 @@ def test_planner_rescues_both_sides_of_slightly_asymmetric_double_hold():
     assert actions[1].reason == "paired-rescue"
 
 
-def test_first_visible_rescue_is_restricted_to_confirmed_hold_bodies():
+def test_paired_holds_lift_together_when_one_tail_ring_reaches_the_line():
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+
+    downs = planner.update([
+        ObservedNote(NoteKind.HOLD, 1, 340, 510, 70, 105, 1.0),
+        ObservedNote(NoteKind.HOLD, 5, 940, 530, 70, 110, 1.0),
+    ], now=1.0)
+    planner.update([
+        ObservedNote(NoteKind.HOLD, 1, 340, 540, 100, 105, 1.2),
+        ObservedNote(NoteKind.HOLD, 5, 940, 575, 100, 110, 1.2),
+    ], now=1.2)
+    ups = planner.update([
+        ObservedNote(NoteKind.HOLD, 1, 340, 570, 100, 18, 1.4),
+        ObservedNote(NoteKind.HOLD, 5, 940, 572, 100, 18, 1.4),
+    ], now=1.4)
+
+    assert [(a.kind, a.lane, a.contact) for a in downs] == [
+        (ActionKind.DOWN, 1, 1), (ActionKind.DOWN, 5, 5)
+    ]
+    # The lane-5 tail recorded last frame sits within the rescue margin, so
+    # the shared connector lifts both contacts in one frame.
+    assert [(a.kind, a.lane, a.contact, a.reason) for a in ups] == [
+        (ActionKind.UP, 1, 1, "tail-ring"),
+        (ActionKind.UP, 5, 5, "tail-ring-paired"),
+    ]
+
+
+def test_paired_hold_with_a_distant_tail_releases_on_its_own():
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+
+    planner.update([
+        ObservedNote(NoteKind.HOLD, 1, 340, 510, 70, 105, 1.0),
+        ObservedNote(NoteKind.HOLD, 5, 940, 490, 70, 110, 1.0),
+    ], now=1.0)
+    first = planner.update([
+        ObservedNote(NoteKind.HOLD, 1, 340, 570, 100, 18, 1.4),
+        ObservedNote(NoteKind.HOLD, 5, 940, 500, 100, 110, 1.4),
+    ], now=1.4)
+    second = planner.update([
+        ObservedNote(NoteKind.HOLD, 5, 940, 572, 100, 18, 1.8),
+    ], now=1.8)
+
+    # Lane 5's tail is still well above the release margin, so pairing must
+    # not drag it up with lane 1.
+    assert [(a.kind, a.lane, a.contact, a.reason) for a in first] == [
+        (ActionKind.UP, 1, 1, "tail-ring"),
+    ]
+    assert [(a.kind, a.lane, a.contact, a.reason) for a in second] == [
+        (ActionKind.UP, 5, 5, "tail-ring"),
+    ]
+
+
+def test_reset_clears_hold_chord_partner_state():
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+    planner.update([
+        ObservedNote(NoteKind.HOLD, 1, 340, 510, 70, 105, 1.0),
+        ObservedNote(NoteKind.HOLD, 5, 940, 530, 70, 110, 1.0),
+    ], now=1.0)
+    assert planner._hold_chord_partner
+
+    ups = planner.reset(1.2)
+
+    assert [(a.kind, a.lane, a.contact) for a in ups] == [
+        (ActionKind.UP, 1, 1), (ActionKind.UP, 5, 5)
+    ]
+    assert planner._hold_chord_partner == {}
+
+
+def test_tap_fragment_shadowed_by_same_lane_flick_never_judges_first():
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+
+    actions = planner.update([
+        _note(NoteKind.TAP, 2, 565, 1.0),
+        _note(NoteKind.FLICK, 2, 561, 1.0),
+    ], now=1.0)
+
+    assert [(a.kind, a.lane, a.reason) for a in actions] == [
+        (ActionKind.FLICK, 2, "rescue")
+    ]
+
+
+def test_first_visible_notes_are_rescued_once_at_the_line():
     planner = RealtimePlanner(
         judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
     )
@@ -168,23 +257,56 @@ def test_first_visible_rescue_is_restricted_to_confirmed_hold_bodies():
     flick = planner.update([_note(NoteKind.FLICK, 5, 562, 1.06)], now=1.06)
     hold = planner.update([_note(NoteKind.HOLD, 3, 560, 1.09)], now=1.09)
 
-    assert tap == []
-    assert flick == []
+    assert [(action.kind, action.lane, action.reason) for action in tap] == [
+        (ActionKind.TAP, 2, "rescue")
+    ]
+    assert [(action.kind, action.lane, action.reason) for action in flick] == [
+        (ActionKind.FLICK, 5, "rescue")
+    ]
     assert [(action.kind, action.lane) for action in hold] == [(ActionKind.DOWN, 3)]
 
 
-def test_first_visible_bright_object_does_not_generate_tap():
+def test_first_visible_residue_below_the_line_never_fires():
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+
+    # Tap-effect ripples park at ~judgement + 9 with a flat geometry.
+    first = planner.update([_note(NoteKind.TAP, 2, 574.4, 1.0)], now=1.0)
+    planner.update([], now=1.2)
+    reappeared = planner.update([_note(NoteKind.TAP, 2, 574.4, 1.5)], now=1.5)
+
+    assert first == []
+    assert reappeared == []
+
+
+def test_tracked_note_crossing_below_the_line_still_fires():
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+
+    planner.update([_note(NoteKind.TAP, 2, 555, 1.0)], now=1.0)
+    crossed = planner.update([_note(NoteKind.TAP, 2, 575, 1.05)], now=1.05)
+
+    assert [(action.kind, action.reason) for action in crossed] == [
+        (ActionKind.TAP, "rescue")
+    ]
+
+
+def test_first_visible_bright_object_is_rescued_once():
     planner = RealtimePlanner(judgement_y=565, rescue_first_visible=True)
     note = _note(NoteKind.TAP, 2, 561, 1.0)
 
     first = planner.update([note], now=1.0)
     repeated = planner.update([_note(NoteKind.TAP, 2, 561, 1.1)], now=1.1)
 
-    assert first == []
+    assert [(action.kind, action.reason) for action in first] == [
+        (ActionKind.TAP, "rescue")
+    ]
     assert repeated == []
 
 
-def test_near_line_artifact_cannot_retrigger_after_tracker_memory_expires():
+def test_note_rebuilt_after_retrigger_window_is_judged_as_new():
     planner = RealtimePlanner(
         judgement_y=565,
         rescue_first_visible=True,
@@ -195,11 +317,17 @@ def test_near_line_artifact_cannot_retrigger_after_tracker_memory_expires():
     planner.update([], now=1.20)
     rebuilt = planner.update([_note(NoteKind.TAP, 2, 562, 1.48)], now=1.48)
 
-    assert first == []
-    assert rebuilt == []
+    assert [(action.kind, action.reason) for action in first] == [
+        (ActionKind.TAP, "rescue")
+    ]
+    # The retrigger window is short on purpose: a note reappearing well
+    # after it (and after tracker memory expired) is a new judgement.
+    assert [(action.kind, action.reason) for action in rebuilt] == [
+        (ActionKind.TAP, "rescue")
+    ]
 
 
-def test_rebuilt_near_line_skill_does_not_generate_tap():
+def test_rebuilt_near_line_skill_is_suppressed_within_retrigger_window():
     planner = RealtimePlanner(
         judgement_y=565, rescue_first_visible=True, track_memory_seconds=.05
     )
@@ -208,11 +336,13 @@ def test_rebuilt_near_line_skill_does_not_generate_tap():
     planner.update([], now=1.06)
     rebuilt = planner.update([_note(NoteKind.SKILL, 4, 563, 1.10)], now=1.10)
 
-    assert first == []
+    assert [(action.kind, action.reason) for action in first] == [
+        (ActionKind.TAP, "rescue")
+    ]
     assert rebuilt == []
 
 
-def test_one_crossing_suppresses_same_window_notes_on_adjacent_lanes():
+def test_simultaneous_adjacent_chord_notes_fire_together():
     planner = RealtimePlanner(judgement_y=565, rescue_first_visible=True)
 
     planner.update([
@@ -225,7 +355,8 @@ def test_one_crossing_suppresses_same_window_notes_on_adjacent_lanes():
     ], now=1.0)
 
     assert [(action.kind, action.lane) for action in actions] == [
-        (ActionKind.TAP, 3)
+        (ActionKind.TAP, 3),
+        (ActionKind.TAP, 4),
     ]
 
 
@@ -238,7 +369,7 @@ def test_note_must_cross_judgement_line_before_triggering():
     tap = planner.update([_note(NoteKind.TAP, 2, 570, 1.05)], now=1.05)
 
     assert [(action.kind, action.lane, action.reason) for action in tap] == [
-        (ActionKind.TAP, 2, "crossing")
+        (ActionKind.TAP, 2, "rescue")
     ]
 
 
