@@ -1,0 +1,22 @@
+{
+  "source": "BanGDreamAutoScript HEAD",
+  "license": "GPL-3.0-only",
+  "files": {
+    "agent/realtime/note_detector.py": "bdas/realtime/vision.py",
+    "tests/test_realtime_note_detector.py": "tests/test_realtime_vision.py",
+    "agent/realtime/note_tracker.py": "bdas/realtime/tracker.py",
+    "tests/test_realtime_note_tracker.py": "tests/test_realtime_tracker.py",
+    "agent/realtime/touch_planner.py": "bdas/realtime/planner.py",
+    "tests/test_realtime_touch_planner.py": "tests/test_realtime_planner.py",
+    "tests/test_realtime_multi_note_planner.py": "tests/test_realtime_multi_note_planner.py",
+    "agent/realtime/touch_protocol.py": "bdas/realtime/touch.py (protocol core rewritten)",
+    "tests/test_realtime_touch_protocol.py": "tests/test_realtime_touch.py",
+    "agent/realtime/life_monitor.py": "bdas/realtime/life.py (synchronous guard rewritten)",
+    "tests/test_realtime_life_monitor.py": "tests/test_realtime_life.py",
+    "agent/realtime/engine.py": "bdas/realtime/engine.py (completion lifecycle redesigned for synchronous Maa Agent)"
+    ,"agent/realtime/result_parser.py": "bdas/realtime/result.py (adapted for Maa BGR frames)"
+    ,"agent/realtime/digit_templates.py": "bdas/realtime/digit_templates.py"
+    ,"agent/realtime/result_samples_v2.py": "bdas/realtime/result_samples_v2.py"
+    ,"tests/test_realtime_result_parser.py": "tests/test_realtime_result.py"
+  }
+}

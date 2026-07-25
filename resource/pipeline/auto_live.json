@@ -34,6 +34,10 @@
       "escape_timeout_ms": 60000,
       "restart_limit": 2,
       "restart_wait_ms": 5000,
+      "startup_grace_ms": 12000,
+      "login_start_node": "AutoLiveLoginScreenMarker",
+      "login_start_target": [640, 635],
+      "escape_after_login_start": true,
       "package": "com.bilibili.star.bili"
     },
     "next": ["AutoLiveHomeMarker"]
@@ -46,11 +50,19 @@
     "next": ["AutoLiveHomeLive"],
     "on_error": ["CommonRecover"]
   },
+  "AutoLiveLoginScreenMarker": {
+    "recognition": "TemplateMatch",
+    "template": "login_menu_marker.png",
+    "roi": [1150, 590, 130, 130],
+    "threshold": 0.90,
+    "action": "DoNothing"
+  },
   "AutoLiveLoginTap": {
     "recognition": "TemplateMatch",
     "template": "login_tap_to_start.png",
     "threshold": 0.90,
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "next": [
       "AutoLiveHomeMarker",
       "AutoLiveLoginNext",
@@ -63,7 +75,8 @@
     "recognition": "TemplateMatch",
     "template": "login_next.png",
     "threshold": 0.90,
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "next": [
       "AutoLiveHomeMarker",
       "AutoLiveLoginNext",
@@ -75,7 +88,8 @@
     "recognition": "TemplateMatch",
     "template": "common_close.png",
     "threshold": 0.90,
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "next": [
       "AutoLiveHomeMarker",
       "AutoLiveLoginNext",
@@ -87,7 +101,8 @@
     "recognition": "TemplateMatch",
     "template": "home_live.png",
     "threshold": 0.88,
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "target": [1085, 580, 180, 130],
     "next": [
       "AutoLiveHomeMarker",
@@ -100,7 +115,8 @@
     "recognition": "TemplateMatch",
     "template": "common_close.png",
     "threshold": 0.90,
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "next": ["AutoLiveFreeLive", "AutoLiveNavigationClose"],
     "on_error": ["CommonRecover"]
   },
@@ -108,7 +124,8 @@
     "recognition": "TemplateMatch",
     "template": "free_live.png",
     "threshold": 0.88,
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "next": [
       "AutoLiveSongSelectMarker",
       "AutoLivePrepare",
@@ -126,14 +143,16 @@
   },
   "AutoLiveRandomSong": {
     "recognition": "DirectHit",
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "target": [687, 642],
     "post_delay": 1000,
     "next": ["AutoLiveDifficulty"]
   },
   "AutoLiveDifficulty": {
     "recognition": "DirectHit",
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "target": [715, 545],
     "post_delay": 500,
     "next": ["AutoLivePrepare"]
@@ -142,7 +161,8 @@
     "recognition": "TemplateMatch",
     "template": "live_prepare.png",
     "threshold": 0.88,
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "target": [1040, 615, 100, 45],
     "next": [
       "AutoLiveQuotaExhausted",
@@ -156,7 +176,8 @@
     "recognition": "TemplateMatch",
     "template": "common_close.png",
     "threshold": 0.90,
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "next": [
       "AutoLiveQuotaExhausted",
       "AutoLiveEnabled",
@@ -184,7 +205,8 @@
     "recognition": "TemplateMatch",
     "template": "auto_live_off.png",
     "threshold": 0.88,
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "target": true,
     "max_hit": 3,
     "next": [
@@ -200,7 +222,8 @@
     "template": "live_start.png",
     "roi": [980, 530, 290, 190],
     "threshold": 0.90,
-    "action": "Click",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
     "target": true,
     "timeout": 300000,
     "next": ["AutoLiveResult"],

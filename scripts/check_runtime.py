@@ -4,7 +4,9 @@ import argparse
 import importlib.metadata
 import json
 import os
+import platform
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -43,10 +45,40 @@ def deps_versions(deps: dict[str, Any]) -> tuple[str, str]:
     return mfa_versions[0], binding_versions[0]
 
 
+def current_runtime_identifier(
+    platform_name: str | None = None,
+    machine: str | None = None,
+) -> str:
+    platform_key = platform_name or sys.platform
+    machine_key = (machine or platform.machine()).lower()
+    operating_system = {
+        "win32": "win",
+        "linux": "linux",
+        "darwin": "osx",
+    }.get(platform_key)
+    architecture = {
+        "amd64": "x64",
+        "x86_64": "x64",
+        "arm64": "arm64",
+        "aarch64": "arm64",
+    }.get(machine_key)
+    if operating_system is None or architecture is None:
+        raise ValueError(
+            f"unsupported runtime platform: {platform_key}/{machine_key}"
+        )
+    return f"{operating_system}-{architecture}"
+
+
 def native_directory(mfa_root: Path) -> Path:
+    runtime_id = current_runtime_identifier()
+    current = mfa_root / "runtimes" / runtime_id / "native" / "MaaFramework.dll"
+    if current.is_file():
+        return current.parent
     matches = list(mfa_root.glob("runtimes/*/native/MaaFramework.dll"))
     if len(matches) != 1:
-        raise ValueError("unable to identify one MaaFramework.dll")
+        raise ValueError(
+            f"unable to identify MaaFramework.dll for {runtime_id}"
+        )
     return matches[0].parent
 
 
@@ -64,7 +96,13 @@ def native_core_version(mfa_root: Path) -> str:
 def static_versions() -> dict[str, str | int]:
     interface = load_json(INTERFACE_PATH)
     requirements = REQUIREMENTS_PATH.read_text(encoding="utf-8")
+    prefix = Path(sys.prefix)
     return {
+        "python": f"{sys.version_info.major}.{sys.version_info.minor}",
+        "environment_manager": (
+            "conda" if (prefix / "conda-meta").is_dir() else "not-conda"
+        ),
+        "conda_environment": prefix.name,
         "maafw_python": importlib.metadata.version("MaaFw"),
         "maafw_requirement": required_maafw_version(requirements),
         "project_interface": interface["interface_version"],

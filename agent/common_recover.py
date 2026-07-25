@@ -8,6 +8,11 @@ from maa.agent.agent_server import AgentServer
 from maa.context import Context
 from maa.custom_action import CustomAction
 
+try:
+    from .foreground_guard import ForegroundAppMismatch, foreground_package, require_game_foreground
+except ImportError:  # AgentServer loads this module from the agent directory.
+    from foreground_guard import ForegroundAppMismatch, foreground_package, require_game_foreground
+
 
 def _params(raw: Any) -> dict[str, Any]:
     if isinstance(raw, dict):
@@ -38,10 +43,22 @@ class CommonRecover(CustomAction):
         package = str(params.get("package", "com.bilibili.star.bili"))
         restart_limit = int(params.get("restart_limit", 2))
         restart_wait = int(params.get("restart_wait_ms", 5000)) / 1000
+        startup_grace = int(params.get("startup_grace_ms", 0)) / 1000
         click_nodes = [str(node) for node in params.get("click_nodes", [])]
+        login_start_node = str(params.get("login_start_node", ""))
+        login_start_target = params.get("login_start_target")
+        escape_after_login_start = bool(params.get("escape_after_login_start", False))
+        login_mode = (
+            escape_after_login_start
+            and bool(login_start_node)
+            and isinstance(login_start_target, (list, tuple))
+            and len(login_start_target) == 2
+        )
         controller = context.tasker.controller
 
         for restart in range(restart_limit + 1):
+            login_started = not login_mode
+            grace_deadline = time.monotonic() + startup_grace
             deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
                 if context.tasker.stopping:
@@ -49,11 +66,37 @@ class CommonRecover(CustomAction):
                 image = controller.post_screencap().wait().get()
                 if context.tasker.stopping:
                     return False
+                try:
+                    require_game_foreground(controller, package)
+                except ForegroundAppMismatch as exc:
+                    actual = foreground_package(controller) or ""
+                    is_system_shell = actual.startswith("com.android.launcher") or actual == "com.android.systemui"
+                    if time.monotonic() < grace_deadline or is_system_shell:
+                        if not _wait_unless_stopping(context, interval):
+                            return False
+                        continue
+                    print(f"CommonRecover {exc}", flush=True)
+                    return False
                 result = context.run_recognition(home_node, image)
                 if result and result.hit:
                     return True
                 clicked = False
+                if login_mode and not login_started:
+                    result = context.run_recognition(login_start_node, image)
+                    if result and result.hit:
+                        if context.tasker.stopping:
+                            return False
+                        x, y = (int(value) for value in login_start_target)
+                        controller.post_click(x, y).wait()
+                        login_started = True
+                        clicked = True
+                        print(
+                            f"CommonRecover login screen detected; clicked ({x}, {y})",
+                            flush=True,
+                        )
                 for node in click_nodes:
+                    if clicked:
+                        break
                     result = context.run_recognition(node, image)
                     if not result or not result.hit or not result.box:
                         continue
@@ -64,9 +107,14 @@ class CommonRecover(CustomAction):
                         box.x + box.w // 2,
                         box.y + box.h // 2,
                     ).wait()
+                    login_started = True
                     clicked = True
                     break
-                if not clicked:
+                if (
+                    not clicked
+                    and login_started
+                    and time.monotonic() >= grace_deadline
+                ):
                     if context.tasker.stopping:
                         return False
                     controller.post_click_key(4).wait()
@@ -81,4 +129,5 @@ class CommonRecover(CustomAction):
                 controller.post_start_app(package).wait()
                 if not _wait_unless_stopping(context, restart_wait):
                     return False
+        print("自动登录未能到达主页；如停留在账号、验证码或实名页面，请人工完成后重试", flush=True)
         return False

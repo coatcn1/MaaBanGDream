@@ -18,17 +18,27 @@ class Job:
 
 
 class Controller:
-    def __init__(self):
+    def __init__(self, foreground="com.bilibili.star.bili"):
         self.image = object()
+        self.foreground = foreground
         self.captures = 0
         self.clicks = []
         self.keys = []
         self.stops = []
         self.starts = []
 
+    def post_shell(self, _command, _timeout=20000):
+        foreground = (
+            next(self.foreground)
+            if hasattr(self.foreground, "__next__")
+            else self.foreground
+        )
+        return Job(f"mCurrentFocus=Window{{123 u0 {foreground}/.MainActivity}}")
+
     def post_screencap(self):
         self.captures += 1
-        return Job(self.image)
+        image = next(self.image) if hasattr(self.image, "__next__") else self.image
+        return Job(image)
 
     def post_click(self, x, y):
         self.clicks.append((x, y))
@@ -48,17 +58,17 @@ class Controller:
 
 
 class Tasker:
-    def __init__(self, stopping=False):
-        self.controller = Controller()
+    def __init__(self, stopping=False, foreground="com.bilibili.star.bili"):
+        self.controller = Controller(foreground)
         self.stopping = stopping
 
 
 class Context:
-    def __init__(self, recognitions=None, *, stopping=False):
+    def __init__(self, recognitions=None, *, stopping=False, foreground="com.bilibili.star.bili"):
         self.recognitions = {
             name: iter(results) for name, results in (recognitions or {}).items()
         }
-        self.tasker = Tasker(stopping)
+        self.tasker = Tasker(stopping, foreground)
 
     def run_recognition(self, node, _image):
         hit = next(self.recognitions.get(node, iter(())), False)
@@ -114,8 +124,22 @@ def test_stopping_exits_before_any_controller_operation():
     assert context.tasker.controller.starts == []
 
 
+def test_foreign_foreground_exits_without_input_or_app_control(monkeypatch):
+    context = Context(foreground="com.bilibili.azurlane")
+    ticks = iter(range(100))
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: next(ticks) / 1000)
+    monkeypatch.setattr(common_recover.time, "sleep", lambda _seconds: None)
+
+    assert not common_recover.CommonRecover().run(context, argv(escape_timeout_ms=20))
+    assert context.tasker.controller.captures == 1
+    assert context.tasker.controller.clicks == []
+    assert context.tasker.controller.keys == []
+    assert context.tasker.controller.stops == []
+    assert context.tasker.controller.starts == []
+
+
 def test_failure_path_restarts_only_up_to_limit(monkeypatch):
-    context = Context()
+    context = Context(foreground="test.package")
     ticks = iter(range(1000))
     monkeypatch.setattr(common_recover.time, "monotonic", lambda: next(ticks) / 1000)
     monkeypatch.setattr(common_recover.time, "sleep", lambda _seconds: None)
@@ -135,3 +159,104 @@ def test_failure_path_restarts_only_up_to_limit(monkeypatch):
     assert context.tasker.controller.keys
     assert context.tasker.controller.stops == ["test.package", "test.package"]
     assert context.tasker.controller.starts == ["test.package", "test.package"]
+
+
+def test_startup_grace_waits_without_sending_back(monkeypatch):
+    context = Context({"HomeMarker": [False, True]})
+    ticks = iter([0, 0, .001, .002, .003, .004, .005])
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(common_recover.time, "sleep", lambda _seconds: None)
+
+    assert common_recover.CommonRecover().run(
+        context,
+        argv(escape_interval_ms=0, escape_timeout_ms=10000, startup_grace_ms=5000),
+    )
+    assert context.tasker.controller.keys == []
+
+
+def test_startup_grace_allows_launcher_until_game_reaches_foreground(monkeypatch):
+    context = Context({"HomeMarker": [False, True]})
+    context.tasker.controller.foreground = iter([
+        "com.android.launcher3", "com.android.launcher3",
+        "com.bilibili.star.bili", "com.bilibili.star.bili"
+    ])
+    ticks = iter(value / 1000 for value in range(1000))
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(common_recover.time, "sleep", lambda _seconds: None)
+
+    assert common_recover.CommonRecover().run(
+        context,
+        argv(escape_interval_ms=0, escape_timeout_ms=10000, startup_grace_ms=5000),
+    )
+    assert context.tasker.controller.keys == []
+
+
+def test_login_mode_never_sends_back_before_start_is_detected(monkeypatch):
+    context = Context({
+        "HomeMarker": [False, False, True],
+        "LoginScreenMarker": [False, False],
+    })
+    ticks = iter(value / 1000 for value in range(1000))
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(common_recover.time, "sleep", lambda _seconds: None)
+
+    assert common_recover.CommonRecover().run(
+        context,
+        argv(
+            escape_interval_ms=0,
+            escape_timeout_ms=100,
+            login_start_node="LoginScreenMarker",
+            login_start_target=[640, 635],
+            escape_after_login_start=True,
+        ),
+    )
+    assert context.tasker.controller.clicks == []
+    assert context.tasker.controller.keys == []
+
+
+def test_login_mode_clicks_start_before_using_back(monkeypatch):
+    context = Context({
+        "HomeMarker": [False, False, True],
+        "LoginScreenMarker": [True, False],
+    })
+    ticks = iter(value / 1000 for value in range(1000))
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(common_recover.time, "sleep", lambda _seconds: None)
+
+    assert common_recover.CommonRecover().run(
+        context,
+        argv(
+            escape_interval_ms=0,
+            escape_timeout_ms=100,
+            login_start_node="LoginScreenMarker",
+            login_start_target=[640, 635],
+            escape_after_login_start=True,
+        ),
+    )
+    assert context.tasker.controller.clicks == [(640, 635)]
+    assert context.tasker.controller.keys == [4]
+
+
+def test_login_start_marker_false_positive_is_clicked_only_once(monkeypatch):
+    context = Context({
+        "HomeMarker": [False, False, True],
+        # The bottom-right menu-shaped marker also occurs on ordinary game
+        # pages. It must not suppress BACK forever when it is a false positive.
+        "LoginScreenMarker": [True, True],
+    })
+    ticks = iter(value / 1000 for value in range(1000))
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(common_recover.time, "sleep", lambda _seconds: None)
+
+    assert common_recover.CommonRecover().run(
+        context,
+        argv(
+            escape_interval_ms=0,
+            escape_timeout_ms=100,
+            login_start_node="LoginScreenMarker",
+            login_start_target=[640, 635],
+            escape_after_login_start=True,
+        ),
+    )
+    assert context.tasker.controller.clicks == [(640, 635)]
+    assert context.tasker.controller.keys == [4]

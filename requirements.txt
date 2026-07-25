@@ -1,2 +1,3 @@
 MaaFw==5.10.2
+opencv-python-headless>=4.8,<5
 pytest>=8,<9

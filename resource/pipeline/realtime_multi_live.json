@@ -1,0 +1,280 @@
+{
+  "RealtimeMultiLive": {
+    "recognition": "DirectHit",
+    "action": "StartApp",
+    "package": "com.bilibili.star.bili",
+    "next": ["RealtimeLiveRoundGate"]
+  },
+  "RealtimeLiveRoundGate": {
+    "recognition": "DirectHit",
+    "action": "DoNothing",
+    "max_hit": 1,
+    "next": ["RealtimeLiveDebugGate"]
+  },
+  "RealtimeLiveComplete": {
+    "recognition": "DirectHit",
+    "action": "DoNothing"
+  },
+  "RealtimeLiveEnsureHome": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "CommonRecover",
+    "custom_action_param": {
+      "home_node": "RealtimeLiveHomeMarker",
+      "click_nodes": [
+        "AutoLiveLoginTap", "AutoLiveLoginNext", "AutoLiveCommonClose",
+        "AutoLiveStorySkipConfirmLarge", "AutoLiveStorySkipConfirm",
+        "AutoLiveStorySkip", "AutoLiveStoryMenu"
+      ],
+      "escape_interval_ms": 1500,
+      "escape_timeout_ms": 60000,
+      "restart_limit": 2,
+      "restart_wait_ms": 5000,
+      "startup_grace_ms": 12000,
+      "login_start_node": "AutoLiveLoginScreenMarker",
+      "login_start_target": [640, 635],
+      "escape_after_login_start": true,
+      "package": "com.bilibili.star.bili"
+    },
+    "next": ["RealtimeLiveHomeMarker"]
+  },
+  "RealtimeLiveHomeMarker": {
+    "recognition": "TemplateMatch",
+    "template": "home_marker.png",
+    "threshold": 0.88,
+    "action": "DoNothing",
+    "next": ["RealtimeLiveHomeLive"],
+    "on_error": ["RealtimeLiveEnsureHome"]
+  },
+  "RealtimeLiveHomeLive": {
+    "recognition": "TemplateMatch",
+    "template": "home_live.png",
+    "threshold": 0.88,
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
+    "target": [1085, 580, 180, 130],
+    "next": ["RealtimeLiveHomeMarker", "RealtimeLiveFreeLive", "RealtimeLiveNavigationClose"],
+    "on_error": ["RealtimeLiveEnsureHome"]
+  },
+  "RealtimeLiveNavigationClose": {
+    "recognition": "TemplateMatch",
+    "template": "common_close.png",
+    "threshold": 0.90,
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
+    "next": ["RealtimeLiveFreeLive", "RealtimeLiveNavigationClose"],
+    "on_error": ["RealtimeLiveEnsureHome"]
+  },
+  "RealtimeLiveFreeLive": {
+    "recognition": "TemplateMatch",
+    "template": "free_live.png",
+    "threshold": 0.88,
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
+    "next": ["RealtimeLiveSongSelectMarker", "RealtimeLivePrepare", "RealtimeLiveNavigationClose"],
+    "on_error": ["RealtimeLiveEnsureHome"]
+  },
+  "RealtimeLiveSongSelectMarker": {
+    "recognition": "TemplateMatch",
+    "template": "song_select_marker.png",
+    "threshold": 0.92,
+    "action": "DoNothing",
+    "next": ["RealtimeLiveDifficulty"],
+    "on_error": ["RealtimeLiveEnsureHome"]
+  },
+  "RealtimeLiveRandomSong": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
+    "target": [687, 642],
+    "post_delay": 1000,
+    "next": ["RealtimeLiveDifficulty"]
+  },
+  "RealtimeLiveDifficulty": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "RealtimeDifficultySelect",
+    "custom_action_param": {"difficulty": "Easy", "max_attempts": 3},
+    "next": ["RealtimeLivePrepare"]
+  },
+  "RealtimeLivePrepare": {
+    "recognition": "TemplateMatch",
+    "template": "live_prepare.png",
+    "threshold": 0.88,
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
+    "target": [1040, 615, 100, 45],
+    "next": ["RealtimeLiveFormalModeGate"],
+    "on_error": ["RealtimeLiveEnsureHome"]
+  },
+  "RealtimeLiveFormalModeGate": {
+    "recognition": "DirectHit",
+    "action": "DoNothing",
+    "next": ["RealtimeLiveFormalMarker", "RealtimeLiveRehearsalMarker"]
+  },
+  "RealtimeLiveRequireProfile": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "RealtimeProfileCheck",
+    "custom_action_param": {"difficulty": "Easy", "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0},
+    "next": ["RealtimeLiveRehearsalToFormal", "RealtimeLiveFormalReady"]
+  },
+  "RealtimeLiveRehearsalToFormal": {
+    "recognition": "TemplateMatch",
+    "template": "rehearsal_mode_marker.png",
+    "threshold": 0.88,
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
+    "target": [55, 520],
+    "post_delay": 1000,
+    "next": ["RealtimeLiveFormalReady"]
+  },
+  "RealtimeLiveFormalReady": {
+    "recognition": "TemplateMatch",
+    "template": "formal_live_marker.png",
+    "threshold": 0.88,
+    "action": "Custom",
+    "custom_action": "RealtimeFormalPreflight",
+    "next": ["RealtimeLiveFormalStart"],
+    "on_error": ["RealtimeLiveEnsureHome"]
+  },
+  "RealtimeLiveFormalStart": {
+    "recognition": "TemplateMatch",
+    "template": "live_start.png",
+    "threshold": 0.88,
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
+    "target": true,
+    "next": ["RealtimeLivePlay"]
+  },
+  "RealtimeLiveDebugGate": {"recognition": "DirectHit", "action": "Custom", "custom_action": "RealtimeRuntimeOptions", "custom_action_param": {"debug_recording": false}, "next": ["RealtimeLiveEnsureHome"]},
+  "RealtimeLiveFormalMarker": {
+    "recognition": "TemplateMatch",
+    "template": "formal_live_marker.png",
+    "threshold": 0.88,
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
+    "target": [55, 520],
+    "post_delay": 1000,
+    "next": ["RealtimeLiveRehearsalMarker", "RealtimeLiveFormalMarker"],
+    "on_error": ["RealtimeLiveEnsureHome"]
+  },
+  "RealtimeLiveRehearsalMarker": {
+    "recognition": "TemplateMatch",
+    "template": "rehearsal_mode_marker.png",
+    "threshold": 0.88,
+    "action": "DoNothing",
+    "next": ["RealtimeLiveDemoSettings"],
+    "on_error": ["RealtimeLiveEnsureHome"]
+  },
+  "RealtimeLiveDemoSettings": {
+    "recognition": "TemplateMatch",
+    "template": "demo_settings.png",
+    "threshold": 0.88,
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
+    "target": true,
+    "post_delay": 500,
+    "next": ["RealtimeLiveDemoModeOff", "RealtimeLiveDemoSettingsMarker"],
+    "on_error": ["RealtimeLiveEnsureHome"]
+  },
+  "RealtimeLiveDemoModeOff": {
+    "recognition": "TemplateMatch",
+    "template": "demo_mode_off.png",
+    "threshold": 0.88,
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
+    "target": [640, 525],
+    "post_delay": 500,
+    "next": ["RealtimeLiveRehearsalStart"],
+    "on_error": ["RealtimeLiveEnsureHome"]
+  },
+  "RealtimeLiveDemoSettingsMarker": {
+    "recognition": "TemplateMatch",
+    "template": "demo_settings_marker.png",
+    "threshold": 0.88,
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
+    "target": [575, 385],
+    "post_delay": 500,
+    "next": ["RealtimeLiveDemoModeOff", "RealtimeLiveDemoSettingsMarker"],
+    "on_error": ["RealtimeLiveEnsureHome"]
+  },
+  "RealtimeLiveRehearsalStart": {
+    "recognition": "TemplateMatch",
+    "template": "rehearsal_start.png",
+    "threshold": 0.88,
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
+    "target": true,
+    "next": ["RealtimeLivePlay"],
+    "on_error": ["RealtimeLiveEnsureHome"]
+  },
+  "RealtimeLivePlay": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "RealtimeProfilePlay",
+    "custom_action_param": {
+      "difficulty": "Easy",
+      "require_profile": false,
+      "target_fps": 60,
+      "timing_offset_ms": 0,
+      "debug_recording": false,
+      "duration_seconds": 300,
+      "dpi": 240,
+      "game_fps": 60,
+      "render_quality": "standard",
+      "note_speed": 2.0,
+      "wait_for_completion": true,
+      "completion_missing_frames": 120,
+      "require_completion": true,
+      "save_result_frame": true,
+      "result_back_attempts": 30,
+      "result_back_interval_seconds": 1.5
+    },
+    "next": ["RealtimeLiveReturnHome"]
+  },
+  "RealtimeLivePlayNormal": {
+    "recognition": "DirectHit", "action": "Custom", "custom_action": "RealtimeProfilePlay",
+    "custom_action_param": {"difficulty": "Normal", "require_profile": false, "target_fps": 60, "timing_offset_ms": 0, "debug_recording": false, "duration_seconds": 300, "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0, "wait_for_completion": true, "completion_missing_frames": 120, "require_completion": true, "save_result_frame": true, "result_back_attempts": 30, "result_back_interval_seconds": 1.5},
+    "next": ["RealtimeLiveReturnHome"]
+  },
+  "RealtimeLivePlayHard": {
+    "recognition": "DirectHit", "action": "Custom", "custom_action": "RealtimeProfilePlay",
+    "custom_action_param": {"difficulty": "Hard", "require_profile": false, "target_fps": 60, "timing_offset_ms": 0, "debug_recording": false, "duration_seconds": 300, "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0, "wait_for_completion": true, "completion_missing_frames": 120, "require_completion": true, "save_result_frame": true, "result_back_attempts": 30, "result_back_interval_seconds": 1.5},
+    "next": ["RealtimeLiveReturnHome"]
+  },
+  "RealtimeLivePlayExpert": {
+    "recognition": "DirectHit", "action": "Custom", "custom_action": "RealtimeProfilePlay",
+    "custom_action_param": {"difficulty": "Expert", "require_profile": false, "target_fps": 60, "timing_offset_ms": 0, "debug_recording": false, "duration_seconds": 300, "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 5.0, "wait_for_completion": true, "completion_missing_frames": 120, "require_completion": true, "save_result_frame": true, "result_back_attempts": 30, "result_back_interval_seconds": 1.5},
+    "next": ["RealtimeLiveReturnHome"]
+  },
+  "RealtimeLivePlaySpecial": {
+    "recognition": "DirectHit", "action": "Custom", "custom_action": "RealtimeProfilePlay",
+    "custom_action_param": {"difficulty": "Special", "require_profile": false, "target_fps": 60, "timing_offset_ms": 0, "debug_recording": false, "duration_seconds": 300, "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 5.0, "wait_for_completion": true, "completion_missing_frames": 120, "require_completion": true, "save_result_frame": true, "result_back_attempts": 30, "result_back_interval_seconds": 1.5},
+    "next": ["RealtimeLiveReturnHome"]
+  },
+  "RealtimeLiveFormalPlay": {"recognition": "DirectHit", "action": "Custom", "custom_action": "RealtimeProfilePlay", "custom_action_param": {"difficulty": "Easy", "require_profile": true, "debug_recording": false, "duration_seconds": 300, "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0, "wait_for_completion": true, "completion_missing_frames": 120, "require_completion": true, "save_result_frame": true, "result_back_attempts": 30, "result_back_interval_seconds": 1.5}, "next": ["RealtimeLiveReturnHome"]},
+  "RealtimeLiveFormalPlayNormal": {"recognition": "DirectHit", "action": "Custom", "custom_action": "RealtimeProfilePlay", "custom_action_param": {"difficulty": "Normal", "require_profile": true, "debug_recording": false, "duration_seconds": 300, "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0, "wait_for_completion": true, "completion_missing_frames": 120, "require_completion": true, "save_result_frame": true, "result_back_attempts": 30, "result_back_interval_seconds": 1.5}, "next": ["RealtimeLiveReturnHome"]},
+  "RealtimeLiveFormalPlayHard": {"recognition": "DirectHit", "action": "Custom", "custom_action": "RealtimeProfilePlay", "custom_action_param": {"difficulty": "Hard", "require_profile": true, "debug_recording": false, "duration_seconds": 300, "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0, "wait_for_completion": true, "completion_missing_frames": 120, "require_completion": true, "save_result_frame": true, "result_back_attempts": 30, "result_back_interval_seconds": 1.5}, "next": ["RealtimeLiveReturnHome"]},
+  "RealtimeLiveFormalPlayExpert": {"recognition": "DirectHit", "action": "Custom", "custom_action": "RealtimeProfilePlay", "custom_action_param": {"difficulty": "Expert", "require_profile": true, "debug_recording": false, "duration_seconds": 300, "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 5.0, "wait_for_completion": true, "completion_missing_frames": 120, "require_completion": true, "save_result_frame": true, "result_back_attempts": 30, "result_back_interval_seconds": 1.5}, "next": ["RealtimeLiveReturnHome"]},
+  "RealtimeLiveFormalPlaySpecial": {"recognition": "DirectHit", "action": "Custom", "custom_action": "RealtimeProfilePlay", "custom_action_param": {"difficulty": "Special", "require_profile": true, "debug_recording": false, "duration_seconds": 300, "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 5.0, "wait_for_completion": true, "completion_missing_frames": 120, "require_completion": true, "save_result_frame": true, "result_back_attempts": 30, "result_back_interval_seconds": 1.5}, "next": ["RealtimeLiveReturnHome"]},
+  "RealtimeLiveReturnHome": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "CommonRecover",
+    "custom_action_param": {
+      "home_node": "RealtimeLiveHomeMarker",
+      "click_nodes": [
+        "AutoLiveResultConfirm", "AutoLiveRewardStoryConfirm",
+        "AutoLiveStorySkipConfirmLarge", "AutoLiveStorySkipConfirm",
+        "AutoLiveStorySkip", "AutoLiveStoryMenu", "AutoLiveCommonClose"
+      ],
+      "escape_interval_ms": 1500,
+      "escape_timeout_ms": 60000,
+      "restart_limit": 0,
+      "package": "com.bilibili.star.bili"
+    },
+    "next": ["RealtimeLiveRoundGate", "RealtimeLiveComplete"]
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "RealtimeNoteObserve": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "RealtimeNoteObserve",
+    "custom_action_param": {
+      "duration_seconds": 10,
+      "target_fps": 60
+    }
+  }
+}
