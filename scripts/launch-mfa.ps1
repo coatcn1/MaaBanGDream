@@ -8,7 +8,7 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $workspaceRoot = Split-Path -Parent $projectRoot
 if (-not $MfaRoot) {
-    $MfaRoot = Join-Path $workspaceRoot '.tools\MFAAvalonia'
+    $MfaRoot = Join-Path $workspaceRoot '.tools\MFAAvalonia-profile-v3'
 }
 if (-not $CondaRoot) {
     $CondaRoot = Join-Path $workspaceRoot '.tools\Miniconda3'
@@ -28,12 +28,16 @@ $recordingDirectory = Join-Path $projectRoot 'debug\recordings'
 $captureDirectory = Join-Path $projectRoot 'screencap'
 $maafwDebugDirectory = Join-Path $MfaRoot 'debug'
 $mfaLogDirectory = Join-Path $MfaRoot 'logs'
+$instanceConfigDirectory = Join-Path $MfaRoot 'config\instances'
+$mfaStopStatusPatch = Join-Path $PSScriptRoot 'patch-mfa-stop-status.ps1'
 
-foreach ($required in ($mfaExe, $sourceInterface, $sourceResource, $python, $agent, $profileManager)) {
+foreach ($required in ($mfaExe, $sourceInterface, $sourceResource, $python, $agent, $profileManager, $mfaStopStatusPatch)) {
     if (-not (Test-Path -LiteralPath $required)) {
         throw "Required MaaBanGDream runtime path is missing: $required"
     }
 }
+
+Get-Process MFAAvalonia -ErrorAction SilentlyContinue | Stop-Process
 
 $dotnetRuntimes = & dotnet --list-runtimes 2>$null
 if (-not ($dotnetRuntimes -match '^Microsoft\.NETCore\.App 10\.')) {
@@ -77,7 +81,22 @@ $profileManagerConfig = [ordered]@{
 }
 $profileManagerConfig | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $deployedProfileManager -Encoding utf8
 
-Get-Process MFAAvalonia -ErrorAction SilentlyContinue | Stop-Process
+# MFA defaults to continuing the queue when a MaaFramework task fails. That
+# converts Tasker.Task.Failed into a misleading "all tasks completed" message.
+# Preserve the framework result so MFA uses its native failure log/toast path.
+if (Test-Path -LiteralPath $instanceConfigDirectory) {
+    Get-ChildItem -LiteralPath $instanceConfigDirectory -Filter '*.json' -File | ForEach-Object {
+        $instanceConfig = Get-Content -LiteralPath $_.FullName -Raw -Encoding utf8 | ConvertFrom-Json
+        $instanceConfig | Add-Member -NotePropertyName 'ContinueRunningWhenError' -NotePropertyValue $false -Force
+        $instanceConfig | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $_.FullName -Encoding utf8
+    }
+}
+
+# MFAAvalonia 2.12.0 checks a failed Maa job before its cancellation token.
+# With strict failure propagation enabled, that race reports a user stop as a
+# failure. Deploy the pinned one-line upstream-compatible status fix once.
+& $mfaStopStatusPatch -MfaRoot $MfaRoot
+
 Start-Process -FilePath $mfaExe -WorkingDirectory $MfaRoot
 
 Write-Host "MFAAvalonia started with MaaBanGDream $($interface.version)"

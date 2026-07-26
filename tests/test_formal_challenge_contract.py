@@ -40,7 +40,8 @@ def test_calibration_rounds_bypass_the_shared_multi_live_hit_counter():
     multi_live = load("resource/pipeline/realtime_multi_live.json")
 
     entry = calibration["RealtimeCalibrationSingleLive"]
-    assert entry["action"] == "StartApp"
+    assert entry["action"] == "Custom"
+    assert entry["custom_action"] == "CommonRecover"
     assert entry["next"] == ["RealtimeLiveDebugGate"]
     assert "max_hit" not in entry
     # This shared gate is intentionally stateful for normal 1-99 round tasks,
@@ -56,7 +57,9 @@ def test_challenge_points_and_profile_contract():
         200: [875, 212], 400: [875, 286], 800: [875, 359], 1600: [875, 431]
     }
     assert nodes["ChallengeProfileCheck"]["custom_action"] == "RealtimeProfileCheck"
-    assert nodes["ChallengePointStillOpen"]["action"] == "StopTask"
+    point_failure = nodes["ChallengePointStillOpen"]
+    assert point_failure["custom_action"] == "TaskOutcome"
+    assert point_failure["custom_action_param"]["status"] == "failure"
     assert nodes["ChallengeStart"]["next"] == ["ChallengePlay"]
     for name in ("ChallengePlay", "ChallengePlayNormal", "ChallengePlayHard", "ChallengePlayExpert", "ChallengePlaySpecial"):
         params = nodes[name]["custom_action_param"]
@@ -69,4 +72,6 @@ def test_challenge_points_and_profile_contract():
         assert nodes[name]["on_error"] == ["ChallengeLifeSafetyGate"]
     assert nodes["ChallengeDifficulty"]["custom_action"] == "RealtimeDifficultySelect"
     assert nodes["ChallengeLifeSafetyGate"]["custom_action"] == "RealtimeLifeSafetyAbortCheck"
-    assert nodes["ChallengeLifeSafetyStop"]["action"] == "StopTask"
+    life_failure = nodes["ChallengeLifeSafetyStop"]
+    assert life_failure["custom_action"] == "TaskOutcome"
+    assert life_failure["custom_action_param"]["status"] == "failure"

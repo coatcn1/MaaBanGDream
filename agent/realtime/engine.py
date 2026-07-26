@@ -38,6 +38,7 @@ class EngineStats:
     timing_feedback_ignored_reasons: dict[str, int] = field(default_factory=dict)
     filtered_adjacent_artifacts: int = 0
     rejected_hold_candidates: int = 0
+    terminal_reason: str = ""
 
 
 class RealtimeEngine:
@@ -217,6 +218,17 @@ class RealtimeEngine:
                     self.touch.dispatch(actions)
                     actions_count += len(actions)
                 frames += 1
+            if was_stopped:
+                terminal_reason = "用户已停止任务"
+            elif aborted_for_life:
+                terminal_reason = "生命值触发安全停止"
+            elif completed:
+                terminal_reason = "已识别演奏结束并进入结算"
+            else:
+                terminal_reason = (
+                    f"演奏超过安全时限 {duration_seconds:g} 秒，"
+                    "仍未识别到结算画面"
+                )
             return EngineStats(
                 frames, actions_count, was_stopped, aborted_for_life, completed,
                 life_depleted,
@@ -248,6 +260,7 @@ class RealtimeEngine:
                 ),
                 int(getattr(self.planner, "filtered_adjacent_artifacts", 0)),
                 int(getattr(self.planner, "rejected_hold_candidates", 0)),
+                terminal_reason,
             )
         finally:
             cleanup = self.planner.reset(self.clock())

@@ -6,6 +6,8 @@ from maa.agent.agent_server import AgentServer
 from maa.tasker import Tasker
 
 import common_recover  # noqa: F401 - registration happens at import time
+import live_select  # noqa: F401 - registration happens at import time
+import task_reporting  # noqa: F401 - registration happens at import time
 import foreground_click  # noqa: F401 - registration happens at import time
 import realtime.frame_observer  # noqa: F401 - registration happens at import time
 import realtime.note_observer  # noqa: F401 - registration happens at import time

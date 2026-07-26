@@ -181,3 +181,56 @@ def test_calibration_report_contains_replay_diagnostics(tmp_path):
     assert payload["realtime_feedback_ignored_reasons"] == {"active_hold": 4}
     assert payload["filtered_adjacent_artifacts"] == 7
     assert payload["rejected_hold_candidates"] == 2
+
+
+def test_formal_timeout_records_a_specific_failure_reason(monkeypatch):
+    tasker = Tasker()
+    context = SimpleNamespace(tasker=tasker)
+    settings = SimpleNamespace(
+        target_fps=60,
+        timing_offset_ms=0,
+        profile_path=SimpleNamespace(name="normal.json"),
+    )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.RealtimeProfileStore.resolve_latest",
+        lambda *args, **kwargs: settings,
+    )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.require_game_foreground",
+        lambda _controller: None,
+    )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.ControllerTouchDispatcher",
+        lambda *_args, **_kwargs: object(),
+    )
+
+    class Engine:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def run(self, _capture, _stopping, **_kwargs):
+            return EngineStats(
+                100,
+                20,
+                False,
+                completed=False,
+                terminal_reason="演奏超过安全时限 600 秒，仍未识别到结算画面",
+            )
+
+    monkeypatch.setattr("agent.realtime.profile_play_action.RealtimeEngine", Engine)
+    reasons = []
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.record_failure_reason",
+        reasons.append,
+    )
+
+    params = {
+        "difficulty": "Normal",
+        "duration_seconds": 600,
+        "require_completion": True,
+        "wait_for_completion": True,
+    }
+    argv = SimpleNamespace(custom_action_param=json.dumps(params))
+
+    assert not RealtimeProfilePlay()._run(context, argv)
+    assert reasons == ["演奏超过安全时限 600 秒，仍未识别到结算画面"]

@@ -68,14 +68,14 @@ class RealtimeEasyRehearsal(CustomAction):
     def _run(self, context: Context, argv: CustomAction.RunArg) -> bool:
         params = json.loads(argv.custom_action_param or "{}")
         if context.tasker.stopping:
-            return False
+            return True
         controller = context.tasker.controller
         image = controller.post_screencap().wait().get()
         density = f"Override density: {int(params.get('dpi', 240))}"
         validate_rehearsal_environment(frame_resolution(image), density, params)
         print("RealtimeEasyRehearsal stage=environment_ok", flush=True)
         if context.tasker.stopping:
-            return False
+            return True
         require_game_foreground(controller)
         touch = ControllerTouchDispatcher(
             controller,

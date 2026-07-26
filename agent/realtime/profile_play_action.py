@@ -9,8 +9,10 @@ import cv2
 
 try:
     from ..foreground_guard import require_game_foreground
+    from ..task_reporting import record_failure_reason
 except ImportError:  # AgentServer imports realtime as a top-level package.
     from foreground_guard import require_game_foreground
+    from task_reporting import record_failure_reason
 
 from maa.agent.agent_server import AgentServer
 from maa.context import Context
@@ -142,11 +144,11 @@ class RealtimeProfileCheck(CustomAction):
     def run(self, context: Context, argv: CustomAction.RunArg) -> bool:
         try:
             if context.tasker.stopping:
-                return False
+                return True
             params = json.loads(argv.custom_action_param or "{}")
             settings = resolve_profile(context, params)
             print(f"RealtimeProfileCheck profile={settings.profile_path.name}", flush=True)
-            return not context.tasker.stopping
+            return True
         except Exception as exc:
             traceback.print_exc()
             print(f"RealtimeProfileCheck failed={type(exc).__name__}: {exc}", flush=True)
@@ -161,6 +163,7 @@ class RealtimeProfilePlay(CustomAction):
         try:
             return self._run(context, argv)
         except Exception as exc:
+            record_failure_reason(f"{type(exc).__name__}: {exc}")
             traceback.print_exc()
             print(f"RealtimeProfilePlay failed={type(exc).__name__}: {exc}", flush=True)
             return False
@@ -170,7 +173,7 @@ class RealtimeProfilePlay(CustomAction):
         _LAST_LIFE_SAFETY_ABORT = False
         params = json.loads(argv.custom_action_param or "{}")
         if context.tasker.stopping:
-            return False
+            return True
         controller = context.tasker.controller
         require_profile = bool(params.get("require_profile", True))
         settings = (
@@ -178,7 +181,7 @@ class RealtimeProfilePlay(CustomAction):
             if require_profile else None
         )
         if context.tasker.stopping:
-            return False
+            return True
         target_fps = settings.target_fps if settings else int(params.get("target_fps", 60))
         timing_offset_ms = (
             settings.timing_offset_ms if settings else int(params.get("timing_offset_ms", 0))
@@ -330,9 +333,16 @@ class RealtimeProfilePlay(CustomAction):
                     timing_offset_ms=effective_timing_offset_ms,
                     song_id=current_song_id(),
                 )
-        success = not stats.stopped and not stats.aborted_for_life
+        if stats.stopped:
+            print("[任务][实时演奏][结束][INFO] 用户已停止任务", flush=True)
+            return True
+        success = not stats.aborted_for_life
         if params.get("require_completion"):
             success = success and stats.completed
+        if not success:
+            reason = stats.terminal_reason or "实时演奏引擎未完成"
+            record_failure_reason(reason)
+            print(f"[任务][实时演奏][演奏][ERROR] {reason}", flush=True)
         return success
 
 

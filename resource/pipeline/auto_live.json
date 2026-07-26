@@ -1,19 +1,96 @@
 {
   "AutoLive": {
     "recognition": "DirectHit",
-    "action": "StartApp",
-    "package": "com.bilibili.star.bili",
-    "next": ["AutoLiveRoundGate"]
+    "action": "Custom",
+    "custom_action": "CommonRecover",
+    "custom_action_param": {
+      "home_node": "AutoLiveHomeMarker",
+      "click_nodes": [
+        "AutoLiveLoginTap",
+        "AutoLiveLoginNext",
+        "AutoLiveCommonClose",
+        "AutoLiveStorySkipConfirmLarge",
+        "AutoLiveStorySkipConfirm",
+        "AutoLiveStorySkip",
+        "AutoLiveStoryMenu"
+      ],
+      "escape_interval_ms": 1500,
+      "escape_timeout_ms": 60000,
+      "restart_limit": 2,
+      "restart_wait_ms": 5000,
+      "startup_grace_ms": 12000,
+      "login_start_node": "AutoLiveLoginScreenMarker",
+      "login_start_target": [
+        640,
+        635
+      ],
+      "escape_after_login_start": true,
+      "package": "com.bilibili.star.bili",
+      "login_tap_target": [
+        640,
+        360
+      ]
+    },
+    "next": [
+      "AutoLiveRoundGate"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 自动演出启动或主页恢复失败",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Starting": {
+        "content": "正在检查游戏进程并恢复主页",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Succeeded": {
+        "content": "已识别主页，登录状态正常",
+        "display": [
+          "log"
+        ]
+      }
+    },
+    "on_error": [
+      "AutoLiveFailure"
+    ]
   },
   "AutoLiveRoundGate": {
     "recognition": "DirectHit",
-    "action": "DoNothing",
+    "action": "Custom",
+    "custom_action": "TaskProgress",
+    "custom_action_param": {
+      "task_name": "AutoLive",
+      "label": "自动演出",
+      "total": 1,
+      "phase": "start"
+    },
     "max_hit": 1,
-    "next": ["AutoLiveEnsureHome"]
+    "next": [
+      "AutoLiveHomeLive"
+    ]
   },
   "AutoLiveComplete": {
     "recognition": "DirectHit",
-    "action": "DoNothing"
+    "action": "Custom",
+    "custom_action": "TaskOutcome",
+    "custom_action_param": {
+      "task_name": "AutoLive",
+      "label": "自动演出",
+      "status": "success"
+    },
+    "focus": {
+      "Node.Action.Succeeded": {
+        "content": "✅ 自动演出任务成功",
+        "display": [
+          "log",
+          "toast"
+        ]
+      }
+    }
   },
   "AutoLiveEnsureHome": {
     "recognition": "DirectHit",
@@ -36,31 +113,60 @@
       "restart_wait_ms": 5000,
       "startup_grace_ms": 12000,
       "login_start_node": "AutoLiveLoginScreenMarker",
-      "login_start_target": [640, 635],
+      "login_start_target": [
+        640,
+        635
+      ],
       "escape_after_login_start": true,
-      "package": "com.bilibili.star.bili"
+      "package": "com.bilibili.star.bili",
+      "login_tap_target": [
+        640,
+        360
+      ]
     },
-    "next": ["AutoLiveHomeMarker"]
+    "next": [
+      "AutoLiveHomeLive"
+    ],
+    "on_error": [
+      "AutoLiveFailure"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 60 秒内未恢复到主页：可能仍在登录、弹窗未识别或游戏无响应",
+        "display": [
+          "log"
+        ]
+      }
+    }
   },
   "AutoLiveHomeMarker": {
     "recognition": "TemplateMatch",
     "template": "home_marker.png",
-    "threshold": 0.88,
+    "threshold": 0.82,
     "action": "DoNothing",
-    "next": ["AutoLiveHomeLive"],
-    "on_error": ["CommonRecover"]
+    "next": [
+      "AutoLiveHomeLive"
+    ],
+    "on_error": [
+      "CommonRecover"
+    ]
   },
   "AutoLiveLoginScreenMarker": {
     "recognition": "TemplateMatch",
     "template": "login_menu_marker.png",
-    "roi": [1150, 590, 130, 130],
-    "threshold": 0.90,
+    "roi": [
+      1150,
+      590,
+      130,
+      130
+    ],
+    "threshold": 0.9,
     "action": "DoNothing"
   },
   "AutoLiveLoginTap": {
     "recognition": "TemplateMatch",
     "template": "login_tap_to_start.png",
-    "threshold": 0.90,
+    "threshold": 0.9,
     "action": "Custom",
     "custom_action": "ForegroundClick",
     "next": [
@@ -69,12 +175,22 @@
       "AutoLiveCommonClose",
       "AutoLiveLoginTap"
     ],
-    "on_error": ["CommonRecover"]
+    "on_error": [
+      "CommonRecover"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 点击失败：游戏不在前台、控制器拒绝输入或页面位置已变化",
+        "display": [
+          "log"
+        ]
+      }
+    }
   },
   "AutoLiveLoginNext": {
     "recognition": "TemplateMatch",
     "template": "login_next.png",
-    "threshold": 0.90,
+    "threshold": 0.9,
     "action": "Custom",
     "custom_action": "ForegroundClick",
     "next": [
@@ -82,12 +198,22 @@
       "AutoLiveLoginNext",
       "AutoLiveCommonClose"
     ],
-    "on_error": ["CommonRecover"]
+    "on_error": [
+      "CommonRecover"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 点击失败：游戏不在前台、控制器拒绝输入或页面位置已变化",
+        "display": [
+          "log"
+        ]
+      }
+    }
   },
   "AutoLiveCommonClose": {
     "recognition": "TemplateMatch",
     "template": "common_close.png",
-    "threshold": 0.90,
+    "threshold": 0.9,
     "action": "Custom",
     "custom_action": "ForegroundClick",
     "next": [
@@ -95,7 +221,17 @@
       "AutoLiveLoginNext",
       "AutoLiveCommonClose"
     ],
-    "on_error": ["CommonRecover"]
+    "on_error": [
+      "CommonRecover"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 点击失败：游戏不在前台、控制器拒绝输入或页面位置已变化",
+        "display": [
+          "log"
+        ]
+      }
+    }
   },
   "AutoLiveHomeLive": {
     "recognition": "TemplateMatch",
@@ -103,59 +239,162 @@
     "threshold": 0.88,
     "action": "Custom",
     "custom_action": "ForegroundClick",
-    "target": [1085, 580, 180, 130],
+    "target": [
+      1085,
+      580,
+      180,
+      130
+    ],
     "next": [
-      "AutoLiveHomeMarker",
-      "AutoLiveFreeLive",
+      "AutoLiveSelectPage",
       "AutoLiveNavigationClose"
     ],
-    "on_error": ["CommonRecover"]
+    "on_error": [
+      "CommonRecover"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 点击失败：游戏不在前台、控制器拒绝输入或页面位置已变化",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Starting": {
+        "content": "正在点击主页右下角“演出”",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Succeeded": {
+        "content": "已点击“演出”，正在识别选择演出界面",
+        "display": [
+          "log"
+        ]
+      }
+    },
+    "post_delay": 1000
   },
   "AutoLiveNavigationClose": {
     "recognition": "TemplateMatch",
     "template": "common_close.png",
-    "threshold": 0.90,
+    "threshold": 0.9,
     "action": "Custom",
     "custom_action": "ForegroundClick",
-    "next": ["AutoLiveFreeLive", "AutoLiveNavigationClose"],
-    "on_error": ["CommonRecover"]
+    "next": [
+      "AutoLiveSelectPage",
+      "AutoLiveNavigationClose"
+    ],
+    "on_error": [
+      "CommonRecover"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 点击失败：游戏不在前台、控制器拒绝输入或页面位置已变化",
+        "display": [
+          "log"
+        ]
+      }
+    }
   },
   "AutoLiveFreeLive": {
-    "recognition": "TemplateMatch",
-    "template": "free_live.png",
-    "threshold": 0.88,
+    "recognition": "DirectHit",
     "action": "Custom",
-    "custom_action": "ForegroundClick",
+    "custom_action": "LiveSelectFind",
+    "custom_action_param": {
+      "expected": "自由演出",
+      "template_node": "AutoLiveFreeLiveTemplate",
+      "roi": [
+        0,
+        100,
+        1280,
+        620
+      ],
+      "click": true,
+      "timeout_ms": 10000,
+      "interval_ms": 500
+    },
     "next": [
       "AutoLiveSongSelectMarker",
       "AutoLivePrepare",
       "AutoLiveNavigationClose"
     ],
-    "on_error": ["CommonRecover"]
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 未找到“自由演出”入口",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Starting": {
+        "content": "正在查找“自由演出”入口",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Succeeded": {
+        "content": "已找到“自由演出”入口",
+        "display": [
+          "log"
+        ]
+      }
+    },
+    "on_error": [
+      "AutoLiveEnsureHome"
+    ]
   },
   "AutoLiveSongSelectMarker": {
     "recognition": "TemplateMatch",
     "template": "song_select_marker.png",
     "threshold": 0.92,
     "action": "DoNothing",
-    "next": ["AutoLiveDifficulty"],
-    "on_error": ["CommonRecover"]
+    "next": [
+      "AutoLiveDifficulty"
+    ],
+    "on_error": [
+      "CommonRecover"
+    ]
   },
   "AutoLiveRandomSong": {
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "ForegroundClick",
-    "target": [687, 642],
+    "target": [
+      687,
+      642
+    ],
     "post_delay": 1000,
-    "next": ["AutoLiveDifficulty"]
+    "next": [
+      "AutoLiveDifficulty"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 点击失败：游戏不在前台、控制器拒绝输入或页面位置已变化",
+        "display": [
+          "log"
+        ]
+      }
+    }
   },
   "AutoLiveDifficulty": {
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "ForegroundClick",
-    "target": [715, 545],
+    "target": [
+      715,
+      545
+    ],
     "post_delay": 500,
-    "next": ["AutoLivePrepare"]
+    "next": [
+      "AutoLivePrepare"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 点击失败：游戏不在前台、控制器拒绝输入或页面位置已变化",
+        "display": [
+          "log"
+        ]
+      }
+    }
   },
   "AutoLivePrepare": {
     "recognition": "TemplateMatch",
@@ -163,19 +402,34 @@
     "threshold": 0.88,
     "action": "Custom",
     "custom_action": "ForegroundClick",
-    "target": [1040, 615, 100, 45],
+    "target": [
+      1040,
+      615,
+      100,
+      45
+    ],
     "next": [
       "AutoLiveQuotaExhausted",
       "AutoLiveEnabled",
       "AutoLiveDisabled",
       "AutoLivePrepareClose"
     ],
-    "on_error": ["CommonRecover"]
+    "on_error": [
+      "CommonRecover"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 点击失败：游戏不在前台、控制器拒绝输入或页面位置已变化",
+        "display": [
+          "log"
+        ]
+      }
+    }
   },
   "AutoLivePrepareClose": {
     "recognition": "TemplateMatch",
     "template": "common_close.png",
-    "threshold": 0.90,
+    "threshold": 0.9,
     "action": "Custom",
     "custom_action": "ForegroundClick",
     "next": [
@@ -184,22 +438,56 @@
       "AutoLiveDisabled",
       "AutoLivePrepareClose"
     ],
-    "on_error": ["CommonRecover"]
+    "on_error": [
+      "CommonRecover"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 点击失败：游戏不在前台、控制器拒绝输入或页面位置已变化",
+        "display": [
+          "log"
+        ]
+      }
+    }
   },
   "AutoLiveQuotaExhausted": {
     "recognition": "TemplateMatch",
     "template": "auto_live_exhausted.png",
-    "roi": [740, 520, 280, 100],
+    "roi": [
+      740,
+      520,
+      280,
+      100
+    ],
     "threshold": 0.92,
-    "action": "StopTask"
+    "action": "Custom",
+    "custom_action": "TaskOutcome",
+    "custom_action_param": {
+      "task_name": "AutoLive",
+      "label": "自动演出",
+      "status": "failure",
+      "reason": "自动演出次数已用尽或当前不可用"
+    },
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 自动演出次数已用尽或当前不可用",
+        "display": [
+          "log"
+        ]
+      }
+    }
   },
   "AutoLiveEnabled": {
     "recognition": "TemplateMatch",
     "template": "auto_live_on.png",
     "threshold": 0.88,
     "action": "DoNothing",
-    "next": ["AutoLiveStart"],
-    "on_error": ["CommonRecover"]
+    "next": [
+      "AutoLiveStart"
+    ],
+    "on_error": [
+      "CommonRecover"
+    ]
   },
   "AutoLiveDisabled": {
     "recognition": "TemplateMatch",
@@ -215,24 +503,51 @@
       "AutoLiveDisabled",
       "AutoLivePrepareClose"
     ],
-    "on_error": ["CommonRecover"]
+    "on_error": [
+      "CommonRecover"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 点击失败：游戏不在前台、控制器拒绝输入或页面位置已变化",
+        "display": [
+          "log"
+        ]
+      }
+    }
   },
   "AutoLiveStart": {
     "recognition": "TemplateMatch",
     "template": "live_start.png",
-    "roi": [980, 530, 290, 190],
-    "threshold": 0.90,
+    "roi": [
+      980,
+      530,
+      290,
+      190
+    ],
+    "threshold": 0.9,
     "action": "Custom",
     "custom_action": "ForegroundClick",
     "target": true,
-    "timeout": 300000,
-    "next": ["AutoLiveResult"],
-    "on_error": ["CommonRecover"]
+    "timeout": 600000,
+    "next": [
+      "AutoLiveResult"
+    ],
+    "on_error": [
+      "CommonRecover"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 点击失败：游戏不在前台、控制器拒绝输入或页面位置已变化",
+        "display": [
+          "log"
+        ]
+      }
+    }
   },
   "AutoLiveResult": {
     "recognition": "TemplateMatch",
     "template": "live_result.png",
-    "threshold": 0.90,
+    "threshold": 0.9,
     "action": "Custom",
     "custom_action": "CommonRecover",
     "custom_action_param": {
@@ -254,48 +569,180 @@
       "restart_wait_ms": 5000,
       "package": "com.bilibili.star.bili"
     },
-    "next": ["AutoLiveRoundGate", "AutoLiveComplete"]
+    "next": [
+      "AutoLiveRoundCompleted"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 60 秒内未恢复到主页：可能仍在登录、弹窗未识别或游戏无响应",
+        "display": [
+          "log"
+        ]
+      }
+    }
   },
   "AutoLiveResultConfirm": {
     "recognition": "TemplateMatch",
     "template": "result_confirm.png",
-    "roi": [450, 450, 380, 170],
-    "threshold": 0.90,
+    "roi": [
+      450,
+      450,
+      380,
+      170
+    ],
+    "threshold": 0.9,
     "action": "DoNothing"
   },
   "AutoLiveRewardStoryConfirm": {
     "recognition": "TemplateMatch",
     "template": "reward_story_confirm.png",
-    "roi": [450, 250, 380, 270],
-    "threshold": 0.90,
+    "roi": [
+      450,
+      250,
+      380,
+      270
+    ],
+    "threshold": 0.9,
     "action": "DoNothing"
   },
   "AutoLiveStoryMenu": {
     "recognition": "TemplateMatch",
     "template": "login_story_menu.png",
-    "roi": [1080, 0, 200, 125],
-    "threshold": 0.90,
+    "roi": [
+      1080,
+      0,
+      200,
+      125
+    ],
+    "threshold": 0.9,
     "action": "DoNothing"
   },
   "AutoLiveStorySkip": {
     "recognition": "TemplateMatch",
     "template": "login_story_skip.png",
-    "roi": [500, 0, 160, 115],
-    "threshold": 0.90,
+    "roi": [
+      500,
+      0,
+      160,
+      115
+    ],
+    "threshold": 0.9,
     "action": "DoNothing"
   },
   "AutoLiveStorySkipConfirm": {
     "recognition": "TemplateMatch",
     "template": "story_skip_confirm.png",
-    "roi": [300, 180, 680, 360],
-    "threshold": 0.90,
+    "roi": [
+      300,
+      180,
+      680,
+      360
+    ],
+    "threshold": 0.9,
     "action": "DoNothing"
   },
   "AutoLiveStorySkipConfirmLarge": {
     "recognition": "TemplateMatch",
     "template": "story_skip_confirm_large.png",
-    "roi": [300, 180, 680, 360],
-    "threshold": 0.90,
+    "roi": [
+      300,
+      180,
+      680,
+      360
+    ],
+    "threshold": 0.9,
     "action": "DoNothing"
+  },
+  "AutoLiveFailure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "TaskOutcome",
+    "custom_action_param": {
+      "task_name": "AutoLive",
+      "label": "自动演出",
+      "status": "failure",
+      "reason": "自动演出流程未完成：未到达演出结算或主页恢复失败"
+    },
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 自动演出流程未完成：未到达演出结算或主页恢复失败",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "AutoLiveFreeLiveTemplate": {
+    "recognition": "TemplateMatch",
+    "template": "free_live.png",
+    "threshold": 0.88,
+    "action": "DoNothing"
+  },
+  "AutoLiveSelectPage": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "LiveSelectFind",
+    "custom_action_param": {
+      "expected": "自由演出",
+      "template_node": "AutoLiveFreeLiveTemplate",
+      "roi": [
+        0,
+        100,
+        1280,
+        620
+      ],
+      "click": false,
+      "missing_reason": "无法确认“选择演出”页面",
+      "timeout_ms": 10000,
+      "interval_ms": 500
+    },
+    "next": [
+      "AutoLiveFreeLive"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 无法确认“选择演出”页面",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Starting": {
+        "content": "正在识别选择演出界面（兼容有活动和无活动）",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Succeeded": {
+        "content": "已识别选择演出界面",
+        "display": [
+          "log"
+        ]
+      }
+    },
+    "on_error": [
+      "AutoLiveEnsureHome"
+    ]
+  },
+  "AutoLiveRoundCompleted": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "TaskProgress",
+    "custom_action_param": {
+      "task_name": "AutoLive",
+      "label": "自动演出",
+      "phase": "completed"
+    },
+    "next": [
+      "AutoLiveRoundGate",
+      "AutoLiveComplete"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 自动演出进度记录失败",
+        "display": [
+          "log"
+        ]
+      }
+    }
   }
 }

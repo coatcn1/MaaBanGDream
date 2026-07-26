@@ -7,7 +7,7 @@
 基于 MaaFramework 的 BanG Dream! 自动化项目。通过 MFAAvalonia GUI 加载 Python Agent，控制 Android 模拟器完成自动演出、实时触控演奏、校准和挑战演出。
 
 - 仓库：`https://github.com/coatcn1/MaaBanGDream`
-- 当前版本：`v0.6.0`
+- 当前版本：`v0.7.0`
 - 许可证：GPL-3.0-only
 
 ## 工作区布局
@@ -49,6 +49,7 @@ Python:   D:\Documents\workplace\.tools\Miniconda3\envs\maabangdream\python.exe 
 main                               ← 主线，已发布 v0.6.0
 feature/formal-calibration-challenge  ← realtime 开发主分支（29 commits，未合并）
 fix/realtime-rescue-chord-pairing     ← 最新修复（基于 formal-calibration，已推远程）
+feature/task-lifecycle-and-reporting  ← v0.7.0 任务生命周期、日志与 MFA 定制部署修复
 ```
 
 realtime 功能链的所有 checkpoint 分支已清理。当前活跃开发在 `feature/formal-calibration-challenge` 和 `fix/realtime-rescue-chord-pairing` 上。
@@ -113,3 +114,83 @@ pytest 临时目录固定在 `.local/pytest-<进程号>`（Git 忽略），不�
 5. **ctypes 回调异常**：MaaFw Python Binding 会吞掉回调中的 Python 异常。所有回调必须显式 try/except 并返回失败状态。
 6. **Profile 环境签名**：分辨率、DPI、帧率、画质、音符流速五项中任一项变化都会使 Profile 失效。草稿 `accepted=false` 不能驱动正式演奏。
 7. **离线重放优先**：触控逻辑修改先用 `trace.jsonl` 离线重放验证（`scripts/replay_realtime_trace.py`），再上真机。
+
+## MFA 定制运行时保护
+
+这台开发机使用的 MFAAvalonia **不是同版本的官方原版**。除 MaaBanGDream 仓库和 MFA 运行目录外，还有一个独立的定制 MFA 源码仓库：
+
+| 目录 | 用途 |
+| --- | --- |
+| `D:\Documents\workplace\MFAAvalonia` | 定制 MFAAvalonia 源码，包含“演出设置”、Profile 管理和 Mirror 启动检查保护 |
+
+- 定制分支：`feature/performance-profile-settings`
+- 定制基线提交：`d7b381b2fa6a09e140d925fb1504bac19ca1f921`
+- `MFAAvalonia.Core.dll` 即使显示相同的 `2.12.0` 版本，也不能视为内容相同。
+
+### 禁止用官方 DLL 覆盖定制 DLL
+
+绝对不要从官方 `v2.12.0` tag、临时 clone 或 NuGet 发布物重新编译 `MFAAvalonia.Core.dll` 后直接覆盖运行目录。这样会同时删除：
+
+- 设置页中的“演出设置”入口；
+- Profile 表格、生命保护和调试目录等本地功能；
+- 启动时跳过“不支持 Mirror 更新源”检查的保护。
+
+如果启动后“演出设置”消失，或右下角出现“该资源操作暂不支持 Mirror酱”，优先检查是否部署了错误的官方 Core DLL，不要先清空用户配置。
+
+`scripts/patch-mfa-stop-status.ps1` 必须：
+
+1. 默认使用 `D:\Documents\workplace\MFAAvalonia` 定制源码；
+2. 检查源码包含 `PerformanceProfileSettingsUserControl`；
+3. 检查源码包含 `SupportsSelectedResourceUpdateSource`；
+4. 检查定制基线提交是当前源码的祖先；
+5. 替换 DLL 前保存到运行目录的 `.maabangdream-backup/`；
+6. 定制源码缺失时直接失败，禁止自动 clone 官方源码作为回退。
+
+### 三类配置不可混淆
+
+| 内容 | 文件/组件 | 部署时能否覆盖 |
+| --- | --- | --- |
+| 任务、任务选项、Pipeline override | 仓库 `interface.json` | 可以，由 `launch-mfa.ps1` 生成运行副本 |
+| Pipeline 和模板 | 仓库 `resource/` | 可以，由 `launch-mfa.ps1` 同步 |
+| 主题、背景、窗口布局、模拟器、任务选中值 | 运行目录 `config/` | 不可以，属于用户配置 |
+| “演出设置”等定制页面和 Mirror 保护 | 定制 `MFAAvalonia.Core.dll` | 只能由定制 MFA 源码编译 |
+
+不要用删除 `config/`、重建运行目录或恢复默认设置来解决 UI 入口缺失；先比较 DLL 哈希和定制源码。
+
+### MFA 停止状态修复
+
+人工停止时，Maa job 可能先抛出 `MaaJobStatusException`，随后 cancellation token 才被观察到。严格失败传播开启时，这会把用户停止误报为任务失败。
+
+修复必须加在定制 MFA 源码的 `MFAAvalonia/Helper/ValueType/MFATask.cs`：
+
+```csharp
+catch (MaaJobStatusException) when (token.IsCancellationRequested)
+{
+    return MFATaskStatus.STOPPED;
+}
+```
+
+不要为修这个问题换回官方 DLL。运行目录仍需设置 `ContinueRunningWhenError=false`，这样真实任务失败会保持失败，而用户停止会显示“已放弃本次任务”。
+
+## 最近交互与任务生命周期陷阱
+
+1. **Pipeline override 坐标**：Custom Action 必须使用 MaaFramework 解析后的 `argv.box`。重新读取源 JSON 的 `target` 会丢弃用户选择的难度覆盖，例如 Expert 被点击成 Easy。
+2. **状态节点不能滥用 `DirectHit`**：带模板、ROI 或阈值的状态判断必须使用实际识别算法。`DirectHit` 会无条件命中，例如把“还剩 10 次”误报成自动演出次数耗尽。
+3. **主页模板阈值需要真图校验**：当前主页样本得分约 `0.837`，阈值 `0.88` 会漏识别并继续按 ESC，最终弹出关闭游戏确认。所有主页 marker 当前统一为 `0.82`，调整时必须同时更新所有 Pipeline 和契约测试。
+4. **停止不是业务失败**：Custom Action 观察到 `context.tasker.stopping` 时应立即停止输入并返回中性成功；不要继续截图、点击、嵌套任务或记录业务失败原因。
+5. **正式演奏时限**：旧的 300 秒上限会在长曲仍演奏时强制失败。正式演奏节点当前为 600 秒，并应在超时、生命保护、用户停止、结算识别等终态记录具体原因。
+6. **禁止含糊日志**：不要写“详情见上一条日志”。终态日志必须包含当前阶段和可执行的具体原因；运行时原因通过 `TaskOutcome` 的 latest failure reason 传递。
+7. **启动恢复必须有界**：未知界面最多按 ESC 恢复 60 秒；仍无法识别主页才重启游戏。登录画面应先识别“点击任意处/开始”，登录阶段不得过早发送 ESC。
+
+## 修改后的最低验收
+
+除 `scripts/verify.ps1` 和运行时兼容检查外，涉及任务生命周期或 MFA 部署时至少完成：
+
+1. 通过 `scripts/launch-mfa.ps1` 部署并启动；
+2. 打开 MFA 设置页，确认“演出设置”存在且 Profile/参数能加载；
+3. 确认最新启动日志包含“跳过启动资源版本检查”，且没有新的 Mirror 酱错误；
+4. 从主页实际启动一次任务，确认能进入相应演出流程；
+5. 运行中手动停止，确认显示“已放弃本次任务”，不是“任务运行失败”；
+6. 对实时演奏改动先重放已有 `trace.jsonl`，再决定是否需要完整真机长曲验收。
+
+MaaBanGDream 和定制 MFAAvalonia 是两个独立 Git 仓库。若一次修复同时修改两边，必须分别检查工作树、分别提交和推送，不能把一个仓库的源码复制进另一个仓库。

@@ -1,0 +1,15 @@
+diff --git a/MFAAvalonia/Helper/ValueType/MFATask.cs b/MFAAvalonia/Helper/ValueType/MFATask.cs
+index 0a18e3a..2a2d807 100644
+--- a/MFAAvalonia/Helper/ValueType/MFATask.cs
++++ b/MFAAvalonia/Helper/ValueType/MFATask.cs
+@@ -56,6 +56,10 @@ public partial class MFATask : ObservableObject
+             }
+             return MFATaskStatus.SUCCEEDED;
+         }
++        catch (MaaJobStatusException) when (token.IsCancellationRequested)
++        {
++            return MFATaskStatus.STOPPED;
++        }
+         catch (MaaJobStatusException)
+         {
+             LoggerHelper.Error($"任务执行失败：{LanguageHelper.GetLocalizedString(Name)}");

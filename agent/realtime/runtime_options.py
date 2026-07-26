@@ -24,7 +24,7 @@ class RealtimeRuntimeOptions(CustomAction):
     def run(self, context: Context, argv: CustomAction.RunArg) -> bool:
         global _DEBUG_ENABLED, _CALIBRATION_DIFFICULTY
         if context.tasker.stopping:
-            return False
+            return True
         params = json.loads(argv.custom_action_param or "{}")
         if "debug_recording" in params:
             _DEBUG_ENABLED = bool(params["debug_recording"])

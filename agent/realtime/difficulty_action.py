@@ -51,7 +51,7 @@ class RealtimeDifficultySelect(CustomAction):
             target = DIFFICULTY_TARGETS[requested]
             for attempt in range(1, attempts + 1):
                 if context.tasker.stopping:
-                    return False
+                    return True
                 require_game_foreground(controller)
                 controller.post_click(*target).wait()
                 time.sleep(float(params.get("verify_delay_seconds", 0.35)))

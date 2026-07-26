@@ -5,7 +5,7 @@
     "custom_action": "RealtimeProfilePlay",
     "custom_action_param": {
       "difficulty": "Easy",
-      "duration_seconds": 300,
+      "duration_seconds": 600,
       "dpi": 240,
       "game_fps": 60,
       "render_quality": "standard",
@@ -16,6 +16,14 @@
       "save_result_frame": true,
       "result_back_attempts": 30,
       "result_back_interval_seconds": 1.5
+    },
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
+        "display": [
+          "log"
+        ]
+      }
     }
   }
 }

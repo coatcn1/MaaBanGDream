@@ -70,10 +70,10 @@ class CalibrationSongIdentity(CustomAction):
     def run(self, context: Context, argv: CustomAction.RunArg) -> bool:
         global _CURRENT_SONG_ID
         if context.tasker.stopping:
-            return False
+            return True
         image = context.tasker.controller.post_screencap().wait().get()
         if context.tasker.stopping:
-            return False
+            return True
         crop = image[110:600, 40:450]
         _CURRENT_SONG_ID = "random-" + hashlib.sha256(crop.tobytes()).hexdigest()[:16]
         print(f"RealtimeCalibration song={_CURRENT_SONG_ID}", flush=True)
@@ -162,7 +162,7 @@ class RealtimeCalibration(CustomAction):
                 "difficulty": difficulty, "require_profile": False,
                 "target_fps": 60, "timing_offset_ms": offset,
                 "debug_recording": calibration_debug,
-                "duration_seconds": 300, "dpi": 240, "game_fps": 60,
+                "duration_seconds": 600, "dpi": 240, "game_fps": 60,
                 "render_quality": "standard", "note_speed": note_speed,
                 "wait_for_completion": True, "completion_missing_frames": 120,
                 "require_completion": True, "save_result_frame": True,

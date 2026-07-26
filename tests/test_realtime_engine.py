@@ -81,6 +81,9 @@ def test_engine_normal_exit_releases_planner_and_dispatcher_state():
     stats = engine.run(capture, lambda: False, duration_seconds=1, target_fps=60)
 
     assert stats.processed_frames == 50
+    assert stats.terminal_reason == (
+        "演奏超过安全时限 1 秒，仍未识别到结算画面"
+    )
     assert planner.resets == 1
     assert touch.batches[-1][0].kind == ActionKind.UP
     assert touch.closed == 1

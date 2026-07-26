@@ -27,10 +27,10 @@ class Controller:
         return Job()
 
 
-def run_arg(node_name):
+def run_arg(node_name, *, box=(10, 20, 30, 40)):
     return SimpleNamespace(
         node_name=node_name,
-        box=SimpleNamespace(x=10, y=20, w=30, h=40),
+        box=SimpleNamespace(x=box[0], y=box[1], w=box[2], h=box[3]),
     )
 
 
@@ -49,5 +49,31 @@ def test_pipeline_click_preserves_fixed_target_center():
     controller = Controller("com.bilibili.star.bili")
     context = SimpleNamespace(tasker=SimpleNamespace(stopping=False, controller=controller))
 
-    assert foreground_click.ForegroundClick().run(context, run_arg("AutoLiveHomeLive"))
+    assert foreground_click.ForegroundClick().run(
+        context,
+        run_arg("AutoLiveHomeLive", box=(1085, 580, 180, 130)),
+    )
     assert controller.clicks == [(1175, 645)]
+
+
+def test_pipeline_click_uses_resolved_override_target_from_framework():
+    controller = Controller("com.bilibili.star.bili")
+    context = SimpleNamespace(tasker=SimpleNamespace(stopping=False, controller=controller))
+
+    assert foreground_click.ForegroundClick().run(
+        context,
+        run_arg("AutoLiveDifficulty", box=(1051, 545, 1, 1)),
+    )
+
+    assert controller.clicks == [(1051, 545)]
+
+
+def test_pipeline_click_treats_user_stop_as_cancellation_not_failure():
+    controller = Controller("com.bilibili.star.bili")
+    context = SimpleNamespace(tasker=SimpleNamespace(stopping=True, controller=controller))
+
+    assert foreground_click.ForegroundClick().run(
+        context,
+        run_arg("AutoLiveHomeLive", box=(1085, 580, 180, 130)),
+    )
+    assert controller.clicks == []

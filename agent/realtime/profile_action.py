@@ -69,12 +69,12 @@ class RealtimeProfileDraft(CustomAction):
 
     def _run(self, context: Context, argv: CustomAction.RunArg) -> bool:
         if context.tasker.stopping:
-            return False
+            return True
         params = json.loads(argv.custom_action_param or "{}")
         controller = context.tasker.controller
         image = controller.post_screencap().wait().get()
         if context.tasker.stopping:
-            return False
+            return True
         if image is None or image.ndim < 2:
             raise ValueError("截图数据无效，无法生成 Profile")
         resolution = (int(image.shape[1]), int(image.shape[0]))

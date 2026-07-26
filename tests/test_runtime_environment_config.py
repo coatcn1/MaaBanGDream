@@ -42,6 +42,30 @@ def test_launcher_generates_machine_local_profile_manager_configuration():
     assert "resolution = @(1280, 720)" in launch
 
 
+def test_launcher_propagates_framework_task_failures_to_mfa():
+    launch = (ROOT / "scripts/launch-mfa.ps1").read_text(encoding="utf-8")
+
+    assert "ContinueRunningWhenError" in launch
+    assert "Value $false" in launch
+
+
+def test_launcher_patches_mfa_user_stop_status_race():
+    launch = (ROOT / "scripts/launch-mfa.ps1").read_text(encoding="utf-8")
+    patcher = (ROOT / "scripts/patch-mfa-stop-status.ps1").read_text(encoding="utf-8")
+    patch = (
+        ROOT / "patches/mfaavalonia-v2.12.0-stop-status.patch"
+    ).read_text(encoding="utf-8")
+
+    assert "patch-mfa-stop-status.ps1" in launch
+    assert "feature/performance-profile-settings" in patcher
+    assert "PerformanceProfileSettingsUserControl" in patcher
+    assert "SupportsSelectedResourceUpdateSource" in patcher
+    assert "git clone" not in patcher
+    assert ".maabangdream-backup" in patcher
+    assert "MFAAvalonia.Core.dll" in patcher
+    assert "when (token.IsCancellationRequested)" in patch
+
+
 def test_runtime_gate_requires_the_named_conda_environment():
     expected = json.loads(
         (ROOT / "runtime-compatibility.json").read_text(encoding="utf-8")
