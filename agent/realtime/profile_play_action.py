@@ -30,6 +30,7 @@ from .result_parser import LiveResult, ResultParser, adjusted_timing_offset
 from .timing_feedback import AdaptiveTimingController, TimingFeedbackDetector
 from .touch_planner import RealtimePlanner, sliding_holds_enabled
 from .runtime_options import debug_enabled
+from .performance_settings_action import verified_settings
 
 
 _LAST_LIFE_SAFETY_ABORT = False
@@ -88,6 +89,51 @@ def _write_calibration_report(path, *, result, stats, timing_offset_ms, song_id)
     temporary.replace(path)
 
 
+def _result_counts(result: LiveResult) -> tuple[int, ...]:
+    return (
+        result.perfect, result.great, result.good, result.bad,
+        result.miss, result.fast, result.slow,
+    )
+
+
+def _settle_result(
+    controller,
+    stopping,
+    *,
+    parser,
+    candidate: tuple[LiveResult, object],
+    sleeper,
+    attempts: int,
+    interval_seconds: float,
+) -> tuple[LiveResult, object]:
+    """Wait for the result panel's count-up animation to finish.
+
+    The panel counts every judgement number up from zero over a couple of
+    seconds. A frame caught mid-animation parses cleanly (the glyphs are
+    crisp) but reports tiny values, so a single successful parse is not
+    trustworthy: only a reading that survives a re-check unchanged counts.
+    No input is sent while settling — the panel is already visible.
+    """
+    result, _ = candidate
+    for _ in range(attempts):
+        if stopping():
+            raise InterruptedError("任务停止，取消结算读取")
+        deadline = time.monotonic() + interval_seconds
+        while time.monotonic() < deadline:
+            if stopping():
+                raise InterruptedError("任务停止，取消结算读取")
+            sleeper(min(.1, max(0.0, deadline - time.monotonic())))
+        latest_image = controller.post_screencap().wait().get()
+        try:
+            latest = parser.parse(latest_image)
+        except ValueError:
+            continue
+        if _result_counts(latest) == _result_counts(result):
+            return latest, latest_image
+        result = latest
+    raise ValueError("结算数字长时间未稳定，放弃本次读取")
+
+
 def collect_result(
     controller,
     stopping,
@@ -97,6 +143,8 @@ def collect_result(
     parser: ResultParser | None = None,
     sleeper=time.sleep,
     before_input=lambda: None,
+    stability_attempts: int = 10,
+    stability_interval_seconds: float = 1.0,
 ) -> tuple[LiveResult, object]:
     """Press BACK one step at a time until a valid result panel is visible."""
     parser = parser or ResultParser()
@@ -105,10 +153,21 @@ def collect_result(
             raise InterruptedError("任务停止，取消结算读取")
         image = controller.post_screencap().wait().get()
         try:
-            return parser.parse(image), image
+            result = parser.parse(image)
         except ValueError:
-            if attempt >= attempts:
-                break
+            pass
+        else:
+            return _settle_result(
+                controller,
+                stopping,
+                parser=parser,
+                candidate=(result, image),
+                sleeper=sleeper,
+                attempts=stability_attempts,
+                interval_seconds=stability_interval_seconds,
+            )
+        if attempt >= attempts:
+            break
         if stopping():
             raise InterruptedError("任务停止，取消结算读取")
         before_input()
@@ -121,7 +180,7 @@ def collect_result(
     raise ValueError("连续按 BACK 后仍未识别到有效结算画面")
 
 
-def resolve_profile(context: Context, params: dict, *, controller=None):
+def resolve_profile_for_settings_gate(context: Context, params: dict, *, controller=None):
     controller = controller or context.tasker.controller
     image = controller.post_screencap().wait().get()
     signature = EnvironmentSignature(
@@ -129,10 +188,44 @@ def resolve_profile(context: Context, params: dict, *, controller=None):
         int(params.get("dpi", 240)),
         int(params.get("game_fps", 60)),
         str(params.get("render_quality", "standard")),
-        float(params.get("note_speed", 2.0)),
+        1.0,
     )
-    return RealtimeProfileStore(PROJECT_ROOT / "profiles").resolve_latest(
+    return RealtimeProfileStore(
+        PROJECT_ROOT / "profiles"
+    ).resolve_latest_for_environment(
         difficulty=str(params.get("difficulty", "Easy")),
+        current_signature=signature,
+    )
+
+
+def resolve_profile(context: Context, params: dict, *, controller=None):
+    controller = controller or context.tasker.controller
+    difficulty = str(params.get("difficulty", "Easy"))
+    verified = verified_settings(difficulty)
+    if bool(params.get("settings_gate_required", False)) and verified is None:
+        raise RuntimeError("本次开演前尚未实际验证游戏流速")
+    note_speed = (
+        verified.actual_note_speed
+        if verified is not None
+        else float(params.get("note_speed", 2.0))
+    )
+    image = controller.post_screencap().wait().get()
+    signature = EnvironmentSignature(
+        frame_resolution(image),
+        int(params.get("dpi", 240)),
+        int(params.get("game_fps", 60)),
+        str(params.get("render_quality", "standard")),
+        note_speed,
+    )
+    store = RealtimeProfileStore(PROJECT_ROOT / "profiles")
+    if verified is not None and verified.profile:
+        return store.resolve(
+            verified.profile,
+            difficulty=difficulty,
+            current_signature=signature,
+        )
+    return store.resolve_latest(
+        difficulty=difficulty,
         current_signature=signature,
     )
 
@@ -146,8 +239,13 @@ class RealtimeProfileCheck(CustomAction):
             if context.tasker.stopping:
                 return True
             params = json.loads(argv.custom_action_param or "{}")
-            settings = resolve_profile(context, params)
-            print(f"RealtimeProfileCheck profile={settings.profile_path.name}", flush=True)
+            settings = resolve_profile_for_settings_gate(context, params)
+            print(
+                "RealtimeProfileCheck "
+                f"profile={settings.profile_path.name} "
+                f"expected_speed={settings.note_speed:.2f}",
+                flush=True,
+            )
             return True
         except Exception as exc:
             traceback.print_exc()
@@ -176,6 +274,10 @@ class RealtimeProfilePlay(CustomAction):
             return True
         controller = context.tasker.controller
         require_profile = bool(params.get("require_profile", True))
+        difficulty = str(params.get("difficulty", "Easy"))
+        verified = verified_settings(difficulty)
+        if bool(params.get("settings_gate_required", False)) and verified is None:
+            raise RuntimeError("本次开演前尚未实际验证游戏流速")
         settings = (
             resolve_profile(context, params, controller=controller)
             if require_profile else None
@@ -187,7 +289,13 @@ class RealtimeProfilePlay(CustomAction):
             settings.timing_offset_ms if settings else int(params.get("timing_offset_ms", 0))
         )
         mode = f"profile={settings.profile_path.name}" if settings else "mode=rehearsal-defaults"
-        print(f"RealtimeProfilePlay {mode}", flush=True)
+        speed_message = (
+            f"actual_speed={verified.actual_note_speed:.2f} "
+            f"expected_speed={verified.expected_note_speed:.2f}"
+            if verified is not None
+            else f"declared_speed={float(params.get('note_speed', 2.0)):.2f}"
+        )
+        print(f"RealtimeProfilePlay {mode} {speed_message}", flush=True)
         recorder = (
             RealtimeDebugRecorder(PROJECT_ROOT / "debug" / "recordings")
             if (params.get("debug_recording") or debug_enabled()) else None
@@ -276,7 +384,15 @@ class RealtimeProfilePlay(CustomAction):
             f"filtered_adjacent={stats.filtered_adjacent_artifacts} "
             f"rejected_holds={stats.rejected_hold_candidates} "
             f"timing_offset={stats.initial_timing_offset_ms}"
-            f"->{stats.final_timing_offset_ms}",
+            f"->{stats.final_timing_offset_ms} "
+            f"tap={stats.action_counts.get('tap', 0)} "
+            f"flick={stats.action_counts.get('flick', 0)} "
+            f"hold={stats.action_counts.get('down', 0)} "
+            f"frame_ms_p50={stats.frame_interval_p50_ms:.2f} "
+            f"frame_ms_p95={stats.frame_interval_p95_ms:.2f} "
+            f"frame_ms_max={stats.frame_interval_max_ms:.2f} "
+            f"effective_fps={stats.effective_fps:.2f} "
+            f"reason={stats.terminal_reason}",
             flush=True,
         )
         if stats.completed and params.get("save_result_frame"):

@@ -409,6 +409,7 @@
       45
     ],
     "next": [
+      "AutoLiveRehearsalToFormal",
       "AutoLiveQuotaExhausted",
       "AutoLiveEnabled",
       "AutoLiveDisabled",
@@ -426,12 +427,42 @@
       }
     }
   },
-  "AutoLivePrepareClose": {
+ "AutoLivePrepareClose": {
+   "recognition": "TemplateMatch",
+   "template": "common_close.png",
+   "threshold": 0.9,
+   "action": "Custom",
+   "custom_action": "ForegroundClick",
+   "next": [
+      "AutoLiveRehearsalToFormal",
+      "AutoLiveQuotaExhausted",
+      "AutoLiveEnabled",
+      "AutoLiveDisabled",
+      "AutoLivePrepareClose"
+    ],
+    "on_error": [
+      "CommonRecover"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 点击失败：游戏不在前台、控制器拒绝输入或页面位置已变化",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "AutoLiveRehearsalToFormal": {
     "recognition": "TemplateMatch",
-    "template": "common_close.png",
-    "threshold": 0.9,
+    "template": "rehearsal_mode_marker.png",
+    "threshold": 0.88,
     "action": "Custom",
     "custom_action": "ForegroundClick",
+    "target": [
+      55,
+      520
+    ],
+    "post_delay": 1000,
     "next": [
       "AutoLiveQuotaExhausted",
       "AutoLiveEnabled",
@@ -442,6 +473,12 @@
       "CommonRecover"
     ],
     "focus": {
+      "Node.Action.Starting": {
+        "content": "检测到排练模式，正在切换回正式演出",
+        "display": [
+          "log"
+        ]
+      },
       "Node.Action.Failed": {
         "content": "❌ 点击失败：游戏不在前台、控制器拒绝输入或页面位置已变化",
         "display": [
@@ -498,6 +535,7 @@
     "target": true,
     "max_hit": 3,
     "next": [
+      "AutoLiveRehearsalToFormal",
       "AutoLiveQuotaExhausted",
       "AutoLiveEnabled",
       "AutoLiveDisabled",

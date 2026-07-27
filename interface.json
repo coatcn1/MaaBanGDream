@@ -286,6 +286,24 @@
                 "render_quality": "standard",
                 "note_speed": 2.0
               }
+            },
+            "RealtimeLiveFormalSettingsGate": {
+              "custom_action_param": {
+                "difficulty": "Easy",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            },
+            "RealtimeLiveRehearsalSettingsGate": {
+              "custom_action_param": {
+                "difficulty": "Easy",
+                "require_profile": false,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
             }
           }
         },
@@ -316,6 +334,24 @@
                 "game_fps": 60,
                 "render_quality": "standard",
                 "note_speed": 2.0
+              }
+            },
+            "RealtimeLiveFormalSettingsGate": {
+              "custom_action_param": {
+                "difficulty": "Normal",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            },
+            "RealtimeLiveRehearsalSettingsGate": {
+              "custom_action_param": {
+                "difficulty": "Normal",
+                "require_profile": false,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
               }
             }
           }
@@ -348,6 +384,24 @@
                 "render_quality": "standard",
                 "note_speed": 2.0
               }
+            },
+            "RealtimeLiveFormalSettingsGate": {
+              "custom_action_param": {
+                "difficulty": "Hard",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            },
+            "RealtimeLiveRehearsalSettingsGate": {
+              "custom_action_param": {
+                "difficulty": "Hard",
+                "require_profile": false,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
             }
           }
         },
@@ -379,6 +433,24 @@
                 "render_quality": "standard",
                 "note_speed": 5.0
               }
+            },
+            "RealtimeLiveFormalSettingsGate": {
+              "custom_action_param": {
+                "difficulty": "Expert",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            },
+            "RealtimeLiveRehearsalSettingsGate": {
+              "custom_action_param": {
+                "difficulty": "Expert",
+                "require_profile": false,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
             }
           }
         },
@@ -409,6 +481,24 @@
                 "game_fps": 60,
                 "render_quality": "standard",
                 "note_speed": 5.0
+              }
+            },
+            "RealtimeLiveFormalSettingsGate": {
+              "custom_action_param": {
+                "difficulty": "Special",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            },
+            "RealtimeLiveRehearsalSettingsGate": {
+              "custom_action_param": {
+                "difficulty": "Special",
+                "require_profile": false,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
               }
             }
           }
@@ -570,6 +660,15 @@
                 "note_speed": 2.0
               }
             },
+            "ChallengeSettingsGate": {
+              "custom_action_param": {
+                "difficulty": "Easy",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            },
             "ChallengeStart": {
               "next": [
                 "ChallengePlay"
@@ -594,6 +693,15 @@
                 "game_fps": 60,
                 "render_quality": "standard",
                 "note_speed": 2.0
+              }
+            },
+            "ChallengeSettingsGate": {
+              "custom_action_param": {
+                "difficulty": "Normal",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
               }
             },
             "ChallengeStart": {
@@ -622,6 +730,15 @@
                 "note_speed": 2.0
               }
             },
+            "ChallengeSettingsGate": {
+              "custom_action_param": {
+                "difficulty": "Hard",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            },
             "ChallengeStart": {
               "next": [
                 "ChallengePlayHard"
@@ -648,6 +765,15 @@
                 "note_speed": 5.0
               }
             },
+            "ChallengeSettingsGate": {
+              "custom_action_param": {
+                "difficulty": "Expert",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            },
             "ChallengeStart": {
               "next": [
                 "ChallengePlayExpert"
@@ -672,6 +798,15 @@
                 "game_fps": 60,
                 "render_quality": "standard",
                 "note_speed": 5.0
+              }
+            },
+            "ChallengeSettingsGate": {
+              "custom_action_param": {
+                "difficulty": "Special",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
               }
             },
             "ChallengeStart": {

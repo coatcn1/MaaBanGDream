@@ -141,7 +141,10 @@ class RealtimeCalibration(CustomAction):
         difficulty = calibration_difficulty()
         if difficulty not in DIFFICULTY_TARGETS:
             raise ValueError(f"不支持的难度: {difficulty}")
-        note_speed = 5.0 if difficulty in {"Expert", "Special"} else 2.0
+        store = RealtimeProfileStore(PROJECT_ROOT / "profiles")
+        note_speed = float(
+            store.runtime_options()["calibration_note_speeds"][difficulty]
+        )
         play_node = PLAY_NODES[difficulty]
         calibration_debug = debug_enabled()
         round_number = 0
@@ -164,6 +167,7 @@ class RealtimeCalibration(CustomAction):
                 "debug_recording": calibration_debug,
                 "duration_seconds": 600, "dpi": 240, "game_fps": 60,
                 "render_quality": "standard", "note_speed": note_speed,
+                "settings_gate_required": True,
                 "wait_for_completion": True, "completion_missing_frames": 120,
                 "require_completion": True, "save_result_frame": True,
                 "result_back_attempts": 30, "result_back_interval_seconds": 1.5,
@@ -179,6 +183,24 @@ class RealtimeCalibration(CustomAction):
                 "RealtimeLiveRandomSong": {"next": ["CalibrationCaptureSong"]},
                 "RealtimeLiveDifficulty": {
                     "custom_action_param": {"difficulty": difficulty, "max_attempts": 3}
+                },
+                "RealtimeLiveFormalSettingsGate": {
+                    "custom_action_param": {
+                        "difficulty": difficulty,
+                        "require_profile": False,
+                        "dpi": 240,
+                        "game_fps": 60,
+                        "render_quality": "standard",
+                    }
+                },
+                "RealtimeLiveRehearsalSettingsGate": {
+                    "custom_action_param": {
+                        "difficulty": difficulty,
+                        "require_profile": False,
+                        "dpi": 240,
+                        "game_fps": 60,
+                        "render_quality": "standard",
+                    }
                 },
                 "RealtimeLiveRehearsalStart": {"next": start_next},
                 "RealtimeLiveFormalStart": {"next": start_next},

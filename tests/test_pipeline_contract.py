@@ -108,11 +108,24 @@ def test_all_pipeline_references_exist_and_nodes_are_unique():
 def test_auto_live_safety_and_timeout_contract():
     nodes = load(ROOT / "resource/pipeline/auto_live.json")
     prepare_order = nodes["AutoLivePrepare"]["next"]
-    assert prepare_order[:3] == [
+    # The auto-live buttons only exist in formal mode. A rehearsal-mode
+    # prepare page must be switched back first, or every check misses and
+    # the loop deadlocks (live issue: entering auto play after calibration
+    # left the game in rehearsal mode).
+    assert prepare_order[:4] == [
+        "AutoLiveRehearsalToFormal",
         "AutoLiveQuotaExhausted",
         "AutoLiveEnabled",
         "AutoLiveDisabled",
     ]
+    rehearsal = nodes["AutoLiveRehearsalToFormal"]
+    assert rehearsal["recognition"] == "TemplateMatch"
+    assert rehearsal["template"] == "rehearsal_mode_marker.png"
+    assert rehearsal["custom_action"] == "ForegroundClick"
+    assert rehearsal["target"] == [55, 520]
+    assert rehearsal["next"] == prepare_order[1:]
+    for looper in ("AutoLivePrepareClose", "AutoLiveDisabled"):
+        assert nodes[looper]["next"][0] == "AutoLiveRehearsalToFormal"
     quota = nodes["AutoLiveQuotaExhausted"]
     assert quota["recognition"] == "TemplateMatch"
     assert quota["template"] == "auto_live_exhausted.png"
@@ -302,6 +315,11 @@ def test_realtime_multi_live_contract_and_options():
         "RealtimeLiveRoundGate", "RealtimeLiveComplete"
     ]
     assert nodes["RealtimeLiveRequireProfile"]["custom_action"] == "RealtimeProfileCheck"
+    for gate in (
+        "RealtimeLiveFormalSettingsGate",
+        "RealtimeLiveRehearsalSettingsGate",
+    ):
+        assert nodes[gate]["custom_action"] == "RealtimePerformanceSettingsGate"
     assert "RealtimeLiveAutoOn" not in nodes
     assert "RealtimeLiveStart" not in nodes
 
@@ -323,6 +341,7 @@ def test_realtime_multi_live_contract_and_options():
         params = nodes[play_node]["custom_action_param"]
         assert params["difficulty"] == case["name"]
         assert params["require_profile"] is False
+        assert params["settings_gate_required"] is True
         assert params["debug_recording"] is False
         assert params["require_completion"] is True
         assert params["note_speed"] == (
@@ -331,6 +350,18 @@ def test_realtime_multi_live_contract_and_options():
         assert override["RealtimeLiveRequireProfile"]["custom_action_param"][
             "note_speed"
         ] == params["note_speed"]
+        assert override["RealtimeLiveFormalSettingsGate"][
+            "custom_action_param"
+        ]["difficulty"] == case["name"]
+        assert override["RealtimeLiveFormalSettingsGate"][
+            "custom_action_param"
+        ]["require_profile"] is True
+        assert override["RealtimeLiveRehearsalSettingsGate"][
+            "custom_action_param"
+        ]["difficulty"] == case["name"]
+        assert override["RealtimeLiveRehearsalSettingsGate"][
+            "custom_action_param"
+        ]["require_profile"] is False
         assert nodes[play_node]["next"] == ["RealtimeLiveReturnHome"]
 
     song_mode = interface["option"]["RealtimeLiveSongMode"]
@@ -347,6 +378,18 @@ def test_realtime_multi_live_contract_and_options():
     assert nodes["RealtimeLiveFormalMarker"]["target"] == [55, 520]
     assert nodes["RealtimeLiveDemoSettingsMarker"]["target"] == [575, 385]
     assert nodes["RealtimeLiveDemoModeOff"]["target"] == [640, 525]
+    assert nodes["RealtimeLiveDemoModeOff"]["next"] == [
+        "RealtimeLiveRehearsalSettingsGate"
+    ]
+    assert nodes["RealtimeLiveFormalReady"]["next"] == [
+        "RealtimeLiveFormalSettingsGate"
+    ]
+    assert nodes["RealtimeLiveFormalSettingsGate"]["next"] == [
+        "RealtimeLiveFormalStart"
+    ]
+    assert nodes["RealtimeLiveRehearsalSettingsGate"]["next"] == [
+        "RealtimeLiveRehearsalStart"
+    ]
     assert nodes["RealtimeLiveRehearsalStart"]["template"] == "rehearsal_start.png"
     debug = interface["option"]["RealtimeLiveDebug"]
     enabled = next(case for case in debug["cases"] if case["name"] == "On")

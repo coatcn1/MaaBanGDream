@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from agent.realtime.engine import EngineStats
 from agent.realtime import profile_play_action
@@ -15,6 +16,7 @@ from agent.realtime.profile_play_action import (
     resolve_life_policy,
 )
 from agent.realtime.result_parser import LiveResult
+from agent.realtime.performance_settings_action import clear_verified_settings
 
 
 class Job:
@@ -89,6 +91,21 @@ def test_profile_play_reuses_one_agent_controller_proxy(monkeypatch):
     assert tasker.controller_reads == 1
     assert foreground_checks == [tasker._controller]
     assert dispatcher_options == [{}]
+
+
+def test_profile_play_refuses_pipeline_start_without_fresh_speed_gate():
+    clear_verified_settings()
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=Controller()),
+    )
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Easy",
+        "require_profile": False,
+        "settings_gate_required": True,
+    }))
+
+    with pytest.raises(RuntimeError, match="尚未实际验证游戏流速"):
+        RealtimeProfilePlay()._run(context, argv)
 
 
 def test_pause_overlay_requires_a_material_screen_change():

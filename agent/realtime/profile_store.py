@@ -57,6 +57,7 @@ class RuntimeSettings:
     frame_timeout_ms: int
     playfield_timeout_ms: int
     profile_path: Path
+    note_speed: float
 
 
 class RealtimeProfileStore:
@@ -70,6 +71,13 @@ class RealtimeProfileStore:
         "life_safety_enabled": True,
         "life_exit_threshold": 200,
         "rehearsal_ignore_life_safety": True,
+        "calibration_note_speeds": {
+            "Easy": 2.0,
+            "Normal": 2.0,
+            "Hard": 2.0,
+            "Expert": 5.0,
+            "Special": 5.0,
+        },
     }
 
     def __init__(self, root: str | Path) -> None:
@@ -171,10 +179,30 @@ class RealtimeProfileStore:
             raise ValueError("life_exit_threshold 必须是整数") from exc
         if not 10 <= threshold <= 990:
             raise ValueError("life_exit_threshold 必须在 10..990 之间")
+        configured_speeds = options.get(
+            "calibration_note_speeds",
+            cls.DEFAULT_RUNTIME_OPTIONS["calibration_note_speeds"],
+        )
+        if not isinstance(configured_speeds, dict):
+            raise ValueError("calibration_note_speeds 必须是 JSON 对象")
+        speeds: dict[str, float] = {}
+        for difficulty in ("Easy", "Normal", "Hard", "Expert", "Special"):
+            try:
+                speed = round(float(configured_speeds[difficulty]), 2)
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"calibration_note_speeds.{difficulty} 必须是数字"
+                ) from exc
+            if not 1.0 <= speed <= 12.0:
+                raise ValueError(
+                    f"calibration_note_speeds.{difficulty} 必须在 1.00..12.00 之间"
+                )
+            speeds[difficulty] = speed
         return {
             "life_safety_enabled": enabled,
             "life_exit_threshold": threshold,
             "rehearsal_ignore_life_safety": rehearsal_ignore,
+            "calibration_note_speeds": speeds,
         }
 
     def runtime_options(self) -> dict[str, Any]:
@@ -239,7 +267,11 @@ class RealtimeProfileStore:
             details = ", ".join(f"{key}={before[key]!r}（当前 {now[key]!r}）" for key in mismatches)
             raise ValueError(f"Profile 与当前环境不匹配: {details}")
         settings = self._validated_settings(profile.get("settings", {}))
-        return RuntimeSettings(**settings, profile_path=profile["_path"])
+        return RuntimeSettings(
+            **settings,
+            profile_path=profile["_path"],
+            note_speed=saved.note_speed,
+        )
 
     def resolve_latest(self, *, difficulty: str, current_signature: EnvironmentSignature) -> RuntimeSettings:
         pinned = self.pinned_profile(difficulty)
@@ -256,6 +288,60 @@ class RealtimeProfileStore:
                 except ValueError:
                     continue
         raise ValueError(f"没有已验收且环境匹配的 {difficulty} Profile")
+
+    @staticmethod
+    def _same_non_speed_environment(
+        saved: EnvironmentSignature,
+        current: EnvironmentSignature,
+    ) -> bool:
+        return (
+            saved.resolution == current.resolution
+            and saved.dpi == current.dpi
+            and saved.game_fps == current.game_fps
+            and saved.render_quality == current.render_quality
+        )
+
+    def resolve_latest_for_environment(
+        self,
+        *,
+        difficulty: str,
+        current_signature: EnvironmentSignature,
+    ) -> RuntimeSettings:
+        """Select a profile before the in-game speed has been read and corrected."""
+        pinned = self.pinned_profile(difficulty)
+        if pinned:
+            profile = self.load(pinned)
+            if profile.get("accepted") is not True:
+                raise ValueError("钉选 Profile 尚未通过用户真机验收")
+            if profile.get("difficulty") not in self.compatible_difficulties(difficulty):
+                raise ValueError("钉选 Profile 难度不兼容")
+            saved = EnvironmentSignature.from_mapping(profile.get("environment", {}))
+            if not self._same_non_speed_environment(saved, current_signature):
+                raise ValueError("钉选 Profile 与当前非流速环境不匹配")
+            return self.resolve(
+                pinned,
+                difficulty=difficulty,
+                current_signature=saved,
+            )
+        for source in self.compatible_difficulties(difficulty):
+            candidates = [
+                profile
+                for profile in self.list_profiles(accepted_only=True)
+                if profile.get("difficulty") == source
+            ]
+            for profile in candidates:
+                saved = EnvironmentSignature.from_mapping(
+                    profile.get("environment", {})
+                )
+                if self._same_non_speed_environment(saved, current_signature):
+                    return self.resolve(
+                        profile["_path"].name,
+                        difficulty=difficulty,
+                        current_signature=saved,
+                    )
+        raise ValueError(
+            f"没有已验收且非流速环境匹配的 {difficulty} Profile"
+        )
 
     def update_settings(self, value: str | Path, *, target_fps: int, timing_offset_ms: int,
                         frame_timeout_ms: int, playfield_timeout_ms: int,

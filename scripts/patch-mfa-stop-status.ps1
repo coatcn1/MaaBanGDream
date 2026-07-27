@@ -23,6 +23,8 @@ $project = Join-Path $SourceRoot 'MFAAvalonia\MFAAvalonia.csproj'
 $taskSource = Join-Path $SourceRoot 'MFAAvalonia\Helper\ValueType\MFATask.cs'
 $settingsSource = Join-Path $SourceRoot 'MFAAvalonia\Views\Pages\SettingsView.axaml'
 $versionCheckerSource = Join-Path $SourceRoot 'MFAAvalonia\Helper\VersionChecker.cs'
+$performanceSettingsView = Join-Path $SourceRoot 'MFAAvalonia\Views\UserControls\Settings\PerformanceProfileSettingsUserControl.axaml'
+$performanceSettingsModel = Join-Path $SourceRoot 'MFAAvalonia\ViewModels\UsersControls\Settings\PerformanceProfileSettingsUserControlModel.cs'
 
 foreach ($required in (
     $MfaRoot,
@@ -32,7 +34,9 @@ foreach ($required in (
     $project,
     $taskSource,
     $settingsSource,
-    $versionCheckerSource
+    $versionCheckerSource,
+    $performanceSettingsView,
+    $performanceSettingsModel
 )) {
     if (-not (Test-Path -LiteralPath $required)) {
         throw "MFA stop-status patch requirement is missing: $required"
@@ -73,12 +77,17 @@ if (-not $alreadyPatched) {
 }
 
 $taskSourceHash = (Get-FileHash -LiteralPath $taskSource -Algorithm SHA256).Hash
+$customSourceFingerprint = (
+    @($settingsSource, $versionCheckerSource, $performanceSettingsView, $performanceSettingsModel) |
+        ForEach-Object { (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash }
+) -join ':'
 if (Test-Path -LiteralPath $marker) {
     $metadata = Get-Content -LiteralPath $marker -Raw -Encoding utf8 | ConvertFrom-Json
     $currentHash = (Get-FileHash -LiteralPath $deployedAssembly -Algorithm SHA256).Hash
     if (
         $metadata.source_commit -eq $sourceCommit -and
         $metadata.task_source_sha256 -eq $taskSourceHash -and
+        $metadata.custom_source_fingerprint -eq $customSourceFingerprint -and
         $metadata.patched_sha256 -eq $currentHash -and
         $metadata.customization_commit -eq $customizationCommit
     ) {
@@ -117,6 +126,7 @@ $patchedHash = (Get-FileHash -LiteralPath $deployedAssembly -Algorithm SHA256).H
     source_commit = $sourceCommit
     customization_commit = $customizationCommit
     task_source_sha256 = $taskSourceHash
+    custom_source_fingerprint = $customSourceFingerprint
     patch = 'mfaavalonia-v2.12.0-stop-status.patch'
     patched_sha256 = $patchedHash
     backup = $backupAssembly

@@ -87,6 +87,51 @@ def test_resolve_latest_selects_newest_accepted_matching_difficulty(tmp_path):
     assert settings.profile_path != older
 
 
+def test_select_for_settings_gate_uses_profile_speed_but_checks_other_environment(tmp_path):
+    store = RealtimeProfileStore(tmp_path)
+    expert_signature = EnvironmentSignature((1280, 720), 240, 60, "standard", 5.0)
+    path = store.write(payload(
+        difficulty="Expert",
+        environment=expert_signature.to_mapping(),
+    ))
+
+    settings = store.resolve_latest_for_environment(
+        difficulty="Expert",
+        current_signature=EnvironmentSignature(
+            (1280, 720), 240, 60, "standard", 2.0,
+        ),
+    )
+
+    assert settings.profile_path == path
+    assert settings.note_speed == 5.0
+
+
+def test_select_for_settings_gate_still_rejects_non_speed_environment_drift(tmp_path):
+    store = RealtimeProfileStore(tmp_path)
+    store.write(payload(difficulty="Expert"))
+
+    with pytest.raises(ValueError, match="Profile"):
+        store.resolve_latest_for_environment(
+            difficulty="Expert",
+            current_signature=EnvironmentSignature(
+                (1920, 1080), 240, 60, "standard", 2.0,
+            ),
+        )
+
+
+def test_runtime_options_accept_game_note_speed_upper_bound(tmp_path):
+    store = RealtimeProfileStore(tmp_path)
+    options = store.runtime_options()
+    options["calibration_note_speeds"] = {
+        difficulty: 12.0
+        for difficulty in RealtimeProfileStore.DIFFICULTIES
+    }
+
+    updated = store.update_runtime_options(options)
+
+    assert set(updated["calibration_note_speeds"].values()) == {12.0}
+
+
 def test_resolve_latest_rejects_when_no_profile_was_accepted(tmp_path):
     store = RealtimeProfileStore(tmp_path)
     store.write(payload(accepted=False))

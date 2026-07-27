@@ -39,6 +39,11 @@ class EngineStats:
     filtered_adjacent_artifacts: int = 0
     rejected_hold_candidates: int = 0
     terminal_reason: str = ""
+    action_counts: dict[str, int] = field(default_factory=dict)
+    frame_interval_p50_ms: float = 0.0
+    frame_interval_p95_ms: float = 0.0
+    frame_interval_max_ms: float = 0.0
+    effective_fps: float = 0.0
 
 
 class RealtimeEngine:
@@ -93,6 +98,8 @@ class RealtimeEngine:
         life_depleted = False
         below_threshold_streak = 0
         safety_reading = None
+        action_counts: dict[str, int] = {}
+        processed_at: list[float] = []
         initial_timing_offset_ms = int(
             getattr(self.planner, "timing_offset_ms", 0)
         )
@@ -103,16 +110,27 @@ class RealtimeEngine:
                 if stopping():
                     was_stopped = True
                     break
+                now = self.clock()
+                if now < next_frame:
+                    # Pace BEFORE capturing. Capturing first and then
+                    # discarding the frame whenever the loop is early wastes
+                    # a full screenshot; once per-frame work crosses the
+                    # 60 Hz budget that waste halves the effective rate.
+                    time.sleep(min(0.002, next_frame - now))
+                    continue
+                next_frame += interval
+                if now - next_frame > interval:
+                    next_frame = now + interval
                 image = capture()
                 now = self.clock()
                 if stopping():
                     was_stopped = True
                     break
-                if now < next_frame:
-                    continue
-                next_frame += interval
-                if now - next_frame > interval:
-                    next_frame = now + interval
+                # Flick gestures span several game frames. Progress them here
+                # so input never sleeps inside dispatch and blocks capture.
+                advance_touch = getattr(self.touch, "advance", None)
+                if advance_touch is not None:
+                    advance_touch(now)
                 life_status = None
                 if self.life_detector is not None and self.life_guard is not None:
                     reading = self.life_detector.detect(image)
@@ -158,6 +176,7 @@ class RealtimeEngine:
                         continue
                 notes = self.detector.detect(image, now)
                 actions = self.planner.update(notes, now)
+                processed_at.append(now)
                 if any(
                     action.kind.value in {"tap", "flick"} for action in actions
                 ):
@@ -217,6 +236,9 @@ class RealtimeEngine:
                 if actions:
                     self.touch.dispatch(actions)
                     actions_count += len(actions)
+                    for action in actions:
+                        kind = action.kind.value
+                        action_counts[kind] = action_counts.get(kind, 0) + 1
                 frames += 1
             if was_stopped:
                 terminal_reason = "用户已停止任务"
@@ -229,38 +251,70 @@ class RealtimeEngine:
                     f"演奏超过安全时限 {duration_seconds:g} 秒，"
                     "仍未识别到结算画面"
                 )
+            frame_intervals_ms = [
+                (current - previous) * 1000
+                for previous, current in zip(processed_at, processed_at[1:])
+            ]
+            measured_seconds = (
+                processed_at[-1] - processed_at[0]
+                if len(processed_at) >= 2 else 0.0
+            )
             return EngineStats(
-                frames, actions_count, was_stopped, aborted_for_life, completed,
-                life_depleted,
-                (
+                processed_frames=frames,
+                dispatched_actions=actions_count,
+                stopped=was_stopped,
+                aborted_for_life=aborted_for_life,
+                completed=completed,
+                life_depleted=life_depleted,
+                timing_feedback_fast=(
                     self.timing_controller.fast_samples
                     if self.timing_controller is not None else 0
                 ),
-                (
+                timing_feedback_slow=(
                     self.timing_controller.slow_samples
                     if self.timing_controller is not None else 0
                 ),
-                initial_timing_offset_ms,
-                (
+                initial_timing_offset_ms=initial_timing_offset_ms,
+                final_timing_offset_ms=(
                     self.timing_controller.current_offset_ms
                     if self.timing_controller is not None
                     else int(getattr(self.planner, "timing_offset_ms", 0))
                 ),
-                (
+                timing_feedback_valid=(
                     self.timing_controller.valid_samples
                     if self.timing_controller is not None else 0
                 ),
-                (
+                timing_feedback_ignored=(
                     self.timing_controller.ignored_samples
                     if self.timing_controller is not None else 0
                 ),
-                (
+                timing_feedback_ignored_reasons=(
                     self.timing_controller.ignored_reasons
                     if self.timing_controller is not None else {}
                 ),
-                int(getattr(self.planner, "filtered_adjacent_artifacts", 0)),
-                int(getattr(self.planner, "rejected_hold_candidates", 0)),
-                terminal_reason,
+                filtered_adjacent_artifacts=int(
+                    getattr(self.planner, "filtered_adjacent_artifacts", 0)
+                ),
+                rejected_hold_candidates=int(
+                    getattr(self.planner, "rejected_hold_candidates", 0)
+                ),
+                terminal_reason=terminal_reason,
+                action_counts=action_counts,
+                frame_interval_p50_ms=(
+                    float(np.percentile(frame_intervals_ms, 50))
+                    if frame_intervals_ms else 0.0
+                ),
+                frame_interval_p95_ms=(
+                    float(np.percentile(frame_intervals_ms, 95))
+                    if frame_intervals_ms else 0.0
+                ),
+                frame_interval_max_ms=(
+                    max(frame_intervals_ms) if frame_intervals_ms else 0.0
+                ),
+                effective_fps=(
+                    (len(processed_at) - 1) / measured_seconds
+                    if measured_seconds > 0 else 0.0
+                ),
             )
         finally:
             cleanup = self.planner.reset(self.clock())

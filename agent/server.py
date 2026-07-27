@@ -18,6 +18,7 @@ import realtime.formal_preflight  # noqa: F401 - registration happens at import 
 import realtime.calibration_action  # noqa: F401 - registration happens at import time
 import realtime.difficulty_action  # noqa: F401 - registration happens at import time
 import realtime.runtime_options  # noqa: F401 - registration happens at import time
+import realtime.performance_settings_action  # noqa: F401 - registration happens at import time
 
 
 def main() -> None:

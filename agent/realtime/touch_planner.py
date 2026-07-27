@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from .note_detector import NoteKind, ObservedNote
+from .note_detector import NoteDetector, NoteKind, ObservedNote
 from .note_tracker import MultiNoteTracker, TrackedNote
 
 
@@ -51,6 +51,7 @@ class RealtimePlanner:
         hold_max_seconds: float = 20,
         hold_restart_cooldown_seconds: float = 0.25,
         post_release_rescue_seconds: float = 0.4,
+        hold_start_suppress_seconds: float = 0.35,
     ):
         self.judgement_y = float(judgement_y)
         self.timing_offset = timing_offset_ms / 1000
@@ -65,6 +66,7 @@ class RealtimePlanner:
         self.hold_max_seconds = float(hold_max_seconds)
         self.hold_restart_cooldown_seconds = float(hold_restart_cooldown_seconds)
         self.post_release_rescue_seconds = float(post_release_rescue_seconds)
+        self.hold_start_suppress_seconds = float(hold_start_suppress_seconds)
         self._last_lane_sweep = float("-inf")
         self._previous: dict[tuple[NoteKind, int], ObservedNote] = {}
         self._last_trigger: dict[int, float] = {}
@@ -75,6 +77,7 @@ class RealtimePlanner:
         self._hold_released_at: dict[int, float] = {}
         self._hold_chord_partner: dict[int, int] = {}
         self._hold_confirmed: set[int] = set()
+        self._hold_tail_flick: set[int] = set()
         self._last_hold_rejection: dict[int, float] = {}
         self._active_hold_lane: dict[int, int] = {}
         self._active_hold_x: dict[int, float] = {}
@@ -140,11 +143,15 @@ class RealtimePlanner:
         self._hold_release_at.pop(contact, None)
         self._hold_started.pop(contact, None)
         self._hold_confirmed.discard(contact)
-        self._hold_released_at[contact] = now
+        # The suppression window is lane-keyed; for a slide hold the contact
+        # id is the stale START lane. Poisoning it kills real notes crossing
+        # there within 0.4 s of the release. Record only where the finger
+        # actually lifted.
         self._hold_released_at[final_lane] = now
         self._active_hold_lane.pop(contact, None)
         self._active_hold_x.pop(contact, None)
         self._hold_last_moved_at.pop(contact, None)
+        self._hold_tail_flick.discard(contact)
 
     def _release_hold(
         self,
@@ -161,7 +168,12 @@ class RealtimePlanner:
         the release line, holding it any longer only drags one half of the
         chord past its judgement.
         """
-        actions.append(TouchAction(ActionKind.UP, lane, now, contact, reason))
+        # A hold whose tail carried the pink chevron marker must be swiped,
+        # not lifted: the dispatcher converts the held contact into a flick.
+        if contact in self._hold_tail_flick:
+            actions.append(TouchAction(ActionKind.FLICK, lane, now, contact, reason))
+        else:
+            actions.append(TouchAction(ActionKind.UP, lane, now, contact, reason))
         self._finish_hold(contact, now, reason)
         # The UP action reports the hold's current observed lane, which can
         # differ from the last recorded active lane after a slide. Record the
@@ -175,15 +187,43 @@ class RealtimePlanner:
         if partner_tail < self.hold_release_y - self.paired_hold_rescue_margin:
             return
         partner_lane = self._active_hold_lane.get(partner, partner)
-        actions.append(TouchAction(
-            ActionKind.UP, partner_lane, now, partner, f"{reason}-paired"
-        ))
+        if partner in self._hold_tail_flick:
+            actions.append(TouchAction(
+                ActionKind.FLICK, partner_lane, now, partner, f"{reason}-paired"
+            ))
+        else:
+            actions.append(TouchAction(
+                ActionKind.UP, partner_lane, now, partner, f"{reason}-paired"
+            ))
         self._finish_hold(partner, now, f"{reason}-paired")
         self._hold_chord_partner.pop(partner, None)
 
     @staticmethod
     def _touch_x(note: ObservedNote) -> int:
         return max(120, min(1160, round(note.x)))
+
+    @staticmethod
+    def _lane_center_x(lane: int, y: float) -> float:
+        progress = min(1.08, max(0.0, (y - NoteDetector.VANISHING_Y) / (
+            NoteDetector.JUDGEMENT_Y - NoteDetector.VANISHING_Y
+        )))
+        return 640 + (NoteDetector.DEFAULT_LANE_CENTERS[lane] - 640) * progress
+
+    def _hugs_hold_edge(self, note: ObservedNote, hold_lane: int) -> bool:
+        """True when the note sits on the lane edge facing the active hold.
+
+        A hold body bleeds edge pixels into the neighbouring lane, and those
+        fragments hug the edge toward the hold. A real note on the adjacent
+        lane sits near its own centre, so only edge-hugging tracks count as
+        artifacts.
+        """
+        center = self._lane_center_x(note.lane, note.y)
+        spacing = max(
+            24.0,
+            abs(self._lane_center_x(1, note.y) - self._lane_center_x(0, note.y)),
+        )
+        toward = 1.0 if hold_lane > note.lane else -1.0
+        return (note.x - center) * toward > spacing * .2
 
     def _trigger_y(self, previous: ObservedNote, note: ObservedNote) -> float:
         elapsed = note.timestamp - previous.timestamp
@@ -319,6 +359,11 @@ class RealtimePlanner:
             head = self._hold_head(note)
             tail = self._hold_tail(note)
 
+            if note.hold_tail_flick:
+                # Latch the marker: one clean sighting is enough, and the
+                # release must stay a swipe even if later frames lose it.
+                self._hold_tail_flick.add(contact)
+
             if continuing:
                 previous_tail = self._active_hold_tail[contact]
                 hold_age = now - self._hold_started.get(contact, now)
@@ -414,6 +459,18 @@ class RealtimePlanner:
                     and head >= self.judgement_y - self.paired_hold_rescue_margin
                     and paired_due
                 )
+                if (
+                    now - self._last_trigger.get(note.lane, float("-inf"))
+                    < self.hold_start_suppress_seconds
+                ):
+                    # A perfect-hit flash is a tall green beam at the line
+                    # appearing right after a tap on the same lane; it can
+                    # linger and drift up for half a second, so this window
+                    # does not depend on the previous sample. A real hold
+                    # head was visible falling first and starts via
+                    # should_cross, which stays untouched.
+                    should_rescue = False
+                    should_pair_rescue = False
                 should_cross = (
                     previous is not None
                     and self._same_falling_note(previous, note)
@@ -426,6 +483,8 @@ class RealtimePlanner:
                         and previous is not None
                         and previous.height >= 30
                         and note.height >= 30
+                        and previous.hold_body_confidence >= .8
+                        and note.hold_body_confidence >= .8
                     )
                 )
                 release_age = now - self._hold_released_at.get(note.lane, float("-inf"))
@@ -529,9 +588,12 @@ class RealtimePlanner:
             note = tracked.note
             if tracked.fired:
                 continue
-            adjacent_to_hold = any(
-                abs(note.lane - lane) == 1
-                for lane in self._active_hold_lane.values()
+            adjacent_hold_lane = next(
+                (
+                    lane for lane in self._active_hold_lane.values()
+                    if abs(note.lane - lane) == 1
+                ),
+                None,
             )
             trusted_adjacent_track = (
                 tracked.minimum_y <= self.judgement_y - 40
@@ -540,8 +602,9 @@ class RealtimePlanner:
                 and tracked.velocity_y > 0
             )
             if (
-                adjacent_to_hold
+                adjacent_hold_lane is not None
                 and note.y >= self.judgement_y - 20
+                and self._hugs_hold_edge(note, adjacent_hold_lane)
                 and not trusted_adjacent_track
             ):
                 self._note_tracker.mark_fired(tracked.track_id, now)
@@ -568,6 +631,11 @@ class RealtimePlanner:
                     and other.note.lane == note.lane
                     and not other.fired
                     and abs(other.note.y - note.y) <= 60
+                    # A flick-hit afterimage rises or fades in place and can
+                    # pass every shape gate. It must not shadow real notes:
+                    # only a track with proven downward motion is a threat.
+                    and other.downward_motion_frames >= 1
+                    and other.velocity_y > 100
                     for other in tracked_notes
                 )
             )
@@ -617,7 +685,10 @@ class RealtimePlanner:
                     is_real_crossing = (
                         tracked.previous_y is not None
                         and tracked.velocity_y > 0
-                        and tracked.previous_y <= self.judgement_y - 25
+                        # The immediate previous sample sits only ~12 px above
+                        # the line at 60 fps, so previous_y can never prove a
+                        # fall. The track's own minimum proves it instead.
+                        and tracked.minimum_y <= self.judgement_y - 25
                         and tracked.previous_y < target <= note.y
                     )
                     self._note_tracker.mark_fired(tracked.track_id, now)
@@ -716,6 +787,12 @@ class RealtimePlanner:
         structural = [
             action for action in actions
             if action.kind in (ActionKind.UP, ActionKind.DOWN, ActionKind.MOVE)
+            # A hold release delivered as a FLICK (tail-flick conversion)
+            # still owns a live contact. Treating it as a judgement
+            # transient can drop it, and the dispatcher then keeps the
+            # finger down forever: the next hold started on that contact
+            # crashes with "touch contact N is already active".
+            or action.contact is not None
         ]
         current_down_lanes = {
             action.lane for action in structural if action.kind == ActionKind.DOWN
@@ -724,6 +801,7 @@ class RealtimePlanner:
         transients = [
             action for action in actions
             if action.kind in (ActionKind.TAP, ActionKind.FLICK)
+            and action.contact is None
             and action.reason != "lane-sweep"
         ]
         lane_sweeps = [action for action in actions if action.reason == "lane-sweep"]
@@ -826,6 +904,7 @@ class RealtimePlanner:
         self._active_hold_lane.clear()
         self._active_hold_x.clear()
         self._hold_last_moved_at.clear()
+        self._hold_tail_flick.clear()
         self._previous.clear()
         self._last_trigger.clear()
         self._note_tracker.reset()

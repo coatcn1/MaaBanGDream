@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 
 import cv2
@@ -23,6 +23,10 @@ class ObservedNote:
     width: int
     height: int
     timestamp: float
+    hold_body_confidence: float = 1.0
+    # A pink chevron marker riding at the tail end of a hold body means the
+    # hold must be released with an upward swipe, not a plain lift.
+    hold_tail_flick: bool = False
 
 
 class NoteDetector:
@@ -62,8 +66,8 @@ class NoteDetector:
         # the saturated white/green head rings.
         (NoteKind.HOLD, (38, 25, 100), (81, 255, 255)),
         (NoteKind.SKILL, (15, 95, 160), (37, 255, 255)),
-        (NoteKind.FLICK, (135, 80, 155), (179, 255, 255)),
     )
+    FLICK_RANGE = ((135, 80, 155), (179, 255, 255))
 
     def centers_at(self, y: float) -> tuple[float, ...]:
         progress = min(1.08, max(0.0, (y - self.VANISHING_Y) / (
@@ -129,11 +133,229 @@ class NoteDetector:
         candidates.sort(key=lambda note: note.y)
         if len(candidates) < 2:
             return []
-        separated = [
-            note for index, note in enumerate(candidates)
-            if index == 0 or note.y - candidates[index - 1].y >= 50
-        ]
+        separated: list[ObservedNote] = []
+        for note in candidates:
+            if not separated:
+                separated.append(note)
+                continue
+            previous = separated[-1]
+            minimum_gap = max(
+                8.0,
+                min(24.0, (previous.height + note.height) * .35),
+            )
+            if note.y - previous.y >= minimum_gap:
+                separated.append(note)
+        if len(separated) == 2:
+            first, second = separated
+            width_ratio = min(first.width, second.width) / max(
+                first.width, second.width
+            )
+            # The upper and lower arcs of one hollow ring have nearly the same
+            # width and centre. Two perspective-scaled note heads do not.
+            if (
+                width_ratio >= .9
+                and abs(first.x - second.x) <= 12
+            ):
+                return []
         return separated if len(separated) >= 2 else []
+
+    @staticmethod
+    def _is_hold_body_component(
+        component: np.ndarray,
+        *,
+        original_width: int,
+        original_height: int,
+    ) -> bool:
+        """Reject round green effects while retaining bodies and tail rings."""
+        fill_ratio = float(np.count_nonzero(component)) / max(1, component.size)
+        aspect = original_width / max(1, original_height)
+        # A real body is a filled ribbon. A disconnected tail/head ring is
+        # horizontally elongated. Round skill and judgement ripples are
+        # neither, and were the source of false holds on no-hold charts.
+        return (
+            fill_ratio >= .32
+            or aspect >= 2.2
+            or original_height >= 140
+        )
+
+    def _detect_flick_chevrons(
+        self,
+        hsv: np.ndarray,
+        ordinary_notes: list[ObservedNote],
+        timestamp: float,
+    ) -> list[ObservedNote]:
+        """Recognise a flick from its chevron stack, not its purple head ring.
+
+        Skin 1 gives every ordinary note a magenta outline in the same HSV
+        range as a flick. A real flick carries one or more upward chevrons
+        (bottom rows wider than top rows); an ordinary ring keeps nearly
+        equal row extents and also sits on top of its cyan/yellow head.
+        Misclassifying a tap as a flick is harmless - an upward swipe clears
+        a tap note too - so recall wins ties against precision here.
+        """
+        mask = cv2.inRange(hsv, *self.FLICK_RANGE)
+        mask = cv2.morphologyEx(
+            mask,
+            cv2.MORPH_OPEN,
+            np.ones((2, 2), np.uint8),
+        )
+        count, labels, stats, centroids = cv2.connectedComponentsWithStats(mask)
+        candidates: list[tuple[ObservedNote, bool]] = []
+        for label in range(1, count):
+            left, top, width, height, area = stats[label]
+            original_width = int(width * 2)
+            original_height = int(height * 2)
+            if (
+                area * 4 < 45
+                or width < 4
+                or height < 2
+                or width / max(height, 1) < 1.15
+                or original_height > 55
+            ):
+                continue
+            component = labels[
+                top:top + height,
+                left:left + width,
+            ] == label
+            row_extents = []
+            for row in component:
+                xs = np.flatnonzero(row)
+                if xs.size:
+                    row_extents.append(float(xs[-1] - xs[0] + 1))
+            third = max(1, len(row_extents) // 3)
+            top_extent = float(np.mean(row_extents[:third]))
+            bottom_extent = float(np.mean(row_extents[-third:]))
+            is_chevron = (
+                bottom_extent >= top_extent * 1.35
+                and bottom_extent - top_extent >= 2
+            )
+            x, local_y = centroids[label]
+            x *= 2
+            y = local_y * 2 + self.PLAYFIELD_TOP
+            centers = self.centers_at(y)
+            lane = min(range(len(centers)), key=lambda i: abs(x - centers[i]))
+            lane_spacing = max(24.0, abs(centers[1] - centers[0]))
+            # Chevron stacks span slightly more than one perspective lane
+            # width far up the road; rings and fragments stay at 1.15.
+            width_cap = lane_spacing * (1.6 if is_chevron else 1.15)
+            if (
+                abs(x - centers[lane]) > lane_spacing * .46
+                or original_width > width_cap
+            ):
+                continue
+            candidates.append((
+                ObservedNote(
+                    NoteKind.FLICK,
+                    lane,
+                    float(x),
+                    float(y),
+                    original_width,
+                    original_height,
+                    timestamp,
+                ),
+                is_chevron,
+            ))
+
+        # The magenta outline of an ordinary head sits on top of its cyan or
+        # yellow component. Remove it before looking for vertical stacks.
+        candidates = [
+            (candidate, is_chevron)
+            for candidate, is_chevron in candidates
+            if not any(
+                note.kind in (NoteKind.TAP, NoteKind.SKILL)
+                and note.lane == candidate.lane
+                and abs(note.y - candidate.y) <= 32
+                and abs(note.x - candidate.x)
+                <= max(45.0, (note.width + candidate.width) * .55)
+                for note in ordinary_notes
+            )
+        ]
+
+        tap_candidates = [
+            candidate for candidate, is_chevron in candidates if not is_chevron
+        ]
+
+        def _isolated(candidate: ObservedNote) -> bool:
+            # A lone chevron only counts as a flick arrow when it is isolated:
+            # a ring fragment always has sibling fragments of the same
+            # ordinary note within a few pixels, while a real arrow sits
+            # ~40 px above its spindle body. Without this gate, arc fragments
+            # create phantom flick tracks that shadow the note's real tap
+            # track - and a shadowed tap is marked fired and never acts.
+            return not any(
+                other.lane == candidate.lane
+                and abs(other.y - candidate.y) <= 25
+                and abs(other.x - candidate.x) <= 40
+                for other in tap_candidates
+            )
+
+        classified: list[ObservedNote] = [
+            ObservedNote(
+                NoteKind.TAP,
+                candidate.lane,
+                candidate.x,
+                candidate.y,
+                candidate.width,
+                candidate.height,
+                candidate.timestamp,
+            )
+            for candidate in tap_candidates
+        ]
+        for lane in range(len(self.lane_centers)):
+            lane_candidates = sorted(
+                (
+                    note
+                    for note, is_chevron in candidates
+                    if is_chevron and note.lane == lane
+                ),
+                key=lambda note: note.y,
+            )
+            stacked: set[int] = set()
+            index = 0
+            while index < len(lane_candidates):
+                stack = [lane_candidates[index]]
+                cursor = index + 1
+                while cursor < len(lane_candidates):
+                    previous = stack[-1]
+                    candidate = lane_candidates[cursor]
+                    gap = candidate.y - previous.y
+                    if (
+                        5 <= gap <= 34
+                        and abs(candidate.x - previous.x)
+                        <= max(32.0, (candidate.width + previous.width) * .45)
+                    ):
+                        stack.append(candidate)
+                        cursor += 1
+                        continue
+                    break
+                if len(stack) >= 2 and stack[-1].y - stack[0].y >= 12:
+                    head = stack[-1]
+                    # One ordinary ring can shatter into several chevron-shaped
+                    # arcs that stack exactly like real arrows. Only accept the
+                    # stack when its head has no tap-shaped siblings.
+                    if _isolated(head):
+                        classified.append(ObservedNote(
+                            NoteKind.FLICK,
+                            lane,
+                            head.x,
+                            head.y,
+                            max(item.width for item in stack),
+                            max(item.height for item in stack),
+                            timestamp,
+                        ))
+                    for member in stack:
+                        stacked.add(id(member))
+                    index = cursor
+                else:
+                    index += 1
+            # A lone surviving chevron is still a flick arrow, subject to the
+            # same isolation gate as stack heads.
+            for candidate in lane_candidates:
+                if id(candidate) in stacked:
+                    continue
+                if _isolated(candidate):
+                    classified.append(candidate)
+        return classified
 
     def detect(self, image: np.ndarray, timestamp: float) -> list[ObservedNote]:
         # Colour segmentation does not need full-resolution pixels.  Processing
@@ -160,6 +382,17 @@ class NoteDetector:
                 if kind != NoteKind.HOLD and width / max(height, 1) < 1.15:
                     continue
                 component = labels[top:top + height, left:left + width] == label
+                original_width = width * 2
+                original_height = height * 2
+                if (
+                    kind == NoteKind.HOLD
+                    and not self._is_hold_body_component(
+                        component,
+                        original_width=original_width,
+                        original_height=original_height,
+                    )
+                ):
+                    continue
                 if (
                     kind != NoteKind.HOLD
                     and width * 2 >= 80
@@ -196,7 +429,6 @@ class NoteDetector:
                         head_y = (top + head_row) * 2 + self.PLAYFIELD_TOP
                 x *= 2
                 y = local_y * 2 + self.PLAYFIELD_TOP
-                original_height = height * 2
                 if head_y is not None:
                     # RealtimePlanner defines head as y + height/2 and tail as
                     # y - height/2. Anchor that geometry on the observed ring.
@@ -210,7 +442,6 @@ class NoteDetector:
                 lane_spacing = max(24.0, abs(centers[1] - centers[0]))
                 if abs(x - centers[lane]) > lane_spacing * .42:
                     continue
-                original_width = width * 2
                 # A note grows with the perspective lane width. A fixed pixel
                 # cap rejected valid heads near the judgement line on some
                 # songs. Reject only components that span substantially more
@@ -234,9 +465,60 @@ class NoteDetector:
                 if original_width < minimum_width:
                     continue
                 notes.append(ObservedNote(
-                    kind, lane, float(x), float(y), int(width * 2), int(height * 2), timestamp
+                    kind,
+                    lane,
+                    float(x),
+                    float(y),
+                    int(width * 2),
+                    int(height * 2),
+                    timestamp,
+                    (
+                        1.0
+                        if kind != NoteKind.HOLD or original_height >= 80
+                        else 0.0
+                    ),
                 ))
-        return self._remove_stationary_feedback(self._merge_skill_hold_heads(notes))
+        notes = self._merge_skill_hold_heads(notes)
+        notes.extend(self._detect_flick_chevrons(hsv, notes, timestamp))
+        notes = self._annotate_hold_tail_flicks(notes)
+        return self._remove_stationary_feedback(notes)
+
+    @staticmethod
+    def _annotate_hold_tail_flicks(
+        notes: list[ObservedNote],
+    ) -> list[ObservedNote]:
+        """Fold a pink tail arrow into the hold body it rides on.
+
+        A hold that ends in a flick carries a magenta chevron marker at the
+        tail end of its green body. Emitted as a standalone flick it dies
+        unfired while the hold lifts with a plain UP and the tail misses.
+        Mark the hold instead; the planner swipes the release. The marker is
+        consumed so it never spawns a phantom flick track.
+        """
+        holds = [note for note in notes if note.kind == NoteKind.HOLD]
+        if not holds:
+            return notes
+        consumed: set[int] = set()
+        annotated: dict[int, ObservedNote] = {}
+        for hold in holds:
+            top = hold.y - hold.height / 2
+            for note in notes:
+                if (
+                    note.kind == NoteKind.FLICK
+                    and id(note) not in consumed
+                    and note.lane == hold.lane
+                    and abs(note.x - hold.x) <= max(50.0, hold.width * .4)
+                    and -20 <= top - note.y <= 35
+                ):
+                    consumed.add(id(note))
+                    annotated[id(hold)] = replace(hold, hold_tail_flick=True)
+        if not consumed:
+            return notes
+        return [
+            annotated.get(id(note), note)
+            for note in notes
+            if id(note) not in consumed
+        ]
 
     @staticmethod
     def _merge_skill_hold_heads(notes: list[ObservedNote]) -> list[ObservedNote]:
@@ -274,6 +556,7 @@ class NoteDetector:
                 max(hold.width, skill.width),
                 max(1, int(round(head - tail))),
                 hold.timestamp,
+                hold.hold_body_confidence,
             )
             consumed_skills.add(skill_index)
         return [

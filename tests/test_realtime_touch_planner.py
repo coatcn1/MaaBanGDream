@@ -74,6 +74,28 @@ def test_planner_keeps_a_hold_pressed_through_short_detection_gaps():
     assert gap == []
 
 
+def test_hold_start_right_after_a_hit_on_the_same_lane_is_an_effect():
+    planner = RealtimePlanner(
+        judgement_y=565, rescue_first_visible=True, timing_offset_ms=0
+    )
+    planner.update([_note(NoteKind.TAP, 2, 520, 1.00)], now=1.00)
+    fired = planner.update([_note(NoteKind.TAP, 2, 570, 1.05)], now=1.05)
+    assert [action.kind for action in fired] == [ActionKind.TAP]
+
+    # The perfect-hit flash: a tall green beam first seen at the line,
+    # right after the tap. It must not start a hold, on either frame.
+    for timestamp in (1.10, 1.25):
+        effect = planner.update([
+            ObservedNote(NoteKind.HOLD, 2, 490, 560, 60, 120, timestamp)
+        ], now=timestamp)
+        assert not [action for action in effect if action.kind == ActionKind.DOWN]
+
+    # A genuinely tracked falling hold still starts once the window ends.
+    planner.update([ObservedNote(NoteKind.HOLD, 2, 490, 480, 60, 100, 1.45)], now=1.45)
+    down = planner.update([ObservedNote(NoteKind.HOLD, 2, 490, 530, 60, 100, 1.55)], now=1.55)
+    assert [action.kind for action in down] == [ActionKind.DOWN]
+
+
 def test_planner_does_not_predict_hold_release_before_three_hundred_ms():
     planner = RealtimePlanner(judgement_y=620, timing_offset_ms=0, hold_grace_seconds=.35)
     planner.update([_note(NoteKind.HOLD, 2, 560, 1.00)], now=1.00)
@@ -120,6 +142,18 @@ def test_planner_releases_a_hold_when_its_tail_reaches_the_judgement_line():
     assert [action.kind for action in up] == [ActionKind.UP]
 
 
+def test_planner_swipes_the_release_when_the_hold_tail_is_a_flick():
+    planner = RealtimePlanner(judgement_y=620, timing_offset_ms=0)
+    planner.update([ObservedNote(NoteKind.HOLD, 2, 490, 540, 60, 100, 1.0, 1.0, True)], now=1.0)
+    down = planner.update([ObservedNote(NoteKind.HOLD, 2, 490, 575, 60, 100, 1.1, 1.0, True)], now=1.1)
+    up = planner.update([ObservedNote(NoteKind.HOLD, 2, 490, 689, 60, 100, 1.5, 1.0, True)], now=1.5)
+
+    assert [action.kind for action in down] == [ActionKind.DOWN]
+    assert [(action.kind, action.reason, action.contact) for action in up] == [
+        (ActionKind.FLICK, "tail-crossing", 2)
+    ]
+
+
 def test_planner_supports_two_simultaneous_holds_with_distinct_contacts():
     planner = RealtimePlanner(judgement_y=620, timing_offset_ms=0)
     planner.update([
@@ -141,6 +175,30 @@ def test_planner_supports_two_simultaneous_holds_with_distinct_contacts():
     ]
 
 
+def test_centered_note_next_to_a_hold_is_not_an_artifact():
+    planner = RealtimePlanner(
+        judgement_y=565, rescue_first_visible=True, timing_offset_ms=0
+    )
+    planner.update([ObservedNote(NoteKind.HOLD, 2, 490, 480, 60, 100, 1.0)], now=1.0)
+    down = planner.update([ObservedNote(NoteKind.HOLD, 2, 490, 530, 60, 100, 1.1)], now=1.1)
+    assert [action.kind for action in down] == [ActionKind.DOWN]
+
+    # A real note first seen at the line on the adjacent lane, near its own
+    # centre: late, but real - it must be rescued, not killed as an artifact.
+    centered = planner.update([
+        ObservedNote(NoteKind.TAP, 1, 340, 560, 60, 30, 1.2)
+    ], now=1.2)
+    assert [(action.kind, action.lane) for action in centered] == [
+        (ActionKind.TAP, 1)
+    ]
+
+    # A fragment hugging the edge toward the hold stays suppressed.
+    edge = planner.update([
+        ObservedNote(NoteKind.TAP, 3, 597, 560, 60, 30, 1.3)
+    ], now=1.3)
+    assert edge == []
+
+
 def test_planner_rescues_both_sides_of_slightly_asymmetric_double_hold():
     planner = RealtimePlanner(
         judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
@@ -156,6 +214,59 @@ def test_planner_rescues_both_sides_of_slightly_asymmetric_double_hold():
         (ActionKind.DOWN, 1, 1), (ActionKind.DOWN, 5, 5)
     ]
     assert actions[1].reason == "paired-rescue"
+
+
+def _start_sliding_hold(planner):
+    """Start a hold on lane 5, slide it to lane 6, release at the tail."""
+    planner.update([ObservedNote(NoteKind.HOLD, 5, 940, 480, 60, 100, 1.0)], now=1.0)
+    planner.update([ObservedNote(NoteKind.HOLD, 5, 940, 530, 60, 100, 1.1)], now=1.1)
+    planner.update([ObservedNote(NoteKind.HOLD, 6, 1090, 540, 60, 100, 1.2)], now=1.2)
+    planner.update([ObservedNote(NoteKind.HOLD, 6, 1090, 560, 60, 100, 1.3)], now=1.3)
+    return planner.update([ObservedNote(NoteKind.HOLD, 6, 1090, 640, 60, 100, 1.6)], now=1.6)
+
+
+def test_slide_release_does_not_poison_the_start_lane():
+    planner = RealtimePlanner(
+        judgement_y=565, rescue_first_visible=True, timing_offset_ms=0
+    )
+    released = _start_sliding_hold(planner)
+    assert [(action.kind, action.lane) for action in released] == [
+        (ActionKind.UP, 6)
+    ]
+
+    # A real tap crossing on the hold's START lane within 0.4 s of the
+    # release must still fire: the finger lifted on lane 6, not lane 5.
+    planner.update([_note(NoteKind.TAP, 5, 520, 1.66)], now=1.66)
+    planner.update([_note(NoteKind.TAP, 5, 545, 1.70)], now=1.70)
+    fired = planner.update([_note(NoteKind.TAP, 5, 568, 1.74)], now=1.74)
+    assert [(action.kind, action.lane) for action in fired] == [
+        (ActionKind.TAP, 5)
+    ]
+
+
+def test_post_release_window_real_crossing_uses_track_history():
+    planner = RealtimePlanner(
+        judgement_y=565, rescue_first_visible=True, timing_offset_ms=0
+    )
+    released = _start_sliding_hold(planner)
+    assert [(action.kind, action.lane) for action in released] == [
+        (ActionKind.UP, 6)
+    ]
+
+    # On the actual release lane a densely sampled real note still fires:
+    # its previous sample is only 23 px above the line, but the track
+    # history proves the fall.
+    planner.update([_note(NoteKind.TAP, 6, 520, 1.66)], now=1.66)
+    planner.update([_note(NoteKind.TAP, 6, 545, 1.70)], now=1.70)
+    fired = planner.update([_note(NoteKind.TAP, 6, 568, 1.74)], now=1.74)
+    assert [(action.kind, action.lane) for action in fired] == [
+        (ActionKind.TAP, 6)
+    ]
+
+    # Tail residue appearing fresh below the line stays suppressed.
+    planner.update([_note(NoteKind.TAP, 6, 558, 1.80)], now=1.80)
+    residue = planner.update([_note(NoteKind.TAP, 6, 566, 1.84)], now=1.84)
+    assert residue == []
 
 
 def test_paired_holds_lift_together_when_one_tail_ring_reaches_the_line():
@@ -211,6 +322,40 @@ def test_paired_hold_with_a_distant_tail_releases_on_its_own():
     ]
     assert [(a.kind, a.lane, a.contact, a.reason) for a in second] == [
         (ActionKind.UP, 5, 5, "tail-ring"),
+    ]
+
+
+def test_tail_flick_releases_survive_a_same_frame_validated_rescue():
+    # Live crash realtime-20260727-235942 frame 3516: two chord holds ended
+    # as tail-flick swipes in the same frame as a validated rescue TAP on the
+    # adjacent lane. The suppression pass kept only the rescue, both release
+    # FLICKs vanished, and the leaked finger later crashed the dispatcher
+    # with "touch contact N is already active".
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+
+    planner.update([
+        ObservedNote(NoteKind.HOLD, 2, 490, 510, 70, 105, 1.0),
+        ObservedNote(NoteKind.HOLD, 3, 640, 530, 70, 110, 1.0),
+    ], now=1.0)
+    planner.update([
+        ObservedNote(NoteKind.HOLD, 2, 490, 540, 100, 105, 1.2),
+        ObservedNote(
+            NoteKind.HOLD, 3, 640, 575, 100, 110, 1.2, hold_tail_flick=True
+        ),
+    ], now=1.2)
+    fired = planner.update([
+        ObservedNote(
+            NoteKind.HOLD, 2, 490, 570, 100, 18, 1.4, hold_tail_flick=True
+        ),
+        ObservedNote(NoteKind.TAP, 4, 790, 568, 60, 100, 1.4),
+    ], now=1.4)
+
+    assert [(a.kind, a.lane, a.contact, a.reason) for a in fired] == [
+        (ActionKind.FLICK, 2, 2, "tail-ring"),
+        (ActionKind.FLICK, 3, 3, "tail-ring-paired"),
+        (ActionKind.TAP, 4, None, "rescue"),
     ]
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import queue
 import threading
+import time
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -32,6 +33,8 @@ class RealtimeDebugRecorder:
         self._frames: queue.Queue[np.ndarray | None] = queue.Queue(maxsize=180)
         self._video_frames = 0
         self._dropped_video_frames = 0
+        self._fps_samples: list[float] = []
+        self._measured_fps: float | None = None
         self._trace_frames = 0
         self._error: BaseException | None = None
         self._event_count = 0
@@ -100,6 +103,8 @@ class RealtimeDebugRecorder:
             self._frames.put_nowait(image.copy())
         except queue.Full:
             self._dropped_video_frames += 1
+        if len(self._fps_samples) < 45:
+            self._fps_samples.append(timestamp)
 
     def _write_event(
         self,
@@ -128,6 +133,16 @@ class RealtimeDebugRecorder:
         }, ensure_ascii=False, separators=(",", ":")) + "\n")
         self._event_count += 1
 
+    def _estimated_fps(self) -> float:
+        samples = self._fps_samples
+        if len(samples) >= 2:
+            span = samples[-1] - samples[0]
+            if span > 0:
+                fps = (len(samples) - 1) / span
+                self._measured_fps = min(120.0, max(15.0, fps))
+                return self._measured_fps
+        return float(self.video_fps)
+
     def _encode_video(self) -> None:
         writer = None
         try:
@@ -136,11 +151,18 @@ class RealtimeDebugRecorder:
                 if frame is None:
                     break
                 if writer is None:
+                    # The engine delivers ~47-60 frames/s, not the nominal
+                    # 30. Measure the real rate from early frame timestamps
+                    # so the video plays back in real time, not slow motion.
+                    deadline = time.monotonic() + 3.0
+                    while len(self._fps_samples) < 45 and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    fps = self._estimated_fps()
                     height, width = frame.shape[:2]
                     writer = cv2.VideoWriter(
                         str(self.output_dir / "playfield.avi"),
                         cv2.VideoWriter_fourcc(*"MJPG"),
-                        self.video_fps,
+                        fps,
                         (width, height),
                     )
                     if not writer.isOpened():
@@ -164,7 +186,7 @@ class RealtimeDebugRecorder:
             "trace_frames": self._trace_frames,
             "video_frames": self._video_frames,
             "dropped_video_frames": self._dropped_video_frames,
-            "video_fps": self.video_fps,
+            "video_fps": self._measured_fps or self.video_fps,
             "event_screenshots": self._event_count,
             "diagnostic_counts": self._diagnostic_counts,
             "timing_feedback": self._last_timing_state,

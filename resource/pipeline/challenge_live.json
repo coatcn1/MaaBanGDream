@@ -419,7 +419,7 @@
     "action": "Custom",
     "custom_action": "RealtimeFormalPreflight",
     "next": [
-      "ChallengeStart"
+      "ChallengeSettingsGate"
     ],
     "on_error": [
       "ChallengePointStillOpen",
@@ -430,6 +430,33 @@
         "content": "❌ 正式演奏前置检查失败：游戏前台、截图或触控环境不满足要求",
         "display": [
           "log"
+        ]
+      }
+    }
+  },
+  "ChallengeSettingsGate": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "RealtimePerformanceSettingsGate",
+    "custom_action_param": {
+      "difficulty": "Easy",
+      "require_profile": true,
+      "dpi": 240,
+      "game_fps": 60,
+      "render_quality": "standard"
+    },
+    "next": [
+      "ChallengeStart"
+    ],
+    "on_error": [
+      "ChallengeFailure"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 挑战演出开演前流速验证失败：未能读取、修正或复核游戏内实际流速",
+        "display": [
+          "log",
+          "toast"
         ]
       }
     }
@@ -484,6 +511,7 @@
     "custom_action_param": {
       "difficulty": "Easy",
       "require_profile": true,
+      "settings_gate_required": true,
       "debug_recording": false,
       "duration_seconds": 600,
       "dpi": 240,
@@ -519,6 +547,7 @@
     "custom_action_param": {
       "difficulty": "Normal",
       "require_profile": true,
+      "settings_gate_required": true,
       "debug_recording": false,
       "duration_seconds": 600,
       "dpi": 240,
@@ -554,6 +583,7 @@
     "custom_action_param": {
       "difficulty": "Hard",
       "require_profile": true,
+      "settings_gate_required": true,
       "debug_recording": false,
       "duration_seconds": 600,
       "dpi": 240,
@@ -589,6 +619,7 @@
     "custom_action_param": {
       "difficulty": "Expert",
       "require_profile": true,
+      "settings_gate_required": true,
       "debug_recording": false,
       "duration_seconds": 600,
       "dpi": 240,
@@ -624,6 +655,7 @@
     "custom_action_param": {
       "difficulty": "Special",
       "require_profile": true,
+      "settings_gate_required": true,
       "debug_recording": false,
       "duration_seconds": 600,
       "dpi": 240,

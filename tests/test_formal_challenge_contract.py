@@ -18,6 +18,7 @@ def test_formal_mode_requires_profile_and_uses_distinct_profile_nodes():
     for name in ("RealtimeLiveFormalPlay", "RealtimeLiveFormalPlayNormal", "RealtimeLiveFormalPlayHard", "RealtimeLiveFormalPlayExpert", "RealtimeLiveFormalPlaySpecial"):
         params = nodes[name]["custom_action_param"]
         assert params["require_profile"] is True
+        assert params["settings_gate_required"] is True
         assert params["result_back_attempts"] == 30
         assert params["result_back_interval_seconds"] == 1.5
         assert params["note_speed"] == (
@@ -57,6 +58,11 @@ def test_challenge_points_and_profile_contract():
         200: [875, 212], 400: [875, 286], 800: [875, 359], 1600: [875, 431]
     }
     assert nodes["ChallengeProfileCheck"]["custom_action"] == "RealtimeProfileCheck"
+    assert nodes["ChallengeBandMarker"]["next"] == ["ChallengeSettingsGate"]
+    assert nodes["ChallengeSettingsGate"]["custom_action"] == (
+        "RealtimePerformanceSettingsGate"
+    )
+    assert nodes["ChallengeSettingsGate"]["next"] == ["ChallengeStart"]
     point_failure = nodes["ChallengePointStillOpen"]
     assert point_failure["custom_action"] == "TaskOutcome"
     assert point_failure["custom_action_param"]["status"] == "failure"
@@ -64,6 +70,7 @@ def test_challenge_points_and_profile_contract():
     for name in ("ChallengePlay", "ChallengePlayNormal", "ChallengePlayHard", "ChallengePlayExpert", "ChallengePlaySpecial"):
         params = nodes[name]["custom_action_param"]
         assert params["require_profile"] is True
+        assert params["settings_gate_required"] is True
         assert params["result_back_attempts"] == 30
         assert params["result_back_interval_seconds"] == 1.5
         assert params["note_speed"] == (

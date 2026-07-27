@@ -56,7 +56,17 @@ class MultiNoteTracker:
     @staticmethod
     def _same_component(a: ObservedNote, b: ObservedNote) -> bool:
         horizontal_limit = max(a.width, b.width) / 2 + 60
-        return abs(a.y - b.y) <= 20 and abs(a.x - b.x) <= horizontal_limit
+        vertical_delta = abs(a.y - b.y)
+        horizontal_delta = abs(a.x - b.x)
+        if horizontal_delta > horizontal_limit:
+            return False
+        if vertical_delta <= 4:
+            return True
+        # Split left/right fragments of one ring are offset horizontally.
+        # Two genuinely dense same-lane heads are nearly co-centred and must
+        # remain independent even when their vertical gap is only 8-20 px.
+        fragment_offset = max(8.0, min(a.width, b.width) * .12)
+        return vertical_delta <= 10 and horizontal_delta >= fragment_offset
 
     def _cluster(self, notes: list[ObservedNote]) -> list[ObservedNote]:
         remaining = list(notes)

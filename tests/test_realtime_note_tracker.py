@@ -17,6 +17,18 @@ def test_tracker_keeps_two_same_lane_notes_as_independent_tracks():
     assert all(900 <= item.velocity_y <= 1100 for item in second)
 
 
+def test_tracker_does_not_merge_dense_same_lane_heads_twelve_pixels_apart():
+    tracker = MultiNoteTracker(memory_seconds=.3)
+
+    tracked = tracker.update([
+        note(500, 0, x=340, width=72, height=16),
+        note(512, 0, x=342, width=76, height=18),
+    ], 0)
+
+    assert len(tracked) == 2
+    assert tracked[0].track_id != tracked[1].track_id
+
+
 def test_tracker_clusters_detector_fragments_before_assigning_ids():
     tracker = MultiNoteTracker(memory_seconds=.3)
 

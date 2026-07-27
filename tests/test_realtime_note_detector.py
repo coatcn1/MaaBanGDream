@@ -26,6 +26,117 @@ def test_detector_finds_simultaneous_tap_notes_by_lane():
     ]
 
 
+def test_regular_purple_ring_is_not_misclassified_as_flick():
+    image = _frame()
+    # Current note skin 1 renders every ordinary cyan head with a purple outer
+    # ring. Colour alone therefore cannot distinguish a tap from a flick.
+    cv2.ellipse(image, (640, 520), (72, 18), 0, 0, 360, (255, 65, 185), 7)
+    cv2.ellipse(image, (640, 520), (58, 11), 0, 0, 360, (55, 185, 255), -1)
+
+    notes = NoteDetector(input_color_order="RGB").detect(image, timestamp=1.0)
+
+    assert [note.kind for note in notes if note.lane == 3] == [NoteKind.TAP]
+
+
+def test_detector_collapses_flick_chevrons_into_one_flick_head():
+    image = _frame()
+    # A real flick has multiple vertically aligned magenta chevrons above its
+    # playable diamond. Ordinary heads have only one horizontal purple ring.
+    for center_y, half_width in ((455, 22), (475, 30), (498, 38)):
+        points = np.array([
+            [640 - half_width, center_y + 8],
+            [640, center_y - 8],
+            [640 + half_width, center_y + 8],
+        ], np.int32)
+        cv2.polylines(
+            image, [points], False, (255, 65, 185), 5, cv2.LINE_8
+        )
+
+    notes = NoteDetector(input_color_order="RGB").detect(image, timestamp=1.0)
+
+    flicks = [note for note in notes if note.kind == NoteKind.FLICK]
+    assert len(flicks) == 1
+    assert flicks[0].lane == 3
+    assert 485 <= flicks[0].y <= 515
+
+
+def test_detector_reports_a_lone_flick_chevron_without_a_stack():
+    image = _frame()
+    # Half-resolution masking often erodes one of the two arrows. A single
+    # surviving chevron must still classify as a flick: flicking a tap note
+    # is harmless, but tapping a flick note misses.
+    points = np.array([
+        [640 - 30, 483],
+        [640, 467],
+        [640 + 30, 483],
+    ], np.int32)
+    cv2.polylines(image, [points], False, (255, 65, 185), 5, cv2.LINE_8)
+
+    notes = NoteDetector(input_color_order="RGB").detect(image, timestamp=1.0)
+
+    flicks = [note for note in notes if note.kind == NoteKind.FLICK]
+    assert len(flicks) == 1
+    assert flicks[0].lane == 3
+
+
+def test_chevron_stack_with_ring_siblings_is_not_a_flick():
+    image = _frame()
+    # One ordinary ring can shatter into chevron-shaped arcs that stack like
+    # real arrows. The stack must stay a tap while non-chevron fragments of
+    # the same ring sit next to it, otherwise the phantom flick shadows the
+    # note's real tap track and the note never gets an action.
+    for center_y, half_width in ((455, 22), (475, 30)):
+        points = np.array([
+            [640 - half_width, center_y + 8],
+            [640, center_y - 8],
+            [640 + half_width, center_y + 8],
+        ], np.int32)
+        cv2.polylines(
+            image, [points], False, (255, 65, 185), 5, cv2.LINE_8
+        )
+    cv2.ellipse(image, (640, 480), (56, 14), 0, 0, 180, (255, 65, 185), 6)
+
+    notes = NoteDetector(input_color_order="RGB").detect(image, timestamp=1.0)
+
+    assert not [note for note in notes if note.kind == NoteKind.FLICK]
+    assert [note for note in notes if note.kind == NoteKind.TAP]
+
+
+def test_pink_arrow_above_hold_body_marks_tail_flick():
+    image = _frame()
+    # A green hold body with a pink chevron marker riding at its tail end:
+    # the marker belongs to the hold, not to the flick stream.
+    cv2.rectangle(image, (610, 390), (670, 460), (70, 240, 110), -1)
+    for center_y, half_width in ((355, 22), (370, 30)):
+        points = np.array([
+            [640 - half_width, center_y + 8],
+            [640, center_y - 8],
+            [640 + half_width, center_y + 8],
+        ], np.int32)
+        cv2.polylines(
+            image, [points], False, (255, 65, 185), 5, cv2.LINE_8
+        )
+
+    notes = NoteDetector(input_color_order="RGB").detect(image, timestamp=1.0)
+
+    assert not [note for note in notes if note.kind == NoteKind.FLICK]
+    holds = [note for note in notes if note.kind == NoteKind.HOLD]
+    assert holds
+    assert any(note.hold_tail_flick for note in holds)
+
+
+def test_green_skill_rings_are_not_hold_bodies():
+    image = _frame()
+    # Skill/judgement effects can leave several green rings close to the line,
+    # but there is no continuous falling body connecting them.
+    for x, y, radius in ((600, 500, 30), (650, 525, 42), (705, 548, 35)):
+        cv2.circle(image, (x, y), radius, (70, 240, 110), 5)
+
+    notes = NoteDetector(input_color_order="RGB").detect(image, timestamp=1.0)
+
+    assert all(note.kind != NoteKind.HOLD for note in notes)
+
+
 def test_detector_splits_slow_stacked_taps_joined_by_colour_bridge():
     image = _frame()
     cv2.ellipse(image, (370, 500), (65, 10), 0, 0, 360, (55, 185, 255), -1)
@@ -57,7 +168,15 @@ def test_detector_classifies_skill_hold_and_flick_on_a_different_background():
     image = _frame(background=(75, 48, 92))
     cv2.rectangle(image, (460, 420), (520, 445), (255, 220, 45), -1)
     cv2.rectangle(image, (610, 390), (670, 460), (70, 240, 110), -1)
-    cv2.rectangle(image, (760, 560), (820, 585), (255, 65, 185), -1)
+    for center_y, half_width in ((520, 22), (540, 30), (560, 38)):
+        points = np.array([
+            [790 - half_width, center_y + 8],
+            [790, center_y - 8],
+            [790 + half_width, center_y + 8],
+        ], np.int32)
+        cv2.polylines(
+            image, [points], False, (255, 65, 185), 5, cv2.LINE_8
+        )
 
     notes = NoteDetector(input_color_order="RGB").detect(image, timestamp=2.0)
 

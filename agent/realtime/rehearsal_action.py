@@ -108,7 +108,13 @@ class RealtimeEasyRehearsal(CustomAction):
         print(
             "RealtimeEasyRehearsal "
             f"frames={stats.processed_frames} actions={stats.dispatched_actions} "
-            f"stopped={stats.stopped} life_abort={stats.aborted_for_life}",
+            f"stopped={stats.stopped} life_abort={stats.aborted_for_life} "
+            f"tap={getattr(stats, 'action_counts', {}).get('tap', 0)} "
+            f"flick={getattr(stats, 'action_counts', {}).get('flick', 0)} "
+            f"hold={getattr(stats, 'action_counts', {}).get('down', 0)} "
+            f"frame_ms_p95={getattr(stats, 'frame_interval_p95_ms', 0):.2f} "
+            f"effective_fps={getattr(stats, 'effective_fps', 0):.2f} "
+            f"reason={getattr(stats, 'terminal_reason', '')}",
             flush=True,
         )
         return not stats.stopped and not stats.aborted_for_life
