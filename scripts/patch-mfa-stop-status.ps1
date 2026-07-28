@@ -25,6 +25,7 @@ $settingsSource = Join-Path $SourceRoot 'MFAAvalonia\Views\Pages\SettingsView.ax
 $versionCheckerSource = Join-Path $SourceRoot 'MFAAvalonia\Helper\VersionChecker.cs'
 $performanceSettingsView = Join-Path $SourceRoot 'MFAAvalonia\Views\UserControls\Settings\PerformanceProfileSettingsUserControl.axaml'
 $performanceSettingsModel = Join-Path $SourceRoot 'MFAAvalonia\ViewModels\UsersControls\Settings\PerformanceProfileSettingsUserControlModel.cs'
+$focusHandlerSource = Join-Path $SourceRoot 'MFAAvalonia\Extensions\MaaFW\FocusHandler.cs'
 
 foreach ($required in (
     $MfaRoot,
@@ -36,7 +37,8 @@ foreach ($required in (
     $settingsSource,
     $versionCheckerSource,
     $performanceSettingsView,
-    $performanceSettingsModel
+    $performanceSettingsModel,
+    $focusHandlerSource
 )) {
     if (-not (Test-Path -LiteralPath $required)) {
         throw "MFA stop-status patch requirement is missing: $required"
@@ -78,7 +80,7 @@ if (-not $alreadyPatched) {
 
 $taskSourceHash = (Get-FileHash -LiteralPath $taskSource -Algorithm SHA256).Hash
 $customSourceFingerprint = (
-    @($settingsSource, $versionCheckerSource, $performanceSettingsView, $performanceSettingsModel) |
+@($settingsSource, $versionCheckerSource, $performanceSettingsView, $performanceSettingsModel, $focusHandlerSource) |
         ForEach-Object { (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash }
 ) -join ':'
 if (Test-Path -LiteralPath $marker) {

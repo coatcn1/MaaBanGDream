@@ -86,8 +86,7 @@
       "Node.Action.Succeeded": {
         "content": "✅ 自动演出任务成功",
         "display": [
-          "log",
-          "toast"
+          "log"
         ]
       }
     }
@@ -427,13 +426,13 @@
       }
     }
   },
- "AutoLivePrepareClose": {
-   "recognition": "TemplateMatch",
-   "template": "common_close.png",
-   "threshold": 0.9,
-   "action": "Custom",
-   "custom_action": "ForegroundClick",
-   "next": [
+  "AutoLivePrepareClose": {
+    "recognition": "TemplateMatch",
+    "template": "common_close.png",
+    "threshold": 0.9,
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
+    "next": [
       "AutoLiveRehearsalToFormal",
       "AutoLiveQuotaExhausted",
       "AutoLiveEnabled",

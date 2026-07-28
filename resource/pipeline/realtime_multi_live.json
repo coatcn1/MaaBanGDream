@@ -86,8 +86,7 @@
       "Node.Action.Succeeded": {
         "content": "✅ 实时演奏任务成功",
         "display": [
-          "log",
-          "toast"
+          "log"
         ]
       }
     }

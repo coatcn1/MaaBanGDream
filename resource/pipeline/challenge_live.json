@@ -97,8 +97,7 @@
       "Node.Action.Succeeded": {
         "content": "✅ 挑战演出任务成功",
         "display": [
-          "log",
-          "toast"
+          "log"
         ]
       }
     }
