@@ -21,7 +21,10 @@ def _public(profile: dict[str, Any], signature: EnvironmentSignature | None) -> 
         result["environment_match"] = None
     else:
         try:
-            result["environment_match"] = EnvironmentSignature.from_mapping(profile.get("environment", {})) == signature
+            saved = EnvironmentSignature.from_mapping(profile.get("environment", {}))
+            result["environment_match"] = (
+                RealtimeProfileStore._same_non_speed_environment(saved, signature)
+            )
         except ValueError:
             result["environment_match"] = False
     return result
@@ -58,7 +61,10 @@ def handle_request(request: dict[str, Any], *, root: str | Path = PROJECT_ROOT /
     selection: dict[str, Any] = {"mode": "pinned" if difficulty in pinned else "auto", "profile": pinned.get(difficulty), "source_difficulty": None}
     if signature is not None:
         try:
-            selected = store.resolve_latest(difficulty=difficulty, current_signature=signature)
+            selected = store.resolve_latest_for_environment(
+                difficulty=difficulty,
+                current_signature=signature,
+            )
             selection["profile"] = selected.profile_path.name
             selection["source_difficulty"] = store.load(selected.profile_path.name).get("difficulty")
         except ValueError as exc:

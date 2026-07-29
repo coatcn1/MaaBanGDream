@@ -47,7 +47,7 @@ def test_debug_recorder_writes_lossless_trace_and_replay_summary(tmp_path):
     assert trace[0]["diagnostics"][0]["event"] == "hold_start"
     assert trace[0]["timing_feedback"]["current_offset_ms"] == 1
     assert summary["trace_frames"] == 2
-    assert summary["video_frames"] == 2
+    assert summary["video_frames"] == 1
     assert summary["diagnostic_counts"] == {"hold_start": 1}
     assert summary["timing_feedback"]["current_offset_ms"] == 1
     assert (recorder.output_dir / "playfield.avi").stat().st_size > 0
@@ -70,3 +70,18 @@ def test_debug_recorder_saves_screenshot_for_post_release_rescue(tmp_path):
     assert events[0]["lane"] == 4
     assert events[0]["delay_seconds"] == 0.3
     assert (recorder.output_dir / events[0]["screenshot"]).stat().st_size > 0
+
+
+def test_debug_video_is_sampled_at_thirty_fps_without_losing_trace(tmp_path):
+    recorder = RealtimeDebugRecorder(tmp_path, video_fps=30)
+    frame = np.zeros((72, 128, 3), dtype=np.uint8)
+    for index in range(6):
+        recorder.record(frame, 1.0 + index / 60, [], [], "alive")
+    recorder.close()
+
+    summary = json.loads(
+        (recorder.output_dir / "summary.json").read_text(encoding="utf-8")
+    )
+    assert summary["trace_frames"] == 6
+    assert summary["video_frames"] == 3
+    assert summary["video_fps"] == 30

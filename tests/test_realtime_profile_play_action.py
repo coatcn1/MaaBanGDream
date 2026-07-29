@@ -4,17 +4,20 @@ import json
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from agent.realtime.engine import EngineStats
 from agent.realtime import profile_play_action
 from agent.realtime.profile_play_action import (
     RealtimeLifeSafetyAbortCheck,
     RealtimeProfilePlay,
+    _result_report_payload,
     _write_calibration_report,
     pause_overlay_changed,
     resolve_life_policy,
 )
 from agent.realtime.result_parser import LiveResult
+from agent.realtime.performance_settings_action import clear_verified_settings
 
 
 class Job:
@@ -89,6 +92,21 @@ def test_profile_play_reuses_one_agent_controller_proxy(monkeypatch):
     assert tasker.controller_reads == 1
     assert foreground_checks == [tasker._controller]
     assert dispatcher_options == [{}]
+
+
+def test_profile_play_refuses_pipeline_start_without_fresh_speed_gate():
+    clear_verified_settings()
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=Controller()),
+    )
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Easy",
+        "require_profile": False,
+        "settings_gate_required": True,
+    }))
+
+    with pytest.raises(RuntimeError, match="尚未实际验证游戏流速"):
+        RealtimeProfilePlay()._run(context, argv)
 
 
 def test_pause_overlay_requires_a_material_screen_change():
@@ -181,3 +199,87 @@ def test_calibration_report_contains_replay_diagnostics(tmp_path):
     assert payload["realtime_feedback_ignored_reasons"] == {"active_hold": 4}
     assert payload["filtered_adjacent_artifacts"] == 7
     assert payload["rejected_hold_candidates"] == 2
+
+
+def test_result_report_contains_runtime_acceptance_metrics():
+    stats = EngineStats(
+        120,
+        42,
+        False,
+        completed=True,
+        action_counts={"tap": 31, "flick": 4, "down": 7},
+        frame_interval_p50_ms=16.4,
+        frame_interval_p95_ms=18.2,
+        frame_interval_max_ms=24.0,
+        effective_fps=59.1,
+        terminal_reason="completed",
+        initial_timing_offset_ms=-11,
+        final_timing_offset_ms=-13,
+    )
+
+    payload = _result_report_payload(
+        LiveResult(100, 10, 2, 1, 2, 3, 4),
+        stats,
+        timing_offset_ms=-11,
+        suggested_timing_offset_ms=-14,
+    )
+
+    assert payload["miss"] == 2
+    assert payload["processed_frames"] == 120
+    assert payload["action_counts"] == {"tap": 31, "flick": 4, "down": 7}
+    assert payload["frame_interval_p95_ms"] == pytest.approx(18.2)
+    assert payload["effective_fps"] == pytest.approx(59.1)
+    assert payload["terminal_reason"] == "completed"
+
+
+def test_formal_timeout_records_a_specific_failure_reason(monkeypatch):
+    tasker = Tasker()
+    context = SimpleNamespace(tasker=tasker)
+    settings = SimpleNamespace(
+        target_fps=60,
+        timing_offset_ms=0,
+        profile_path=SimpleNamespace(name="normal.json"),
+    )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.RealtimeProfileStore.resolve_latest",
+        lambda *args, **kwargs: settings,
+    )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.require_game_foreground",
+        lambda _controller: None,
+    )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.ControllerTouchDispatcher",
+        lambda *_args, **_kwargs: object(),
+    )
+
+    class Engine:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def run(self, _capture, _stopping, **_kwargs):
+            return EngineStats(
+                100,
+                20,
+                False,
+                completed=False,
+                terminal_reason="演奏超过安全时限 600 秒，仍未识别到结算画面",
+            )
+
+    monkeypatch.setattr("agent.realtime.profile_play_action.RealtimeEngine", Engine)
+    reasons = []
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.record_failure_reason",
+        reasons.append,
+    )
+
+    params = {
+        "difficulty": "Normal",
+        "duration_seconds": 600,
+        "require_completion": True,
+        "wait_for_completion": True,
+    }
+    argv = SimpleNamespace(custom_action_param=json.dumps(params))
+
+    assert not RealtimeProfilePlay()._run(context, argv)
+    assert reasons == ["演奏超过安全时限 600 秒，仍未识别到结算画面"]

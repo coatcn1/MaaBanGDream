@@ -3,26 +3,55 @@
     "recognition": "DirectHit",
     "action": "StartApp",
     "package": "com.bilibili.star.bili",
-    "next": ["MinimalHomeMarker", "LoginTapToStart", "LoginNext", "CommonClose"],
-    "on_error": ["CommonRecover"]
+    "next": [
+      "MinimalHomeMarker",
+      "LoginTapToStart",
+      "LoginNext",
+      "CommonClose"
+    ],
+    "on_error": [
+      "CommonRecover"
+    ]
   },
   "MinimalHomeMarker": {
     "recognition": "TemplateMatch",
     "template": "home_marker.png",
-    "threshold": 0.88,
+    "threshold": 0.82,
     "action": "DoNothing",
-    "next": ["HomeLive"],
-    "on_error": ["CommonRecover"]
+    "next": [
+      "HomeLive"
+    ],
+    "on_error": [
+      "CommonRecover"
+    ]
   },
   "HomeLive": {
     "recognition": "TemplateMatch",
     "template": "home_live.png",
-    "threshold": 0.88,
+    "threshold": 0.82,
     "action": "Custom",
     "custom_action": "ForegroundClick",
-    "target": [1085, 580, 180, 130],
-    "next": ["FreeLive", "CommonClose"],
-    "on_error": ["CommonRecover"]
+    "target": [
+      1085,
+      580,
+      180,
+      130
+    ],
+    "next": [
+      "FreeLive",
+      "CommonClose"
+    ],
+    "on_error": [
+      "CommonRecover"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 点击失败：游戏不在前台、控制器拒绝输入或页面位置已变化",
+        "display": [
+          "log"
+        ]
+      }
+    }
   },
   "FreeLive": {
     "recognition": "TemplateMatch",
@@ -30,15 +59,30 @@
     "threshold": 0.88,
     "action": "Custom",
     "custom_action": "ForegroundClick",
-    "next": ["SongSelectMarker", "CommonClose"],
-    "on_error": ["CommonRecover"]
+    "next": [
+      "SongSelectMarker",
+      "CommonClose"
+    ],
+    "on_error": [
+      "CommonRecover"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 点击失败：游戏不在前台、控制器拒绝输入或页面位置已变化",
+        "display": [
+          "log"
+        ]
+      }
+    }
   },
   "SongSelectMarker": {
     "recognition": "TemplateMatch",
     "template": "song_select_marker.png",
     "threshold": 0.92,
     "action": "DoNothing",
-    "next": ["BackToHome"]
+    "next": [
+      "BackToHome"
+    ]
   },
   "BackToHome": {
     "recognition": "DirectHit",
@@ -47,12 +91,26 @@
     "custom_action_param": {
       "home_node": "HomeMarker",
       "escape_interval_ms": 1500,
-      "escape_timeout_ms": 30000,
+      "escape_timeout_ms": 60000,
       "restart_limit": 2,
       "restart_wait_ms": 5000,
-      "click_nodes": ["LoginTapToStart", "LoginNext", "CommonClose"],
+      "click_nodes": [
+        "LoginTapToStart",
+        "LoginNext",
+        "CommonClose"
+      ],
       "package": "com.bilibili.star.bili"
     },
-    "next": ["HomeMarker"]
+    "next": [
+      "HomeMarker"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 60 秒内未恢复到主页：可能仍在登录、弹窗未识别或游戏无响应",
+        "display": [
+          "log"
+        ]
+      }
+    }
   }
 }

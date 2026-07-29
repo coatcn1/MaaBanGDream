@@ -26,6 +26,7 @@ class TrackedNote:
     track_id: int
     note: ObservedNote
     previous_y: float | None
+    previous_x: float | None
     velocity_y: float
     sample_count: int
     fired: bool
@@ -34,6 +35,7 @@ class TrackedNote:
     motion_samples: int
     downward_motion_frames: int
     last_fired_at: float | None
+    last_seen: float
 
 
 class MultiNoteTracker:
@@ -51,12 +53,23 @@ class MultiNoteTracker:
         self.memory_seconds = float(memory_seconds)
         self.max_samples = max(3, min(5, int(max_samples)))
         self._tracks: dict[int, _Track] = {}
+        self._current_ids: set[int] = set()
         self._next_id = 1
 
     @staticmethod
     def _same_component(a: ObservedNote, b: ObservedNote) -> bool:
         horizontal_limit = max(a.width, b.width) / 2 + 60
-        return abs(a.y - b.y) <= 20 and abs(a.x - b.x) <= horizontal_limit
+        vertical_delta = abs(a.y - b.y)
+        horizontal_delta = abs(a.x - b.x)
+        if horizontal_delta > horizontal_limit:
+            return False
+        if vertical_delta <= 4:
+            return True
+        # Split left/right fragments of one ring are offset horizontally.
+        # Two genuinely dense same-lane heads are nearly co-centred and must
+        # remain independent even when their vertical gap is only 8-20 px.
+        fragment_offset = max(8.0, min(a.width, b.width) * .12)
+        return vertical_delta <= 10 and horizontal_delta >= fragment_offset
 
     def _cluster(self, notes: list[ObservedNote]) -> list[ObservedNote]:
         remaining = list(notes)
@@ -178,6 +191,7 @@ class MultiNoteTracker:
                 track.track_id,
                 track.samples[-1],
                 track.samples[-2].y if len(track.samples) >= 2 else None,
+                track.samples[-2].x if len(track.samples) >= 2 else None,
                 self._velocity(track.samples),
                 len(track.samples),
                 track.fired,
@@ -186,6 +200,30 @@ class MultiNoteTracker:
                 track.motion_samples,
                 track.downward_motion_frames,
                 track.fired_at,
+                track.last_seen,
+            ))
+        self._current_ids = current_ids
+        return result
+
+    def stale(self) -> list[TrackedNote]:
+        """Return retained tracks that had no detection in the latest frame."""
+        result = []
+        for track_id in sorted(self._tracks.keys() - self._current_ids):
+            track = self._tracks[track_id]
+            result.append(TrackedNote(
+                track.track_id,
+                track.samples[-1],
+                track.samples[-2].y if len(track.samples) >= 2 else None,
+                track.samples[-2].x if len(track.samples) >= 2 else None,
+                self._velocity(track.samples),
+                len(track.samples),
+                track.fired,
+                track.first_y,
+                track.minimum_y,
+                track.motion_samples,
+                track.downward_motion_frames,
+                track.fired_at,
+                track.last_seen,
             ))
         return result
 
@@ -194,6 +232,11 @@ class MultiNoteTracker:
             self._tracks[track_id].fired = True
             self._tracks[track_id].fired_at = now
 
+    def discard(self, track_id: int) -> None:
+        """Remove a proven visual artifact before it can steal a later match."""
+        self._tracks.pop(track_id, None)
+
     def reset(self) -> None:
         self._tracks.clear()
+        self._current_ids.clear()
         self._next_id = 1

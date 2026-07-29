@@ -135,6 +135,16 @@ def test_selection_state_is_written_atomically(tmp_path):
             "life_safety_enabled": True,
             "life_exit_threshold": 200,
             "rehearsal_ignore_life_safety": True,
+            "game_effect_settings_enabled": True,
+            "judgement_assist_effect": True,
+            "tap_effect": 1,
+            "calibration_note_speeds": {
+                "Easy": 2.0,
+                "Normal": 2.0,
+                "Hard": 2.0,
+                "Expert": 5.0,
+                "Special": 5.0,
+            },
         },
     }
     assert not list(tmp_path.glob("*.tmp"))
@@ -152,6 +162,16 @@ def test_runtime_options_default_and_atomic_update_do_not_invalidate_profile(tmp
         "life_safety_enabled": True,
         "life_exit_threshold": 200,
         "rehearsal_ignore_life_safety": True,
+        "game_effect_settings_enabled": True,
+        "judgement_assist_effect": True,
+        "tap_effect": 1,
+        "calibration_note_speeds": {
+            "Easy": 2.0,
+            "Normal": 2.0,
+            "Hard": 2.0,
+            "Expert": 5.0,
+            "Special": 5.0,
+        },
     }
 
     result = handle_request(
@@ -161,12 +181,20 @@ def test_runtime_options_default_and_atomic_update_do_not_invalidate_profile(tmp
                 "life_safety_enabled": False,
                 "life_exit_threshold": 350,
                 "rehearsal_ignore_life_safety": False,
+                "calibration_note_speeds": {
+                    "Easy": 1.5,
+                    "Normal": 2.5,
+                    "Hard": 3.5,
+                    "Expert": 5.0,
+                    "Special": 5.5,
+                },
             },
         },
         root=tmp_path,
     )
     assert result["runtime_options"]["life_exit_threshold"] == 350
     assert result["runtime_options"]["rehearsal_ignore_life_safety"] is False
+    assert result["runtime_options"]["calibration_note_speeds"]["Hard"] == 3.5
     assert store.load(path.name)["accepted"] is True
     assert not list(tmp_path.glob("*.tmp"))
 

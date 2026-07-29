@@ -1,6 +1,7 @@
 /.venv/
 /.local/
 /debug/
+/agent/debug/
 /logs/
 /config.local.json
 /screencap/

@@ -30,7 +30,7 @@ def duplicate_judgements(actions: list[TouchAction], window: float = .12) -> int
     )
 
 
-def post_release_rescues(actions: list[TouchAction], window: float = .4) -> int:
+def post_release_rescues(actions: list[TouchAction], window: float = .65) -> int:
     total = 0
     for index, released in enumerate(actions):
         if released.kind != ActionKind.UP:
@@ -75,6 +75,8 @@ def replay(
                 int(note["width"]),
                 int(note["height"]),
                 float(note["timestamp"]),
+                float(note.get("hold_body_confidence", 1.0)),
+                bool(note.get("hold_tail_flick", False)),
             ) for note in frame["notes"]]
             recorded.extend(TouchAction(
                 ActionKind(action["kind"]),

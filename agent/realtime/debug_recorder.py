@@ -18,8 +18,8 @@ class RealtimeDebugRecorder:
     """Record every analysed frame's notes plus a replay video.
 
     JSONL is written synchronously so the training timeline is lossless. Video
-    encoding is isolated on a worker thread; if the encoder cannot keep up, the
-    summary reports dropped video frames without losing note/action records.
+    is sampled at a bounded frame rate and encoded on a worker thread; debug
+    recording must not compete with the 60 Hz detector for every full frame.
     """
 
     def __init__(self, root: Path, *, video_fps: int = 30) -> None:
@@ -31,7 +31,9 @@ class RealtimeDebugRecorder:
         self._events = (self.output_dir / "events.jsonl").open("w", encoding="utf-8")
         self._frames: queue.Queue[np.ndarray | None] = queue.Queue(maxsize=180)
         self._video_frames = 0
+        self._skipped_video_frames = 0
         self._dropped_video_frames = 0
+        self._next_video_at: float | None = None
         self._trace_frames = 0
         self._error: BaseException | None = None
         self._event_count = 0
@@ -89,17 +91,25 @@ class RealtimeDebugRecorder:
             if (
                 action.reason == "rescue"
                 and action.kind.value in {"tap", "down", "flick"}
-                and 0 <= delay <= 0.5
+                and 0 <= delay <= 0.65
             ):
                 self._write_event(
                     image, timestamp, action.lane,
                     "post-release-rescue", action.reason, delay,
                 )
         self._trace_frames += 1
-        try:
-            self._frames.put_nowait(image.copy())
-        except queue.Full:
-            self._dropped_video_frames += 1
+        if self._next_video_at is None:
+            self._next_video_at = timestamp
+        if timestamp + 1e-9 >= self._next_video_at:
+            try:
+                self._frames.put_nowait(image.copy())
+            except queue.Full:
+                self._dropped_video_frames += 1
+            interval = 1.0 / self.video_fps
+            while self._next_video_at <= timestamp + 1e-9:
+                self._next_video_at += interval
+        else:
+            self._skipped_video_frames += 1
 
     def _write_event(
         self,
@@ -140,7 +150,7 @@ class RealtimeDebugRecorder:
                     writer = cv2.VideoWriter(
                         str(self.output_dir / "playfield.avi"),
                         cv2.VideoWriter_fourcc(*"MJPG"),
-                        self.video_fps,
+                        float(self.video_fps),
                         (width, height),
                     )
                     if not writer.isOpened():
@@ -163,6 +173,7 @@ class RealtimeDebugRecorder:
         (self.output_dir / "summary.json").write_text(json.dumps({
             "trace_frames": self._trace_frames,
             "video_frames": self._video_frames,
+            "skipped_video_frames": self._skipped_video_frames,
             "dropped_video_frames": self._dropped_video_frames,
             "video_fps": self.video_fps,
             "event_screenshots": self._event_count,

@@ -1,29 +1,914 @@
 {
-  "ChallengeLive": {"recognition": "DirectHit", "action": "StartApp", "package": "com.bilibili.star.bili", "next": ["ChallengeRoundGate"]},
-  "ChallengeRoundGate": {"recognition": "DirectHit", "action": "DoNothing", "max_hit": 1, "next": ["ChallengeDebugGate"]},
-  "ChallengeDebugGate": {"recognition": "DirectHit", "action": "Custom", "custom_action": "RealtimeRuntimeOptions", "custom_action_param": {"debug_recording": false}, "next": ["ChallengeProfileCheck"]},
-  "ChallengeComplete": {"recognition": "DirectHit", "action": "DoNothing"},
-  "ChallengeProfileCheck": {"recognition": "DirectHit", "action": "Custom", "custom_action": "RealtimeProfileCheck", "custom_action_param": {"difficulty": "Easy", "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0}, "next": ["ChallengeEnsureHome"]},
-  "ChallengeEnsureHome": {"recognition": "DirectHit", "action": "Custom", "custom_action": "CommonRecover", "custom_action_param": {"home_node": "ChallengeHomeMarker", "click_nodes": ["AutoLiveLoginTap", "AutoLiveLoginNext", "AutoLiveCommonClose", "AutoLiveStorySkipConfirmLarge", "AutoLiveStorySkipConfirm", "AutoLiveStorySkip", "AutoLiveStoryMenu"], "escape_interval_ms": 1500, "escape_timeout_ms": 60000, "restart_limit": 2, "restart_wait_ms": 5000, "startup_grace_ms": 12000, "login_start_node": "AutoLiveLoginScreenMarker", "login_start_target": [640, 635], "escape_after_login_start": true, "package": "com.bilibili.star.bili"}, "next": ["ChallengeHomeMarker"]},
-  "ChallengeHomeMarker": {"recognition": "TemplateMatch", "template": "home_marker.png", "threshold": 0.88, "action": "DoNothing", "next": ["ChallengeHomeLive"], "on_error": ["ChallengeEnsureHome"]},
-  "ChallengeHomeLive": {"recognition": "TemplateMatch", "template": "home_live.png", "threshold": 0.88, "action": "Custom", "custom_action": "ForegroundClick", "target": [1085, 580, 180, 130], "next": ["ChallengeEntry", "ChallengeClose"], "on_error": ["ChallengeEnsureHome"]},
-  "ChallengeClose": {"recognition": "TemplateMatch", "template": "common_close.png", "threshold": 0.90, "action": "Custom", "custom_action": "ForegroundClick", "next": ["ChallengeEntry", "ChallengeClose"], "on_error": ["ChallengeEnsureHome"]},
-  "ChallengeEntry": {"recognition": "TemplateMatch", "template": "challenge_live.png", "threshold": 0.88, "action": "Custom", "custom_action": "ForegroundClick", "target": true, "next": ["ChallengeSongMarker"], "on_error": ["ChallengeEnsureHome"]},
-  "ChallengeSongMarker": {"recognition": "TemplateMatch", "template": "challenge_song_select_marker.png", "threshold": 0.88, "action": "DoNothing", "next": ["ChallengeDifficulty"], "on_error": ["ChallengeEnsureHome"]},
-  "ChallengeDifficulty": {"recognition": "DirectHit", "action": "Custom", "custom_action": "RealtimeDifficultySelect", "custom_action_param": {"difficulty": "Easy", "max_attempts": 3}, "next": ["ChallengePrepare"]},
-  "ChallengePrepare": {"recognition": "TemplateMatch", "template": "live_prepare.png", "threshold": 0.88, "action": "Custom", "custom_action": "ForegroundClick", "target": [1040, 615, 100, 45], "next": ["ChallengePointMarker"], "on_error": ["ChallengeEnsureHome"]},
-  "ChallengePointMarker": {"recognition": "TemplateMatch", "template": "challenge_points_marker.png", "threshold": 0.88, "action": "DoNothing", "next": ["ChallengePointSelect"], "on_error": ["ChallengeEnsureHome"]},
-  "ChallengePointSelect": {"recognition": "DirectHit", "action": "Custom", "custom_action": "ForegroundClick", "target": [875, 212], "post_delay": 500, "next": ["ChallengePointConfirm"]},
-  "ChallengePointConfirm": {"recognition": "DirectHit", "action": "Custom", "custom_action": "ForegroundClick", "target": [770, 620], "post_delay": 1000, "next": ["ChallengeBandMarker"]},
-  "ChallengeBandMarker": {"recognition": "TemplateMatch", "template": "challenge_band_marker.png", "threshold": 0.88, "action": "Custom", "custom_action": "RealtimeFormalPreflight", "next": ["ChallengeStart"], "on_error": ["ChallengePointStillOpen", "ChallengeEnsureHome"]},
-  "ChallengePointStillOpen": {"recognition": "TemplateMatch", "template": "challenge_points_marker.png", "threshold": 0.88, "action": "StopTask"},
-  "ChallengeStart": {"recognition": "TemplateMatch", "template": "live_start.png", "threshold": 0.88, "action": "Custom", "custom_action": "ForegroundClick", "target": true, "next": ["ChallengePlay"], "on_error": ["ChallengeEnsureHome"]},
-  "ChallengePlay": {"recognition": "DirectHit", "action": "Custom", "custom_action": "RealtimeProfilePlay", "custom_action_param": {"difficulty": "Easy", "require_profile": true, "debug_recording": false, "duration_seconds": 300, "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0, "wait_for_completion": true, "completion_missing_frames": 120, "require_completion": true, "save_result_frame": true, "result_back_attempts": 30, "result_back_interval_seconds": 1.5}, "next": ["ChallengeReturnHome"], "on_error": ["ChallengeLifeSafetyGate"]},
-  "ChallengePlayNormal": {"recognition": "DirectHit", "action": "Custom", "custom_action": "RealtimeProfilePlay", "custom_action_param": {"difficulty": "Normal", "require_profile": true, "debug_recording": false, "duration_seconds": 300, "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0, "wait_for_completion": true, "completion_missing_frames": 120, "require_completion": true, "save_result_frame": true, "result_back_attempts": 30, "result_back_interval_seconds": 1.5}, "next": ["ChallengeReturnHome"], "on_error": ["ChallengeLifeSafetyGate"]},
-  "ChallengePlayHard": {"recognition": "DirectHit", "action": "Custom", "custom_action": "RealtimeProfilePlay", "custom_action_param": {"difficulty": "Hard", "require_profile": true, "debug_recording": false, "duration_seconds": 300, "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 2.0, "wait_for_completion": true, "completion_missing_frames": 120, "require_completion": true, "save_result_frame": true, "result_back_attempts": 30, "result_back_interval_seconds": 1.5}, "next": ["ChallengeReturnHome"], "on_error": ["ChallengeLifeSafetyGate"]},
-  "ChallengePlayExpert": {"recognition": "DirectHit", "action": "Custom", "custom_action": "RealtimeProfilePlay", "custom_action_param": {"difficulty": "Expert", "require_profile": true, "debug_recording": false, "duration_seconds": 300, "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 5.0, "wait_for_completion": true, "completion_missing_frames": 120, "require_completion": true, "save_result_frame": true, "result_back_attempts": 30, "result_back_interval_seconds": 1.5}, "next": ["ChallengeReturnHome"], "on_error": ["ChallengeLifeSafetyGate"]},
-  "ChallengePlaySpecial": {"recognition": "DirectHit", "action": "Custom", "custom_action": "RealtimeProfilePlay", "custom_action_param": {"difficulty": "Special", "require_profile": true, "debug_recording": false, "duration_seconds": 300, "dpi": 240, "game_fps": 60, "render_quality": "standard", "note_speed": 5.0, "wait_for_completion": true, "completion_missing_frames": 120, "require_completion": true, "save_result_frame": true, "result_back_attempts": 30, "result_back_interval_seconds": 1.5}, "next": ["ChallengeReturnHome"], "on_error": ["ChallengeLifeSafetyGate"]},
-  "ChallengeLifeSafetyGate": {"recognition": "DirectHit", "action": "Custom", "custom_action": "RealtimeLifeSafetyAbortCheck", "next": ["ChallengeLifeSafetyStop"], "on_error": ["ChallengeReturnHome"]},
-  "ChallengeLifeSafetyStop": {"recognition": "DirectHit", "action": "StopTask"},
-  "ChallengeReturnHome": {"recognition": "DirectHit", "action": "Custom", "custom_action": "CommonRecover", "custom_action_param": {"home_node": "ChallengeHomeMarker", "click_nodes": ["AutoLiveResultConfirm", "AutoLiveRewardStoryConfirm", "AutoLiveStorySkipConfirmLarge", "AutoLiveStorySkipConfirm", "AutoLiveStorySkip", "AutoLiveStoryMenu", "AutoLiveCommonClose"], "escape_interval_ms": 1500, "escape_timeout_ms": 60000, "restart_limit": 0, "package": "com.bilibili.star.bili"}, "next": ["ChallengeRoundGate", "ChallengeComplete"]}
+  "ChallengeLive": {
+    "recognition": "DirectHit",
+    "action": "DoNothing",
+    "next": [
+      "ChallengeProcessConflictGuard"
+    ],
+    "focus": {
+      "Node.Action.Starting": {
+        "content": "正在启动挑战演出任务",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Succeeded": {
+        "content": "挑战演出任务启动检查已开始",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "ChallengeProcessConflictGuard": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "ProcessConflictGuard",
+    "next": [
+      "ChallengeRecover"
+    ],
+    "on_error": [
+      "ChallengeFailure"
+    ],
+    "focus": {
+      "Node.Action.Starting": {
+        "content": "正在检查 ALAS 进程冲突",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Failed": {
+        "content": "❌ 检测到 ALAS 冲突进程，本次任务已安全阻止",
+        "display": [
+          "log",
+          "toast"
+        ]
+      }
+    }
+  },
+  "ChallengeRecover": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "CommonRecover",
+    "custom_action_param": {
+      "home_node": "ChallengeHomeMarker",
+      "click_nodes": [
+        "AutoLiveLoginTap",
+        "AutoLiveLoginNext",
+        "AutoLiveCommonClose",
+        "AutoLiveStorySkipConfirmLarge",
+        "AutoLiveStorySkipConfirm",
+        "AutoLiveStorySkip",
+        "AutoLiveStoryMenu"
+      ],
+      "escape_interval_ms": 1500,
+      "escape_timeout_ms": 60000,
+      "restart_limit": 2,
+      "restart_wait_ms": 5000,
+      "startup_grace_ms": 12000,
+      "login_start_node": "AutoLiveLoginScreenMarker",
+      "login_start_target": [
+        640,
+        635
+      ],
+      "login_marker_priority_attempts": 3,
+      "escape_after_login_start": true,
+      "package": "com.bilibili.star.bili",
+      "login_tap_target": [
+        640,
+        360
+      ]
+    },
+    "next": [
+      "ChallengeRoundGate"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 挑战演出启动或主页恢复失败",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Starting": {
+        "content": "正在检查游戏进程并恢复主页",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Succeeded": {
+        "content": "已识别主页，登录状态正常",
+        "display": [
+          "log"
+        ]
+      }
+    },
+    "on_error": [
+      "ChallengeFailure"
+    ]
+  },
+  "ChallengeRoundGate": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "TaskProgress",
+    "custom_action_param": {
+      "task_name": "ChallengeLive",
+      "label": "挑战演出",
+      "total": 1,
+      "phase": "start"
+    },
+    "max_hit": 1,
+    "next": [
+      "ChallengeDebugGate"
+    ]
+  },
+  "ChallengeDebugGate": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "RealtimeRuntimeOptions",
+    "custom_action_param": {
+      "debug_recording": false
+    },
+    "next": [
+      "ChallengeProfileCheck"
+    ]
+  },
+  "ChallengeComplete": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "TaskOutcome",
+    "custom_action_param": {
+      "task_name": "ChallengeLive",
+      "label": "挑战演出",
+      "status": "success"
+    },
+    "focus": {
+      "Node.Action.Succeeded": {
+        "content": "✅ 挑战演出任务成功",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "ChallengeProfileCheck": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "RealtimeProfileCheck",
+    "custom_action_param": {
+      "difficulty": "Easy",
+      "dpi": 240,
+      "game_fps": 60,
+      "render_quality": "standard",
+      "note_speed": 2.0
+    },
+    "next": [
+      "ChallengeHomeLive"
+    ],
+    "on_error": [
+      "ChallengeFailure"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 实时演奏 Profile 检查失败：当前难度与模拟器环境没有可用的已接受 Profile",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "ChallengeEnsureHome": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "CommonRecover",
+    "custom_action_param": {
+      "home_node": "ChallengeHomeMarker",
+      "click_nodes": [
+        "AutoLiveLoginTap",
+        "AutoLiveLoginNext",
+        "AutoLiveCommonClose",
+        "AutoLiveStorySkipConfirmLarge",
+        "AutoLiveStorySkipConfirm",
+        "AutoLiveStorySkip",
+        "AutoLiveStoryMenu"
+      ],
+      "escape_interval_ms": 1500,
+      "escape_timeout_ms": 60000,
+      "restart_limit": 2,
+      "restart_wait_ms": 5000,
+      "startup_grace_ms": 12000,
+      "login_start_node": "AutoLiveLoginScreenMarker",
+      "login_start_target": [
+        640,
+        635
+      ],
+      "login_marker_priority_attempts": 3,
+      "escape_after_login_start": true,
+      "package": "com.bilibili.star.bili",
+      "login_tap_target": [
+        640,
+        360
+      ]
+    },
+    "next": [
+      "ChallengeHomeLive"
+    ],
+    "on_error": [
+      "ChallengeFailure"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 60 秒内未恢复到主页：可能仍在登录、弹窗未识别或游戏无响应",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "ChallengeHomeMarker": {
+    "recognition": "TemplateMatch",
+    "template": "home_marker.png",
+    "threshold": 0.82,
+    "action": "DoNothing",
+    "next": [
+      "ChallengeHomeLive"
+    ],
+    "on_error": [
+      "ChallengeEnsureHome"
+    ]
+  },
+  "ChallengeHomeLive": {
+    "recognition": "TemplateMatch",
+    "template": "home_live.png",
+    "threshold": 0.82,
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
+    "target": [
+      1085,
+      580,
+      180,
+      130
+    ],
+    "next": [
+      "ChallengeLiveSelectPage",
+      "ChallengeClose"
+    ],
+    "on_error": [
+      "ChallengeEnsureHome"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 点击失败：游戏不在前台、控制器拒绝输入或页面位置已变化",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Starting": {
+        "content": "正在点击主页右下角“演出”",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Succeeded": {
+        "content": "已点击“演出”，正在识别选择演出界面",
+        "display": [
+          "log"
+        ]
+      }
+    },
+    "post_delay": 1000
+  },
+  "ChallengeClose": {
+    "recognition": "TemplateMatch",
+    "template": "common_close.png",
+    "threshold": 0.9,
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
+    "next": [
+      "ChallengeLiveSelectPage",
+      "ChallengeClose"
+    ],
+    "on_error": [
+      "ChallengeEnsureHome"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 点击失败：游戏不在前台、控制器拒绝输入或页面位置已变化",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "ChallengeEntry": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "LiveSelectFind",
+    "custom_action_param": {
+      "expected": "挑战演出",
+      "template_node": "ChallengeEntryTemplate",
+      "roi": [
+        0,
+        100,
+        1280,
+        620
+      ],
+      "click": true,
+      "missing_reason": "当前没有可用的挑战演出活动",
+      "timeout_ms": 10000,
+      "interval_ms": 500
+    },
+    "next": [
+      "ChallengeSongMarker"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 当前没有可用的挑战演出活动",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Starting": {
+        "content": "正在查找“挑战演出”入口",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Succeeded": {
+        "content": "已找到“挑战演出”入口",
+        "display": [
+          "log"
+        ]
+      }
+    },
+    "on_error": [
+      "ChallengeNoEvent"
+    ]
+  },
+  "ChallengeSongMarker": {
+    "recognition": "TemplateMatch",
+    "template": "challenge_song_select_marker.png",
+    "threshold": 0.88,
+    "action": "DoNothing",
+    "next": [
+      "ChallengeDifficulty"
+    ],
+    "on_error": [
+      "ChallengeEnsureHome"
+    ]
+  },
+  "ChallengeDifficulty": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "RealtimeDifficultySelect",
+    "custom_action_param": {
+      "difficulty": "Easy",
+      "max_attempts": 3
+    },
+    "next": [
+      "ChallengePrepare"
+    ],
+    "on_error": [
+      "ChallengeFailure"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 难度选择失败：未能识别或切换到请求的难度",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "ChallengePrepare": {
+    "recognition": "TemplateMatch",
+    "template": "live_prepare.png",
+    "threshold": 0.88,
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
+    "target": [
+      1040,
+      615,
+      100,
+      45
+    ],
+    "next": [
+      "ChallengePointMarker"
+    ],
+    "on_error": [
+      "ChallengeEnsureHome"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 点击失败：游戏不在前台、控制器拒绝输入或页面位置已变化",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "ChallengePointMarker": {
+    "recognition": "TemplateMatch",
+    "template": "challenge_points_marker.png",
+    "threshold": 0.88,
+    "action": "DoNothing",
+    "next": [
+      "ChallengePointSelect"
+    ],
+    "on_error": [
+      "ChallengeEnsureHome"
+    ]
+  },
+  "ChallengePointSelect": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
+    "target": [
+      875,
+      212
+    ],
+    "post_delay": 500,
+    "next": [
+      "ChallengePointConfirm"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 点击失败：游戏不在前台、控制器拒绝输入或页面位置已变化",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "ChallengePointConfirm": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
+    "target": [
+      770,
+      620
+    ],
+    "post_delay": 1000,
+    "next": [
+      "ChallengeBandMarker"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 点击失败：游戏不在前台、控制器拒绝输入或页面位置已变化",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "ChallengeBandMarker": {
+    "recognition": "TemplateMatch",
+    "template": "challenge_band_marker.png",
+    "threshold": 0.88,
+    "action": "Custom",
+    "custom_action": "RealtimeFormalPreflight",
+    "next": [
+      "ChallengeSettingsGate"
+    ],
+    "on_error": [
+      "ChallengePointStillOpen",
+      "ChallengeEnsureHome"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 正式演奏前置检查失败：游戏前台、截图或触控环境不满足要求",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "ChallengeSettingsGate": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "RealtimePerformanceSettingsGate",
+    "custom_action_param": {
+      "difficulty": "Easy",
+      "require_profile": true,
+      "dpi": 240,
+      "game_fps": 60,
+      "render_quality": "standard"
+    },
+    "next": [
+      "ChallengeStart"
+    ],
+    "on_error": [
+      "ChallengeFailure"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 挑战演出开演前流速验证失败：未能读取、修正或复核游戏内实际流速",
+        "display": [
+          "log",
+          "toast"
+        ]
+      }
+    }
+  },
+  "ChallengePointStillOpen": {
+    "recognition": "DirectHit",
+    "template": "challenge_points_marker.png",
+    "threshold": 0.88,
+    "action": "Custom",
+    "custom_action": "TaskOutcome",
+    "custom_action_param": {
+      "task_name": "ChallengeLive",
+      "label": "挑战演出",
+      "status": "failure",
+      "reason": "挑战点数选择未能确认，准备界面仍然打开"
+    },
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 挑战点数选择未能确认，准备界面仍然打开",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "ChallengeStart": {
+    "recognition": "TemplateMatch",
+    "template": "live_start.png",
+    "threshold": 0.88,
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
+    "target": true,
+    "next": [
+      "ChallengePlay"
+    ],
+    "on_error": [
+      "ChallengeEnsureHome"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 点击失败：游戏不在前台、控制器拒绝输入或页面位置已变化",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "ChallengePlay": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "RealtimeProfilePlay",
+    "custom_action_param": {
+      "difficulty": "Easy",
+      "require_profile": true,
+      "settings_gate_required": true,
+      "debug_recording": false,
+      "duration_seconds": 600,
+      "dpi": 240,
+      "game_fps": 60,
+      "render_quality": "standard",
+      "note_speed": 2.0,
+      "wait_for_completion": true,
+      "completion_missing_frames": 120,
+      "require_completion": true,
+      "save_result_frame": true,
+      "result_back_attempts": 30,
+      "result_back_interval_seconds": 1.5
+    },
+    "next": [
+      "ChallengeReturnHome"
+    ],
+    "on_error": [
+      "ChallengeLifeSafetyGate"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "ChallengePlayNormal": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "RealtimeProfilePlay",
+    "custom_action_param": {
+      "difficulty": "Normal",
+      "require_profile": true,
+      "settings_gate_required": true,
+      "debug_recording": false,
+      "duration_seconds": 600,
+      "dpi": 240,
+      "game_fps": 60,
+      "render_quality": "standard",
+      "note_speed": 2.0,
+      "wait_for_completion": true,
+      "completion_missing_frames": 120,
+      "require_completion": true,
+      "save_result_frame": true,
+      "result_back_attempts": 30,
+      "result_back_interval_seconds": 1.5
+    },
+    "next": [
+      "ChallengeReturnHome"
+    ],
+    "on_error": [
+      "ChallengeLifeSafetyGate"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "ChallengePlayHard": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "RealtimeProfilePlay",
+    "custom_action_param": {
+      "difficulty": "Hard",
+      "require_profile": true,
+      "settings_gate_required": true,
+      "debug_recording": false,
+      "duration_seconds": 600,
+      "dpi": 240,
+      "game_fps": 60,
+      "render_quality": "standard",
+      "note_speed": 2.0,
+      "wait_for_completion": true,
+      "completion_missing_frames": 120,
+      "require_completion": true,
+      "save_result_frame": true,
+      "result_back_attempts": 30,
+      "result_back_interval_seconds": 1.5
+    },
+    "next": [
+      "ChallengeReturnHome"
+    ],
+    "on_error": [
+      "ChallengeLifeSafetyGate"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "ChallengePlayExpert": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "RealtimeProfilePlay",
+    "custom_action_param": {
+      "difficulty": "Expert",
+      "require_profile": true,
+      "settings_gate_required": true,
+      "debug_recording": false,
+      "duration_seconds": 600,
+      "dpi": 240,
+      "game_fps": 60,
+      "render_quality": "standard",
+      "note_speed": 5.0,
+      "wait_for_completion": true,
+      "completion_missing_frames": 120,
+      "require_completion": true,
+      "save_result_frame": true,
+      "result_back_attempts": 30,
+      "result_back_interval_seconds": 1.5
+    },
+    "next": [
+      "ChallengeReturnHome"
+    ],
+    "on_error": [
+      "ChallengeLifeSafetyGate"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "ChallengePlaySpecial": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "RealtimeProfilePlay",
+    "custom_action_param": {
+      "difficulty": "Special",
+      "require_profile": true,
+      "settings_gate_required": true,
+      "debug_recording": false,
+      "duration_seconds": 600,
+      "dpi": 240,
+      "game_fps": 60,
+      "render_quality": "standard",
+      "note_speed": 5.0,
+      "wait_for_completion": true,
+      "completion_missing_frames": 120,
+      "require_completion": true,
+      "save_result_frame": true,
+      "result_back_attempts": 30,
+      "result_back_interval_seconds": 1.5
+    },
+    "next": [
+      "ChallengeReturnHome"
+    ],
+    "on_error": [
+      "ChallengeLifeSafetyGate"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "ChallengeLifeSafetyGate": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "RealtimeLifeSafetyAbortCheck",
+    "next": [
+      "ChallengeLifeSafetyStop"
+    ],
+    "on_error": [
+      "ChallengeReturnHome"
+    ]
+  },
+  "ChallengeLifeSafetyStop": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "TaskOutcome",
+    "custom_action_param": {
+      "task_name": "ChallengeLive",
+      "label": "挑战演出",
+      "status": "failure",
+      "reason": "检测到生命值安全中止，已停止本轮挑战"
+    },
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 检测到生命值安全中止，已停止本轮挑战",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "ChallengeReturnHome": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "CommonRecover",
+    "custom_action_param": {
+      "home_node": "ChallengeHomeMarker",
+      "click_nodes": [
+        "AutoLiveResultConfirm",
+        "AutoLiveRewardStoryConfirm",
+        "AutoLiveStorySkipConfirmLarge",
+        "AutoLiveStorySkipConfirm",
+        "AutoLiveStorySkip",
+        "AutoLiveStoryMenu",
+        "AutoLiveCommonClose"
+      ],
+      "escape_interval_ms": 1500,
+      "escape_timeout_ms": 60000,
+      "restart_limit": 0,
+      "package": "com.bilibili.star.bili"
+    },
+    "next": [
+      "ChallengeRoundCompleted"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 60 秒内未恢复到主页：可能仍在登录、弹窗未识别或游戏无响应",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "ChallengeFailure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "TaskOutcome",
+    "custom_action_param": {
+      "task_name": "ChallengeLive",
+      "label": "挑战演出",
+      "status": "failure",
+      "reason": "挑战演出流程未完成：未到达演出结算或主页恢复失败"
+    },
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 挑战演出流程未完成：未到达演出结算或主页恢复失败",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "ChallengeFreeLiveTemplate": {
+    "recognition": "TemplateMatch",
+    "template": "free_live.png",
+    "threshold": 0.88,
+    "action": "DoNothing"
+  },
+  "ChallengeLiveSelectPage": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "LiveSelectFind",
+    "custom_action_param": {
+      "expected": "自由演出",
+      "template_node": "ChallengeFreeLiveTemplate",
+      "roi": [
+        0,
+        100,
+        1280,
+        620
+      ],
+      "click": false,
+      "missing_reason": "无法确认“选择演出”页面",
+      "timeout_ms": 10000,
+      "interval_ms": 500
+    },
+    "next": [
+      "ChallengeEntry"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 无法确认“选择演出”页面",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Starting": {
+        "content": "正在识别选择演出界面（兼容有活动和无活动）",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Succeeded": {
+        "content": "已识别选择演出界面",
+        "display": [
+          "log"
+        ]
+      }
+    },
+    "on_error": [
+      "ChallengeEnsureHome"
+    ]
+  },
+  "ChallengeEntryTemplate": {
+    "recognition": "TemplateMatch",
+    "template": "challenge_live.png",
+    "threshold": 0.88,
+    "action": "DoNothing"
+  },
+  "ChallengeNoEvent": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "TaskOutcome",
+    "custom_action_param": {
+      "task_name": "ChallengeLive",
+      "label": "挑战演出",
+      "status": "failure",
+      "reason": "当前没有可用的挑战演出活动"
+    },
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 当前没有可用的挑战演出活动",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "ChallengeRoundCompleted": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "TaskProgress",
+    "custom_action_param": {
+      "task_name": "ChallengeLive",
+      "label": "挑战演出",
+      "phase": "completed"
+    },
+    "next": [
+      "ChallengeRoundGate",
+      "ChallengeComplete"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 挑战演出进度记录失败",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  }
 }

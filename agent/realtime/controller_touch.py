@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 import math
 import time
 from typing import Protocol
@@ -16,6 +17,13 @@ class _Controller(Protocol):
     def post_touch_down(self, x: int, y: int, contact: int = 0, pressure: int = 1) -> _Job: ...
     def post_touch_move(self, x: int, y: int, contact: int = 0, pressure: int = 1) -> _Job: ...
     def post_touch_up(self, contact: int = 0) -> _Job: ...
+
+
+@dataclass
+class _PendingFlick:
+    lane: int
+    started_at: float
+    next_phase: int = 0
 
 
 class ControllerTouchDispatcher:
@@ -37,6 +45,9 @@ class ControllerTouchDispatcher:
         self.maximum_move_step = max(20, int(maximum_move_step))
         self.active_contacts: set[int] = set()
         self.active_positions: dict[int, int] = {}
+        self._pending_flicks: dict[int, _PendingFlick] = {}
+        self._flick_phases = ((.012, 545), (.024, 490), (.036, 455))
+        self._flick_release_after = .048
 
     def _ensure_running(self) -> None:
         if self.stopping():
@@ -50,6 +61,16 @@ class ControllerTouchDispatcher:
 
     def _down(self, action: TouchAction, contact: int) -> None:
         self._ensure_running()
+        if contact in self.active_contacts:
+            if contact not in self._pending_flicks:
+                raise RuntimeError(f"touch contact {contact} is already active")
+            # A newly starting hold owns its stable lane contact. The older
+            # flick has already remained down for at least one capture cycle;
+            # release it before reusing the contact instead of corrupting both.
+            self.controller.post_touch_up(contact).wait()
+            self.active_contacts.discard(contact)
+            self.active_positions.pop(contact, None)
+            self._pending_flicks.pop(contact, None)
         x = self._x(action)
         self.controller.post_touch_down(
             x, 590, contact, 50
@@ -57,12 +78,69 @@ class ControllerTouchDispatcher:
         self.active_contacts.add(contact)
         self.active_positions[contact] = x
 
+    def advance(self, now: float) -> None:
+        """Advance pending flick gestures without sleeping in the capture loop."""
+        self._ensure_running()
+        for contact, pending in list(self._pending_flicks.items()):
+            elapsed = float(now) - pending.started_at
+            while (
+                pending.next_phase < len(self._flick_phases)
+                and elapsed >= self._flick_phases[pending.next_phase][0]
+            ):
+                _, y = self._flick_phases[pending.next_phase]
+                self.controller.post_touch_move(
+                    self.LANE_CENTERS[pending.lane],
+                    y,
+                    contact,
+                    50,
+                ).wait()
+                pending.next_phase += 1
+            if elapsed < self._flick_release_after:
+                continue
+            self.controller.post_touch_up(contact).wait()
+            self.active_contacts.discard(contact)
+            self.active_positions.pop(contact, None)
+            self._pending_flicks.pop(contact, None)
+
     def dispatch(self, actions: list[TouchAction]) -> None:
         persistent = [action for action in actions if action.kind == ActionKind.DOWN]
         moves = [action for action in actions if action.kind == ActionKind.MOVE]
+        persistent_contacts = {
+            0 if action.contact is None else action.contact
+            for action in persistent
+        }
+        # A hold can end and a new hold can acquire the same stable contact in
+        # one planner frame. Preserve that causal order instead of grouping
+        # every DOWN ahead of every UP, which would try to press an active
+        # MaaFramework contact and abort the song.
+        pre_releases = [
+            action
+            for action in actions
+            if action.kind == ActionKind.UP
+            and (0 if action.contact is None else action.contact)
+            in persistent_contacts
+        ]
+        deferred_releases = [
+            action
+            for action in actions
+            if action.kind == ActionKind.UP and action not in pre_releases
+        ]
         transients = [
             action for action in actions if action.kind in (ActionKind.TAP, ActionKind.FLICK)
         ]
+        # Hold-to-flick conversions keep their held contact: the finger
+        # swipes up via advance() instead of lifting and re-pressing.
+        conversions = [
+            action for action in transients
+            if action.kind == ActionKind.FLICK
+            and action.contact is not None
+            and action.contact in self.active_contacts
+        ]
+        if conversions:
+            conversion_ids = {id(action) for action in conversions}
+            transients = [
+                action for action in transients if id(action) not in conversion_ids
+            ]
         reserved = set(self.active_contacts)
         reserved.update(0 if action.contact is None else action.contact for action in persistent)
         available = [contact for contact in range(10) if contact not in reserved]
@@ -70,6 +148,14 @@ class ControllerTouchDispatcher:
             raise RuntimeError("MaaFramework 可用触点不足")
         transient_contacts = list(zip(transients, available))
         try:
+            for action in pre_releases:
+                self._ensure_running()
+                contact = 0 if action.contact is None else action.contact
+                if contact in self.active_contacts:
+                    self.controller.post_touch_up(contact).wait()
+                    self.active_contacts.discard(contact)
+                    self.active_positions.pop(contact, None)
+                    self._pending_flicks.pop(contact, None)
             for action in persistent:
                 self._down(action, 0 if action.contact is None else action.contact)
             for action, contact in transient_contacts:
@@ -95,36 +181,28 @@ class ControllerTouchDispatcher:
                         interpolated_x, 590, contact, 50
                     ).wait()
                 self.active_positions[contact] = target_x
-            for action in actions:
-                if action.kind != ActionKind.UP:
-                    continue
+            for action in deferred_releases:
                 self._ensure_running()
                 contact = 0 if action.contact is None else action.contact
                 self.controller.post_touch_up(contact).wait()
                 self.active_contacts.discard(contact)
                 self.active_positions.pop(contact, None)
-            flick_contacts = [
-                (action, contact) for action, contact in transient_contacts
-                if action.kind == ActionKind.FLICK
-            ]
-            # A zero-duration Down/Move/Up sequence can collapse into a tap at
-            # the game's input sampling boundary. Move all members of a flick
-            # chord together over three short phases so at least two game
-            # frames observe a genuine upward gesture.
-            for y in (545, 490, 455):
-                if not flick_contacts:
-                    break
-                self.sleeper(.012)
-                for action, contact in flick_contacts:
-                    self._ensure_running()
-                    self.controller.post_touch_move(
-                        self.LANE_CENTERS[action.lane], y, contact, 50
-                    ).wait()
-            for _, contact in transient_contacts:
+            for action, contact in transient_contacts:
+                if action.kind == ActionKind.FLICK:
+                    self._pending_flicks[contact] = _PendingFlick(
+                        action.lane,
+                        float(action.timestamp),
+                    )
+                    continue
                 self._ensure_running()
                 self.controller.post_touch_up(contact).wait()
                 self.active_contacts.discard(contact)
                 self.active_positions.pop(contact, None)
+            for action in conversions:
+                self._pending_flicks[action.contact] = _PendingFlick(
+                    action.lane,
+                    float(action.timestamp),
+                )
         except BaseException:
             self.reset()
             raise
@@ -137,6 +215,7 @@ class ControllerTouchDispatcher:
                 pass
         self.active_contacts.clear()
         self.active_positions.clear()
+        self._pending_flicks.clear()
 
     def close(self) -> None:
         self.reset()
