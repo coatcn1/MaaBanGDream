@@ -11,6 +11,7 @@ from agent.realtime import profile_play_action
 from agent.realtime.profile_play_action import (
     RealtimeLifeSafetyAbortCheck,
     RealtimeProfilePlay,
+    _result_report_payload,
     _write_calibration_report,
     pause_overlay_changed,
     resolve_life_policy,
@@ -198,6 +199,37 @@ def test_calibration_report_contains_replay_diagnostics(tmp_path):
     assert payload["realtime_feedback_ignored_reasons"] == {"active_hold": 4}
     assert payload["filtered_adjacent_artifacts"] == 7
     assert payload["rejected_hold_candidates"] == 2
+
+
+def test_result_report_contains_runtime_acceptance_metrics():
+    stats = EngineStats(
+        120,
+        42,
+        False,
+        completed=True,
+        action_counts={"tap": 31, "flick": 4, "down": 7},
+        frame_interval_p50_ms=16.4,
+        frame_interval_p95_ms=18.2,
+        frame_interval_max_ms=24.0,
+        effective_fps=59.1,
+        terminal_reason="completed",
+        initial_timing_offset_ms=-11,
+        final_timing_offset_ms=-13,
+    )
+
+    payload = _result_report_payload(
+        LiveResult(100, 10, 2, 1, 2, 3, 4),
+        stats,
+        timing_offset_ms=-11,
+        suggested_timing_offset_ms=-14,
+    )
+
+    assert payload["miss"] == 2
+    assert payload["processed_frames"] == 120
+    assert payload["action_counts"] == {"tap": 31, "flick": 4, "down": 7}
+    assert payload["frame_interval_p95_ms"] == pytest.approx(18.2)
+    assert payload["effective_fps"] == pytest.approx(59.1)
+    assert payload["terminal_reason"] == "completed"
 
 
 def test_formal_timeout_records_a_specific_failure_reason(monkeypatch):

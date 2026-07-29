@@ -9,6 +9,7 @@ import common_recover  # noqa: F401 - registration happens at import time
 import live_select  # noqa: F401 - registration happens at import time
 import task_reporting  # noqa: F401 - registration happens at import time
 import foreground_click  # noqa: F401 - registration happens at import time
+import process_conflict_guard  # noqa: F401 - registration happens at import time
 import realtime.frame_observer  # noqa: F401 - registration happens at import time
 import realtime.note_observer  # noqa: F401 - registration happens at import time
 import realtime.profile_action  # noqa: F401 - registration happens at import time
@@ -19,6 +20,7 @@ import realtime.calibration_action  # noqa: F401 - registration happens at impor
 import realtime.difficulty_action  # noqa: F401 - registration happens at import time
 import realtime.runtime_options  # noqa: F401 - registration happens at import time
 import realtime.performance_settings_action  # noqa: F401 - registration happens at import time
+import realtime.game_effect_settings_action  # noqa: F401 - registration happens at import time
 
 
 def main() -> None:

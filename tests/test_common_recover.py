@@ -313,6 +313,34 @@ def test_login_mode_clicks_start_before_using_back(monkeypatch):
     assert context.tasker.controller.keys == [4]
 
 
+def test_login_menu_marker_gets_multiple_attempts_before_tap_to_start(
+    monkeypatch,
+):
+    context = Context({
+        "HomeMarker": [False, False, False, True],
+        "LoginScreenMarker": [False, False, True],
+        "LoginTap": [True, True],
+    })
+    ticks = iter(value / 1000 for value in range(1000))
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(common_recover.time, "sleep", lambda _seconds: None)
+
+    assert common_recover.CommonRecover().run(
+        context,
+        argv(
+            escape_interval_ms=0,
+            escape_timeout_ms=100,
+            click_nodes=["LoginTap"],
+            login_start_node="LoginScreenMarker",
+            login_start_target=[640, 635],
+            login_marker_priority_attempts=3,
+            escape_after_login_start=True,
+        ),
+    )
+    assert context.tasker.controller.clicks == [(640, 635)]
+    assert context.tasker.controller.keys == []
+
+
 def test_login_mode_uses_safe_tap_anywhere_fallback_once(monkeypatch):
     context = Context({
         "HomeMarker": [False, False, True],

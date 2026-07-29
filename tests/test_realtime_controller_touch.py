@@ -101,6 +101,34 @@ def test_held_contact_converts_into_flick_swipe_without_repress():
     assert ("up", 3) in controller.calls
 
 
+def test_same_frame_hold_release_precedes_contact_reuse():
+    controller = Controller()
+    touch = ControllerTouchDispatcher(controller, lambda: False)
+    touch.dispatch([
+        TouchAction(ActionKind.DOWN, 3, 1.0, contact=6, target_x=640),
+    ])
+
+    touch.dispatch([
+        TouchAction(ActionKind.UP, 3, 1.1, contact=6, reason="new-hold-head"),
+        TouchAction(
+            ActionKind.DOWN,
+            6,
+            1.1,
+            contact=6,
+            reason="rescue",
+            target_x=1060,
+        ),
+    ])
+
+    assert controller.calls == [
+        ("down", 6, 640, 590, 50),
+        ("up", 6),
+        ("down", 6, 1060, 590, 50),
+    ]
+    assert touch.active_contacts == {6}
+    assert touch.active_positions == {6: 1060}
+
+
 def test_stop_during_dispatch_releases_every_active_contact():
     controller = Controller()
     checks = 0

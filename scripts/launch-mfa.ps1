@@ -97,7 +97,16 @@ if (Test-Path -LiteralPath $instanceConfigDirectory) {
 # failure. Deploy the pinned one-line upstream-compatible status fix once.
 & $mfaStopStatusPatch -MfaRoot $MfaRoot
 
-Start-Process -FilePath $mfaExe -WorkingDirectory $MfaRoot
+# Every Agent child launched by this MFA process inherits the same session id.
+# The ALAS conflict guard uses it to allow cleanup only after a first warning
+# in this exact MFA session; restarting MFA invalidates that authorization.
+$env:MAABANGDREAM_MFA_SESSION_ID = [Guid]::NewGuid().ToString('N')
+try {
+    Start-Process -FilePath $mfaExe -WorkingDirectory $MfaRoot
+}
+finally {
+    Remove-Item Env:MAABANGDREAM_MFA_SESSION_ID -ErrorAction SilentlyContinue
+}
 
 Write-Host "MFAAvalonia started with MaaBanGDream $($interface.version)"
 Write-Host "Project: $projectRoot"

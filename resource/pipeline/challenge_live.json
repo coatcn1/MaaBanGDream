@@ -1,6 +1,53 @@
 {
   "ChallengeLive": {
     "recognition": "DirectHit",
+    "action": "DoNothing",
+    "next": [
+      "ChallengeProcessConflictGuard"
+    ],
+    "focus": {
+      "Node.Action.Starting": {
+        "content": "正在启动挑战演出任务",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Succeeded": {
+        "content": "挑战演出任务启动检查已开始",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "ChallengeProcessConflictGuard": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "ProcessConflictGuard",
+    "next": [
+      "ChallengeRecover"
+    ],
+    "on_error": [
+      "ChallengeFailure"
+    ],
+    "focus": {
+      "Node.Action.Starting": {
+        "content": "正在检查 ALAS 进程冲突",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Failed": {
+        "content": "❌ 检测到 ALAS 冲突进程，本次任务已安全阻止",
+        "display": [
+          "log",
+          "toast"
+        ]
+      }
+    }
+  },
+  "ChallengeRecover": {
+    "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "CommonRecover",
     "custom_action_param": {
@@ -24,6 +71,7 @@
         640,
         635
       ],
+      "login_marker_priority_attempts": 3,
       "escape_after_login_start": true,
       "package": "com.bilibili.star.bili",
       "login_tap_target": [
@@ -153,6 +201,7 @@
         640,
         635
       ],
+      "login_marker_priority_attempts": 3,
       "escape_after_login_start": true,
       "package": "com.bilibili.star.bili",
       "login_tap_target": [
@@ -190,7 +239,7 @@
   "ChallengeHomeLive": {
     "recognition": "TemplateMatch",
     "template": "home_live.png",
-    "threshold": 0.88,
+    "threshold": 0.82,
     "action": "Custom",
     "custom_action": "ForegroundClick",
     "target": [

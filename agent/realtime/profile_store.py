@@ -71,6 +71,9 @@ class RealtimeProfileStore:
         "life_safety_enabled": True,
         "life_exit_threshold": 200,
         "rehearsal_ignore_life_safety": True,
+        "game_effect_settings_enabled": True,
+        "judgement_assist_effect": True,
+        "tap_effect": 1,
         "calibration_note_speeds": {
             "Easy": 2.0,
             "Normal": 2.0,
@@ -173,6 +176,21 @@ class RealtimeProfileStore:
         rehearsal_ignore = options.get("rehearsal_ignore_life_safety", True)
         if not isinstance(rehearsal_ignore, bool):
             raise ValueError("rehearsal_ignore_life_safety 必须是布尔值")
+        effect_settings_enabled = options.get("game_effect_settings_enabled", True)
+        if not isinstance(effect_settings_enabled, bool):
+            raise ValueError("game_effect_settings_enabled 必须是布尔值")
+        judgement_assist = options.get("judgement_assist_effect", True)
+        if not isinstance(judgement_assist, bool):
+            raise ValueError("judgement_assist_effect 必须是布尔值")
+        tap_effect_raw = options.get("tap_effect", 1)
+        if isinstance(tap_effect_raw, bool):
+            raise ValueError("tap_effect 必须是 1..5 的整数")
+        try:
+            tap_effect = int(tap_effect_raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("tap_effect 必须是 1..5 的整数") from exc
+        if tap_effect_raw != tap_effect or not 1 <= tap_effect <= 5:
+            raise ValueError("tap_effect 必须是 1..5 的整数")
         try:
             threshold = int(options.get("life_exit_threshold", 200))
         except (TypeError, ValueError) as exc:
@@ -202,6 +220,9 @@ class RealtimeProfileStore:
             "life_safety_enabled": enabled,
             "life_exit_threshold": threshold,
             "rehearsal_ignore_life_safety": rehearsal_ignore,
+            "game_effect_settings_enabled": effect_settings_enabled,
+            "judgement_assist_effect": judgement_assist,
+            "tap_effect": tap_effect,
             "calibration_note_speeds": speeds,
         }
 

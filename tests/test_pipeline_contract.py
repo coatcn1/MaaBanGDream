@@ -23,7 +23,7 @@ def test_all_pipeline_clicks_use_the_foreground_guard():
 def test_interface_references_existing_entry_and_resource():
     interface = load(ROOT / "interface.json")
     assert interface["interface_version"] == 2
-    assert interface["version"] == "0.7.0"
+    assert interface["version"] == "0.8.0"
     assert [task["name"] for task in interface["task"]] == [
         "AutoLive", "RealtimeLive", "RealtimeCalibration", "ChallengeLive"
     ]
@@ -48,6 +48,23 @@ def test_minimal_navigation_contract():
     assert "StartGame" not in nodes["MinimalNavigation"]["next"]
     assert nodes["BackToHome"]["custom_action"] == "CommonRecover"
     assert nodes["FreeLive"]["on_error"] == ["CommonRecover"]
+
+
+def test_all_home_live_click_markers_use_the_validated_threshold():
+    pipeline_dir = ROOT / "resource" / "pipeline"
+    for path in (pipeline_dir / name for name in (
+        "minimal_navigation.json",
+        "auto_live.json",
+        "realtime_multi_live.json",
+        "challenge_live.json",
+    )):
+        nodes = json.loads(path.read_text(encoding="utf-8"))
+        markers = [
+            node for node in nodes.values()
+            if node.get("template") == "home_live.png"
+        ]
+        assert markers, path.name
+        assert all(node.get("threshold") == .82 for node in markers), path.name
 
 
 def test_templates_exist_and_are_lossless_png():
@@ -153,7 +170,8 @@ def test_auto_live_safety_and_timeout_contract():
 
 def test_auto_live_entry_recovers_to_home_before_navigation():
     nodes = load(ROOT / "resource/pipeline/auto_live.json")
-    assert nodes["AutoLive"]["next"] == ["AutoLiveRoundGate"]
+    assert nodes["AutoLive"]["next"] == ["AutoLiveProcessConflictGuard"]
+    assert nodes["AutoLiveRecover"]["next"] == ["AutoLiveRoundGate"]
     assert nodes["AutoLiveRoundGate"]["next"] == ["AutoLiveHomeLive"]
     recover = nodes["AutoLiveEnsureHome"]
     assert recover["custom_action"] == "CommonRecover"
@@ -180,6 +198,7 @@ def test_cold_login_uses_stable_menu_marker_before_back():
         ]
         assert params["login_start_node"] == "AutoLiveLoginScreenMarker"
         assert params["login_start_target"] == [640, 635]
+        assert params["login_marker_priority_attempts"] == 3
         assert params["login_tap_target"] == [640, 360]
         assert params["escape_after_login_start"] is True
 
@@ -308,7 +327,18 @@ def test_realtime_multi_live_contract_and_options():
         "RealtimeMode", "RealtimeLiveSongMode", "RealtimeLiveDifficulty",
         "RealtimeLiveCount", "RealtimeLiveDebug",
     ]
-    assert nodes["RealtimeMultiLive"]["next"] == ["RealtimeLiveRoundGate"]
+    assert nodes["RealtimeMultiLive"]["next"] == [
+        "RealtimeLiveProcessConflictGuard"
+    ]
+    assert nodes["RealtimeLiveRecover"]["next"] == [
+        "RealtimeLiveEffectSettingsGate"
+    ]
+    assert nodes["RealtimeLiveEffectSettingsGate"]["custom_action"] == (
+        "RealtimeGameEffectSettingsGate"
+    )
+    assert nodes["RealtimeLiveEffectSettingsGate"]["next"] == [
+        "RealtimeLiveRoundGate"
+    ]
     assert nodes["RealtimeLiveRoundGate"]["max_hit"] == 1
     assert nodes["RealtimeLiveReturnHome"]["next"] == ["RealtimeLiveRoundCompleted"]
     assert nodes["RealtimeLiveRoundCompleted"]["next"] == [
@@ -399,16 +429,50 @@ def test_realtime_multi_live_contract_and_options():
 
 def test_task_entries_bootstrap_before_round_execution():
     entries = (
-        ("auto_live.json", "AutoLive", "AutoLiveRoundGate"),
-        ("realtime_multi_live.json", "RealtimeMultiLive", "RealtimeLiveRoundGate"),
-        ("challenge_live.json", "ChallengeLive", "ChallengeRoundGate"),
+        (
+            "auto_live.json",
+            "AutoLive",
+            "AutoLiveProcessConflictGuard",
+            "AutoLiveRecover",
+            "AutoLiveRoundGate",
+        ),
+        (
+            "realtime_multi_live.json",
+            "RealtimeMultiLive",
+            "RealtimeLiveProcessConflictGuard",
+            "RealtimeLiveRecover",
+            "RealtimeLiveEffectSettingsGate",
+        ),
+        (
+            "realtime_calibration.json",
+            "RealtimeCalibration",
+            "RealtimeCalibrationProcessConflictGuard",
+            None,
+            "CalibrationDifficultySetting",
+        ),
+        (
+            "challenge_live.json",
+            "ChallengeLive",
+            "ChallengeProcessConflictGuard",
+            "ChallengeRecover",
+            "ChallengeRoundGate",
+        ),
     )
-    for filename, entry_name, gate_name in entries:
-        node = load(ROOT / "resource/pipeline" / filename)[entry_name]
-        assert node["custom_action"] == "CommonRecover"
-        assert node["custom_action_param"]["escape_timeout_ms"] == 60000
-        assert node["custom_action_param"]["restart_limit"] == 2
-        assert node["next"] == [gate_name]
+    for filename, entry_name, guard_name, recover_name, gate_name in entries:
+        nodes = load(ROOT / "resource/pipeline" / filename)
+        entry = nodes[entry_name]
+        assert entry["next"] == [guard_name]
+        guard = nodes[guard_name]
+        assert guard["custom_action"] == "ProcessConflictGuard"
+        expected_next = recover_name or gate_name
+        assert guard["next"] == [expected_next]
+        assert guard["on_error"]
+        if recover_name:
+            recover = nodes[recover_name]
+            assert recover["custom_action"] == "CommonRecover"
+            assert recover["custom_action_param"]["escape_timeout_ms"] == 60000
+            assert recover["custom_action_param"]["restart_limit"] == 2
+            assert recover["next"] == [gate_name]
 
 
 def test_formal_realtime_song_timeout_allows_long_music():

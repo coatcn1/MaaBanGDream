@@ -3,8 +3,34 @@
     "recognition": "DirectHit",
     "action": "DoNothing",
     "next": [
-      "CalibrationDifficultySetting"
+      "RealtimeCalibrationProcessConflictGuard"
     ]
+  },
+  "RealtimeCalibrationProcessConflictGuard": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "ProcessConflictGuard",
+    "next": [
+      "CalibrationDifficultySetting"
+    ],
+    "on_error": [
+      "RealtimeCalibrationFailure"
+    ],
+    "focus": {
+      "Node.Action.Starting": {
+        "content": "正在检查 ALAS 进程冲突",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Failed": {
+        "content": "❌ 检测到 ALAS 冲突进程，本次任务已安全阻止",
+        "display": [
+          "log",
+          "toast"
+        ]
+      }
+    }
   },
   "CalibrationDifficultySetting": {
     "recognition": "DirectHit",
@@ -79,6 +105,7 @@
         640,
         635
       ],
+      "login_marker_priority_attempts": 3,
       "escape_after_login_start": true,
       "package": "com.bilibili.star.bili"
     },

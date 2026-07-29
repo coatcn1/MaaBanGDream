@@ -2,7 +2,7 @@
 
 基于 [MaaFramework](https://github.com/MaaAssistantArknights/MaaFramework) 的《BanG Dream! 少女乐团派对！》自动化项目。
 
-当前版本 `v0.7.0` · [GitHub](https://github.com/coatcn1/MaaBanGDream)
+当前版本 `v0.8.0` · [GitHub](https://github.com/coatcn1/MaaBanGDream)
 
 ## 功能
 

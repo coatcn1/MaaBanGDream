@@ -63,6 +63,173 @@ def test_reclassified_crossing_cannot_retap_same_lane_within_retrigger_window():
     assert rebuilt == []
 
 
+def test_trusted_parallel_fragment_cannot_retap_same_physical_note():
+    planner = RealtimePlanner(
+        judgement_y=565,
+        timing_offset_ms=0,
+        retrigger_seconds=.12,
+    )
+    for timestamp, upper_y, lower_y in (
+        (1.00, 480, 500),
+        (1.02, 510, 530),
+        (1.04, 540, 570),
+    ):
+        actions = planner.update([
+            ObservedNote(
+                NoteKind.TAP, 5, 920, upper_y, 90, 14, timestamp
+            ),
+            ObservedNote(
+                NoteKind.TAP, 5, 850, lower_y, 120, 30, timestamp
+            ),
+        ], now=timestamp)
+    assert [(action.kind, action.lane) for action in actions] == [
+        (ActionKind.TAP, 5)
+    ]
+
+    rebuilt = planner.update([
+        ObservedNote(NoteKind.TAP, 5, 920, 570, 90, 14, 1.08)
+    ], now=1.08)
+
+    assert rebuilt == []
+
+
+def test_tap_ring_cannot_fire_after_its_flick_was_already_dispatched():
+    planner = RealtimePlanner(
+        judgement_y=565,
+        timing_offset_ms=0,
+        retrigger_seconds=.12,
+        rescue_first_visible=True,
+    )
+    planner.update([
+        ObservedNote(NoteKind.FLICK, 1, 360, 480, 58, 22, 1.00)
+    ], now=1.00)
+    flick = planner.update([
+        ObservedNote(NoteKind.FLICK, 1, 360, 500, 58, 22, 1.04),
+        ObservedNote(NoteKind.TAP, 1, 400, 565, 82, 6, 1.04),
+    ], now=1.04)
+    ring = planner.update([
+        ObservedNote(NoteKind.TAP, 1, 400, 575, 82, 6, 1.08)
+    ], now=1.08)
+
+    assert [(action.kind, action.lane) for action in flick] == [
+        (ActionKind.FLICK, 1)
+    ]
+    assert ring == []
+
+
+def test_stale_flick_fragment_cannot_shadow_a_later_tap_crossing():
+    planner = RealtimePlanner(
+        judgement_y=565,
+        timing_offset_ms=0,
+        rescue_first_visible=True,
+    )
+    planner.update([
+        ObservedNote(NoteKind.TAP, 2, 490, 480, 78, 16, 1.00)
+    ], now=1.00)
+    planner.update([
+        ObservedNote(NoteKind.TAP, 2, 490, 530, 78, 16, 1.03),
+        ObservedNote(NoteKind.FLICK, 2, 490, 490, 24, 10, 1.03),
+    ], now=1.03)
+    planner.update([
+        ObservedNote(NoteKind.TAP, 2, 490, 545, 78, 16, 1.06)
+    ], now=1.06)
+
+    crossing = planner.update([
+        ObservedNote(NoteKind.TAP, 2, 490, 566, 78, 16, 1.09)
+    ], now=1.09)
+
+    assert [(action.kind, action.lane) for action in crossing] == [
+        (ActionKind.TAP, 2)
+    ]
+
+
+def test_concentric_late_fragment_cannot_retap_a_tracked_skill_head():
+    planner = RealtimePlanner(
+        judgement_y=565,
+        timing_offset_ms=0,
+        retrigger_seconds=.12,
+    )
+    for timestamp, outer_y in (
+        (1.00, 480),
+        (1.04, 530),
+        (1.08, 565),
+    ):
+        first = planner.update([
+            ObservedNote(
+                NoteKind.SKILL, 5, 930, outer_y, 92, 36, timestamp
+            ),
+        ], now=timestamp)
+    assert [(action.kind, action.lane) for action in first] == [
+        (ActionKind.TAP, 5)
+    ]
+
+    late_fragment = planner.update([
+        ObservedNote(NoteKind.SKILL, 5, 929, 575, 86, 8, 1.12)
+    ], now=1.12)
+
+    assert late_fragment == []
+
+
+def test_tracker_swap_at_line_cannot_preempt_the_replacement_head():
+    planner = RealtimePlanner(
+        judgement_y=565,
+        timing_offset_ms=0,
+    )
+    planner.update([
+        ObservedNote(NoteKind.TAP, 2, 494, 220, 64, 14, 1.00)
+    ], now=1.00)
+    planner.update([
+        ObservedNote(NoteKind.TAP, 2, 494, 350, 64, 14, 1.04)
+    ], now=1.04)
+    planner.update([
+        ObservedNote(NoteKind.TAP, 2, 494, 480, 64, 14, 1.08),
+        ObservedNote(NoteKind.TAP, 2, 507, 465, 82, 18, 1.08),
+    ], now=1.08)
+
+    # Segmentation assigns the old track to a line-glow component 94 px
+    # lower, while the replacement physical head continues near its previous
+    # position. The jumped track must not create an early TAP.
+    protected = planner.update([
+        ObservedNote(NoteKind.TAP, 2, 494, 574, 64, 14, 1.12),
+        ObservedNote(NoteKind.TAP, 2, 507, 479, 82, 18, 1.12),
+    ], now=1.12)
+    continued = planner.update([
+        ObservedNote(NoteKind.TAP, 2, 500, 530, 82, 18, 1.20)
+    ], now=1.20)
+    real = planner.update([
+        ObservedNote(NoteKind.TAP, 2, 483, 562, 82, 18, 1.28)
+    ], now=1.28)
+
+    assert protected == []
+    assert [
+        (action.kind, action.lane) for action in continued + real
+    ] == [
+        (ActionKind.TAP, 2)
+    ]
+
+
+def test_kind_change_at_line_rescues_a_tracked_crossing():
+    planner = RealtimePlanner(
+        judgement_y=565,
+        timing_offset_ms=0,
+        rescue_first_visible=True,
+    )
+    planner.update([
+        ObservedNote(NoteKind.TAP, 4, 790, 520, 70, 16, 1.00)
+    ], now=1.00)
+    planner.update([
+        ObservedNote(NoteKind.TAP, 4, 790, 540, 72, 16, 1.03)
+    ], now=1.03)
+
+    rescued = planner.update([
+        ObservedNote(NoteKind.FLICK, 4, 790, 578, 58, 4, 1.06)
+    ], now=1.06)
+
+    assert [(action.kind, action.lane, action.reason) for action in rescued] == [
+        (ActionKind.FLICK, 4, "reclassified-crossing")
+    ]
+
+
 def test_planner_keeps_a_hold_pressed_through_short_detection_gaps():
     planner = RealtimePlanner(judgement_y=620, timing_offset_ms=0, hold_grace_seconds=.35)
 
@@ -72,6 +239,112 @@ def test_planner_keeps_a_hold_pressed_through_short_detection_gaps():
 
     assert [action.kind for action in down] == [ActionKind.DOWN]
     assert gap == []
+
+
+def test_detached_slide_head_uses_connected_body_as_hold_evidence():
+    planner = RealtimePlanner(
+        judgement_y=565,
+        timing_offset_ms=0,
+        rescue_first_visible=True,
+        enable_slide=True,
+    )
+
+    actions = planner.update([
+        # Wide diagonal body: its centroid has already moved into lane 1.
+        ObservedNote(
+            NoteKind.HOLD, 1, 371, 453, 558, 176, 1.00,
+            hold_body_confidence=1.0,
+        ),
+        # Detached playable head at the line is still in lane 0.
+        ObservedNote(
+            NoteKind.HOLD, 0, 242, 562, 124, 18, 1.00,
+            hold_body_confidence=0.0,
+        ),
+    ], now=1.00)
+
+    assert [
+        (action.kind, action.lane, action.reason) for action in actions
+    ] == [(ActionKind.DOWN, 0, "rescue")]
+
+    continuation = planner.update([
+        ObservedNote(
+            NoteKind.HOLD, 1, 390, 475, 520, 170, 1.04,
+            hold_body_confidence=1.0,
+        ),
+        ObservedNote(
+            NoteKind.HOLD, 0, 245, 570, 120, 18, 1.04,
+            hold_body_confidence=0.0,
+        ),
+    ], now=1.04)
+
+    assert not [
+        action for action in continuation if action.kind == ActionKind.DOWN
+    ]
+
+
+def test_negative_profile_offset_cannot_delay_a_hold_below_the_line():
+    planner = RealtimePlanner(
+        judgement_y=565,
+        timing_offset_ms=-11,
+        rescue_first_visible=True,
+    )
+    planner.update([
+        ObservedNote(
+            NoteKind.HOLD, 1, 390, 414, 212, 178, 1.00,
+            hold_body_confidence=1.0,
+        ),
+    ], now=1.00)
+
+    actions = planner.update([
+        ObservedNote(
+            NoteKind.HOLD, 1, 383, 470, 220, 186, 1.04,
+            hold_body_confidence=1.0,
+        ),
+    ], now=1.04)
+
+    assert [(action.kind, action.lane) for action in actions] == [
+        (ActionKind.DOWN, 1)
+    ]
+
+
+def test_new_confirmed_head_restarts_a_stale_cross_lane_contact():
+    planner = RealtimePlanner(
+        judgement_y=565,
+        timing_offset_ms=0,
+        rescue_first_visible=True,
+        enable_slide=True,
+    )
+    planner.update([
+        ObservedNote(
+            NoteKind.HOLD, 6, 1030, 390, 220, 220, 1.00,
+            hold_body_confidence=1.0,
+        )
+    ], now=1.00)
+    started = planner.update([
+        ObservedNote(
+            NoteKind.HOLD, 6, 1050, 470, 220, 190, 1.04,
+            hold_body_confidence=1.0,
+        )
+    ], now=1.04)
+    assert [action.kind for action in started] == [ActionKind.DOWN]
+
+    planner.update([
+        ObservedNote(
+            NoteKind.HOLD, 4, 730, 520, 80, 60, 1.30,
+            hold_body_confidence=1.0,
+        )
+    ], now=1.30)
+    restarted = planner.update([
+        ObservedNote(
+            NoteKind.HOLD, 6, 1060, 470, 240, 190, 1.70,
+            hold_body_confidence=1.0,
+        )
+    ], now=1.70)
+
+    assert [action.kind for action in restarted] == [
+        ActionKind.UP,
+        ActionKind.DOWN,
+    ]
 
 
 def test_hold_start_right_after_a_hit_on_the_same_lane_is_an_effect():
@@ -392,6 +665,52 @@ def test_tap_fragment_shadowed_by_same_lane_flick_never_judges_first():
     ]
 
 
+def test_falling_flick_promotes_its_separated_ring_fragment():
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+
+    planner.update([
+        ObservedNote(NoteKind.FLICK, 1, 365, 481, 54, 22, 1.00),
+    ], now=1.00)
+    planner.update([
+        ObservedNote(NoteKind.FLICK, 1, 365, 488, 54, 22, 1.02),
+    ], now=1.02)
+    actions = planner.update([
+        # Live trace frame 3530: the chevron is about 75 px above the
+        # playable ring. The old fixed 60 px gate let the ring fire as TAP.
+        ObservedNote(NoteKind.FLICK, 1, 365, 494.7, 56, 22, 1.04),
+        ObservedNote(NoteKind.TAP, 1, 357.7, 569.9, 92, 20, 1.04),
+    ], now=1.04)
+
+    assert [(action.kind, action.lane, action.reason) for action in actions] == [
+        (ActionKind.FLICK, 1, "rescue")
+    ]
+
+
+def test_close_same_lane_tap_is_not_absorbed_by_a_flick():
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+
+    planner.update([
+        ObservedNote(NoteKind.FLICK, 2, 490, 500, 54, 22, 1.00),
+        ObservedNote(NoteKind.TAP, 2, 490, 520, 60, 18, 1.00),
+    ], now=1.00)
+    planner.update([
+        ObservedNote(NoteKind.FLICK, 2, 490, 525, 60, 22, 1.02),
+        ObservedNote(NoteKind.TAP, 2, 490, 545, 70, 18, 1.02),
+    ], now=1.02)
+    tap = planner.update([
+        ObservedNote(NoteKind.FLICK, 2, 490, 545, 70, 22, 1.04),
+        ObservedNote(NoteKind.TAP, 2, 490, 565, 80, 20, 1.04),
+    ], now=1.04)
+
+    assert [(action.kind, action.lane) for action in tap] == [
+        (ActionKind.TAP, 2)
+    ]
+
+
 def test_first_visible_notes_are_rescued_once_at_the_line():
     planner = RealtimePlanner(
         judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
@@ -434,7 +753,172 @@ def test_tracked_note_crossing_below_the_line_still_fires():
     crossed = planner.update([_note(NoteKind.TAP, 2, 575, 1.05)], now=1.05)
 
     assert [(action.kind, action.reason) for action in crossed] == [
-        (ActionKind.TAP, "rescue")
+        (ActionKind.TAP, "crossing")
+    ]
+
+
+def test_tracked_note_keeps_dispatch_lead_when_profile_offset_is_negative():
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=-20, rescue_first_visible=True
+    )
+
+    planner.update([_note(NoteKind.TAP, 2, 540, 1.00)], now=1.00)
+    before = planner.update(
+        [_note(NoteKind.TAP, 2, 561, 1.02)], now=1.02
+    )
+    due = planner.update(
+        [_note(NoteKind.TAP, 2, 562, 1.03)], now=1.03
+    )
+
+    assert [(action.kind, action.reason) for action in before] == [
+        (ActionKind.TAP, "crossing")
+    ]
+    assert due == []
+
+
+def test_low_capture_fps_predicts_a_crossing_before_the_next_frame():
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=-11, rescue_first_visible=True
+    )
+    for timestamp in (1.00, 1.03, 1.06, 1.09):
+        planner.update([], now=timestamp)
+    planner.update([
+        ObservedNote(NoteKind.TAP, 2, 490, 530, 80, 18, 1.12)
+    ], now=1.12)
+
+    predicted = planner.update([
+        ObservedNote(NoteKind.TAP, 2, 490, 556, 80, 18, 1.15)
+    ], now=1.15)
+
+    assert [(action.kind, action.reason) for action in predicted] == [
+        (ActionKind.TAP, "crossing")
+    ]
+
+
+def test_moving_predictive_line_cannot_lose_a_physical_crossing():
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=-11, rescue_first_visible=True
+    )
+    planner._frame_interval_seconds = .006
+    planner.update([
+        ObservedNote(NoteKind.TAP, 2, 490, 547, 80, 18, 1.00)
+    ], now=1.00)
+    before_line = planner.update([
+        ObservedNote(NoteKind.TAP, 2, 490, 557, 80, 18, 1.016)
+    ], now=1.016)
+    assert before_line == []
+
+    # A capture stall moves the predictive target above previous_y. The note
+    # still visibly crosses the immutable game judgement line and must fire.
+    planner._frame_interval_seconds = .025
+    crossing = planner.update([
+        ObservedNote(NoteKind.TAP, 2, 490, 567, 80, 18, 1.048)
+    ], now=1.048)
+
+    assert [(action.kind, action.reason) for action in crossing] == [
+        (ActionKind.TAP, "crossing")
+    ]
+
+
+def test_dropout_prediction_uses_last_seen_after_duplicate_frames():
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+    for timestamp, y in (
+        (1.00, 430),
+        (1.04, 470),
+        (1.08, 510),
+        (1.12, 540),
+    ):
+        planner.update([
+            ObservedNote(NoteKind.TAP, 4, 790, y, 78, 16, timestamp)
+        ], now=timestamp)
+    # Identical frames refresh the real last-seen time without adding motion
+    # samples or changing the sample's older timestamp.
+    planner.update([
+        ObservedNote(NoteKind.TAP, 4, 790, 540, 78, 16, 1.15)
+    ], now=1.15)
+    planner.update([
+        ObservedNote(NoteKind.TAP, 4, 790, 540, 78, 16, 1.18)
+    ], now=1.18)
+
+    assert planner.update([], now=1.19) == []
+    rescued = planner.update([], now=1.21)
+    repeated = planner.update([], now=1.23)
+
+    assert [(action.kind, action.lane, action.reason) for action in rescued] == [
+        (ActionKind.TAP, 4, "predicted-dropout-rescue")
+    ]
+    assert repeated == []
+
+
+def test_two_sample_effect_jump_cannot_inherit_a_falling_note_track():
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+
+    planner.update([
+        ObservedNote(NoteKind.TAP, 2, 558, 508, 52, 38, 1.00)
+    ], now=1.00)
+    effect = planner.update([
+        ObservedNote(NoteKind.TAP, 2, 494, 574.4, 58, 14, 1.08)
+    ], now=1.08)
+
+    assert effect == []
+
+
+def test_line_glow_cannot_preempt_an_upstream_same_lane_head():
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+    planner.update([
+        ObservedNote(NoteKind.TAP, 6, 1015, 470, 104, 28, 1.00)
+    ], now=1.00)
+    planner.update([
+        ObservedNote(NoteKind.TAP, 6, 1020, 490, 90, 22, 1.02)
+    ], now=1.02)
+
+    protected = planner.update([
+        ObservedNote(NoteKind.TAP, 6, 1027, 520, 64, 14, 1.04),
+        ObservedNote(NoteKind.TAP, 6, 1082, 572, 58, 14, 1.04),
+    ], now=1.04)
+    crossed = planner.update([], now=1.08)
+
+    assert protected == []
+    assert [
+        (action.kind, action.lane, action.reason) for action in crossed
+    ] == [
+        (ActionKind.TAP, 6, "predicted-crossing-rescue")
+    ]
+
+
+def test_tracked_line_effect_cannot_preempt_an_established_flick():
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+    planner.update([
+        ObservedNote(NoteKind.FLICK, 1, 367, 227, 56, 22, 1.00)
+    ], now=1.00)
+    planner.update([
+        ObservedNote(NoteKind.FLICK, 1, 367, 350, 56, 22, 1.04),
+        ObservedNote(NoteKind.TAP, 1, 360, 524, 74, 38, 1.04),
+    ], now=1.04)
+    planner.update([
+        ObservedNote(NoteKind.FLICK, 1, 367, 420, 56, 22, 1.08),
+        ObservedNote(NoteKind.TAP, 1, 360, 545, 74, 38, 1.08),
+    ], now=1.08)
+
+    protected = planner.update([
+        ObservedNote(NoteKind.FLICK, 1, 367, 481, 56, 22, 1.12),
+        ObservedNote(NoteKind.TAP, 1, 360, 569, 74, 38, 1.12),
+    ], now=1.12)
+    flick = planner.update([
+        ObservedNote(NoteKind.FLICK, 1, 367, 570, 56, 22, 1.16)
+    ], now=1.16)
+
+    assert protected == []
+    assert [(action.kind, action.lane) for action in flick] == [
+        (ActionKind.FLICK, 1)
     ]
 
 
@@ -514,7 +998,7 @@ def test_note_must_cross_judgement_line_before_triggering():
     tap = planner.update([_note(NoteKind.TAP, 2, 570, 1.05)], now=1.05)
 
     assert [(action.kind, action.lane, action.reason) for action in tap] == [
-        (ActionKind.TAP, 2, "rescue")
+        (ActionKind.TAP, 2, "crossing")
     ]
 
 
@@ -729,9 +1213,11 @@ def test_released_hold_tail_cannot_be_rescued_as_a_tap_on_the_same_lane():
     released = planner.update([
         ObservedNote(NoteKind.HOLD, 4, 790, 572, 100, 18, 2.0)
     ], now=2.0)
+    # TAP EFFECT 1 residue in the failing SAVIOR OF SONG trace first appeared
+    # about 0.50 s after release, so the guard must cover more than 0.4 s.
     lingering_tail = planner.update([
-        ObservedNote(NoteKind.TAP, 4, 790, 562, 100, 18, 2.30)
-    ], now=2.30)
+        ObservedNote(NoteKind.TAP, 4, 790, 562, 100, 18, 2.50)
+    ], now=2.50)
 
     assert [action.kind for action in released] == [ActionKind.UP]
     assert lingering_tail == []
@@ -754,6 +1240,36 @@ def test_real_crossing_note_after_hold_release_is_not_suppressed():
 
     assert [(action.kind, action.reason) for action in actions] == [
         (ActionKind.TAP, "crossing")
+    ]
+
+
+def test_confirmed_hold_can_restart_after_crossing_from_y_553():
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+    planner.update([
+        ObservedNote(NoteKind.HOLD, 0, 190, 405, 100, 320, 1.0)
+    ], now=1.0)
+    released = planner.update([
+        ObservedNote(NoteKind.HOLD, 0, 190, 572, 100, 18, 2.0)
+    ], now=2.0)
+    assert [action.kind for action in released] == [ActionKind.UP]
+
+    # A later, independently tracked body crosses from head y=553 to y=567
+    # in one 31 ms frame. This is continuous high-confidence hold evidence,
+    # even though it did not pass through the obsolete y<=540 restart gate.
+    planner.update([
+        ObservedNote(NoteKind.TAP, 0, 190, 562, 70, 18, 4.800)
+    ], now=4.800)
+    planner.update([
+        ObservedNote(NoteKind.HOLD, 0, 190, 455, 196, 196, 5.000)
+    ], now=5.000)
+    restarted = planner.update([
+        ObservedNote(NoteKind.HOLD, 0, 190, 473, 188, 188, 5.031)
+    ], now=5.031)
+
+    assert [(action.kind, action.lane, action.reason) for action in restarted] == [
+        (ActionKind.DOWN, 0, "crossing")
     ]
 
 

@@ -28,7 +28,7 @@
   "HomeLive": {
     "recognition": "TemplateMatch",
     "template": "home_live.png",
-    "threshold": 0.88,
+    "threshold": 0.82,
     "action": "Custom",
     "custom_action": "ForegroundClick",
     "target": [

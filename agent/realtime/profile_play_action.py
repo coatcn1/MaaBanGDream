@@ -89,6 +89,36 @@ def _write_calibration_report(path, *, result, stats, timing_offset_ms, song_id)
     temporary.replace(path)
 
 
+def _result_report_payload(
+    result: LiveResult,
+    stats,
+    *,
+    timing_offset_ms: int,
+    suggested_timing_offset_ms: int,
+) -> dict:
+    return {
+        **result.to_dict(),
+        "initial_timing_offset_ms": timing_offset_ms,
+        "current_timing_offset_ms": stats.final_timing_offset_ms,
+        "suggested_timing_offset_ms": suggested_timing_offset_ms,
+        "realtime_feedback_fast": stats.timing_feedback_fast,
+        "realtime_feedback_slow": stats.timing_feedback_slow,
+        "realtime_feedback_valid": stats.timing_feedback_valid,
+        "realtime_feedback_ignored": stats.timing_feedback_ignored,
+        "realtime_feedback_ignored_reasons": stats.timing_feedback_ignored_reasons,
+        "filtered_adjacent_artifacts": stats.filtered_adjacent_artifacts,
+        "rejected_hold_candidates": stats.rejected_hold_candidates,
+        "processed_frames": stats.processed_frames,
+        "dispatched_actions": stats.dispatched_actions,
+        "action_counts": stats.action_counts,
+        "frame_interval_p50_ms": stats.frame_interval_p50_ms,
+        "frame_interval_p95_ms": stats.frame_interval_p95_ms,
+        "frame_interval_max_ms": stats.frame_interval_max_ms,
+        "effective_fps": stats.effective_fps,
+        "terminal_reason": stats.terminal_reason,
+    }
+
+
 def _result_counts(result: LiveResult) -> tuple[int, ...]:
     return (
         result.perfect, result.great, result.good, result.bad,
@@ -414,19 +444,12 @@ class RealtimeProfilePlay(CustomAction):
                 effective_timing_offset_ms, result_data,
             )
             report = output / f"realtime-result-{stamp}.json"
-            report.write_text(json.dumps({
-                **result_data.to_dict(),
-                "initial_timing_offset_ms": timing_offset_ms,
-                "current_timing_offset_ms": effective_timing_offset_ms,
-                "suggested_timing_offset_ms": suggestion,
-                "realtime_feedback_fast": stats.timing_feedback_fast,
-                "realtime_feedback_slow": stats.timing_feedback_slow,
-                "realtime_feedback_valid": stats.timing_feedback_valid,
-                "realtime_feedback_ignored": stats.timing_feedback_ignored,
-                "realtime_feedback_ignored_reasons": stats.timing_feedback_ignored_reasons,
-                "filtered_adjacent_artifacts": stats.filtered_adjacent_artifacts,
-                "rejected_hold_candidates": stats.rejected_hold_candidates,
-            }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            report.write_text(json.dumps(_result_report_payload(
+                result_data,
+                stats,
+                timing_offset_ms=timing_offset_ms,
+                suggested_timing_offset_ms=suggestion,
+            ), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             print(
                 f"RealtimeProfilePlay result_frame={path.name} "
                 f"perfect={result_data.perfect} great={result_data.great} "

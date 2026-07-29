@@ -123,6 +123,9 @@ class CommonRecover(CustomAction):
         login_start_node = str(params.get("login_start_node", ""))
         login_start_target = params.get("login_start_target")
         login_tap_target = params.get("login_tap_target")
+        login_marker_priority_attempts = max(
+            1, int(params.get("login_marker_priority_attempts", 3))
+        )
         escape_after_login_start = bool(params.get("escape_after_login_start", False))
         login_mode = (
             escape_after_login_start
@@ -151,6 +154,7 @@ class CommonRecover(CustomAction):
             login_started = not login_mode
             login_seen = False
             login_tap_attempted = False
+            login_marker_attempts = 0
             iteration_grace = max(startup_grace, 30.0) if app_started else startup_grace
             grace_deadline = time.monotonic() + iteration_grace
             deadline = time.monotonic() + timeout
@@ -186,6 +190,7 @@ class CommonRecover(CustomAction):
                     return True
                 clicked = False
                 if login_mode and not login_started:
+                    login_marker_attempts += 1
                     result = context.run_recognition(login_start_node, image)
                     if result and result.hit:
                         if context.tasker.stopping:
@@ -201,6 +206,17 @@ class CommonRecover(CustomAction):
                             "INFO",
                             f"识别到登录界面，已点击开始位置 ({x}, {y})",
                         )
+                    elif (
+                        login_marker_attempts
+                        < login_marker_priority_attempts
+                    ):
+                        # The bottom-right menu marker appears later and is
+                        # more stable than the animated "tap to start" text.
+                        # Give it several fresh frames before allowing the
+                        # generic login click nodes to take over.
+                        if not _wait_unless_stopping(context, interval):
+                            return True
+                        continue
                 for node in click_nodes:
                     if clicked:
                         break

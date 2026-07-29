@@ -132,6 +132,24 @@ def test_runtime_options_accept_game_note_speed_upper_bound(tmp_path):
     assert set(updated["calibration_note_speeds"].values()) == {12.0}
 
 
+def test_runtime_options_default_to_detector_friendly_game_effects(tmp_path):
+    options = RealtimeProfileStore(tmp_path).runtime_options()
+
+    assert options["game_effect_settings_enabled"] is True
+    assert options["judgement_assist_effect"] is True
+    assert options["tap_effect"] == 1
+
+
+@pytest.mark.parametrize("tap_effect", [0, 6, "bad"])
+def test_runtime_options_reject_invalid_tap_effect(tmp_path, tap_effect):
+    store = RealtimeProfileStore(tmp_path)
+    options = store.runtime_options()
+    options["tap_effect"] = tap_effect
+
+    with pytest.raises(ValueError, match="tap_effect"):
+        store.update_runtime_options(options)
+
+
 def test_resolve_latest_rejects_when_no_profile_was_accepted(tmp_path):
     store = RealtimeProfileStore(tmp_path)
     store.write(payload(accepted=False))

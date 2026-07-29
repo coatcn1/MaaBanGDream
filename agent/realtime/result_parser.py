@@ -12,6 +12,10 @@ from .result_samples_v2 import (
     RESULT_CROPS_V2_LABELS,
     RESULT_CROPS_V2_ZLIB_BASE64,
 )
+from .result_samples_v3 import (
+    PERFECT_377_CROP_ZLIB_BASE64,
+    PERFECT_377_LABELS,
+)
 
 
 @dataclass(frozen=True)
@@ -186,6 +190,28 @@ def _install_result_samples_v2() -> None:
 
 
 _install_result_samples_v2()
+
+
+def _install_result_samples_v3() -> None:
+    crop = np.frombuffer(
+        zlib.decompress(base64.b64decode(PERFECT_377_CROP_ZLIB_BASE64)),
+        dtype=np.uint8,
+    ).reshape(32, 56)
+    samples: list[np.ndarray] = []
+    for index in range(4):
+        left = round(index * crop.shape[1] / 4)
+        right = round((index + 1) * crop.shape[1] / 4)
+        samples.append(ResultParser._normalise_glyph(crop[:, left:right]))
+    ResultParser._samples = np.concatenate(
+        (ResultParser._samples, np.asarray(samples, dtype=np.float32)), axis=0
+    )
+    ResultParser._labels = np.concatenate(
+        (ResultParser._labels, np.asarray(PERFECT_377_LABELS, dtype=np.uint8)),
+        axis=0,
+    )
+
+
+_install_result_samples_v3()
 
 
 def adjusted_timing_offset(current: int, result: LiveResult) -> int:

@@ -226,6 +226,34 @@ def _read_speed_stable(
     raise RuntimeError(f"流速读数不可识别：{last_error}")
 
 
+def _select_first_tab_and_read(
+    controller,
+    coordinates: dict[str, tuple[int, int]],
+    read_current,
+    *,
+    attempts: int,
+    settle_delay_seconds: float,
+) -> float:
+    """Select 演出设定 with a visual readback loop.
+
+    A coordinate click is not proof that the remembered settings tab changed:
+    the dialog animation can silently drop the first input.  Re-click the tab
+    only after the fixed-digit display remains unreadable for a full stable
+    read cycle.
+    """
+    last_error: RuntimeError | None = None
+    for _ in range(max(1, attempts)):
+        _click(controller, coordinates["first_tab"])
+        time.sleep(settle_delay_seconds)
+        try:
+            return _read_speed_stable(read_current)
+        except RuntimeError as exc:
+            last_error = exc
+    raise RuntimeError(
+        f"无法进入“演出设定”流速页：重复点击页签后仍不可读取：{last_error}"
+    )
+
+
 def _adjust_speed(
     context: Context,
     controller,
@@ -315,13 +343,19 @@ class RealtimePerformanceSettingsGate(CustomAction):
             # The game reopens the settings dialog on the last-used tab, so
             # the speed display is not guaranteed to be visible. Land on the
             # first "演出设定" tab explicitly before every read/adjust loop.
-            _click(controller, coordinates["first_tab"])
-            time.sleep(float(params.get("first_tab_delay_seconds", 0.3)))
             read_current = lambda: _read_speed(
                 controller.post_screencap().wait().get(),
                 coordinates["speed_roi"],
             )
-            actual_before = _read_speed_stable(read_current)
+            actual_before = _select_first_tab_and_read(
+                controller,
+                coordinates,
+                read_current,
+                attempts=int(params.get("first_tab_attempts", 3)),
+                settle_delay_seconds=float(
+                    params.get("first_tab_delay_seconds", 0.3)
+                ),
+            )
             completed, confirmed = _adjust_speed(
                 context,
                 controller,

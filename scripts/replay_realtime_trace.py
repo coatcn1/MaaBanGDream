@@ -30,7 +30,7 @@ def duplicate_judgements(actions: list[TouchAction], window: float = .12) -> int
     )
 
 
-def post_release_rescues(actions: list[TouchAction], window: float = .4) -> int:
+def post_release_rescues(actions: list[TouchAction], window: float = .65) -> int:
     total = 0
     for index, released in enumerate(actions):
         if released.kind != ActionKind.UP:

@@ -105,6 +105,26 @@ class ControllerTouchDispatcher:
     def dispatch(self, actions: list[TouchAction]) -> None:
         persistent = [action for action in actions if action.kind == ActionKind.DOWN]
         moves = [action for action in actions if action.kind == ActionKind.MOVE]
+        persistent_contacts = {
+            0 if action.contact is None else action.contact
+            for action in persistent
+        }
+        # A hold can end and a new hold can acquire the same stable contact in
+        # one planner frame. Preserve that causal order instead of grouping
+        # every DOWN ahead of every UP, which would try to press an active
+        # MaaFramework contact and abort the song.
+        pre_releases = [
+            action
+            for action in actions
+            if action.kind == ActionKind.UP
+            and (0 if action.contact is None else action.contact)
+            in persistent_contacts
+        ]
+        deferred_releases = [
+            action
+            for action in actions
+            if action.kind == ActionKind.UP and action not in pre_releases
+        ]
         transients = [
             action for action in actions if action.kind in (ActionKind.TAP, ActionKind.FLICK)
         ]
@@ -128,6 +148,14 @@ class ControllerTouchDispatcher:
             raise RuntimeError("MaaFramework 可用触点不足")
         transient_contacts = list(zip(transients, available))
         try:
+            for action in pre_releases:
+                self._ensure_running()
+                contact = 0 if action.contact is None else action.contact
+                if contact in self.active_contacts:
+                    self.controller.post_touch_up(contact).wait()
+                    self.active_contacts.discard(contact)
+                    self.active_positions.pop(contact, None)
+                    self._pending_flicks.pop(contact, None)
             for action in persistent:
                 self._down(action, 0 if action.contact is None else action.contact)
             for action, contact in transient_contacts:
@@ -153,9 +181,7 @@ class ControllerTouchDispatcher:
                         interpolated_x, 590, contact, 50
                     ).wait()
                 self.active_positions[contact] = target_x
-            for action in actions:
-                if action.kind != ActionKind.UP:
-                    continue
+            for action in deferred_releases:
                 self._ensure_running()
                 contact = 0 if action.contact is None else action.contact
                 self.controller.post_touch_up(contact).wait()

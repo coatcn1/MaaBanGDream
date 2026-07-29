@@ -253,3 +253,49 @@ def test_gate_blocks_instead_of_blind_clicking_when_unreadable(monkeypatch):
     else:
         raise AssertionError("expected the gate to block on unreadable digits")
     assert clicks.count((207, 312)) == 0
+
+
+def test_gate_reclicks_first_tab_when_the_initial_tab_switch_is_dropped(
+    monkeypatch,
+):
+    clear_verified_settings()
+    clicks = []
+    attempts = iter([
+        RuntimeError("wrong settings tab"),
+        RuntimeError("wrong settings tab"),
+        RuntimeError("wrong settings tab"),
+        2.0,
+    ])
+    monkeypatch.setattr(
+        "agent.realtime.performance_settings_action._expected_speed",
+        lambda context, params, image: (2.0, None),
+    )
+
+    def _read_after_retry(_image, _roi):
+        value = next(attempts)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    monkeypatch.setattr(
+        "agent.realtime.performance_settings_action._read_speed",
+        _read_after_retry,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "agent.realtime.performance_settings_action._click",
+        lambda controller, point: clicks.append(point),
+    )
+    monkeypatch.setattr(
+        "agent.realtime.performance_settings_action.time.sleep",
+        lambda seconds: None,
+    )
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=_Controller()),
+    )
+
+    assert RealtimePerformanceSettingsGate()._run(context, {
+        "difficulty": "Easy",
+    })
+    assert clicks.count(DEFAULT_COORDINATES["first_tab"]) == 2
+    assert verified_settings("Easy").actual_note_speed == 2.0

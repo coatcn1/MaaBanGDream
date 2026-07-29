@@ -1,6 +1,53 @@
 {
   "RealtimeMultiLive": {
     "recognition": "DirectHit",
+    "action": "DoNothing",
+    "next": [
+      "RealtimeLiveProcessConflictGuard"
+    ],
+    "focus": {
+      "Node.Action.Starting": {
+        "content": "正在启动实时演奏任务",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Succeeded": {
+        "content": "实时演奏任务启动检查已开始",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "RealtimeLiveProcessConflictGuard": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "ProcessConflictGuard",
+    "next": [
+      "RealtimeLiveRecover"
+    ],
+    "on_error": [
+      "RealtimeLiveFailure"
+    ],
+    "focus": {
+      "Node.Action.Starting": {
+        "content": "正在检查 ALAS 进程冲突",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Failed": {
+        "content": "❌ 检测到 ALAS 冲突进程，本次任务已安全阻止",
+        "display": [
+          "log",
+          "toast"
+        ]
+      }
+    }
+  },
+  "RealtimeLiveRecover": {
+    "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "CommonRecover",
     "custom_action_param": {
@@ -24,6 +71,7 @@
         640,
         635
       ],
+      "login_marker_priority_attempts": 3,
       "escape_after_login_start": true,
       "package": "com.bilibili.star.bili",
       "login_tap_target": [
@@ -32,7 +80,7 @@
       ]
     },
     "next": [
-      "RealtimeLiveRoundGate"
+      "RealtimeLiveEffectSettingsGate"
     ],
     "focus": {
       "Node.Action.Failed": {
@@ -57,6 +105,72 @@
     "on_error": [
       "RealtimeLiveFailure"
     ]
+  },
+  "RealtimeLiveEffectSettingsGate": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "RealtimeGameEffectSettingsGate",
+    "next": [
+      "RealtimeLiveRoundGate"
+    ],
+    "on_error": [
+      "RealtimeLiveFailure"
+    ],
+    "focus": {
+      "Node.Action.Starting": {
+        "content": "正在设置并验证游戏内判定辅助效果和 TAP EFFECT",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Failed": {
+        "content": "❌ 游戏演出特效设置失败：设置页未进入、点击未生效或读回值不一致",
+        "display": [
+          "log",
+          "toast"
+        ]
+      },
+      "Node.Action.Succeeded": {
+        "content": "已验证游戏内演出特效设置",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "RealtimeGameEffectSwipe": {
+    "recognition": "DirectHit",
+    "action": "Swipe",
+    "begin": [
+      844,
+      320,
+      1,
+      1
+    ],
+    "end": [
+      [
+        844,
+        180,
+        1,
+        1
+      ]
+    ],
+    "duration": [
+      250
+    ],
+    "post_delay": 0
+  },
+  "RealtimeGameEffectClick": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
+    "target": [
+      0,
+      0,
+      1,
+      1
+    ],
+    "post_delay": 0
   },
   "RealtimeLiveRoundGate": {
     "recognition": "DirectHit",
@@ -116,6 +230,7 @@
         640,
         635
       ],
+      "login_marker_priority_attempts": 3,
       "escape_after_login_start": true,
       "package": "com.bilibili.star.bili",
       "login_tap_target": [
@@ -153,7 +268,7 @@
   "RealtimeLiveHomeLive": {
     "recognition": "TemplateMatch",
     "template": "home_live.png",
-    "threshold": 0.88,
+    "threshold": 0.82,
     "action": "Custom",
     "custom_action": "ForegroundClick",
     "target": [
