@@ -1,33 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import Enum
-
-from .note_detector import NoteDetector, NoteKind, ObservedNote
-from .note_tracker import MultiNoteTracker, TrackedNote
-
-
-class ActionKind(str, Enum):
-    TAP = "tap"
-    DOWN = "down"
-    MOVE = "move"
-    UP = "up"
-    FLICK = "flick"
-
-
-def sliding_holds_enabled(difficulty: str) -> bool:
-    return str(difficulty).strip().lower() in {"hard", "expert", "special"}
-
-
-@dataclass(frozen=True)
-class TouchAction:
-    kind: ActionKind
-    lane: int
-    timestamp: float
-    contact: int | None = None
-    reason: str = ""
-    track_id: int | None = None
-    target_x: int | None = None
+from .actions import ActionKind, TouchAction
+from .geometry import lane_center_x, touch_x, trusted_crossing_track
+from ..note_detector import NoteKind, ObservedNote
+from ..note_tracker import MultiNoteTracker, TrackedNote
 
 
 class RealtimePlanner:
@@ -215,17 +191,6 @@ class RealtimePlanner:
         self._finish_hold(partner, now, f"{reason}-paired")
         self._hold_chord_partner.pop(partner, None)
 
-    @staticmethod
-    def _touch_x(note: ObservedNote) -> int:
-        return max(120, min(1160, round(note.x)))
-
-    @staticmethod
-    def _lane_center_x(lane: int, y: float) -> float:
-        progress = min(1.08, max(0.0, (y - NoteDetector.VANISHING_Y) / (
-            NoteDetector.JUDGEMENT_Y - NoteDetector.VANISHING_Y
-        )))
-        return 640 + (NoteDetector.DEFAULT_LANE_CENTERS[lane] - 640) * progress
-
     def _hugs_hold_edge(self, note: ObservedNote, hold_lane: int) -> bool:
         """True when the note sits on the lane edge facing the active hold.
 
@@ -234,10 +199,10 @@ class RealtimePlanner:
         lane sits near its own centre, so only edge-hugging tracks count as
         artifacts.
         """
-        center = self._lane_center_x(note.lane, note.y)
+        center = lane_center_x(note.lane, note.y)
         spacing = max(
             24.0,
-            abs(self._lane_center_x(1, note.y) - self._lane_center_x(0, note.y)),
+            abs(lane_center_x(1, note.y) - lane_center_x(0, note.y)),
         )
         toward = 1.0 if hold_lane > note.lane else -1.0
         return (note.x - center) * toward > spacing * .2
@@ -267,8 +232,8 @@ class RealtimePlanner:
         lane_spacing = max(
             24.0,
             abs(
-                self._lane_center_x(1, note.y)
-                - self._lane_center_x(0, note.y)
+                lane_center_x(1, note.y)
+                - lane_center_x(0, note.y)
             ),
         )
         maximum_gap = min(90.0, lane_spacing * .56)
@@ -453,37 +418,6 @@ class RealtimePlanner:
         if not candidates:
             return None
         return max(candidates, key=lambda item: item.note.y)
-
-    def _trusted_crossing_track(self, tracked: TrackedNote) -> bool:
-        lateral_residual = float("inf")
-        if tracked.previous_x is not None and tracked.previous_y is not None:
-            previous_residual = (
-                tracked.previous_x
-                - self._lane_center_x(tracked.note.lane, tracked.previous_y)
-            )
-            current_residual = (
-                tracked.note.x
-                - self._lane_center_x(tracked.note.lane, tracked.note.y)
-            )
-            lateral_residual = abs(current_residual - previous_residual)
-        return (
-            tracked.previous_y is not None
-            and tracked.velocity_y > 0
-            and (
-                tracked.previous_y >= self.judgement_y - 35
-                or (
-                    tracked.velocity_y >= 350
-                    and tracked.minimum_y <= self.judgement_y - 40
-                    and (
-                        lateral_residual <= 40
-                        or (
-                            tracked.motion_samples >= 3
-                            and tracked.downward_motion_frames >= 2
-                        )
-                    )
-                )
-            )
-        )
 
     @staticmethod
     def _same_falling_note(previous: ObservedNote, note: ObservedNote) -> bool:
@@ -766,7 +700,7 @@ class RealtimePlanner:
                         contact, previous_tail, previous_seen or now, tail, now
                     )
                 self._active_hold_tail[contact] = tail
-                target_x = self._touch_x(note)
+                target_x = touch_x(note)
                 previous_lane = self._active_hold_lane.get(contact, note.lane)
                 previous_x = self._active_hold_x.get(contact, float(target_x))
                 last_moved = self._hold_last_moved_at.get(
@@ -920,7 +854,7 @@ class RealtimePlanner:
                         ):
                             self._hold_chord_partner[contact] = other_contact
                             self._hold_chord_partner[other_contact] = contact
-                    target_x = self._touch_x(note)
+                    target_x = touch_x(note)
                     self._active_hold_lane[contact] = note.lane
                     self._active_hold_x[contact] = float(target_x)
                     start_reason = (
@@ -1055,8 +989,8 @@ class RealtimePlanner:
                         vertical_gap=round(note.y - flick_arrow.note.y, 2),
                         maximum_gap=round(
                             abs(
-                                self._lane_center_x(1, note.y)
-                                - self._lane_center_x(0, note.y)
+                                lane_center_x(1, note.y)
+                                - lane_center_x(0, note.y)
                             ) * .56,
                             2,
                         ),
@@ -1158,7 +1092,7 @@ class RealtimePlanner:
             ):
                 target = self._ordinary_trigger_y(tracked.velocity_y)
                 is_real_crossing = (
-                    self._trusted_crossing_track(tracked)
+                    trusted_crossing_track(tracked, self.judgement_y)
                     and (
                         tracked.downward_motion_frames >= 2
                         or tracked.previous_y >= self.judgement_y - 50
@@ -1215,7 +1149,7 @@ class RealtimePlanner:
                 continue
             target = self._ordinary_trigger_y(tracked.velocity_y)
             if self._crossed_ordinary_trigger(tracked, target):
-                trusted_crossing = self._trusted_crossing_track(tracked)
+                trusted_crossing = trusted_crossing_track(tracked, self.judgement_y)
                 if not trusted_crossing:
                     # A PERFECT glyph or lane-light fragment can disappear,
                     # then be assigned to a different fragment at the line.
@@ -1460,7 +1394,7 @@ class RealtimePlanner:
                 or (
                     action.reason == "crossing"
                     and track is not None
-                    and self._trusted_crossing_track(track)
+                    and trusted_crossing_track(track, self.judgement_y)
                 )
             )
 
