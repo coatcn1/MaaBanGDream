@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .actions import ActionKind, TouchAction
+from .state import PlannerConfig, PlannerState
 from .geometry import lane_center_x, touch_x, trusted_crossing_track
 from ..note_detector import NoteKind, ObservedNote
 from ..note_tracker import MultiNoteTracker, TrackedNote
@@ -36,115 +37,91 @@ class RealtimePlanner:
         post_release_rescue_seconds: float = 0.65,
         hold_start_suppress_seconds: float = 0.35,
     ):
-        self.judgement_y = float(judgement_y)
-        self.timing_offset = timing_offset_ms / 1000
-        self.retrigger_seconds = retrigger_seconds
-        self.hold_grace_seconds = hold_grace_seconds
-        self.track_memory_seconds = track_memory_seconds
-        self.enable_slide = enable_slide
-        self.rescue_first_visible = rescue_first_visible
-        self.lane_sweep_interval = lane_sweep_interval
-        self.hold_release_y = float(hold_release_y)
-        self.paired_hold_rescue_margin = float(paired_hold_rescue_margin)
-        self.hold_max_seconds = float(hold_max_seconds)
-        self.hold_restart_cooldown_seconds = float(hold_restart_cooldown_seconds)
-        self.post_release_rescue_seconds = float(post_release_rescue_seconds)
-        self.hold_start_suppress_seconds = float(hold_start_suppress_seconds)
-        self._last_lane_sweep = float("-inf")
-        self._last_update_at: float | None = None
-        self._frame_interval_seconds = 1 / 60
-        self._previous: dict[tuple[NoteKind, int], ObservedNote] = {}
-        self._last_trigger: dict[int, float] = {}
-        self._last_trigger_note: dict[int, ObservedNote] = {}
-        self._last_trigger_track: dict[int, TrackedNote] = {}
-        self._last_trigger_action_kind: dict[int, ActionKind] = {}
-        self._last_trigger_reason: dict[int, str] = {}
-        self._recent_ordinary: dict[int, list[ObservedNote]] = {}
-        self._pending_ordinary_rescue: dict[
-            int, tuple[float, NoteKind, int]
-        ] = {}
-        self._hold_seen: dict[int, float] = {}
-        self._active_hold_tail: dict[int, float] = {}
-        self._hold_release_at: dict[int, float] = {}
-        self._hold_started: dict[int, float] = {}
-        self._hold_released_at: dict[int, float] = {}
-        self._hold_chord_partner: dict[int, int] = {}
-        self._hold_confirmed: set[int] = set()
-        self._hold_tail_flick: set[int] = set()
-        self._last_hold_rejection: dict[int, float] = {}
-        self._active_hold_lane: dict[int, int] = {}
-        self._active_hold_x: dict[int, float] = {}
-        self._hold_last_moved_at: dict[int, float] = {}
-        self._diagnostics: list[dict[str, object]] = []
-        self.filtered_adjacent_artifacts = 0
-        self.rejected_hold_candidates = 0
-        self._note_tracker = MultiNoteTracker(memory_seconds=track_memory_seconds)
+        self._config = PlannerConfig(
+            judgement_y=float(judgement_y),
+            retrigger_seconds=retrigger_seconds,
+            hold_grace_seconds=hold_grace_seconds,
+            track_memory_seconds=track_memory_seconds,
+            enable_slide=enable_slide,
+            rescue_first_visible=rescue_first_visible,
+            lane_sweep_interval=lane_sweep_interval,
+            hold_release_y=float(hold_release_y),
+            paired_hold_rescue_margin=float(paired_hold_rescue_margin),
+            hold_max_seconds=float(hold_max_seconds),
+            hold_restart_cooldown_seconds=hold_restart_cooldown_seconds,
+            post_release_rescue_seconds=post_release_rescue_seconds,
+            hold_start_suppress_seconds=hold_start_suppress_seconds,
+        )
+        self._state = PlannerState(timing_offset_ms=timing_offset_ms)
+        self._note_tracker = MultiNoteTracker(
+            memory_seconds=track_memory_seconds
+        )
 
     @property
     def has_active_holds(self) -> bool:
-        return bool(self._active_hold_tail)
+        return bool(self._state._active_hold_tail)
 
     @property
     def timing_offset_ms(self) -> int:
-        return round(self.timing_offset * 1000)
+        return round(self._state.timing_offset * 1000)
 
     def set_timing_offset_ms(self, value: int) -> None:
         if not -250 <= int(value) <= 250:
             raise ValueError("timing offset must be between -250 and 250 ms")
-        self.timing_offset = int(value) / 1000
+        self._state.timing_offset = int(value) / 1000
 
     def _predict_hold_release(
         self, lane: int, previous_tail: float, previous_time: float,
         tail: float, now: float,
     ) -> None:
         elapsed = now - previous_time
-        if elapsed <= 0 or tail >= self.hold_release_y:
+        if elapsed <= 0 or tail >= self._config.hold_release_y:
             return
         velocity = (tail - previous_tail) / elapsed
         if 80 <= velocity <= 3000:
-            release_at = now + (self.hold_release_y - tail) / velocity
-            started = self._hold_started.get(lane, now)
-            self._hold_release_at[lane] = max(
+            release_at = now + (self._config.hold_release_y - tail) / velocity
+            started = self._state._hold_started.get(lane, now)
+            self._state._hold_release_at[lane] = max(
                 now + .02,
                 started + .30,
                 release_at,
             )
 
     def _record_diagnostic(self, event: str, now: float, **fields: object) -> None:
-        self._diagnostics.append({"event": event, "timestamp": now, **fields})
+        self._state._diagnostics.append({"event": event, "timestamp": now, **fields})
 
     def drain_diagnostics(self) -> list[dict[str, object]]:
-        result = self._diagnostics
-        self._diagnostics = []
+        result = self._state._diagnostics
+        self._state._diagnostics = []
         return result
 
     def _finish_hold(self, contact: int, now: float, reason: str) -> None:
-        started = self._hold_started.get(contact, now)
-        final_lane = self._active_hold_lane.get(contact, contact)
+        started = self._state._hold_started.get(contact, now)
+        final_lane = self._state._active_hold_lane.get(contact, contact)
         self._record_diagnostic(
             "hold_release",
             now,
             lane=final_lane,
             release_method=reason,
             duration_ms=round(max(0.0, now - started) * 1000),
-            body_confirmed=contact in self._hold_confirmed,
+            body_confirmed=contact in self._state._hold_confirmed,
             contact=contact,
             final_lane=final_lane,
         )
-        self._active_hold_tail.pop(contact, None)
-        self._hold_seen.pop(contact, None)
-        self._hold_release_at.pop(contact, None)
-        self._hold_started.pop(contact, None)
-        self._hold_confirmed.discard(contact)
+        self._state._active_hold_tail.pop(contact, None)
+        self._state._hold_seen.pop(contact, None)
+        self._state._hold_release_at.pop(contact, None)
+        self._state._hold_started.pop(contact, None)
+        self._state._hold_confirmed.discard(contact)
         # The suppression window is lane-keyed; for a slide hold the contact
         # id is the stale START lane. Poisoning it kills real notes crossing
         # there within 0.4 s of the release. Record only where the finger
         # actually lifted.
-        self._hold_released_at[final_lane] = now
-        self._active_hold_lane.pop(contact, None)
-        self._active_hold_x.pop(contact, None)
-        self._hold_last_moved_at.pop(contact, None)
-        self._hold_tail_flick.discard(contact)
+        self._state._hold_released_at[final_lane] = now
+        self._state._active_hold_lane.pop(contact, None)
+        self._state._active_hold_x.pop(contact, None)
+        self._state._hold_last_moved_at.pop(contact, None)
+        self._state._hold_tail_flick.discard(contact)
 
     def _release_hold(
         self,
@@ -163,7 +140,7 @@ class RealtimePlanner:
         """
         # A hold whose tail carried the pink chevron marker must be swiped,
         # not lifted: the dispatcher converts the held contact into a flick.
-        if contact in self._hold_tail_flick:
+        if contact in self._state._hold_tail_flick:
             actions.append(TouchAction(ActionKind.FLICK, lane, now, contact, reason))
         else:
             actions.append(TouchAction(ActionKind.UP, lane, now, contact, reason))
@@ -172,15 +149,15 @@ class RealtimePlanner:
         # differ from the last recorded active lane after a slide. Record the
         # release under the action lane too, or the post-release suppression
         # window will miss residue appearing where the finger actually lifted.
-        self._hold_released_at[lane] = now
-        partner = self._hold_chord_partner.pop(contact, None)
-        if partner is None or partner not in self._active_hold_tail:
+        self._state._hold_released_at[lane] = now
+        partner = self._state._hold_chord_partner.pop(contact, None)
+        if partner is None or partner not in self._state._active_hold_tail:
             return
-        partner_tail = self._active_hold_tail[partner]
-        if partner_tail < self.hold_release_y - self.paired_hold_rescue_margin:
+        partner_tail = self._state._active_hold_tail[partner]
+        if partner_tail < self._config.hold_release_y - self._config.paired_hold_rescue_margin:
             return
-        partner_lane = self._active_hold_lane.get(partner, partner)
-        if partner in self._hold_tail_flick:
+        partner_lane = self._state._active_hold_lane.get(partner, partner)
+        if partner in self._state._hold_tail_flick:
             actions.append(TouchAction(
                 ActionKind.FLICK, partner_lane, now, partner, f"{reason}-paired"
             ))
@@ -189,7 +166,7 @@ class RealtimePlanner:
                 ActionKind.UP, partner_lane, now, partner, f"{reason}-paired"
             ))
         self._finish_hold(partner, now, f"{reason}-paired")
-        self._hold_chord_partner.pop(partner, None)
+        self._state._hold_chord_partner.pop(partner, None)
 
     def _hugs_hold_edge(self, note: ObservedNote, hold_lane: int) -> bool:
         """True when the note sits on the lane edge facing the active hold.
@@ -250,7 +227,7 @@ class RealtimePlanner:
             ):
                 continue
             gap = note.y - arrow.y
-            late_fragment = fragment.minimum_y >= self.judgement_y - 40
+            late_fragment = fragment.minimum_y >= self._config.judgement_y - 40
             maximum_x_delta = max(
                 55.0,
                 (note.width + arrow.width) * .55,
@@ -268,13 +245,13 @@ class RealtimePlanner:
     def _trigger_y(self, previous: ObservedNote, note: ObservedNote) -> float:
         elapsed = note.timestamp - previous.timestamp
         if elapsed <= 0:
-            return self.judgement_y
+            return self._config.judgement_y
         velocity = max(0.0, (note.y - previous.y) / elapsed)
-        calibrated = self.judgement_y - velocity * self.timing_offset
+        calibrated = self._config.judgement_y - velocity * self._state.timing_offset
         # Starting a hold slightly early is safe because the contact remains
         # pressed, while waiting for the ordinary-note line loses bodies that
         # are occluded by skill and judgement effects on their last frame.
-        return min(self.judgement_y - 10.0, calibrated)
+        return min(self._config.judgement_y - 10.0, calibrated)
 
     def _ordinary_trigger_y(self, velocity_y: float) -> float:
         """Keep enough lead time for capture-to-touch dispatch latency.
@@ -291,17 +268,17 @@ class RealtimePlanner:
         a negative offset must never push the action below this bounded line.
         """
         velocity = max(0.0, velocity_y)
-        calibrated = self.judgement_y - velocity * self.timing_offset
+        calibrated = self._config.judgement_y - velocity * self._state.timing_offset
         # Capture cadence varies sharply on the emulator (16 ms in the
         # successful run, 31 ms in the life-depleted run). Predict most of one
         # frame ahead so a head cannot jump from above the trigger to below
         # the judgement line before the next screenshot is dispatched.
         predictive_lead = min(
             .025,
-            max(.006, self._frame_interval_seconds * .65),
+            max(.006, self._state._frame_interval_seconds * .65),
         )
-        predicted = self.judgement_y - velocity * predictive_lead
-        return min(self.judgement_y - 3.0, calibrated, predicted)
+        predicted = self._config.judgement_y - velocity * predictive_lead
+        return min(self._config.judgement_y - 3.0, calibrated, predicted)
 
     def _crossed_ordinary_trigger(
         self,
@@ -320,7 +297,7 @@ class RealtimePlanner:
             return False
         return (
             previous_y < target <= tracked.note.y
-            or previous_y < self.judgement_y <= tracked.note.y
+            or previous_y < self._config.judgement_y <= tracked.note.y
         )
 
     def _reclassified_crossing(
@@ -339,13 +316,13 @@ class RealtimePlanner:
         """
         target = self._ordinary_trigger_y(0.0)
         candidates = []
-        for previous in self._recent_ordinary.get(note.lane, []):
+        for previous in self._state._recent_ordinary.get(note.lane, []):
             elapsed = now - previous.timestamp
             if (
                 previous.kind != note.kind
                 and 0 < elapsed <= .06
                 and target - 45 <= previous.y < target <= note.y
-                and note.y <= self.judgement_y + 25
+                and note.y <= self._config.judgement_y + 25
                 and abs(note.x - previous.x)
                 <= max(70.0, (note.width + previous.width) * .65)
             ):
@@ -372,7 +349,7 @@ class RealtimePlanner:
         """
         note = fragment.note
         late_near_line_fragment = (
-            fragment.minimum_y >= self.judgement_y - 50
+            fragment.minimum_y >= self._config.judgement_y - 50
         )
         tracker_swap_at_line = (
             fragment.previous_y is not None
@@ -505,14 +482,14 @@ class RealtimePlanner:
 
     def update(self, notes: list[ObservedNote], now: float) -> list[TouchAction]:
         actions: list[TouchAction] = []
-        if self._last_update_at is not None:
-            interval = now - self._last_update_at
+        if self._state._last_update_at is not None:
+            interval = now - self._state._last_update_at
             if .005 <= interval <= .100:
-                self._frame_interval_seconds = (
-                    self._frame_interval_seconds * .75
+                self._state._frame_interval_seconds = (
+                    self._state._frame_interval_seconds * .75
                     + interval * .25
                 )
-        self._last_update_at = now
+        self._state._last_update_at = now
         tracked_notes = self._note_tracker.update(notes, now)
         hold_notes = [note for note in notes if note.kind == NoteKind.HOLD]
 
@@ -521,12 +498,12 @@ class RealtimePlanner:
         # by continuous tail/x motion before considering new lane-local holds.
         current_holds: dict[int, tuple[ObservedNote, bool]] = {}
         used_notes: set[int] = set()
-        for contact in sorted(self._active_hold_tail):
-            previous_tail = self._active_hold_tail[contact]
-            previous_seen = self._hold_seen.get(contact, now)
+        for contact in sorted(self._state._active_hold_tail):
+            previous_tail = self._state._active_hold_tail[contact]
+            previous_seen = self._state._hold_seen.get(contact, now)
             elapsed = max(0.0, now - previous_seen)
-            current_lane = self._active_hold_lane.get(contact, contact)
-            hold_age = now - self._hold_started.get(contact, now)
+            current_lane = self._state._active_hold_lane.get(contact, contact)
+            hold_age = now - self._state._hold_started.get(contact, now)
             # A short slide can remain latched to unrelated green fragments
             # after its real tail disappears. If a new, fully confirmed body
             # reaches the line on the contact's original lane while the stale
@@ -542,7 +519,7 @@ class RealtimePlanner:
                         and note.width >= 180
                         and note.height >= 80
                         and note.hold_body_confidence >= .8
-                        and self._hold_head(note) >= self.judgement_y - 10
+                        and self._hold_head(note) >= self._config.judgement_y - 10
                     )
                 ),
                 None,
@@ -576,7 +553,7 @@ class RealtimePlanner:
                 current_holds[contact] = (selected, True)
                 used_notes.add(selected_index)
                 continue
-            previous_x = self._active_hold_x.get(
+            previous_x = self._state._active_hold_x.get(
                 contact,
                 190 + 150 * current_lane,
             )
@@ -591,7 +568,7 @@ class RealtimePlanner:
                 and (
                     note.lane == current_lane
                     or (
-                        self.enable_slide
+                        self._config.enable_slide
                         and abs(note.x - previous_x) <= maximum_x_delta
                     )
                 )
@@ -638,7 +615,7 @@ class RealtimePlanner:
         for index, note in enumerate(hold_notes):
             if index not in used_notes:
                 grouped_new.setdefault(note.lane, []).append((index, note))
-        occupied_lanes = set(self._active_hold_lane.values())
+        occupied_lanes = set(self._state._active_hold_lane.values())
         for lane, candidates in grouped_new.items():
             if lane in current_holds or lane in occupied_lanes:
                 continue
@@ -654,34 +631,34 @@ class RealtimePlanner:
         for contact, (note, continuing) in sorted(
             current_holds.items(), key=lambda item: item[1][0].lane
         ):
-            if continuing and contact not in self._active_hold_tail:
+            if continuing and contact not in self._state._active_hold_tail:
                 # Already released as a chord partner earlier in this frame.
                 continue
             key = (NoteKind.HOLD, note.lane)
-            previous = self._previous.get(key)
+            previous = self._state._previous.get(key)
             if (
                 previous is not None
-                and now - previous.timestamp > self.track_memory_seconds
+                and now - previous.timestamp > self._config.track_memory_seconds
             ):
                 previous = None
-            previous_seen = self._hold_seen.get(contact)
-            self._hold_seen[contact] = now
+            previous_seen = self._state._hold_seen.get(contact)
+            self._state._hold_seen[contact] = now
             head = self._hold_head(note)
             tail = self._hold_tail(note)
 
             if note.hold_tail_flick:
                 # Latch the marker: one clean sighting is enough, and the
                 # release must stay a swipe even if later frames lose it.
-                self._hold_tail_flick.add(contact)
+                self._state._hold_tail_flick.add(contact)
 
             if continuing:
-                previous_tail = self._active_hold_tail[contact]
-                hold_age = now - self._hold_started.get(contact, now)
+                previous_tail = self._state._active_hold_tail[contact]
+                hold_age = now - self._state._hold_started.get(contact, now)
                 tail_ring_at_line = (
                     note.height <= 30
                     and note.width >= 70
                     and note.y >= 555
-                    and contact in self._hold_confirmed
+                    and contact in self._state._hold_confirmed
                     and hold_age >= .30
                 )
                 if tail_ring_at_line:
@@ -689,7 +666,7 @@ class RealtimePlanner:
                     continue
                 if (
                     hold_age >= .30
-                    and previous_tail < self.hold_release_y <= tail
+                    and previous_tail < self._config.hold_release_y <= tail
                 ):
                     self._release_hold(
                         contact, note.lane, now, "tail-crossing", actions
@@ -699,16 +676,16 @@ class RealtimePlanner:
                     self._predict_hold_release(
                         contact, previous_tail, previous_seen or now, tail, now
                     )
-                self._active_hold_tail[contact] = tail
+                self._state._active_hold_tail[contact] = tail
                 target_x = touch_x(note)
-                previous_lane = self._active_hold_lane.get(contact, note.lane)
-                previous_x = self._active_hold_x.get(contact, float(target_x))
-                last_moved = self._hold_last_moved_at.get(
+                previous_lane = self._state._active_hold_lane.get(contact, note.lane)
+                previous_x = self._state._active_hold_x.get(contact, float(target_x))
+                last_moved = self._state._hold_last_moved_at.get(
                     contact, float("-inf")
                 )
-                near_judgement_line = head >= self.judgement_y - 45
+                near_judgement_line = head >= self._config.judgement_y - 45
                 should_move = (
-                    self.enable_slide
+                    self._config.enable_slide
                     and near_judgement_line
                     and (
                         note.lane != previous_lane
@@ -717,10 +694,10 @@ class RealtimePlanner:
                     and now - last_moved >= .03
                 )
                 if near_judgement_line:
-                    self._active_hold_lane[contact] = note.lane
-                    self._active_hold_x[contact] = float(target_x)
+                    self._state._active_hold_lane[contact] = note.lane
+                    self._state._active_hold_x[contact] = float(target_x)
                 if should_move:
-                    self._hold_last_moved_at[contact] = now
+                    self._state._hold_last_moved_at[contact] = now
                     actions.append(TouchAction(
                         ActionKind.MOVE,
                         note.lane,
@@ -744,12 +721,12 @@ class RealtimePlanner:
                     note, hold_notes
                 )
                 should_rescue = (
-                    self.rescue_first_visible
+                    self._config.rescue_first_visible
                     and (note.height >= 80 or linked_body)
-                    and head >= self.judgement_y - 5
+                    and head >= self._config.judgement_y - 5
                     and (
                         previous is None
-                        or self._hold_head(previous) < self.judgement_y - 5
+                        or self._hold_head(previous) < self._config.judgement_y - 5
                     )
                 )
                 # Perspective/alpha segmentation can make one side of a
@@ -760,21 +737,21 @@ class RealtimePlanner:
                     other_kind == NoteKind.HOLD
                     and other_lane != note.lane
                     and other_note.height >= 80
-                    and self._hold_head(other_note) >= self.judgement_y - 5
+                    and self._hold_head(other_note) >= self._config.judgement_y - 5
                     and abs(self._hold_head(other_note) - head)
-                    <= self.paired_hold_rescue_margin
+                    <= self._config.paired_hold_rescue_margin
                     for (other_kind, other_lane), other_note
                     in selected_by_lane.items()
                 )
                 should_pair_rescue = (
-                    contact not in self._active_hold_tail
+                    contact not in self._state._active_hold_tail
                     and note.height >= 80
-                    and head >= self.judgement_y - self.paired_hold_rescue_margin
+                    and head >= self._config.judgement_y - self._config.paired_hold_rescue_margin
                     and paired_due
                 )
                 if (
-                    now - self._last_trigger.get(note.lane, float("-inf"))
-                    < self.hold_start_suppress_seconds
+                    now - self._state._last_trigger.get(note.lane, float("-inf"))
+                    < self._config.hold_start_suppress_seconds
                 ):
                     # A perfect-hit flash is a tall green beam at the line
                     # appearing right after a tap on the same lane; it can
@@ -802,7 +779,7 @@ class RealtimePlanner:
                         and note.hold_body_confidence >= .8
                     )
                 )
-                release_age = now - self._hold_released_at.get(note.lane, float("-inf"))
+                release_age = now - self._state._hold_released_at.get(note.lane, float("-inf"))
                 strong_new_crossing = (
                     should_cross
                     and previous is not None
@@ -813,12 +790,12 @@ class RealtimePlanner:
                     # an unrelated hold seconds earlier.  The normal hold
                     # trigger is y<=555, and should_cross already requires
                     # continuous falling geometry, so use that same bound.
-                    and self._hold_head(previous) <= self.judgement_y - 10
+                    and self._hold_head(previous) <= self._config.judgement_y - 10
                 )
                 restart_allowed = (
-                    note.lane not in self._hold_released_at
+                    note.lane not in self._state._hold_released_at
                     or (
-                        release_age >= self.hold_restart_cooldown_seconds
+                        release_age >= self._config.hold_restart_cooldown_seconds
                         and (
                             strong_new_crossing
                             or should_rescue
@@ -827,7 +804,7 @@ class RealtimePlanner:
                     )
                 )
                 if (
-                    contact not in self._active_hold_tail
+                    contact not in self._state._active_hold_tail
                     and restart_allowed
                     and body_confirmed
                     and (
@@ -840,23 +817,23 @@ class RealtimePlanner:
                         self._hold_tail(linked_body)
                         if linked_body is not None else tail
                     )
-                    self._active_hold_tail[contact] = tracking_tail
-                    self._hold_started[contact] = now
-                    self._hold_confirmed.add(contact)
+                    self._state._active_hold_tail[contact] = tracking_tail
+                    self._state._hold_started[contact] = now
+                    self._state._hold_confirmed.add(contact)
                     # Holds whose heads arrive together share one connector;
                     # link them so the release side can lift both contacts in
                     # the same frame later.
-                    for other_contact, other_started in self._hold_started.items():
+                    for other_contact, other_started in self._state._hold_started.items():
                         if (
                             other_contact != contact
-                            and other_contact in self._active_hold_tail
+                            and other_contact in self._state._active_hold_tail
                             and now - other_started <= 0.08
                         ):
-                            self._hold_chord_partner[contact] = other_contact
-                            self._hold_chord_partner[other_contact] = contact
+                            self._state._hold_chord_partner[contact] = other_contact
+                            self._state._hold_chord_partner[other_contact] = contact
                     target_x = touch_x(note)
-                    self._active_hold_lane[contact] = note.lane
-                    self._active_hold_x[contact] = float(target_x)
+                    self._state._active_hold_lane[contact] = note.lane
+                    self._state._active_hold_x[contact] = float(target_x)
                     start_reason = (
                         "rescue" if should_rescue else
                         "paired-rescue" if should_pair_rescue else
@@ -892,16 +869,16 @@ class RealtimePlanner:
                         target_x=target_x,
                     ))
                 elif (
-                    contact not in self._active_hold_tail
-                    and head >= self.judgement_y - 5
+                    contact not in self._state._active_hold_tail
+                    and head >= self._config.judgement_y - 5
                     and not body_confirmed
                 ):
-                    last_rejected = self._last_hold_rejection.get(
+                    last_rejected = self._state._last_hold_rejection.get(
                         note.lane, float("-inf")
                     )
-                    if now - last_rejected > self.track_memory_seconds:
-                        self.rejected_hold_candidates += 1
-                        self._last_hold_rejection[note.lane] = now
+                    if now - last_rejected > self._config.track_memory_seconds:
+                        self._state.rejected_hold_candidates += 1
+                        self._state._last_hold_rejection[note.lane] = now
                         self._record_diagnostic(
                             "hold_candidate_rejected",
                             now,
@@ -918,26 +895,26 @@ class RealtimePlanner:
             flick_arrow = self._matching_flick_arrow(tracked, tracked_notes)
             adjacent_hold_lane = next(
                 (
-                    lane for lane in self._active_hold_lane.values()
+                    lane for lane in self._state._active_hold_lane.values()
                     if abs(note.lane - lane) == 1
                 ),
                 None,
             )
             trusted_adjacent_track = (
-                tracked.minimum_y <= self.judgement_y - 40
+                tracked.minimum_y <= self._config.judgement_y - 40
                 and tracked.motion_samples >= 3
                 and tracked.downward_motion_frames >= 2
                 and tracked.velocity_y > 0
             )
             if (
                 adjacent_hold_lane is not None
-                and note.y >= self.judgement_y - 20
+                and note.y >= self._config.judgement_y - 20
                 and self._hugs_hold_edge(note, adjacent_hold_lane)
                 and not trusted_adjacent_track
                 and flick_arrow is None
             ):
                 self._note_tracker.mark_fired(tracked.track_id, now)
-                self.filtered_adjacent_artifacts += 1
+                self._state.filtered_adjacent_artifacts += 1
                 self._record_diagnostic(
                     "adjacent_artifact_filtered",
                     now,
@@ -958,9 +935,9 @@ class RealtimePlanner:
                     self._note_tracker.mark_fired(tracked.track_id, now)
                     continue
                 rescue_due = (
-                    self.rescue_first_visible
+                    self._config.rescue_first_visible
                     and tracked.previous_y is None
-                    and self.judgement_y - 5 <= note.y < self.judgement_y + 8
+                    and self._config.judgement_y - 5 <= note.y < self._config.judgement_y + 8
                 )
                 target = self._ordinary_trigger_y(tracked.velocity_y)
                 crossing_due = (
@@ -1002,14 +979,14 @@ class RealtimePlanner:
             # velocity. Without a guarded first-visible rescue these notes
             # silently miss. The post-release window is what keeps the hold
             # tail-ring residue from retriggering: it stays suppressive.
-            release_age = now - self._hold_released_at.get(
+            release_age = now - self._state._hold_released_at.get(
                 note.lane, float("-inf")
             )
             target = self._ordinary_trigger_y(tracked.velocity_y)
             fragment_due = (
                 (
                     tracked.previous_y is None
-                    and note.y >= self.judgement_y - 5
+                    and note.y >= self._config.judgement_y - 5
                 )
                 or (
                     tracked.previous_y is not None
@@ -1034,7 +1011,7 @@ class RealtimePlanner:
                         remaining / max(100.0, upstream.velocity_y),
                     ),
                 )
-                self._pending_ordinary_rescue[note.lane] = (
+                self._state._pending_ordinary_rescue[note.lane] = (
                     now + delay,
                     upstream.note.kind,
                     upstream.track_id,
@@ -1061,7 +1038,7 @@ class RealtimePlanner:
             )
             if (
                 reclassified_previous is not None
-                and release_age >= self.post_release_rescue_seconds
+                and release_age >= self._config.post_release_rescue_seconds
             ):
                 kind = (
                     ActionKind.FLICK
@@ -1087,15 +1064,15 @@ class RealtimePlanner:
                 )
                 continue
             if (
-                release_age < self.post_release_rescue_seconds
-                and note.y >= self.judgement_y - 5
+                release_age < self._config.post_release_rescue_seconds
+                and note.y >= self._config.judgement_y - 5
             ):
                 target = self._ordinary_trigger_y(tracked.velocity_y)
                 is_real_crossing = (
-                    trusted_crossing_track(tracked, self.judgement_y)
+                    trusted_crossing_track(tracked, self._config.judgement_y)
                     and (
                         tracked.downward_motion_frames >= 2
-                        or tracked.previous_y >= self.judgement_y - 50
+                        or tracked.previous_y >= self._config.judgement_y - 50
                     )
                     # The immediate previous sample sits only ~12 px above
                     # the line at 60 fps, so the track minimum proves the
@@ -1115,13 +1092,13 @@ class RealtimePlanner:
                     ))
                 continue
             if (
-                self.rescue_first_visible
+                self._config.rescue_first_visible
                 and tracked.previous_y is None
-                and note.y >= self.judgement_y - 5
+                and note.y >= self._config.judgement_y - 5
             ):
                 if (
                     tracked.previous_y is None
-                    and note.y >= self.judgement_y + 8
+                    and note.y >= self._config.judgement_y + 8
                 ):
                     # Tap-effect ripples and hold-tail residue park a flat
                     # fragment just below the line (around judgement + 9)
@@ -1149,7 +1126,7 @@ class RealtimePlanner:
                 continue
             target = self._ordinary_trigger_y(tracked.velocity_y)
             if self._crossed_ordinary_trigger(tracked, target):
-                trusted_crossing = trusted_crossing_track(tracked, self.judgement_y)
+                trusted_crossing = trusted_crossing_track(tracked, self._config.judgement_y)
                 if not trusted_crossing:
                     # A PERFECT glyph or lane-light fragment can disappear,
                     # then be assigned to a different fragment at the line.
@@ -1180,11 +1157,11 @@ class RealtimePlanner:
             if (
                 tracked.fired
                 or note.kind not in MultiNoteTracker.ORDINARY_KINDS
-                or tracked.minimum_y > self.judgement_y - 60
+                or tracked.minimum_y > self._config.judgement_y - 60
                 or tracked.motion_samples < 4
                 or tracked.downward_motion_frames < 3
                 or not 200 <= tracked.velocity_y <= 2500
-                or not self.judgement_y - 60 <= note.y < self.judgement_y
+                or not self._config.judgement_y - 60 <= note.y < self._config.judgement_y
                 or not 0 < now - tracked.last_seen <= .12
                 or any(
                     not current.fired
@@ -1244,14 +1221,14 @@ class RealtimePlanner:
             if action.kind in {ActionKind.TAP, ActionKind.FLICK}
         }
         for lane in transient_lanes:
-            self._pending_ordinary_rescue.pop(lane, None)
-        occupied_hold_lanes = set(self._active_hold_lane.values())
+            self._state._pending_ordinary_rescue.pop(lane, None)
+        occupied_hold_lanes = set(self._state._active_hold_lane.values())
         for lane, (due_at, kind, track_id) in list(
-            self._pending_ordinary_rescue.items()
+            self._state._pending_ordinary_rescue.items()
         ):
             if now < due_at:
                 continue
-            self._pending_ordinary_rescue.pop(lane, None)
+            self._state._pending_ordinary_rescue.pop(lane, None)
             if lane in occupied_hold_lanes:
                 continue
             action_kind = (
@@ -1276,39 +1253,39 @@ class RealtimePlanner:
         # Skill animations can cover a long bar for many frames, so a predicted
         # release is valid only after the body has remained absent for a full
         # grace window. Visible bodies always override stale predictions.
-        for contact, release_at in list(self._hold_release_at.items()):
-            unseen_for = now - self._hold_seen.get(contact, now)
-            held_for = now - self._hold_started.get(contact, now)
+        for contact, release_at in list(self._state._hold_release_at.items()):
+            unseen_for = now - self._state._hold_seen.get(contact, now)
+            held_for = now - self._state._hold_started.get(contact, now)
             if (
-                contact in self._active_hold_tail
+                contact in self._state._active_hold_tail
                 and now >= release_at
-                and unseen_for >= self.hold_grace_seconds
+                and unseen_for >= self._config.hold_grace_seconds
                 and held_for >= .30
             ):
-                lane = self._active_hold_lane.get(contact, contact)
+                lane = self._state._active_hold_lane.get(contact, contact)
                 self._release_hold(contact, lane, now, "predicted-tail", actions)
-        for contact, started in list(self._hold_started.items()):
+        for contact, started in list(self._state._hold_started.items()):
             if (
-                contact in self._active_hold_tail
-                and now - started >= self.hold_max_seconds
+                contact in self._state._active_hold_tail
+                and now - started >= self._config.hold_max_seconds
             ):
-                lane = self._active_hold_lane.get(contact, contact)
+                lane = self._state._active_hold_lane.get(contact, contact)
                 self._release_hold(contact, lane, now, "hold-failsafe", actions)
         if (
-            self.lane_sweep_interval is not None
-            and now - self._last_lane_sweep >= self.lane_sweep_interval
+            self._config.lane_sweep_interval is not None
+            and now - self._state._last_lane_sweep >= self._config.lane_sweep_interval
         ):
-            occupied = set(self._active_hold_lane.values())
+            occupied = set(self._state._active_hold_lane.values())
             already_touched = {action.lane for action in actions}
             for lane in range(7):
                 if lane not in occupied and lane not in already_touched:
                     actions.append(TouchAction(
                         ActionKind.FLICK, lane, now, reason="lane-sweep"
                     ))
-            self._last_lane_sweep = now
+            self._state._last_lane_sweep = now
         remembered = {
-            key: previous for key, previous in self._previous.items()
-            if now - previous.timestamp <= self.track_memory_seconds
+            key: previous for key, previous in self._state._previous.items()
+            if now - previous.timestamp <= self._config.track_memory_seconds
         }
         for key, note in selected_by_lane.items():
             previous = remembered.get(key)
@@ -1317,12 +1294,12 @@ class RealtimePlanner:
             # frame has a useful velocity baseline.
             if previous is None or abs(note.y - previous.y) >= .2:
                 remembered[key] = note
-        self._previous = remembered
+        self._state._previous = remembered
         recent_ordinary: dict[int, list[ObservedNote]] = {}
         for note in notes:
             if note.kind in MultiNoteTracker.ORDINARY_KINDS:
                 recent_ordinary.setdefault(note.lane, []).append(note)
-        self._recent_ordinary = recent_ordinary
+        self._state._recent_ordinary = recent_ordinary
         return self._suppress_redundant_judgements(
             actions,
             now,
@@ -1381,7 +1358,7 @@ class RealtimePlanner:
             track = tracked_by_id.get(action.track_id)
             return (
                 track is not None
-                and track.minimum_y <= self.judgement_y - 40
+                and track.minimum_y <= self._config.judgement_y - 40
                 and track.motion_samples >= 3
                 and track.downward_motion_frames >= 2
                 and track.velocity_y > 0
@@ -1394,7 +1371,7 @@ class RealtimePlanner:
                 or (
                     action.reason == "crossing"
                     and track is not None
-                    and trusted_crossing_track(track, self.judgement_y)
+                    and trusted_crossing_track(track, self._config.judgement_y)
                 )
             )
 
@@ -1405,11 +1382,11 @@ class RealtimePlanner:
         ) -> bool:
             if (
                 action.lane != lane
-                or now - timestamp >= self.retrigger_seconds
+                or now - timestamp >= self._config.retrigger_seconds
             ):
                 return False
-            previous = self._last_trigger_note.get(lane)
-            previous_track = self._last_trigger_track.get(lane)
+            previous = self._state._last_trigger_note.get(lane)
+            previous_track = self._state._last_trigger_track.get(lane)
             current_track = tracked_by_id.get(action.track_id)
             if previous is None or current_track is None:
                 return False
@@ -1439,17 +1416,17 @@ class RealtimePlanner:
             if (
                 live_previous is None
                 and abs(current.y - previous.y) <= 24
-                and current.y >= self.judgement_y - 20
+                and current.y >= self._config.judgement_y - 20
             ):
                 return True
             if (
-                self._last_trigger_reason.get(lane)
+                self._state._last_trigger_reason.get(lane)
                 == "predicted-dropout-rescue"
                 and horizontal_delta <= horizontal_limit
                 and abs(current.y - previous.y) <= 40
             ):
                 return True
-            previous_action_kind = self._last_trigger_action_kind.get(lane)
+            previous_action_kind = self._state._last_trigger_action_kind.get(lane)
             if previous_action_kind == ActionKind.FLICK:
                 # A flick's upper arrow and lower ring are often maintained
                 # as two long-lived tracks. After one component dispatches
@@ -1476,8 +1453,8 @@ class RealtimePlanner:
                 and horizontal_delta < fragment_offset
                 and abs(current.y - previous.y) <= 30
                 and (
-                    previous_track.minimum_y >= self.judgement_y - 100
-                    or current_track.minimum_y >= self.judgement_y - 100
+                    previous_track.minimum_y >= self._config.judgement_y - 100
+                    or current_track.minimum_y >= self._config.judgement_y - 100
                 )
             )
             return (
@@ -1529,19 +1506,19 @@ class RealtimePlanner:
                 )
                 or (
                     action.lane == lane
-                    and now - timestamp < self.retrigger_seconds
+                    and now - timestamp < self._config.retrigger_seconds
                     and not trusted(action)
                 )
                 or (
                     action.reason == "rescue"
                     and abs(action.lane - lane) <= 1
-                    and now - timestamp < self.retrigger_seconds
+                    and now - timestamp < self._config.retrigger_seconds
                     and (
                         action.lane == lane
                         or 1e-9 < now - timestamp
                     )
                 )
-                for lane, timestamp in self._last_trigger.items()
+                for lane, timestamp in self._state._last_trigger.items()
             )
             covered_by_hold_start = (
                 action.kind == ActionKind.TAP
@@ -1551,44 +1528,56 @@ class RealtimePlanner:
             if recently_covered or covered_by_hold_start:
                 continue
             kept.append(action)
-            self._last_trigger[action.lane] = now
+            self._state._last_trigger[action.lane] = now
             track = tracked_by_id.get(action.track_id)
             if track is not None:
-                self._last_trigger_note[action.lane] = track.note
-                self._last_trigger_track[action.lane] = track
-            self._last_trigger_action_kind[action.lane] = action.kind
-            self._last_trigger_reason[action.lane] = action.reason
+                self._state._last_trigger_note[action.lane] = track.note
+                self._state._last_trigger_track[action.lane] = track
+            self._state._last_trigger_action_kind[action.lane] = action.kind
+            self._state._last_trigger_reason[action.lane] = action.reason
         return structural + kept + lane_sweeps
+
 
     def reset(self, now: float) -> list[TouchAction]:
         actions = []
-        for contact in sorted(self._active_hold_tail):
-            lane = self._active_hold_lane.get(contact, contact)
+        for contact in sorted(self._state._active_hold_tail):
+            lane = self._state._active_hold_lane.get(contact, contact)
             actions.append(TouchAction(
                 ActionKind.UP, lane, now, contact, "engine-reset"
             ))
-        self._active_hold_tail.clear()
-        self._hold_seen.clear()
-        self._hold_release_at.clear()
-        self._hold_started.clear()
-        self._hold_released_at.clear()
-        self._hold_chord_partner.clear()
-        self._hold_confirmed.clear()
-        self._last_hold_rejection.clear()
-        self._active_hold_lane.clear()
-        self._active_hold_x.clear()
-        self._hold_last_moved_at.clear()
-        self._hold_tail_flick.clear()
-        self._previous.clear()
-        self._recent_ordinary.clear()
-        self._last_trigger_note.clear()
-        self._last_trigger_track.clear()
-        self._last_trigger_action_kind.clear()
-        self._last_trigger_reason.clear()
-        self._pending_ordinary_rescue.clear()
-        self._last_trigger.clear()
+        self._state.reset()
         self._note_tracker.reset()
-        self._last_lane_sweep = float("-inf")
-        self._last_update_at = None
-        self._frame_interval_seconds = 1 / 60
         return actions
+
+    # Backward-compatible accessors for tests and the engine.
+    @property
+    def hold_release_y(self) -> float:
+        return self._config.hold_release_y
+
+    @property
+    def _active_hold_tail(self) -> dict[int, float]:
+        return self._state._active_hold_tail
+
+    @property
+    def _active_hold_lane(self) -> dict[int, int]:
+        return self._state._active_hold_lane
+
+    @property
+    def _hold_chord_partner(self) -> dict[int, int]:
+        return self._state._hold_chord_partner
+
+    @property
+    def _frame_interval_seconds(self) -> float:
+        return self._state._frame_interval_seconds
+
+    @_frame_interval_seconds.setter
+    def _frame_interval_seconds(self, value: float) -> None:
+        self._state._frame_interval_seconds = value
+
+    @property
+    def filtered_adjacent_artifacts(self) -> int:
+        return self._state.filtered_adjacent_artifacts
+
+    @property
+    def rejected_hold_candidates(self) -> int:
+        return self._state.rejected_hold_candidates
