@@ -772,8 +772,21 @@
       "back_only": true,
       "escape_interval_ms": 500,
       "escape_timeout_ms": 60000,
-      "restart_limit": 0,
-      "package": "com.bilibili.star.bili"
+      "restart_limit": 1,
+      "restart_wait_ms": 5000,
+      "startup_grace_ms": 12000,
+      "login_start_node": "AutoLiveLoginScreenMarker",
+      "login_start_target": [
+        640,
+        635
+      ],
+      "login_marker_priority_attempts": 3,
+      "escape_after_login_start": true,
+      "package": "com.bilibili.star.bili",
+      "login_tap_target": [
+        640,
+        360
+      ]
     },
     "next": [
       "ChallengeRoundCompleted"

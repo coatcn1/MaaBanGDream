@@ -346,11 +346,21 @@ def test_realtime_multi_live_contract_and_options():
     assert return_home["back_only"] is True
     assert return_home["click_nodes"] == []
     assert return_home["escape_interval_ms"] == 500
+    assert return_home["restart_limit"] == 1
+    assert return_home["login_start_node"] == "AutoLiveLoginScreenMarker"
+    assert return_home["login_start_target"] == [640, 635]
+    assert return_home["login_tap_target"] == [640, 360]
+    assert return_home["escape_after_login_start"] is True
     challenge = load(ROOT / "resource/pipeline/challenge_live.json")
     challenge_return = challenge["ChallengeReturnHome"]["custom_action_param"]
     assert challenge_return["back_only"] is True
     assert challenge_return["click_nodes"] == []
     assert challenge_return["escape_interval_ms"] == 500
+    assert challenge_return["restart_limit"] == 1
+    assert challenge_return["login_start_node"] == "AutoLiveLoginScreenMarker"
+    assert challenge_return["login_start_target"] == [640, 635]
+    assert challenge_return["login_tap_target"] == [640, 360]
+    assert challenge_return["escape_after_login_start"] is True
     assert nodes["RealtimeLiveRoundCompleted"]["next"] == [
         "RealtimeLiveRoundGate", "RealtimeLiveComplete"
     ]

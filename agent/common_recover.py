@@ -190,7 +190,13 @@ class CommonRecover(CustomAction):
                         f"已识别主页，状态：{login_status}",
                     )
                     return True
-                if back_only or login_recovery_active:
+                # Result recovery is ESC-only for the full initial window.
+                # If that cannot escape a page whose BACK dialog toggles
+                # between open/cancel (for example an unlocked story), a
+                # bounded app restart must switch to the normal login state
+                # machine instead of continuing to press BACK on the title
+                # screen.
+                if (back_only and restart == 0) or login_recovery_active:
                     if context.tasker.stopping:
                         return True
                     controller.post_click_key(4).wait()

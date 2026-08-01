@@ -443,3 +443,37 @@ def test_back_only_recovery_never_clicks_recognized_nodes(monkeypatch):
     )
     assert context.tasker.controller.clicks == []
     assert context.tasker.controller.keys == [4]
+
+
+def test_back_only_recovery_uses_login_state_machine_after_restart(monkeypatch):
+    context = Context({
+        "HomeMarker": [False, False, False, False, True],
+        "LoginScreenMarker": [True],
+    })
+    now = [0.0]
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: now[0])
+
+    def advance(_context, seconds):
+        now[0] += max(seconds, 1.0)
+        return True
+
+    monkeypatch.setattr(common_recover, "_wait_unless_stopping", advance)
+
+    assert common_recover.CommonRecover().run(
+        context,
+        argv(
+            escape_interval_ms=1000,
+            escape_timeout_ms=2000,
+            restart_wait_ms=0,
+            restart_limit=1,
+            back_only=True,
+            login_start_node="LoginScreenMarker",
+            login_start_target=[640, 635],
+            login_tap_target=[640, 360],
+            escape_after_login_start=True,
+        ),
+    )
+    assert context.tasker.controller.keys == [4, 4]
+    assert context.tasker.controller.stops == ["com.bilibili.star.bili"]
+    assert context.tasker.controller.starts == ["com.bilibili.star.bili"]
+    assert context.tasker.controller.clicks == [(640, 635), (640, 360)]
