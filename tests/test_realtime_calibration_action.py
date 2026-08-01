@@ -99,6 +99,22 @@ def test_calibration_is_bounded_when_no_three_valid_songs():
         raise AssertionError("calibration should be bounded")
 
 
+def test_invalid_result_rounds_are_retried_within_existing_budget():
+    records = iter([
+        {"valid": False, "song_id": "invalid-1"},
+        record("A"),
+        {"valid": False, "song_id": "invalid-2"},
+        record("B"), record("C"), record("D"),
+    ])
+
+    _, rehearsals, formal = CalibrationRunner(
+        lambda *_: next(records), max_attempts=10,
+    ).run()
+
+    assert [item["song_id"] for item in rehearsals] == ["A", "B", "C"]
+    assert formal["song_id"] == "D"
+
+
 def test_calibration_reuses_the_result_json_already_saved_by_the_play_action(tmp_path):
     before = result_report_snapshot(tmp_path)
     result = record("ignored")

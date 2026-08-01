@@ -241,4 +241,3 @@ class JudgementSuppressor:
             self._state._last_trigger_reason[action.lane] = action.reason
         return structural + kept + lane_sweeps
 
-

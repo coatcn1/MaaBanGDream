@@ -94,6 +94,8 @@ class CalibrationRunner:
             if len(rehearsals) == 3:
                 break
             record = self.run_round(False, offset)
+            if record.get("valid") is False:
+                continue
             result = result_from_mapping(record)
             round_initial_offset = offset
             effective_offset = int(record.get("timing_offset_ms", round_initial_offset))
@@ -118,6 +120,8 @@ class CalibrationRunner:
         formal = None
         for _ in range(self.max_attempts):
             candidate = self.run_round(True, offset)
+            if candidate.get("valid") is False:
+                continue
             if candidate["song_id"] not in used:
                 result = result_from_mapping(candidate)
                 formal = {**candidate, "passed": calibration_passed(result, bool(candidate["survived"]))}

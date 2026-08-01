@@ -138,6 +138,18 @@ def test_runtime_options_default_to_detector_friendly_game_effects(tmp_path):
     assert options["game_effect_settings_enabled"] is True
     assert options["judgement_assist_effect"] is True
     assert options["tap_effect"] == 1
+    assert options["skip_process_conflict_cleanup"] is False
+
+
+def test_runtime_options_persist_process_conflict_cleanup_switch(tmp_path):
+    store = RealtimeProfileStore(tmp_path)
+    options = store.runtime_options()
+    options["skip_process_conflict_cleanup"] = True
+
+    updated = store.update_runtime_options(options)
+
+    assert updated["skip_process_conflict_cleanup"] is True
+    assert store.runtime_options()["skip_process_conflict_cleanup"] is True
 
 
 @pytest.mark.parametrize("tap_effect", [0, 6, "bad"])

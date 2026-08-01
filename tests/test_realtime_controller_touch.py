@@ -11,6 +11,14 @@ class Job:
         return self
 
 
+class FailingJob(Job):
+    def __init__(self, error):
+        self.error = error
+
+    def wait(self):
+        raise self.error
+
+
 class Controller:
     def __init__(self):
         self.calls = []
@@ -129,6 +137,64 @@ def test_same_frame_hold_release_precedes_contact_reuse():
     assert touch.active_positions == {6: 1060}
 
 
+def test_stale_internal_contact_is_released_before_reuse():
+    controller = Controller()
+    touch = ControllerTouchDispatcher(controller, lambda: False)
+    touch.active_contacts.add(6)
+    touch.active_positions[6] = 640
+
+    touch.dispatch([
+        TouchAction(ActionKind.DOWN, 6, 1.0, contact=6, target_x=1060),
+    ])
+
+    assert controller.calls == [
+        ("up", 6),
+        ("down", 6, 1060, 590, 50),
+    ]
+    assert touch.recovered_contacts == 1
+
+
+def test_controller_reported_active_contact_is_released_and_retried_once():
+    class StaleController(Controller):
+        def __init__(self):
+            super().__init__()
+            self.external_active = {6}
+
+        def post_touch_down(self, x, y, contact=0, pressure=1):
+            self.calls.append(("down", contact, x, y, pressure))
+            if contact in self.external_active:
+                return FailingJob(RuntimeError(f"touch contact {contact} is already active"))
+            return Job()
+
+        def post_touch_up(self, contact=0):
+            self.calls.append(("up", contact))
+            self.external_active.discard(contact)
+            return Job()
+
+    controller = StaleController()
+    touch = ControllerTouchDispatcher(controller, lambda: False)
+
+    touch.dispatch([
+        TouchAction(ActionKind.DOWN, 6, 1.0, contact=6, target_x=1060),
+    ])
+
+    assert controller.calls == [
+        ("down", 6, 1060, 590, 50),
+        ("up", 6),
+        ("down", 6, 1060, 590, 50),
+    ]
+    assert touch.recovered_contacts == 1
+
+
+def test_synchronize_releases_all_possible_contacts_before_song():
+    controller = Controller()
+    touch = ControllerTouchDispatcher(controller, lambda: False)
+
+    touch.synchronize()
+
+    assert controller.calls == [("up", contact) for contact in range(10)]
+
+
 def test_stop_during_dispatch_releases_every_active_contact():
     controller = Controller()
     checks = 0
@@ -155,7 +221,8 @@ def test_close_always_releases_contacts():
 
     touch.close()
 
-    assert controller.calls == [("up", 1), ("up", 6)]
+    assert controller.calls == [("up", contact) for contact in range(10)]
+    assert touch.active_contacts == set()
 
 
 def test_move_keeps_the_existing_hold_contact_and_uses_detected_x():

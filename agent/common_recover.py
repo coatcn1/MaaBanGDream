@@ -120,6 +120,7 @@ class CommonRecover(CustomAction):
         restart_wait = int(params.get("restart_wait_ms", 5000)) / 1000
         startup_grace = int(params.get("startup_grace_ms", 0)) / 1000
         click_nodes = [str(node) for node in params.get("click_nodes", [])]
+        back_only = bool(params.get("back_only", False))
         login_start_node = str(params.get("login_start_node", ""))
         login_start_target = params.get("login_start_target")
         login_tap_target = params.get("login_tap_target")
@@ -154,6 +155,7 @@ class CommonRecover(CustomAction):
             login_started = not login_mode
             login_seen = False
             login_tap_attempted = False
+            login_recovery_active = False
             login_marker_attempts = 0
             iteration_grace = max(startup_grace, 30.0) if app_started else startup_grace
             grace_deadline = time.monotonic() + iteration_grace
@@ -188,6 +190,14 @@ class CommonRecover(CustomAction):
                         f"已识别主页，状态：{login_status}",
                     )
                     return True
+                if back_only or login_recovery_active:
+                    if context.tasker.stopping:
+                        return True
+                    controller.post_click_key(4).wait()
+                    escape_count += 1
+                    if not _wait_unless_stopping(context, interval):
+                        return True
+                    continue
                 clicked = False
                 if login_mode and not login_started:
                     login_marker_attempts += 1
@@ -200,6 +210,10 @@ class CommonRecover(CustomAction):
                         login_started = True
                         login_seen = True
                         clicked = True
+                        if not tap_anywhere_mode:
+                            login_recovery_active = True
+                            deadline = time.monotonic() + timeout
+                            grace_deadline = time.monotonic()
                         log_task(
                             "游戏启动",
                             "登录",
@@ -217,7 +231,12 @@ class CommonRecover(CustomAction):
                         if not _wait_unless_stopping(context, interval):
                             return True
                         continue
-                for node in click_nodes:
+                pending_login_tap = (
+                    tap_anywhere_mode
+                    and login_started
+                    and not login_tap_attempted
+                )
+                for node in ([] if pending_login_tap else click_nodes):
                     if clicked:
                         break
                     result = context.run_recognition(node, image)
@@ -233,6 +252,9 @@ class CommonRecover(CustomAction):
                     login_started = True
                     login_seen = True
                     clicked = True
+                    login_recovery_active = True
+                    deadline = time.monotonic() + timeout
+                    grace_deadline = time.monotonic()
                     log_task(
                         "游戏启动",
                         "登录",
@@ -253,6 +275,9 @@ class CommonRecover(CustomAction):
                     login_tap_attempted = True
                     login_seen = True
                     clicked = True
+                    login_recovery_active = True
+                    deadline = time.monotonic() + timeout
+                    grace_deadline = time.monotonic()
                     log_task(
                         "游戏启动",
                         "登录",

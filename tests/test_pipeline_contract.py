@@ -25,7 +25,8 @@ def test_interface_references_existing_entry_and_resource():
     assert interface["interface_version"] == 2
     assert interface["version"] == "0.8.0"
     assert [task["name"] for task in interface["task"]] == [
-        "AutoLive", "RealtimeLive", "RealtimeCalibration", "ChallengeLive"
+        "AutoLive", "RealtimeLive", "ContinuousRealtimeLive",
+        "RealtimeCalibration", "ChallengeLive",
     ]
     assert interface["resource"][0]["path"] == ["./resource"]
     nodes = {}
@@ -341,6 +342,15 @@ def test_realtime_multi_live_contract_and_options():
     ]
     assert nodes["RealtimeLiveRoundGate"]["max_hit"] == 1
     assert nodes["RealtimeLiveReturnHome"]["next"] == ["RealtimeLiveRoundCompleted"]
+    return_home = nodes["RealtimeLiveReturnHome"]["custom_action_param"]
+    assert return_home["back_only"] is True
+    assert return_home["click_nodes"] == []
+    assert return_home["escape_interval_ms"] == 500
+    challenge = load(ROOT / "resource/pipeline/challenge_live.json")
+    challenge_return = challenge["ChallengeReturnHome"]["custom_action_param"]
+    assert challenge_return["back_only"] is True
+    assert challenge_return["click_nodes"] == []
+    assert challenge_return["escape_interval_ms"] == 500
     assert nodes["RealtimeLiveRoundCompleted"]["next"] == [
         "RealtimeLiveRoundGate", "RealtimeLiveComplete"
     ]
@@ -427,6 +437,44 @@ def test_realtime_multi_live_contract_and_options():
     assert not any(task["name"] == "RealtimeFullSong" for task in interface["task"])
 
 
+def test_continuous_realtime_live_is_a_pure_listener_task():
+    nodes = load(ROOT / "resource/pipeline/continuous_realtime_live.json")
+    interface = load(ROOT / "interface.json")
+    task = next(
+        task for task in interface["task"]
+        if task["name"] == "ContinuousRealtimeLive"
+    )
+
+    assert task["entry"] == "ContinuousRealtimeLive"
+    assert task["option"] == [
+        "ContinuousRealtimeDifficulty", "ContinuousRealtimeDebug",
+    ]
+    assert nodes["ContinuousRealtimeLive"]["next"] == [
+        "ContinuousRealtimeProcessConflictGuard"
+    ]
+    assert nodes["ContinuousRealtimeProcessConflictGuard"]["custom_action"] == (
+        "ProcessConflictGuard"
+    )
+    watcher = nodes["ContinuousRealtimeWatcher"]
+    assert watcher["custom_action"] == "ContinuousRealtimeLive"
+    assert "next" not in watcher
+    serialized = json.dumps(nodes, ensure_ascii=False)
+    assert "Click" not in serialized
+    assert "result" not in serialized.lower()
+
+    difficulty = interface["option"]["ContinuousRealtimeDifficulty"]
+    assert difficulty["default_case"] == "Easy"
+    assert [case["name"] for case in difficulty["cases"]] == [
+        "Easy", "Normal", "Hard", "Expert", "Special",
+    ]
+    for case in difficulty["cases"]:
+        params = case["pipeline_override"]["ContinuousRealtimeWatcher"][
+            "custom_action_param"
+        ]
+        assert params["difficulty"] == case["name"]
+        assert params["debug_recording"] is False
+
+
 def test_task_entries_bootstrap_before_round_execution():
     entries = (
         (
@@ -473,6 +521,19 @@ def test_task_entries_bootstrap_before_round_execution():
             assert recover["custom_action_param"]["escape_timeout_ms"] == 60000
             assert recover["custom_action_param"]["restart_limit"] == 2
             assert recover["next"] == [gate_name]
+
+
+def test_process_conflict_focus_text_does_not_expose_program_identity():
+    for path in (
+        "auto_live.json", "realtime_multi_live.json",
+        "realtime_calibration.json", "challenge_live.json",
+    ):
+        serialized = json.dumps(
+            load(ROOT / "resource/pipeline" / path), ensure_ascii=False,
+        )
+        assert "ALAS" not in serialized
+        assert "AzurLaneAutoScript" not in serialized
+        assert "PID" not in serialized
 
 
 def test_formal_realtime_song_timeout_allows_long_music():

@@ -46,6 +46,7 @@ class ControllerTouchDispatcher:
         self.active_contacts: set[int] = set()
         self.active_positions: dict[int, int] = {}
         self._pending_flicks: dict[int, _PendingFlick] = {}
+        self.recovered_contacts = 0
         self._flick_phases = ((.012, 545), (.024, 490), (.036, 455))
         self._flick_release_after = .048
 
@@ -59,24 +60,44 @@ class ControllerTouchDispatcher:
             return self.LANE_CENTERS[action.lane]
         return max(120, min(1160, int(action.target_x)))
 
+    def _release(self, contact: int) -> None:
+        self.controller.post_touch_up(contact).wait()
+        self.active_contacts.discard(contact)
+        self.active_positions.pop(contact, None)
+        self._pending_flicks.pop(contact, None)
+
+    @staticmethod
+    def _is_active_contact_error(exc: BaseException) -> bool:
+        message = str(exc).lower()
+        return "contact" in message and "already active" in message
+
     def _down(self, action: TouchAction, contact: int) -> None:
         self._ensure_running()
         if contact in self.active_contacts:
-            if contact not in self._pending_flicks:
-                raise RuntimeError(f"touch contact {contact} is already active")
-            # A newly starting hold owns its stable lane contact. The older
-            # flick has already remained down for at least one capture cycle;
-            # release it before reusing the contact instead of corrupting both.
-            self.controller.post_touch_up(contact).wait()
-            self.active_contacts.discard(contact)
-            self.active_positions.pop(contact, None)
-            self._pending_flicks.pop(contact, None)
+            self._release(contact)
+            self.recovered_contacts += 1
         x = self._x(action)
-        self.controller.post_touch_down(
-            x, 590, contact, 50
-        ).wait()
+        try:
+            self.controller.post_touch_down(x, 590, contact, 50).wait()
+        except Exception as exc:
+            if not self._is_active_contact_error(exc):
+                raise
+            self._release(contact)
+            self.recovered_contacts += 1
+            self.controller.post_touch_down(x, 590, contact, 50).wait()
         self.active_contacts.add(contact)
         self.active_positions[contact] = x
+
+    def synchronize(self) -> None:
+        """Best-effort non-hot-path reset of every MaaFramework contact."""
+        for contact in range(10):
+            try:
+                self.controller.post_touch_up(contact).wait()
+            except Exception:
+                pass
+        self.active_contacts.clear()
+        self.active_positions.clear()
+        self._pending_flicks.clear()
 
     def advance(self, now: float) -> None:
         """Advance pending flick gestures without sleeping in the capture loop."""
@@ -208,14 +229,7 @@ class ControllerTouchDispatcher:
             raise
 
     def reset(self) -> None:
-        for contact in sorted(self.active_contacts):
-            try:
-                self.controller.post_touch_up(contact).wait()
-            except Exception:
-                pass
-        self.active_contacts.clear()
-        self.active_positions.clear()
-        self._pending_flicks.clear()
+        self.synchronize()
 
     def close(self) -> None:
-        self.reset()
+        self.synchronize()

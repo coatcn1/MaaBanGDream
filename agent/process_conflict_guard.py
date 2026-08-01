@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import json
+import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,8 +14,10 @@ from maa.context import Context
 from maa.custom_action import CustomAction
 
 try:
+    from .realtime.profile_store import RealtimeProfileStore
     from .task_reporting import log_task, record_failure_reason
 except ImportError:
+    from realtime.profile_store import RealtimeProfileStore
     from task_reporting import log_task, record_failure_reason
 
 
@@ -91,11 +94,15 @@ class ProcessConflictGuardService:
         *,
         state_path: str | Path | None = None,
         session_id: str = "",
+        clock: Callable[[], float] = time.monotonic,
+        timeout_seconds: float = 30.0,
     ):
         self._process_iter = process_iter
         self._wait_procs = wait_procs
         self._state_path = Path(state_path) if state_path else None
         self._session_id = str(session_id)
+        self._clock = clock
+        self._timeout_seconds = max(0.0, float(timeout_seconds))
         self._previous: frozenset[tuple[int, float, str]] = frozenset()
 
     def _load_previous(self) -> frozenset[tuple[int, float, str]]:
@@ -140,14 +147,20 @@ class ProcessConflictGuardService:
         )
         os.replace(temporary, self._state_path)
 
-    def _scan(self) -> list[tuple[ProcessIdentity, Any]]:
+    def _ensure_budget(self, deadline: float) -> None:
+        if self._clock() >= deadline:
+            raise TimeoutError("process conflict guard exceeded its time budget")
+
+    def _scan(self, deadline: float) -> list[tuple[ProcessIdentity, Any]]:
         attrs = ("pid", "ppid", "create_time", "exe", "cmdline", "name")
         matches: list[tuple[ProcessIdentity, Any]] = []
+        self._ensure_budget(deadline)
         try:
             processes = self._process_iter(attrs)
         except (OSError, psutil.Error):
             raise
         for process in processes:
+            self._ensure_budget(deadline)
             try:
                 identity = _identity(process)
             except (OSError, psutil.Error, KeyError, TypeError, ValueError):
@@ -175,14 +188,21 @@ class ProcessConflictGuardService:
 
         return sorted(matches, key=lambda item: (-depth(item[0]), item[0].pid))
 
-    def check(self) -> GuardResult:
-        matches = self._scan()
+    def check(self, *, skip_cleanup: bool = False) -> GuardResult:
+        deadline = self._clock() + self._timeout_seconds
+        try:
+            matches = self._scan(deadline)
+        except TimeoutError:
+            return GuardResult(True, "timeout")
         if not matches:
             self._store_previous(frozenset())
             return GuardResult(True, "clear")
 
         current = frozenset(identity.fingerprint for identity, _ in matches)
         identities = tuple(identity for identity, _ in matches)
+        if skip_cleanup:
+            self._store_previous(current)
+            return GuardResult(True, "skipped", identities)
         previous = self._load_previous()
         if not previous or not current.issubset(previous):
             self._store_previous(current)
@@ -192,6 +212,8 @@ class ProcessConflictGuardService:
         ordered = self._children_first(matches)
         handles = [process for _, process in ordered]
         for identity, process in ordered:
+            if self._clock() >= deadline:
+                return GuardResult(True, "timeout", identities, tuple(errors))
             try:
                 process.terminate()
             except (OSError, psutil.Error) as exc:
@@ -200,12 +222,17 @@ class ProcessConflictGuardService:
                 errors.append(f"PID {identity.pid} terminate: {exc}")
 
         try:
-            _, alive = self._wait_procs(handles, 3.0)
+            remaining_time = max(0.0, deadline - self._clock())
+            if remaining_time <= 0:
+                return GuardResult(True, "timeout", identities, tuple(errors))
+            _, alive = self._wait_procs(handles, min(3.0, remaining_time))
         except (OSError, psutil.Error) as exc:
             errors.append(f"等待进程退出失败：{exc}")
             alive = handles
 
         for process in alive:
+            if self._clock() >= deadline:
+                return GuardResult(True, "timeout", identities, tuple(errors))
             try:
                 process.kill()
             except (OSError, psutil.Error) as exc:
@@ -214,11 +241,17 @@ class ProcessConflictGuardService:
                 errors.append(f"PID {process.pid} kill: {exc}")
         if alive:
             try:
-                self._wait_procs(alive, 1.0)
+                remaining_time = max(0.0, deadline - self._clock())
+                if remaining_time <= 0:
+                    return GuardResult(True, "timeout", identities, tuple(errors))
+                self._wait_procs(alive, min(1.0, remaining_time))
             except (OSError, psutil.Error) as exc:
                 errors.append(f"等待强制结束失败：{exc}")
 
-        remaining = self._scan()
+        try:
+            remaining = self._scan(deadline)
+        except TimeoutError:
+            return GuardResult(True, "timeout", identities, tuple(errors))
         if remaining:
             remaining_identities = tuple(identity for identity, _ in remaining)
             self._store_previous(frozenset(
@@ -246,12 +279,6 @@ _SERVICE = ProcessConflictGuardService(
 )
 
 
-def _process_list(processes: tuple[ProcessIdentity, ...]) -> str:
-    return "；".join(
-        f"PID {process.pid} ({process.display_path})" for process in processes
-    )
-
-
 @AgentServer.custom_action("ProcessConflictGuard")
 class ProcessConflictGuard(CustomAction):
     """Prevent two automation tools from controlling the same emulator."""
@@ -261,37 +288,45 @@ class ProcessConflictGuard(CustomAction):
         if context.tasker.stopping:
             return True
         try:
-            result = _SERVICE.check()
-        except Exception as exc:
-            reason = f"无法检查 ALAS 冲突进程：{type(exc).__name__}: {exc}"
+            options = RealtimeProfileStore(_PROJECT_ROOT / "profiles").runtime_options()
+            result = _SERVICE.check(
+                skip_cleanup=bool(options["skip_process_conflict_cleanup"])
+            )
+        except Exception:
+            reason = "无法完成其他程序占用检测；本次任务已停止"
             record_failure_reason(reason)
             log_task("任务前检查", "进程互斥", "ERROR", reason)
             traceback.print_exc()
             return False
 
-        processes = _process_list(result.processes)
         if result.action == "clear":
-            log_task("任务前检查", "进程互斥", "SUCCESS", "未发现 ALAS 冲突进程")
+            log_task("任务前检查", "进程互斥", "SUCCESS", "未检测到其他程序占用")
             return True
         if result.action == "prompt":
             reason = (
-                "检测到 ALAS/AzurLaneAutoScript 仍在运行，为避免 ADB 和模拟器输入竞争，"
-                f"本次任务已阻止：{processes}。请先关闭 ALAS；若直接再次运行同一任务，"
-                "MaaBanGDream 将只结束上述同一组进程后继续。"
+                "检测到其他程序占用。本次任务已停止；请关闭占用程序后重试，"
+                "或直接再次运行以允许自动清理。"
             )
             record_failure_reason(reason)
             log_task("任务前检查", "进程互斥", "WARN", reason)
             return False
         if result.action == "terminated":
-            detail = f"已结束上次提示的 ALAS 冲突进程：{processes}"
-            if result.errors:
-                detail += f"；温和退出异常后已复核清理：{'；'.join(result.errors)}"
-            log_task("任务前检查", "进程互斥", "SUCCESS", detail)
+            log_task("任务前检查", "进程互斥", "SUCCESS", "其他程序占用已清理")
+            return True
+        if result.action == "skipped":
+            log_task(
+                "任务前检查", "进程互斥", "WARN",
+                "检测到其他程序占用；已按设置跳过清理并继续任务",
+            )
+            return True
+        if result.action == "timeout":
+            log_task(
+                "任务前检查", "进程互斥", "WARN",
+                "其他程序占用检测或清理超过 30 秒；已跳过剩余清理并继续任务",
+            )
             return True
 
-        reason = f"ALAS 冲突进程未能完全结束，任务保持阻止：{processes}"
-        if result.errors:
-            reason += f"；{'；'.join(result.errors)}"
+        reason = "检测到其他程序占用，自动清理未完成；本次任务已停止"
         record_failure_reason(reason)
         log_task("任务前检查", "进程互斥", "ERROR", reason)
         return False

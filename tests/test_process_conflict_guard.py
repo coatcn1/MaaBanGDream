@@ -290,3 +290,34 @@ def test_restarting_mfa_invalidates_previous_termination_authorization(tmp_path)
     assert not result.allowed
     assert result.action == "prompt"
     assert process.alive
+
+def test_skip_cleanup_warns_but_never_terminates():
+    calls: list[tuple[str, int]] = []
+    process = alas_process(110, calls=calls)
+    table = FakeProcessTable([process])
+    guard = ProcessConflictGuardService(table.process_iter, table.wait_procs)
+
+    result = guard.check(skip_cleanup=True)
+
+    assert result.allowed
+    assert result.action == "skipped"
+    assert process.alive
+    assert calls == []
+
+
+def test_scan_timeout_skips_remaining_cleanup_and_allows_task():
+    ticks = iter((0.0, 0.0, 31.0))
+    process = alas_process(120)
+    table = FakeProcessTable([process])
+    guard = ProcessConflictGuardService(
+        table.process_iter,
+        table.wait_procs,
+        clock=lambda: next(ticks),
+        timeout_seconds=30.0,
+    )
+
+    result = guard.check()
+
+    assert result.allowed
+    assert result.action == "timeout"
+    assert process.alive
