@@ -445,6 +445,31 @@ def test_back_only_recovery_never_clicks_recognized_nodes(monkeypatch):
     assert context.tasker.controller.keys == [4]
 
 
+def test_back_only_recovery_clicks_only_explicit_safe_story_nodes(monkeypatch):
+    context = Context({
+        "HomeMarker": [False, False, True],
+        "StorySkip": [False, True],
+        "StoryMenu": [True],
+        "UnrelatedConfirm": [True],
+    })
+    ticks = iter(value / 1000 for value in range(1000))
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(common_recover.time, "sleep", lambda _seconds: None)
+
+    assert common_recover.CommonRecover().run(
+        context,
+        argv(
+            escape_interval_ms=0,
+            escape_timeout_ms=100,
+            click_nodes=["UnrelatedConfirm"],
+            back_only_click_nodes=["StorySkip", "StoryMenu"],
+            back_only=True,
+        ),
+    )
+    assert context.tasker.controller.clicks == [(25, 40), (25, 40)]
+    assert context.tasker.controller.keys == []
+
+
 def test_back_only_recovery_uses_login_state_machine_after_restart(monkeypatch):
     context = Context({
         "HomeMarker": [False, False, False, False, True],

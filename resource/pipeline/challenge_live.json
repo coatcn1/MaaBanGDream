@@ -769,6 +769,12 @@
     "custom_action_param": {
       "home_node": "ChallengeHomeMarker",
       "click_nodes": [],
+      "back_only_click_nodes": [
+        "AutoLiveStorySkipConfirmLarge",
+        "AutoLiveStorySkipConfirm",
+        "AutoLiveStorySkip",
+        "AutoLiveStoryMenu"
+      ],
       "back_only": true,
       "escape_interval_ms": 500,
       "escape_timeout_ms": 60000,

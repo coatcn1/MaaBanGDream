@@ -121,6 +121,9 @@ class CommonRecover(CustomAction):
         startup_grace = int(params.get("startup_grace_ms", 0)) / 1000
         click_nodes = [str(node) for node in params.get("click_nodes", [])]
         back_only = bool(params.get("back_only", False))
+        back_only_click_nodes = [
+            str(node) for node in params.get("back_only_click_nodes", [])
+        ]
         login_start_node = str(params.get("login_start_node", ""))
         login_start_target = params.get("login_start_target")
         login_tap_target = params.get("login_tap_target")
@@ -190,6 +193,31 @@ class CommonRecover(CustomAction):
                         f"已识别主页，状态：{login_status}",
                     )
                     return True
+                if back_only and restart == 0:
+                    safe_story_clicked = False
+                    for node in back_only_click_nodes:
+                        result = context.run_recognition(node, image)
+                        if not result or not result.hit or not result.box:
+                            continue
+                        if context.tasker.stopping:
+                            return True
+                        box = result.box
+                        controller.post_click(
+                            box.x + box.w // 2,
+                            box.y + box.h // 2,
+                        ).wait()
+                        safe_story_clicked = True
+                        log_task(
+                            "娓告垙鍚姩",
+                            "涓婚〉鎭㈠",
+                            "INFO",
+                            f"璇嗗埆骞跺鐞嗗畨鍏ㄥ墽鎯呰妭鐐癸細{node}",
+                        )
+                        break
+                    if safe_story_clicked:
+                        if not _wait_unless_stopping(context, interval):
+                            return True
+                        continue
                 # Result recovery is ESC-only for the full initial window.
                 # If that cannot escape a page whose BACK dialog toggles
                 # between open/cancel (for example an unlocked story), a

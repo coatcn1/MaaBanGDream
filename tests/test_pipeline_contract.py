@@ -345,6 +345,12 @@ def test_realtime_multi_live_contract_and_options():
     return_home = nodes["RealtimeLiveReturnHome"]["custom_action_param"]
     assert return_home["back_only"] is True
     assert return_home["click_nodes"] == []
+    assert return_home["back_only_click_nodes"] == [
+        "AutoLiveStorySkipConfirmLarge",
+        "AutoLiveStorySkipConfirm",
+        "AutoLiveStorySkip",
+        "AutoLiveStoryMenu",
+    ]
     assert return_home["escape_interval_ms"] == 500
     assert return_home["restart_limit"] == 1
     assert return_home["login_start_node"] == "AutoLiveLoginScreenMarker"
@@ -355,6 +361,12 @@ def test_realtime_multi_live_contract_and_options():
     challenge_return = challenge["ChallengeReturnHome"]["custom_action_param"]
     assert challenge_return["back_only"] is True
     assert challenge_return["click_nodes"] == []
+    assert challenge_return["back_only_click_nodes"] == [
+        "AutoLiveStorySkipConfirmLarge",
+        "AutoLiveStorySkipConfirm",
+        "AutoLiveStorySkip",
+        "AutoLiveStoryMenu",
+    ]
     assert challenge_return["escape_interval_ms"] == 500
     assert challenge_return["restart_limit"] == 1
     assert challenge_return["login_start_node"] == "AutoLiveLoginScreenMarker"
