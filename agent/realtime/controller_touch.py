@@ -89,8 +89,15 @@ class ControllerTouchDispatcher:
         self.active_positions[contact] = x
 
     def synchronize(self) -> None:
-        """Best-effort non-hot-path reset of every MaaFramework contact."""
-        for contact in range(10):
+        """Release contacts owned by this dispatcher without desynchronizing MTouch.
+
+        MaaFramework's MTouch backend accepts UP for an inactive contact, but a
+        burst of such synthetic releases can leave the device-side gesture
+        stream unable to register the next song's taps.  External stale
+        contacts are therefore recovered lazily by ``_down`` when the backend
+        reports ``already active``.
+        """
+        for contact in sorted(self.active_contacts):
             try:
                 self.controller.post_touch_up(contact).wait()
             except Exception:

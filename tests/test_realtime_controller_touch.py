@@ -186,13 +186,23 @@ def test_controller_reported_active_contact_is_released_and_retried_once():
     assert touch.recovered_contacts == 1
 
 
-def test_synchronize_releases_all_possible_contacts_before_song():
+def test_synchronize_does_not_send_up_for_contacts_unknown_to_dispatcher():
     controller = Controller()
     touch = ControllerTouchDispatcher(controller, lambda: False)
 
     touch.synchronize()
 
-    assert controller.calls == [("up", contact) for contact in range(10)]
+    assert controller.calls == []
+
+
+def test_synchronize_releases_only_contacts_owned_by_dispatcher():
+    controller = Controller()
+    touch = ControllerTouchDispatcher(controller, lambda: False)
+    touch.active_contacts.update({1, 6})
+
+    touch.synchronize()
+
+    assert controller.calls == [("up", 1), ("up", 6)]
 
 
 def test_stop_during_dispatch_releases_every_active_contact():
@@ -221,7 +231,7 @@ def test_close_always_releases_contacts():
 
     touch.close()
 
-    assert controller.calls == [("up", contact) for contact in range(10)]
+    assert controller.calls == [("up", 1), ("up", 6)]
     assert touch.active_contacts == set()
 
 
