@@ -121,6 +121,20 @@ def test_alas_match_requires_an_explicit_install_path_or_script():
             name="python.exe",
         )
     )
+
+
+def test_bundled_adb_helper_is_never_a_cleanup_target():
+    executable = r"E:\alas\AzurLaneAutoScript\toolkit\adb.exe"
+    assert not is_alas_process(
+        ProcessIdentity(
+            pid=14,
+            parent_pid=10,
+            create_time=1.0,
+            executable=executable,
+            command_line=(executable, "-P", "5037", "fork-server", "server"),
+            name="adb.exe",
+        )
+    )
     assert not is_alas_process(
         ProcessIdentity(
             pid=13,
@@ -161,6 +175,30 @@ def test_second_detection_terminates_children_before_parents():
     assert result.action == "terminated"
     assert calls == [("terminate", 31), ("terminate", 30)]
     assert table.wait_calls == [([31, 30], 3.0)]
+
+
+def test_cleanup_leaves_bundled_adb_server_running():
+    calls: list[tuple[str, int]] = []
+    parent = alas_process(32, calls=calls)
+    adb_path = r"E:\alas\AzurLaneAutoScript\toolkit\adb.exe"
+    adb = FakeProcess(
+        pid=33,
+        ppid=32,
+        create_time=101.0,
+        exe=adb_path,
+        cmdline=[adb_path, "-P", "5037", "fork-server", "server"],
+        name="adb.exe",
+        calls=calls,
+    )
+    table = FakeProcessTable([parent, adb])
+    guard = ProcessConflictGuardService(table.process_iter, table.wait_procs)
+    assert guard.check().action == "prompt"
+
+    result = guard.check()
+
+    assert result.action == "terminated"
+    assert calls == [("terminate", 32)]
+    assert adb.alive
 
 
 def test_pid_reuse_or_restarted_process_requires_a_new_prompt():

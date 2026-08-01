@@ -60,6 +60,13 @@ class GuardResult:
 
 def is_alas_process(identity: ProcessIdentity) -> bool:
     executable = _normalized_path(identity.executable)
+    executable_name = executable.rsplit("/", 1)[-1]
+    reported_name = str(identity.name or "").lower()
+    # ADB servers use a machine-wide port and may be shared by MaaFramework.
+    # Killing a bundled helper disconnects the active Maa controller and makes
+    # the very next DirectHit recognition spend 60 seconds retrying screenshots.
+    if executable_name.endswith("adb.exe") or reported_name.endswith("adb.exe"):
+        return False
     if _ALAS_PATH_MARKER in executable:
         return True
     for raw_token in identity.command_line:
