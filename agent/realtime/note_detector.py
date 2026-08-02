@@ -217,11 +217,12 @@ class NoteDetector:
                 top:top + height,
                 left:left + width,
             ] == label
-            row_extents = []
-            for row in component:
-                xs = np.flatnonzero(row)
-                if xs.size:
-                    row_extents.append(float(xs[-1] - xs[0] + 1))
+            # Row extents vectorised: first/last lit pixel per row, same
+            # integer values as the per-row flatnonzero loop it replaces.
+            has_pixel = component.any(axis=1)
+            first_lit = component.argmax(axis=1)
+            last_lit = component.shape[1] - 1 - component[:, ::-1].argmax(axis=1)
+            row_extents = (last_lit - first_lit + 1)[has_pixel].astype(float).tolist()
             third = max(1, len(row_extents) // 3)
             top_extent = float(np.mean(row_extents[:third]))
             bottom_extent = float(np.mean(row_extents[-third:]))

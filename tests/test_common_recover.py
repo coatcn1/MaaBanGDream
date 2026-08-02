@@ -345,6 +345,7 @@ def test_login_mode_uses_safe_tap_anywhere_fallback_once(monkeypatch):
     context = Context({
         "HomeMarker": [False, False, True],
         "LoginScreenMarker": [True],
+        "UnrelatedConfirm": [True],
     })
     ticks = iter(value / 1000 for value in range(1000))
     monkeypatch.setattr(common_recover.time, "monotonic", lambda: next(ticks))
@@ -358,6 +359,7 @@ def test_login_mode_uses_safe_tap_anywhere_fallback_once(monkeypatch):
             login_start_node="LoginScreenMarker",
             login_start_target=[640, 635],
             login_tap_target=[640, 360],
+            click_nodes=["UnrelatedConfirm"],
             escape_after_login_start=True,
         ),
     )
@@ -388,3 +390,115 @@ def test_login_start_marker_false_positive_is_clicked_only_once(monkeypatch):
     )
     assert context.tasker.controller.clicks == [(640, 635)]
     assert context.tasker.controller.keys == [4]
+
+
+def test_login_click_starts_a_fresh_full_escape_window(monkeypatch):
+    context = Context({
+        "HomeMarker": [False] * 100 + [True],
+        "LoginScreenMarker": [False] * 50 + [True],
+    })
+    now = [0.0]
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: now[0])
+
+    def advance(_context, seconds):
+        now[0] += max(seconds, 1.0)
+        return True
+
+    monkeypatch.setattr(common_recover, "_wait_unless_stopping", advance)
+
+    assert common_recover.CommonRecover().run(
+        context,
+        argv(
+            escape_interval_ms=1000,
+            escape_timeout_ms=60000,
+            restart_limit=0,
+            login_start_node="LoginScreenMarker",
+            login_start_target=[640, 635],
+            login_marker_priority_attempts=3,
+            escape_after_login_start=True,
+        ),
+    )
+    assert context.tasker.controller.clicks == [(640, 635)]
+    assert context.tasker.controller.keys
+    assert now[0] > 60
+
+
+def test_back_only_recovery_never_clicks_recognized_nodes(monkeypatch):
+    context = Context({
+        "HomeMarker": [False, True],
+        "ResultConfirm": [True],
+    })
+    ticks = iter(value / 1000 for value in range(1000))
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(common_recover.time, "sleep", lambda _seconds: None)
+
+    assert common_recover.CommonRecover().run(
+        context,
+        argv(
+            escape_interval_ms=0,
+            escape_timeout_ms=100,
+            click_nodes=["ResultConfirm"],
+            back_only=True,
+        ),
+    )
+    assert context.tasker.controller.clicks == []
+    assert context.tasker.controller.keys == [4]
+
+
+def test_back_only_recovery_clicks_only_explicit_safe_story_nodes(monkeypatch):
+    context = Context({
+        "HomeMarker": [False, False, True],
+        "StorySkip": [False, True],
+        "StoryMenu": [True],
+        "UnrelatedConfirm": [True],
+    })
+    ticks = iter(value / 1000 for value in range(1000))
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(common_recover.time, "sleep", lambda _seconds: None)
+
+    assert common_recover.CommonRecover().run(
+        context,
+        argv(
+            escape_interval_ms=0,
+            escape_timeout_ms=100,
+            click_nodes=["UnrelatedConfirm"],
+            back_only_click_nodes=["StorySkip", "StoryMenu"],
+            back_only=True,
+        ),
+    )
+    assert context.tasker.controller.clicks == [(25, 40), (25, 40)]
+    assert context.tasker.controller.keys == []
+
+
+def test_back_only_recovery_uses_login_state_machine_after_restart(monkeypatch):
+    context = Context({
+        "HomeMarker": [False, False, False, False, True],
+        "LoginScreenMarker": [True],
+    })
+    now = [0.0]
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: now[0])
+
+    def advance(_context, seconds):
+        now[0] += max(seconds, 1.0)
+        return True
+
+    monkeypatch.setattr(common_recover, "_wait_unless_stopping", advance)
+
+    assert common_recover.CommonRecover().run(
+        context,
+        argv(
+            escape_interval_ms=1000,
+            escape_timeout_ms=2000,
+            restart_wait_ms=0,
+            restart_limit=1,
+            back_only=True,
+            login_start_node="LoginScreenMarker",
+            login_start_target=[640, 635],
+            login_tap_target=[640, 360],
+            escape_after_login_start=True,
+        ),
+    )
+    assert context.tasker.controller.keys == [4, 4]
+    assert context.tasker.controller.stops == ["com.bilibili.star.bili"]
+    assert context.tasker.controller.starts == ["com.bilibili.star.bili"]
+    assert context.tasker.controller.clicks == [(640, 635), (640, 360)]

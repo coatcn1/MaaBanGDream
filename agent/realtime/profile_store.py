@@ -71,6 +71,7 @@ class RealtimeProfileStore:
         "life_safety_enabled": True,
         "life_exit_threshold": 200,
         "rehearsal_ignore_life_safety": True,
+        "skip_process_conflict_cleanup": False,
         "game_effect_settings_enabled": True,
         "judgement_assist_effect": True,
         "tap_effect": 1,
@@ -176,6 +177,9 @@ class RealtimeProfileStore:
         rehearsal_ignore = options.get("rehearsal_ignore_life_safety", True)
         if not isinstance(rehearsal_ignore, bool):
             raise ValueError("rehearsal_ignore_life_safety 必须是布尔值")
+        skip_conflict_cleanup = options.get("skip_process_conflict_cleanup", False)
+        if not isinstance(skip_conflict_cleanup, bool):
+            raise ValueError("skip_process_conflict_cleanup must be boolean")
         effect_settings_enabled = options.get("game_effect_settings_enabled", True)
         if not isinstance(effect_settings_enabled, bool):
             raise ValueError("game_effect_settings_enabled 必须是布尔值")
@@ -220,6 +224,7 @@ class RealtimeProfileStore:
             "life_safety_enabled": enabled,
             "life_exit_threshold": threshold,
             "rehearsal_ignore_life_safety": rehearsal_ignore,
+            "skip_process_conflict_cleanup": skip_conflict_cleanup,
             "game_effect_settings_enabled": effect_settings_enabled,
             "judgement_assist_effect": judgement_assist,
             "tap_effect": tap_effect,

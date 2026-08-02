@@ -18,13 +18,13 @@
     ],
     "focus": {
       "Node.Action.Starting": {
-        "content": "正在检查 ALAS 进程冲突",
+        "content": "正在检测其他程序占用",
         "display": [
           "log"
         ]
       },
       "Node.Action.Failed": {
-        "content": "❌ 检测到 ALAS 冲突进程，本次任务已安全阻止",
+        "content": "❌ 检测到其他程序占用，本次任务已安全停止",
         "display": [
           "log",
           "toast"

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
-
-from agent.realtime.profile_play_action import collect_result
+from agent.realtime.profile_play_action import (
+    ResultCollectionStatus,
+    collect_result,
+)
 from agent.realtime.result_parser import LiveResult
 
 
@@ -43,30 +44,43 @@ class Parser:
         return LiveResult(170, 42, 0, 0, 3, 33, 9, .8)
 
 
+class Clock:
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
 def test_result_collection_checks_each_frame_and_presses_one_back_at_a_time():
     controller = Controller()
+    clock = Clock()
 
-    result, image = collect_result(
+    outcome = collect_result(
         controller,
         lambda: False,
-        attempts=3,
-        interval_seconds=0,
-        stability_interval_seconds=0,
+        stability_interval_seconds=1,
         parser=Parser(),
+        clock=clock.monotonic,
+        sleeper=clock.sleep,
     )
 
-    assert result.fast == 33
-    assert result.slow == 9
-    assert image.any()
+    assert outcome.status is ResultCollectionStatus.STABLE
+    assert outcome.result.fast == 33
+    assert outcome.result.slow == 9
+    assert outcome.image.any()
     assert controller.backs == 1
 
 
 def test_result_collection_stops_without_back_input():
     controller = Controller()
 
-    with pytest.raises(InterruptedError, match="任务停止"):
-        collect_result(controller, lambda: True, parser=Parser())
+    outcome = collect_result(controller, lambda: True, parser=Parser())
 
+    assert outcome.status is ResultCollectionStatus.STOPPED
     assert controller.backs == 0
 
 
@@ -76,13 +90,15 @@ def test_result_collection_checks_foreground_before_back_input():
     def reject_foreign_app():
         raise RuntimeError("foreign foreground")
 
-    with pytest.raises(RuntimeError, match="foreign foreground"):
+    try:
         collect_result(
-            controller,
-            lambda: False,
-            parser=Parser(),
+            controller, lambda: False, parser=Parser(),
             before_input=reject_foreign_app,
         )
+    except RuntimeError as exc:
+        assert "foreign foreground" in str(exc)
+    else:
+        raise AssertionError("foreground rejection must propagate")
 
     assert controller.backs == 0
 
@@ -121,18 +137,56 @@ class AnimatingParser:
 
 def test_result_collection_waits_for_count_up_animation_to_settle():
     controller = AnimatingController()
+    clock = Clock()
 
-    result, image = collect_result(
+    outcome = collect_result(
         controller,
         lambda: False,
-        attempts=3,
-        interval_seconds=0,
-        stability_interval_seconds=0,
+        stability_interval_seconds=1,
         parser=AnimatingParser(),
+        clock=clock.monotonic,
+        sleeper=clock.sleep,
     )
 
-    assert result.perfect == 374
-    assert result.miss == 6
-    assert int(image.flat[0]) == 3
+    assert outcome.status is ResultCollectionStatus.STABLE
+    assert outcome.result.perfect == 374
+    assert outcome.result.miss == 6
+    assert int(outcome.image.flat[0]) == 3
     # The panel is already visible, so settling must never press BACK.
     assert controller.backs == 0
+
+
+def test_result_timeout_uses_slow_then_medium_esc_and_never_clicks():
+    clock = Clock()
+
+    class NoResultController:
+        def __init__(self):
+            self.esc_times = []
+
+        def post_screencap(self):
+            return Job(np.zeros((720, 1280, 3), dtype=np.uint8))
+
+        def post_click_key(self, key):
+            assert key == 4
+            self.esc_times.append(clock.now)
+            return Job()
+
+    class NoResultParser:
+        def parse(self, _image):
+            raise ValueError("not result")
+
+    controller = NoResultController()
+    outcome = collect_result(
+        controller,
+        lambda: False,
+        parser=NoResultParser(),
+        clock=clock.monotonic,
+        sleeper=clock.sleep,
+    )
+
+    assert outcome.status is ResultCollectionStatus.TIMED_OUT
+    assert outcome.elapsed_seconds == 60
+    early = [time for time in controller.esc_times if time < 30]
+    late = [time for time in controller.esc_times if time >= 30]
+    assert early[:3] == [0.0, 1.5, 3.0]
+    assert late[:3] == [30.0, 31.0, 32.0]

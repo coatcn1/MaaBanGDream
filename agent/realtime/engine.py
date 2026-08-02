@@ -44,6 +44,7 @@ class EngineStats:
     frame_interval_p95_ms: float = 0.0
     frame_interval_max_ms: float = 0.0
     effective_fps: float = 0.0
+    recovered_contacts: int = 0
 
 
 class RealtimeEngine:
@@ -78,18 +79,22 @@ class RealtimeEngine:
         capture: Callable[[], np.ndarray],
         stopping: Callable[[], bool],
         *,
-        duration_seconds: float,
+        duration_seconds: float | None,
         target_fps: int,
         continue_after_life_depleted: bool = False,
         life_exit_threshold: int | None = None,
         on_life_safety: Callable[[object], None] | None = None,
     ) -> EngineStats:
-        if not 1 <= duration_seconds <= 600:
+        if duration_seconds is not None and not 1 <= duration_seconds <= 600:
             raise ValueError("duration_seconds 必须在 1..600 之间")
         if not 15 <= target_fps <= 120:
             raise ValueError("target_fps 必须在 15..120 之间")
         interval = 1 / target_fps
-        deadline = self.clock() + duration_seconds
+        deadline = (
+            float("inf")
+            if duration_seconds is None
+            else self.clock() + duration_seconds
+        )
         next_frame = self.clock()
         frames = actions_count = 0
         was_stopped = False
@@ -105,6 +110,9 @@ class RealtimeEngine:
         )
         last_transient_action_at = float("-inf")
         hold_feedback_block_until = float("-inf")
+        synchronize_touch = getattr(self.touch, "synchronize", None)
+        if synchronize_touch is not None:
+            synchronize_touch()
         try:
             while self.clock() < deadline:
                 if stopping():
@@ -246,11 +254,13 @@ class RealtimeEngine:
                 terminal_reason = "生命值触发安全停止"
             elif completed:
                 terminal_reason = "已识别演奏结束并进入结算"
-            else:
+            elif duration_seconds is not None:
                 terminal_reason = (
                     f"演奏超过安全时限 {duration_seconds:g} 秒，"
                     "仍未识别到结算画面"
                 )
+            else:
+                terminal_reason = "持续监听演奏已结束"
             frame_intervals_ms = [
                 (current - previous) * 1000
                 for previous, current in zip(processed_at, processed_at[1:])
@@ -314,6 +324,9 @@ class RealtimeEngine:
                 effective_fps=(
                     (len(processed_at) - 1) / measured_seconds
                     if measured_seconds > 0 else 0.0
+                ),
+                recovered_contacts=int(
+                    getattr(self.touch, "recovered_contacts", 0)
                 ),
             )
         finally:

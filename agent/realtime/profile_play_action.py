@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import time
 import traceback
+from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 
 import cv2
 
@@ -70,6 +72,7 @@ def pause_overlay_changed(before, after) -> bool:
 
 def _write_calibration_report(path, *, result, stats, timing_offset_ms, song_id):
     payload = {
+        "valid": True,
         **result.to_dict(),
         "timing_offset_ms": int(timing_offset_ms),
         "initial_timing_offset_ms": stats.initial_timing_offset_ms,
@@ -83,6 +86,7 @@ def _write_calibration_report(path, *, result, stats, timing_offset_ms, song_id)
         "realtime_feedback_ignored_reasons": stats.timing_feedback_ignored_reasons,
         "filtered_adjacent_artifacts": stats.filtered_adjacent_artifacts,
         "rejected_hold_candidates": stats.rejected_hold_candidates,
+        "recovered_contacts": stats.recovered_contacts,
     }
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -108,6 +112,7 @@ def _result_report_payload(
         "realtime_feedback_ignored_reasons": stats.timing_feedback_ignored_reasons,
         "filtered_adjacent_artifacts": stats.filtered_adjacent_artifacts,
         "rejected_hold_candidates": stats.rejected_hold_candidates,
+        "recovered_contacts": stats.recovered_contacts,
         "processed_frames": stats.processed_frames,
         "dispatched_actions": stats.dispatched_actions,
         "action_counts": stats.action_counts,
@@ -126,88 +131,127 @@ def _result_counts(result: LiveResult) -> tuple[int, ...]:
     )
 
 
-def _settle_result(
-    controller,
-    stopping,
-    *,
-    parser,
-    candidate: tuple[LiveResult, object],
-    sleeper,
-    attempts: int,
-    interval_seconds: float,
-) -> tuple[LiveResult, object]:
-    """Wait for the result panel's count-up animation to finish.
+class ResultCollectionStatus(str, Enum):
+    STABLE = "stable"
+    TIMED_OUT = "timed_out"
+    STOPPED = "stopped"
 
-    The panel counts every judgement number up from zero over a couple of
-    seconds. A frame caught mid-animation parses cleanly (the glyphs are
-    crisp) but reports tiny values, so a single successful parse is not
-    trustworthy: only a reading that survives a re-check unchanged counts.
-    No input is sent while settling — the panel is already visible.
-    """
-    result, _ = candidate
-    for _ in range(attempts):
+
+@dataclass(frozen=True)
+class ResultCollectionOutcome:
+    status: ResultCollectionStatus
+    result: LiveResult | None = None
+    image: object | None = None
+    elapsed_seconds: float = 0.0
+
+
+def _wait_until(deadline, stopping, *, clock, sleeper) -> bool:
+    while clock() < deadline:
         if stopping():
-            raise InterruptedError("任务停止，取消结算读取")
-        deadline = time.monotonic() + interval_seconds
-        while time.monotonic() < deadline:
-            if stopping():
-                raise InterruptedError("任务停止，取消结算读取")
-            sleeper(min(.1, max(0.0, deadline - time.monotonic())))
-        latest_image = controller.post_screencap().wait().get()
-        try:
-            latest = parser.parse(latest_image)
-        except ValueError:
-            continue
-        if _result_counts(latest) == _result_counts(result):
-            return latest, latest_image
-        result = latest
-    raise ValueError("结算数字长时间未稳定，放弃本次读取")
+            return False
+        sleeper(min(.1, max(0.0, deadline - clock())))
+    return not stopping()
 
 
 def collect_result(
     controller,
     stopping,
     *,
-    attempts: int = 30,
-    interval_seconds: float = 1.5,
     parser: ResultParser | None = None,
     sleeper=time.sleep,
+    clock=time.monotonic,
     before_input=lambda: None,
-    stability_attempts: int = 10,
+    timeout_seconds: float = 60.0,
+    slow_phase_seconds: float = 30.0,
+    slow_interval_seconds: float = 1.5,
+    medium_interval_seconds: float = 1.0,
     stability_interval_seconds: float = 1.0,
-) -> tuple[LiveResult, object]:
-    """Press BACK one step at a time until a valid result panel is visible."""
+) -> ResultCollectionOutcome:
+    """Use only ESC while seeking a stable result, bounded by 60 seconds."""
     parser = parser or ResultParser()
-    for attempt in range(attempts + 1):
+    started_at = clock()
+    deadline = started_at + timeout_seconds
+    candidate: LiveResult | None = None
+    candidate_at = 0.0
+    last_image = None
+    while clock() < deadline:
         if stopping():
-            raise InterruptedError("任务停止，取消结算读取")
+            return ResultCollectionOutcome(
+                ResultCollectionStatus.STOPPED,
+                elapsed_seconds=clock() - started_at,
+            )
         image = controller.post_screencap().wait().get()
+        last_image = image
         try:
             result = parser.parse(image)
         except ValueError:
-            pass
-        else:
-            return _settle_result(
-                controller,
+            result = None
+
+        now = clock()
+        if result is not None:
+            if (
+                candidate is not None
+                and now - candidate_at >= stability_interval_seconds
+                and _result_counts(result) == _result_counts(candidate)
+            ):
+                return ResultCollectionOutcome(
+                    ResultCollectionStatus.STABLE,
+                    result=result,
+                    image=image,
+                    elapsed_seconds=now - started_at,
+                )
+            if candidate is None or _result_counts(result) != _result_counts(candidate):
+                candidate = result
+                candidate_at = now
+            if not _wait_until(
+                min(deadline, now + stability_interval_seconds),
                 stopping,
-                parser=parser,
-                candidate=(result, image),
+                clock=clock,
                 sleeper=sleeper,
-                attempts=stability_attempts,
-                interval_seconds=stability_interval_seconds,
-            )
-        if attempt >= attempts:
-            break
-        if stopping():
-            raise InterruptedError("任务停止，取消结算读取")
+            ):
+                return ResultCollectionOutcome(
+                    ResultCollectionStatus.STOPPED,
+                    elapsed_seconds=clock() - started_at,
+                )
+            continue
+
+        if candidate is not None:
+            if not _wait_until(
+                min(deadline, now + stability_interval_seconds),
+                stopping,
+                clock=clock,
+                sleeper=sleeper,
+            ):
+                return ResultCollectionOutcome(
+                    ResultCollectionStatus.STOPPED,
+                    elapsed_seconds=clock() - started_at,
+                )
+            continue
+
         before_input()
         controller.post_click_key(4).wait()
-        deadline = time.monotonic() + interval_seconds
-        while time.monotonic() < deadline:
-            if stopping():
-                raise InterruptedError("任务停止，取消结算读取")
-            sleeper(min(.1, max(0.0, deadline - time.monotonic())))
-    raise ValueError("连续按 BACK 后仍未识别到有效结算画面")
+        elapsed = now - started_at
+        interval = (
+            slow_interval_seconds
+            if elapsed < slow_phase_seconds
+            else medium_interval_seconds
+        )
+        if not _wait_until(
+            min(deadline, now + interval),
+            stopping,
+            clock=clock,
+            sleeper=sleeper,
+        ):
+            return ResultCollectionOutcome(
+                ResultCollectionStatus.STOPPED,
+                elapsed_seconds=clock() - started_at,
+            )
+
+    return ResultCollectionOutcome(
+        ResultCollectionStatus.TIMED_OUT,
+        image=last_image,
+        elapsed_seconds=clock() - started_at,
+    )
 
 
 def resolve_profile_for_settings_gate(context: Context, params: dict, *, controller=None):
@@ -305,11 +349,18 @@ class RealtimeProfilePlay(CustomAction):
         controller = context.tasker.controller
         require_profile = bool(params.get("require_profile", True))
         difficulty = str(params.get("difficulty", "Easy"))
-        verified = verified_settings(difficulty)
+        ignore_note_speed = bool(params.get("ignore_note_speed", False))
+        verified = None if ignore_note_speed else verified_settings(difficulty)
         if bool(params.get("settings_gate_required", False)) and verified is None:
             raise RuntimeError("本次开演前尚未实际验证游戏流速")
         settings = (
-            resolve_profile(context, params, controller=controller)
+            (
+                resolve_profile_for_settings_gate(
+                    context, params, controller=controller,
+                )
+                if ignore_note_speed
+                else resolve_profile(context, params, controller=controller)
+            )
             if require_profile else None
         )
         if context.tasker.stopping:
@@ -326,6 +377,13 @@ class RealtimeProfilePlay(CustomAction):
             else f"declared_speed={float(params.get('note_speed', 2.0)):.2f}"
         )
         print(f"RealtimeProfilePlay {mode} {speed_message}", flush=True)
+        if ignore_note_speed and settings is not None:
+            print(
+                "RealtimeProfilePlay listener_mode=true "
+                f"profile_speed={settings.note_speed:.2f} "
+                "actual game note speed must match the accepted Profile",
+                flush=True,
+            )
         recorder = (
             RealtimeDebugRecorder(PROJECT_ROOT / "debug" / "recordings")
             if (params.get("debug_recording") or debug_enabled()) else None
@@ -393,10 +451,14 @@ class RealtimeProfilePlay(CustomAction):
             if not confirmed:
                 raise RuntimeError("life safety triggered but pause overlay was not confirmed")
 
+        duration_value = params.get("duration_seconds", 30)
+        duration_seconds = (
+            None if duration_value is None else float(duration_value)
+        )
         stats = engine.run(
             lambda: controller.post_screencap().wait().get(),
             lambda: context.tasker.stopping,
-            duration_seconds=float(params.get("duration_seconds", 30)),
+            duration_seconds=duration_seconds,
             target_fps=target_fps,
             continue_after_life_depleted=continue_after_depleted,
             life_exit_threshold=life_threshold,
@@ -422,20 +484,51 @@ class RealtimeProfilePlay(CustomAction):
             f"frame_ms_p95={stats.frame_interval_p95_ms:.2f} "
             f"frame_ms_max={stats.frame_interval_max_ms:.2f} "
             f"effective_fps={stats.effective_fps:.2f} "
+            f"touch_recoveries={stats.recovered_contacts} "
             f"reason={stats.terminal_reason}",
             flush=True,
         )
         if stats.completed and params.get("save_result_frame"):
-            result_data, result = collect_result(
+            outcome = collect_result(
                 controller,
                 lambda: context.tasker.stopping,
-                attempts=int(params.get("result_back_attempts", 30)),
-                interval_seconds=float(params.get("result_back_interval_seconds", 1.5)),
                 before_input=lambda: require_game_foreground(controller),
+                timeout_seconds=60.0,
             )
             output = PROJECT_ROOT / "screencap"
             output.mkdir(parents=True, exist_ok=True)
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            if outcome.status is ResultCollectionStatus.STOPPED:
+                print("RealtimeProfilePlay result collection stopped by user", flush=True)
+                return True
+            if outcome.status is ResultCollectionStatus.TIMED_OUT:
+                diagnostic = output / f"realtime-result-timeout-{stamp}.png"
+                if outcome.image is not None:
+                    cv2.imwrite(str(diagnostic), outcome.image)
+                reason = "结算数字在 60 秒内未稳定，已跳过本次读取并继续"
+                print(
+                    "RealtimeProfilePlay result_timeout=true "
+                    f"diagnostic={diagnostic.name} reason={reason}",
+                    flush=True,
+                )
+                calibration_report = params.get("calibration_report")
+                if calibration_report:
+                    from .calibration_action import current_song_id
+
+                    report_path = PROJECT_ROOT / str(calibration_report)
+                    report_path.parent.mkdir(parents=True, exist_ok=True)
+                    report_path.write_text(json.dumps({
+                        "valid": False,
+                        "song_id": current_song_id(),
+                        "completed": bool(stats.completed),
+                        "survived": not stats.life_depleted,
+                        "reason": reason,
+                    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                return True
+            result_data = outcome.result
+            result = outcome.image
+            if result_data is None or result is None:
+                raise RuntimeError("stable result outcome is incomplete")
             path = output / f"realtime-result-{stamp}.png"
             if not cv2.imwrite(str(path), result):
                 raise OSError(f"无法保存结算截图: {path}")

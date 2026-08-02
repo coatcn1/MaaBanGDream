@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import statistics
+import time
 from pathlib import Path
 import sys
 
@@ -53,6 +55,7 @@ def replay(
     *,
     timing_offset_ms: int = 0,
     difficulty: str = "Hard",
+    collect: bool = False,
 ) -> dict[str, object]:
     planner = RealtimePlanner(
         judgement_y=565,
@@ -93,7 +96,7 @@ def replay(
         event for event in diagnostics
         if event.get("event") == "hold_release"
     ]
-    return {
+    result = {
         "recorded_actions": len(recorded),
         "replayed_actions": len(replayed),
         "recorded_structural_actions": {
@@ -170,6 +173,21 @@ def replay(
             })
         },
     }
+    if collect:
+        result["actions_sequence"] = [
+            {
+                "kind": action.kind.value,
+                "lane": action.lane,
+                "timestamp": action.timestamp,
+                "contact": action.contact,
+                "reason": action.reason,
+                "track_id": action.track_id,
+                "target_x": action.target_x,
+            }
+            for action in replayed
+        ]
+        result["diagnostics_sequence"] = diagnostics
+    return result
 
 
 def main() -> None:
@@ -177,16 +195,57 @@ def main() -> None:
     parser.add_argument("trace", type=Path)
     parser.add_argument("--timing-offset-ms", type=int, default=0)
     parser.add_argument("--difficulty", default="Hard")
+    parser.add_argument(
+        "--dump-actions",
+        type=Path,
+        default=None,
+        help="Write the full replayed action and diagnostic sequences as JSON",
+    )
+    parser.add_argument(
+        "--benchmark",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Replay N times and report wall-time statistics instead",
+    )
     args = parser.parse_args()
-    print(json.dumps(
-        replay(
-            args.trace,
-            timing_offset_ms=args.timing_offset_ms,
-            difficulty=args.difficulty,
-        ),
-        ensure_ascii=False,
-        indent=2,
-    ))
+    if args.benchmark > 0:
+        times = []
+        for _ in range(args.benchmark):
+            started = time.perf_counter()
+            replay(
+                args.trace,
+                timing_offset_ms=args.timing_offset_ms,
+                difficulty=args.difficulty,
+            )
+            times.append(time.perf_counter() - started)
+        print(json.dumps({
+            "runs": args.benchmark,
+            "min_seconds": round(min(times), 4),
+            "median_seconds": round(statistics.median(times), 4),
+            "mean_seconds": round(statistics.fmean(times), 4),
+        }, indent=2))
+        return
+    result = replay(
+        args.trace,
+        timing_offset_ms=args.timing_offset_ms,
+        difficulty=args.difficulty,
+        collect=args.dump_actions is not None,
+    )
+    if args.dump_actions is not None:
+        payload = {
+            "trace": args.trace.name,
+            "difficulty": args.difficulty,
+            "timing_offset_ms": args.timing_offset_ms,
+            "actions": result.pop("actions_sequence"),
+            "diagnostics": result.pop("diagnostics_sequence"),
+        }
+        args.dump_actions.parent.mkdir(parents=True, exist_ok=True)
+        args.dump_actions.write_text(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

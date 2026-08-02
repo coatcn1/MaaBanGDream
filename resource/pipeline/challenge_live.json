@@ -32,13 +32,13 @@
     ],
     "focus": {
       "Node.Action.Starting": {
-        "content": "正在检查 ALAS 进程冲突",
+        "content": "正在检测其他程序占用",
         "display": [
           "log"
         ]
       },
       "Node.Action.Failed": {
-        "content": "❌ 检测到 ALAS 冲突进程，本次任务已安全阻止",
+        "content": "❌ 检测到其他程序占用，本次任务已安全停止",
         "display": [
           "log",
           "toast"
@@ -768,19 +768,31 @@
     "custom_action": "CommonRecover",
     "custom_action_param": {
       "home_node": "ChallengeHomeMarker",
-      "click_nodes": [
-        "AutoLiveResultConfirm",
-        "AutoLiveRewardStoryConfirm",
+      "click_nodes": [],
+      "back_only_click_nodes": [
         "AutoLiveStorySkipConfirmLarge",
         "AutoLiveStorySkipConfirm",
         "AutoLiveStorySkip",
-        "AutoLiveStoryMenu",
-        "AutoLiveCommonClose"
+        "AutoLiveStoryMenu"
       ],
-      "escape_interval_ms": 1500,
+      "back_only": true,
+      "escape_interval_ms": 500,
       "escape_timeout_ms": 60000,
-      "restart_limit": 0,
-      "package": "com.bilibili.star.bili"
+      "restart_limit": 1,
+      "restart_wait_ms": 5000,
+      "startup_grace_ms": 12000,
+      "login_start_node": "AutoLiveLoginScreenMarker",
+      "login_start_target": [
+        640,
+        635
+      ],
+      "login_marker_priority_attempts": 3,
+      "escape_after_login_start": true,
+      "package": "com.bilibili.star.bili",
+      "login_tap_target": [
+        640,
+        360
+      ]
     },
     "next": [
       "ChallengeRoundCompleted"

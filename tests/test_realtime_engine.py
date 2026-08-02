@@ -107,6 +107,28 @@ def test_engine_stop_releases_everything_without_another_capture():
     assert touch.closed == 1
 
 
+def test_engine_allows_unbounded_listener_only_until_manual_stop():
+    engine, _, planner, touch, capture = build()
+
+    stats = engine.run(
+        capture,
+        lambda: planner.updates == 5,
+        duration_seconds=None,
+        target_fps=60,
+    )
+
+    assert stats.stopped
+    assert planner.updates == 5
+    assert touch.closed == 1
+
+
+def test_engine_keeps_bounded_task_limit_at_600_seconds():
+    engine, _, _, _, capture = build()
+
+    with pytest.raises(ValueError, match="1..600"):
+        engine.run(capture, lambda: False, duration_seconds=601, target_fps=60)
+
+
 def test_engine_exception_still_releases_everything():
     engine, _, planner, touch, capture = build(fail=True)
 
