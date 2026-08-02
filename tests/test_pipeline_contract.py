@@ -495,6 +495,12 @@ def test_continuous_realtime_live_is_a_pure_listener_task():
         ]
         assert params["difficulty"] == case["name"]
         assert params["debug_recording"] is False
+    debug = interface["option"]["ContinuousRealtimeDebug"]
+    assert debug["default_case"] == "Off"
+    enabled = next(case for case in debug["cases"] if case["name"] == "On")
+    assert enabled["pipeline_override"]["ContinuousRealtimeWatcher"][
+        "custom_action_param"
+    ]["debug_recording"] is True
 
 
 def test_task_entries_bootstrap_before_round_execution():

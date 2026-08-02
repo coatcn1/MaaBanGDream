@@ -60,7 +60,7 @@
     {
       "name": "ContinuousRealtimeLive",
       "label": "一键实时演奏",
-      "description": "持续监听演奏页面并自动演奏，不导航、不确认、不读取结算，仅手动停止。",
+      "description": "持续检测演奏页面并自动演奏，不导航、不确认、不读取结算，仅手动停止。",
       "entry": "ContinuousRealtimeLive",
       "option": [
         "ContinuousRealtimeDifficulty",
@@ -564,7 +564,7 @@
     },
     "ContinuousRealtimeDifficulty": {
       "type": "select",
-      "label": "监听难度",
+      "label": "难度",
       "default_case": "Easy",
       "cases": [
         {
@@ -646,7 +646,7 @@
     },
     "ContinuousRealtimeDebug": {
       "type": "select",
-      "label": "监听调试记录",
+      "label": "调试记录",
       "default_case": "Off",
       "cases": [
         {
