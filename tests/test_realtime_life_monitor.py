@@ -44,6 +44,25 @@ def test_life_detector_reads_low_life_yellow_green_fill():
     assert 220 <= reading.value <= 280
 
 
+def test_life_detector_reads_low_life_red_fill_without_zeroing_it():
+    reading = LifeDetector().detect(
+        life_frame(130, fill_hsv=(2, 210, 255))
+    )
+
+    assert reading.visible
+    assert 100 <= reading.value <= 160
+
+
+def test_life_detector_tolerates_a_rounded_left_edge_on_red_fill():
+    image = life_frame(130, fill_hsv=(2, 210, 255))
+    image[32:53, 970:973] = 0
+
+    reading = LifeDetector().detect(image)
+
+    assert reading.visible
+    assert 100 <= reading.value <= 180
+
+
 def test_life_guard_requires_three_visible_zero_frames():
     guard = LifeGuard()
     guard.update(LifeReading(True, 1000))
