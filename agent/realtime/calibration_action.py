@@ -101,8 +101,8 @@ class CalibrationRunner:
             effective_offset = int(record.get("timing_offset_ms", round_initial_offset))
             suggested_offset = adjusted_timing_offset(effective_offset, result)
             offset = max(
-                round_initial_offset - 5,
-                min(round_initial_offset + 5, suggested_offset),
+                round_initial_offset - 15,
+                min(round_initial_offset + 15, suggested_offset),
             )
             record = {
                 **record,

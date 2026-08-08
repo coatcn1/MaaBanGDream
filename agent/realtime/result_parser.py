@@ -220,6 +220,6 @@ def adjusted_timing_offset(current: int, result: LiveResult) -> int:
     threshold = max(2, round(feedback * .10))
     if feedback == 0 or abs(error) <= threshold:
         return int(current)
-    delta = round(8 * error / feedback)
-    delta = max(-5, min(5, delta or (1 if error > 0 else -1)))
+    delta = round(12 * error / feedback)
+    delta = max(-15, min(15, delta or (1 if error > 0 else -1)))
     return max(-250, min(250, int(current) + delta))

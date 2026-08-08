@@ -14,12 +14,16 @@ from .note_detector import ObservedNote
 from .touch_planner import TouchAction
 
 
+_SENTINEL = None
+
+
 class RealtimeDebugRecorder:
     """Record every analysed frame's notes plus a replay video.
 
-    JSONL is written synchronously so the training timeline is lossless. Video
-    is sampled at a bounded frame rate and encoded on a worker thread; debug
-    recording must not compete with the 60 Hz detector for every full frame.
+    The realtime hot path only enqueues frame references. JSON serialisation,
+    trace/event writes, event screenshots and the sampled video copy all run
+    on a background worker, and MJPG encoding runs on a second thread, so
+    debug recording must not compete with the 60 Hz detector.
     """
 
     def __init__(self, root: Path, *, video_fps: int = 30) -> None:
@@ -29,6 +33,7 @@ class RealtimeDebugRecorder:
         self.video_fps = video_fps
         self._trace = (self.output_dir / "trace.jsonl").open("w", encoding="utf-8")
         self._events = (self.output_dir / "events.jsonl").open("w", encoding="utf-8")
+        self._record_queue: queue.Queue = queue.Queue()
         self._frames: queue.Queue[np.ndarray | None] = queue.Queue(maxsize=180)
         self._video_frames = 0
         self._skipped_video_frames = 0
@@ -40,8 +45,14 @@ class RealtimeDebugRecorder:
         self._released_at: dict[int, float] = {}
         self._diagnostic_counts: dict[str, int] = {}
         self._last_timing_state: dict[str, object] = {}
-        self._thread = threading.Thread(target=self._encode_video, daemon=True)
-        self._thread.start()
+        self._record_thread = threading.Thread(
+            target=self._record_worker, daemon=True
+        )
+        self._encode_thread = threading.Thread(
+            target=self._encode_video, daemon=True
+        )
+        self._record_thread.start()
+        self._encode_thread.start()
 
     @staticmethod
     def _serialise(value) -> dict:
@@ -60,6 +71,60 @@ class RealtimeDebugRecorder:
         life_status: str | None,
         diagnostics: list[dict[str, object]] | None = None,
         timing_state: dict[str, object] | None = None,
+    ) -> None:
+        self._record_queue.put(
+            (image, timestamp, notes, actions, life_status, diagnostics, timing_state)
+        )
+
+    def _record_worker(self) -> None:
+        try:
+            while True:
+                item = self._record_queue.get()
+                if item is _SENTINEL:
+                    break
+                image, timestamp, notes, actions, life_status, diagnostics, timing_state = item
+                self._process_record(
+                    image, timestamp, notes, actions, life_status,
+                    diagnostics, timing_state,
+                )
+        except BaseException as exc:
+            self._error = exc
+        finally:
+            try:
+                self._trace.flush()
+                self._trace.close()
+                self._events.flush()
+                self._events.close()
+            except BaseException as exc:
+                if self._error is None:
+                    self._error = exc
+            if self._encode_thread.is_alive():
+                self._frames.put(_SENTINEL)
+                self._encode_thread.join()
+            try:
+                (self.output_dir / "summary.json").write_text(json.dumps({
+                    "trace_frames": self._trace_frames,
+                    "video_frames": self._video_frames,
+                    "skipped_video_frames": self._skipped_video_frames,
+                    "dropped_video_frames": self._dropped_video_frames,
+                    "video_fps": self.video_fps,
+                    "event_screenshots": self._event_count,
+                    "diagnostic_counts": self._diagnostic_counts,
+                    "timing_feedback": self._last_timing_state,
+                }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            except BaseException as exc:
+                if self._error is None:
+                    self._error = exc
+
+    def _process_record(
+        self,
+        image: np.ndarray,
+        timestamp: float,
+        notes: list[ObservedNote],
+        actions: list[TouchAction],
+        life_status: str | None,
+        diagnostics: list[dict[str, object]] | None,
+        timing_state: dict[str, object] | None,
     ) -> None:
         diagnostics = diagnostics or []
         timing_state = timing_state or {}
@@ -143,7 +208,7 @@ class RealtimeDebugRecorder:
         try:
             while True:
                 frame = self._frames.get()
-                if frame is None:
+                if frame is _SENTINEL:
                     break
                 if writer is None:
                     height, width = frame.shape[:2]
@@ -164,21 +229,7 @@ class RealtimeDebugRecorder:
                 writer.release()
 
     def close(self) -> None:
-        self._trace.flush()
-        self._trace.close()
-        self._events.flush()
-        self._events.close()
-        self._frames.put(None)
-        self._thread.join()
-        (self.output_dir / "summary.json").write_text(json.dumps({
-            "trace_frames": self._trace_frames,
-            "video_frames": self._video_frames,
-            "skipped_video_frames": self._skipped_video_frames,
-            "dropped_video_frames": self._dropped_video_frames,
-            "video_fps": self.video_fps,
-            "event_screenshots": self._event_count,
-            "diagnostic_counts": self._diagnostic_counts,
-            "timing_feedback": self._last_timing_state,
-        }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        self._record_queue.put(_SENTINEL)
+        self._record_thread.join()
         if self._error is not None:
             raise RuntimeError("实时调试录像写入失败") from self._error

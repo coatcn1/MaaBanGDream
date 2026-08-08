@@ -86,6 +86,9 @@
     "custom_action": "CommonRecover",
     "custom_action_param": {
       "home_node": "RealtimeLiveHomeMarker",
+      "modal_cancel_nodes": [
+        "QuitConfirmCancel"
+      ],
       "click_nodes": [
         "AutoLiveLoginTap",
         "AutoLiveLoginNext",

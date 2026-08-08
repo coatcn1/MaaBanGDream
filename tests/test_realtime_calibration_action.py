@@ -26,7 +26,7 @@ def test_calibration_collects_three_distinct_rehearsals_then_distinct_formal():
     assert [item["song_id"] for item in rehearsals] == ["A", "B", "C"]
     assert formal["song_id"] == "D"
     assert formal["passed"] is True
-    assert offset == 5
+    assert offset == 12
     assert [formal for formal, _ in calls] == [False, False, False, False, True]
 
 
@@ -38,7 +38,7 @@ def test_failed_rehearsal_counts_and_adjusts_offset():
     offset, rehearsals, formal = CalibrationRunner(lambda *_: next(records)).run()
     assert [item["song_id"] for item in rehearsals] == ["bad", "A", "B"]
     assert rehearsals[0]["passed"] is False
-    assert offset == 5
+    assert offset == 12
     assert formal["passed"]
 
 
@@ -58,8 +58,8 @@ def test_next_round_starts_from_the_live_adjusted_offset():
     offset, _, _ = CalibrationRunner(run_round).run()
 
     assert calls[0] == (False, 0)
-    assert calls[1] == (False, 5)
-    assert offset == 5
+    assert calls[1] == (False, 15)
+    assert offset == 15
 
 
 def test_three_failed_rehearsals_stop_before_formal():

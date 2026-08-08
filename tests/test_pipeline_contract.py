@@ -167,6 +167,21 @@ def test_auto_live_safety_and_timeout_contract():
     assert nodes["AutoLiveResult"]["custom_action_param"]["home_node"] == (
         "AutoLiveHomeMarker"
     )
+    result_recover = nodes["AutoLiveResult"]["custom_action_param"]
+    assert result_recover["back_only"] is True
+    assert result_recover["click_nodes"] == []
+    assert result_recover["back_only_click_nodes"] == [
+        "AutoLiveStorySkipConfirmLarge",
+        "AutoLiveStorySkipConfirm",
+        "AutoLiveStorySkip",
+        "AutoLiveStoryMenu",
+    ]
+    assert result_recover["escape_interval_ms"] == 500
+    assert result_recover["restart_limit"] == 1
+    assert result_recover["login_start_node"] == "AutoLiveLoginScreenMarker"
+    assert result_recover["login_start_target"] == [640, 635]
+    assert result_recover["login_tap_target"] == [640, 360]
+    assert result_recover["escape_after_login_start"] is True
 
 
 def test_auto_live_entry_recovers_to_home_before_navigation():

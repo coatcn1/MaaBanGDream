@@ -120,6 +120,9 @@ class CommonRecover(CustomAction):
         restart_wait = int(params.get("restart_wait_ms", 5000)) / 1000
         startup_grace = int(params.get("startup_grace_ms", 0)) / 1000
         click_nodes = [str(node) for node in params.get("click_nodes", [])]
+        modal_cancel_nodes = [
+            str(node) for node in params.get("modal_cancel_nodes", [])
+        ]
         back_only = bool(params.get("back_only", False))
         back_only_click_nodes = [
             str(node) for node in params.get("back_only_click_nodes", [])
@@ -183,6 +186,30 @@ class CommonRecover(CustomAction):
                         continue
                     print(f"CommonRecover {exc}", flush=True)
                     return False
+                modal_dismissed = False
+                for node in modal_cancel_nodes:
+                    result = context.run_recognition(node, image)
+                    if not result or not result.hit or not result.box:
+                        continue
+                    if context.tasker.stopping:
+                        return True
+                    box = result.box
+                    controller.post_click(
+                        box.x + box.w // 2,
+                        box.y + box.h // 2,
+                    ).wait()
+                    modal_dismissed = True
+                    log_task(
+                        "游戏启动",
+                        "弹窗",
+                        "INFO",
+                        f"检测到模态弹窗，已点击取消：{node}",
+                    )
+                    break
+                if modal_dismissed:
+                    if not _wait_unless_stopping(context, interval):
+                        return True
+                    continue
                 result = context.run_recognition(home_node, image)
                 if result and result.hit:
                     login_status = "登录完成" if login_seen else "已登录"

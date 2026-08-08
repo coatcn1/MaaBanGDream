@@ -164,6 +164,33 @@ def test_clicks_safe_node_center_instead_of_back(monkeypatch):
     assert context.tasker.controller.keys == []
 
 
+def test_modal_cancel_takes_priority_over_home_marker(monkeypatch):
+    # The quit-confirm dialog sits on top of the home page. HomeMarker still
+    # matches through the dimmed overlay, so recovery must dismiss the dialog
+    # before declaring "already home"; otherwise the next 演出 tap is eaten by
+    # the modal and the flow loops forever.
+    context = Context(
+        {
+            "HomeMarker": [True, True],
+            "QuitConfirmCancel": [True, False],
+        }
+    )
+    ticks = iter(value / 1000 for value in range(1000))
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(common_recover.time, "sleep", lambda _seconds: None)
+
+    assert common_recover.CommonRecover().run(
+        context,
+        argv(
+            escape_interval_ms=0,
+            escape_timeout_ms=100,
+            modal_cancel_nodes=["QuitConfirmCancel"],
+        ),
+    )
+    assert context.tasker.controller.clicks == [(25, 40)]
+    assert context.tasker.controller.keys == []
+
+
 def test_stopping_exits_before_any_controller_operation():
     context = Context(stopping=True)
 

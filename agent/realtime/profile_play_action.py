@@ -390,6 +390,7 @@ class RealtimeProfilePlay(CustomAction):
         )
         if recorder is not None:
             print(f"RealtimeProfilePlay debug={recorder.output_dir}", flush=True)
+        save_screenshot = recorder is not None
         # Foreground verification is intentionally outside the realtime touch
         # hot path. A dumpsys query before every down/move/up blocks capture for
         # 100-450 ms and turns otherwise correct notes into SLOW judgements.
@@ -503,12 +504,13 @@ class RealtimeProfilePlay(CustomAction):
                 return True
             if outcome.status is ResultCollectionStatus.TIMED_OUT:
                 diagnostic = output / f"realtime-result-timeout-{stamp}.png"
-                if outcome.image is not None:
+                if save_screenshot and outcome.image is not None:
                     cv2.imwrite(str(diagnostic), outcome.image)
                 reason = "结算数字在 60 秒内未稳定，已跳过本次读取并继续"
                 print(
                     "RealtimeProfilePlay result_timeout=true "
-                    f"diagnostic={diagnostic.name} reason={reason}",
+                    f"diagnostic={diagnostic.name if save_screenshot else 'none'} "
+                    f"reason={reason}",
                     flush=True,
                 )
                 calibration_report = params.get("calibration_report")
@@ -529,9 +531,10 @@ class RealtimeProfilePlay(CustomAction):
             result = outcome.image
             if result_data is None or result is None:
                 raise RuntimeError("stable result outcome is incomplete")
-            path = output / f"realtime-result-{stamp}.png"
-            if not cv2.imwrite(str(path), result):
-                raise OSError(f"无法保存结算截图: {path}")
+            screenshot_path = output / f"realtime-result-{stamp}.png"
+            if save_screenshot:
+                if not cv2.imwrite(str(screenshot_path), result):
+                    raise OSError(f"无法保存结算截图: {screenshot_path}")
             effective_timing_offset_ms = stats.final_timing_offset_ms
             suggestion = adjusted_timing_offset(
                 effective_timing_offset_ms, result_data,
@@ -544,7 +547,8 @@ class RealtimeProfilePlay(CustomAction):
                 suggested_timing_offset_ms=suggestion,
             ), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             print(
-                f"RealtimeProfilePlay result_frame={path.name} "
+                "RealtimeProfilePlay "
+                f"result_frame={screenshot_path.name if save_screenshot else 'none'} "
                 f"perfect={result_data.perfect} great={result_data.great} "
                 f"good={result_data.good} bad={result_data.bad} miss={result_data.miss} "
                 f"fast={result_data.fast} slow={result_data.slow} "

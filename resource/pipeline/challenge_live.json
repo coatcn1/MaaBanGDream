@@ -52,6 +52,9 @@
     "custom_action": "CommonRecover",
     "custom_action_param": {
       "home_node": "ChallengeHomeMarker",
+      "modal_cancel_nodes": [
+        "QuitConfirmCancel"
+      ],
       "click_nodes": [
         "AutoLiveLoginTap",
         "AutoLiveLoginNext",
@@ -182,6 +185,9 @@
     "custom_action": "CommonRecover",
     "custom_action_param": {
       "home_node": "ChallengeHomeMarker",
+      "modal_cancel_nodes": [
+        "QuitConfirmCancel"
+      ],
       "click_nodes": [
         "AutoLiveLoginTap",
         "AutoLiveLoginNext",
@@ -768,6 +774,9 @@
     "custom_action": "CommonRecover",
     "custom_action_param": {
       "home_node": "ChallengeHomeMarker",
+      "modal_cancel_nodes": [
+        "QuitConfirmCancel"
+      ],
       "click_nodes": [],
       "back_only_click_nodes": [
         "AutoLiveStorySkipConfirmLarge",

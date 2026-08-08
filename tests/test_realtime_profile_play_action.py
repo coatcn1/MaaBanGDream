@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -11,6 +12,8 @@ from agent.realtime import profile_play_action
 from agent.realtime.profile_play_action import (
     RealtimeLifeSafetyAbortCheck,
     RealtimeProfilePlay,
+    ResultCollectionOutcome,
+    ResultCollectionStatus,
     _result_report_payload,
     _write_calibration_report,
     pause_overlay_changed,
@@ -283,3 +286,133 @@ def test_formal_timeout_records_a_specific_failure_reason(monkeypatch):
 
     assert not RealtimeProfilePlay()._run(context, argv)
     assert reasons == ["演奏超过安全时限 600 秒，仍未识别到结算画面"]
+
+
+def _completed_play_harness(monkeypatch, tmp_path, *, debug_recording):
+    tasker = Tasker()
+    context = SimpleNamespace(tasker=tasker)
+    settings = SimpleNamespace(
+        target_fps=60,
+        timing_offset_ms=0,
+        profile_path=SimpleNamespace(name="easy.json"),
+    )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.PROJECT_ROOT",
+        tmp_path,
+    )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.RealtimeProfileStore.resolve_latest",
+        lambda *args, **kwargs: settings,
+    )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.RealtimeProfileStore.runtime_options",
+        lambda *args, **kwargs: {},
+    )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.require_game_foreground",
+        lambda _controller: None,
+    )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.ControllerTouchDispatcher",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.debug_enabled",
+        lambda: False,
+    )
+    if debug_recording:
+        monkeypatch.setattr(
+            "agent.realtime.profile_play_action.RealtimeDebugRecorder",
+            lambda _root: SimpleNamespace(output_dir=tmp_path / "debug-rec"),
+        )
+
+    class Engine:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def run(self, _capture, _stopping, **_kwargs):
+            return EngineStats(
+                120,
+                42,
+                False,
+                completed=True,
+                action_counts={"tap": 31, "flick": 4, "down": 7},
+                frame_interval_p50_ms=16.4,
+                frame_interval_p95_ms=18.2,
+                frame_interval_max_ms=24.0,
+                effective_fps=59.1,
+                terminal_reason="已识别演奏结束并进入结算",
+                initial_timing_offset_ms=-11,
+                final_timing_offset_ms=-13,
+            )
+
+    monkeypatch.setattr("agent.realtime.profile_play_action.RealtimeEngine", Engine)
+
+    image = np.full((720, 1280, 3), 128, dtype=np.uint8)
+
+    def fake_collect(*args, **kwargs):
+        return ResultCollectionOutcome(
+            ResultCollectionStatus.STABLE,
+            result=LiveResult(100, 10, 2, 1, 2, 3, 4),
+            image=image,
+            elapsed_seconds=1.0,
+        )
+
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.collect_result",
+        fake_collect,
+    )
+    writes = []
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.cv2.imwrite",
+        lambda path, _image: (
+            writes.append(str(path))
+            or Path(path).parent.mkdir(parents=True, exist_ok=True)
+            or Path(path).write_bytes(b"png")
+            or True
+        ),
+    )
+
+    params = {
+        "difficulty": "Easy",
+        "require_profile": False,
+        "settings_gate_required": False,
+        "duration_seconds": 600,
+        "wait_for_completion": True,
+        "require_completion": True,
+        "save_result_frame": True,
+        "debug_recording": debug_recording,
+    }
+    argv = SimpleNamespace(custom_action_param=json.dumps(params))
+    assert RealtimeProfilePlay()._run(context, argv)
+    return tmp_path, writes
+
+
+def test_completed_without_debug_recording_writes_json_only(tmp_path, monkeypatch):
+    root, writes = _completed_play_harness(
+        monkeypatch, tmp_path, debug_recording=False,
+    )
+
+    reports = list((root / "screencap").glob("realtime-result-*.json"))
+    screenshots = list((root / "screencap").glob("realtime-result-*.png"))
+    assert len(reports) == 1
+    assert screenshots == []
+    assert writes == []
+    payload = json.loads(reports[0].read_text(encoding="utf-8"))
+    assert payload["perfect"] == 100
+    assert payload["processed_frames"] == 120
+
+
+def test_completed_with_debug_recording_writes_json_and_screenshot(
+    tmp_path, monkeypatch,
+):
+    root, writes = _completed_play_harness(
+        monkeypatch, tmp_path, debug_recording=True,
+    )
+
+    reports = list((root / "screencap").glob("realtime-result-*.json"))
+    screenshots = list((root / "screencap").glob("realtime-result-*.png"))
+    assert len(reports) == 1
+    assert len(screenshots) == 1
+    assert len(writes) == 1
+    assert str(screenshots[0]) == writes[0]

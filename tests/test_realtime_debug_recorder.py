@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import threading
 
 import numpy as np
+import pytest
 
 from agent.realtime.debug_recorder import RealtimeDebugRecorder
 from agent.realtime.note_detector import NoteKind, ObservedNote
@@ -85,3 +87,39 @@ def test_debug_video_is_sampled_at_thirty_fps_without_losing_trace(tmp_path):
     assert summary["trace_frames"] == 6
     assert summary["video_frames"] == 3
     assert summary["video_fps"] == 30
+
+
+def test_record_returns_while_background_worker_is_still_processing(
+    tmp_path, monkeypatch,
+):
+    recorder = RealtimeDebugRecorder(tmp_path, video_fps=30)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow_process(self, *args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+
+    monkeypatch.setattr(RealtimeDebugRecorder, "_process_record", slow_process)
+    frame = np.zeros((72, 128, 3), dtype=np.uint8)
+
+    recorder.record(frame, 1.0, [], [], "alive")
+
+    assert entered.wait(1)
+    release.set()
+    recorder.close()
+
+
+def test_record_write_failure_is_reported_at_close(tmp_path, monkeypatch):
+    recorder = RealtimeDebugRecorder(tmp_path, video_fps=30)
+
+    def boom(self, *args, **kwargs):
+        raise OSError("simulated disk failure")
+
+    monkeypatch.setattr(RealtimeDebugRecorder, "_process_record", boom)
+    frame = np.zeros((72, 128, 3), dtype=np.uint8)
+
+    recorder.record(frame, 1.0, [], [], "alive")
+
+    with pytest.raises(RuntimeError, match="实时调试录像写入失败"):
+        recorder.close()
