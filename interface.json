@@ -60,7 +60,7 @@
     {
       "name": "ContinuousRealtimeLive",
       "label": "一键实时演奏",
-      "description": "持续检测演奏页面并自动演奏，不导航、不确认、不读取结算，仅手动停止。",
+      "description": "持续检测演奏页面并自动演奏，不导航、不确认、不读取结算；需在最近 15 分钟内完成一次游戏视觉设置读回复核。",
       "entry": "ContinuousRealtimeLive",
       "option": [
         "ContinuousRealtimeDifficulty",
@@ -229,6 +229,57 @@
               "next": [
                 "RealtimeLiveRequireProfile"
               ]
+            }
+          }
+        },
+        {
+          "name": "VisualEvaluation",
+          "label": "视觉设置评估（实验）",
+          "pipeline_override": {
+            "RealtimeLiveFormalModeGate": {
+              "next": [
+                "RealtimeLiveRequireProfile"
+              ]
+            },
+            "RealtimeLiveRequireProfile": {
+              "custom_action_param": {
+                "visual_evaluation": true
+              }
+            },
+            "RealtimeLiveFormalSettingsGate": {
+              "custom_action_param": {
+                "visual_evaluation": true
+              }
+            },
+            "RealtimeLiveFormalPlay": {
+              "custom_action_param": {
+                "visual_evaluation": true,
+                "run_mode": "visual-evaluation"
+              }
+            },
+            "RealtimeLiveFormalPlayNormal": {
+              "custom_action_param": {
+                "visual_evaluation": true,
+                "run_mode": "visual-evaluation"
+              }
+            },
+            "RealtimeLiveFormalPlayHard": {
+              "custom_action_param": {
+                "visual_evaluation": true,
+                "run_mode": "visual-evaluation"
+              }
+            },
+            "RealtimeLiveFormalPlayExpert": {
+              "custom_action_param": {
+                "visual_evaluation": true,
+                "run_mode": "visual-evaluation"
+              }
+            },
+            "RealtimeLiveFormalPlaySpecial": {
+              "custom_action_param": {
+                "visual_evaluation": true,
+                "run_mode": "visual-evaluation"
+              }
             }
           }
         }

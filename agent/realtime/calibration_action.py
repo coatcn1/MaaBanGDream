@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import traceback
 from datetime import datetime
@@ -16,9 +15,11 @@ from .rehearsal_action import frame_resolution
 from .result_parser import LiveResult, adjusted_timing_offset
 from .runtime_options import calibration_difficulty, debug_enabled
 from .difficulty_action import DIFFICULTY_TARGETS
+from .game_effect_settings_action import verified_game_visual_settings
+from .live_session import current_song_id
+from .song_identity import UNKNOWN_SONG_ID, same_song
 
 
-_CURRENT_SONG_ID = "unknown"
 PLAY_NODES = {
     "Easy": "RealtimeLivePlay", "Normal": "RealtimeLivePlayNormal",
     "Hard": "RealtimeLivePlayHard", "Expert": "RealtimeLivePlayExpert",
@@ -53,10 +54,6 @@ def latest_result_report_since(
     raise RuntimeError("校准单轮未找到本轮已保存的结算报告")
 
 
-def current_song_id() -> str:
-    return _CURRENT_SONG_ID
-
-
 def result_from_mapping(value: dict) -> LiveResult:
     return LiveResult(**{key: value[key] for key in ("perfect", "great", "good", "bad", "miss", "fast", "slow")}, confidence=float(value.get("confidence", 1)))
 
@@ -65,19 +62,19 @@ def calibration_passed(result: LiveResult, survived: bool) -> bool:
     return bool(survived and result.hit_rate >= .80)
 
 
-@AgentServer.custom_action("CalibrationSongIdentity")
-class CalibrationSongIdentity(CustomAction):
-    def run(self, context: Context, argv: CustomAction.RunArg) -> bool:
-        global _CURRENT_SONG_ID
-        if context.tasker.stopping:
-            return True
-        image = context.tasker.controller.post_screencap().wait().get()
-        if context.tasker.stopping:
-            return True
-        crop = image[110:600, 40:450]
-        _CURRENT_SONG_ID = "random-" + hashlib.sha256(crop.tobytes()).hexdigest()[:16]
-        print(f"RealtimeCalibration song={_CURRENT_SONG_ID}", flush=True)
-        return True
+def _song_was_used(song_id: str, used: list[str]) -> bool:
+    return any(
+        song_id == previous or same_song(song_id, previous)
+        for previous in used
+    )
+
+
+def _calibration_song_id(record: dict) -> str | None:
+    value = record.get("song_id")
+    if not isinstance(value, str) or not value.strip():
+        return None
+    value = value.strip()
+    return None if value == UNKNOWN_SONG_ID else value
 
 
 class CalibrationRunner:
@@ -89,13 +86,17 @@ class CalibrationRunner:
 
     def run(self, initial_offset: int = 0):
         offset = int(initial_offset)
-        rehearsals, used = [], set()
+        rehearsals, used = [], []
         for _ in range(self.max_attempts):
             if len(rehearsals) == 3:
                 break
             record = self.run_round(False, offset)
             if record.get("valid") is False:
                 continue
+            song_id = _calibration_song_id(record)
+            if song_id is None:
+                continue
+            record = {**record, "song_id": song_id}
             result = result_from_mapping(record)
             round_initial_offset = offset
             effective_offset = int(record.get("timing_offset_ms", round_initial_offset))
@@ -110,9 +111,9 @@ class CalibrationRunner:
                 "initial_timing_offset_ms": round_initial_offset,
                 "suggested_timing_offset_ms": offset,
             }
-            if record["song_id"] not in used:
+            if not _song_was_used(record["song_id"], used):
                 rehearsals.append(record)
-                used.add(record["song_id"])
+                used.append(record["song_id"])
         if len(rehearsals) != 3:
             raise RuntimeError("十次尝试内未取得三首不同歌曲的有效排练结果")
         if not any(record["passed"] for record in rehearsals):
@@ -122,7 +123,11 @@ class CalibrationRunner:
             candidate = self.run_round(True, offset)
             if candidate.get("valid") is False:
                 continue
-            if candidate["song_id"] not in used:
+            song_id = _calibration_song_id(candidate)
+            if song_id is None:
+                continue
+            candidate = {**candidate, "song_id": song_id}
+            if not _song_was_used(candidate["song_id"], used):
                 result = result_from_mapping(candidate)
                 formal = {**candidate, "passed": calibration_passed(result, bool(candidate["survived"]))}
                 break
@@ -172,6 +177,10 @@ class RealtimeCalibration(CustomAction):
                 "duration_seconds": 600, "dpi": 240, "game_fps": 60,
                 "render_quality": "standard", "note_speed": note_speed,
                 "settings_gate_required": True,
+                "run_mode": (
+                    "calibration-formal"
+                    if formal else "calibration-rehearsal"
+                ),
                 "wait_for_completion": True, "completion_missing_frames": 120,
                 "require_completion": True, "save_result_frame": True,
                 "result_back_attempts": 30, "result_back_interval_seconds": 1.5,
@@ -184,9 +193,17 @@ class RealtimeCalibration(CustomAction):
             start_next = [play_node]
             override = {
                 "RealtimeLiveSongSelectMarker": {"next": ["RealtimeLiveRandomSong"]},
-                "RealtimeLiveRandomSong": {"next": ["CalibrationCaptureSong"]},
                 "RealtimeLiveDifficulty": {
-                    "custom_action_param": {"difficulty": difficulty, "max_attempts": 3}
+                    "custom_action_param": {
+                        "difficulty": difficulty,
+                        "max_attempts": 3,
+                        "mode": (
+                            "calibration-formal"
+                            if formal else "calibration-rehearsal"
+                        ),
+                        "note_speed": note_speed,
+                        "debug_recording": calibration_debug,
+                    }
                 },
                 "RealtimeLiveFormalSettingsGate": {
                     "custom_action_param": {
@@ -236,9 +253,15 @@ class RealtimeCalibration(CustomAction):
 
         runner = CalibrationRunner(run_round)
         offset, rehearsals, formal = runner.run(int(params.get("timing_offset_ms", 0)))
+        visual = verified_game_visual_settings()
+        if visual is None:
+            raise RuntimeError("校准未经过游戏视觉设置读回验证")
         image = context.tasker.controller.post_screencap().wait().get()
         signature = EnvironmentSignature(
             frame_resolution(image), 240, 60, "standard", note_speed,
+            visual.note_skin_type,
+            visual.tap_effect,
+            visual.judgement_assist_effect,
         )
         payload = {
             "created_at": datetime.now().isoformat(timespec="seconds"),

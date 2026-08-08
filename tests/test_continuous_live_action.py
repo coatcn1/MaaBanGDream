@@ -1,10 +1,14 @@
 import json
 
 import numpy as np
+import pytest
+
+from agent.realtime import continuous_live_action
 
 from agent.realtime.continuous_live_action import (
     ListenerDiagnosticCapture,
     continuous_song_params,
+    require_recent_visual_settings,
     run_continuous_listener,
 )
 from agent.realtime.life_monitor import LifeReading
@@ -16,6 +20,31 @@ class Detector:
 
     def detect(self, _image):
         return next(self.readings)
+
+
+def test_continuous_requires_recent_actual_visual_readback(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        continuous_live_action,
+        "verified_game_visual_settings",
+        lambda **kwargs: calls.append(kwargs) or None,
+    )
+
+    with pytest.raises(RuntimeError, match="不能用 MFA 目标配置冒充"):
+        require_recent_visual_settings()
+
+    assert calls == [{"max_age_seconds": 900}]
+
+
+def test_continuous_accepts_recent_actual_visual_readback(monkeypatch):
+    verified = object()
+    monkeypatch.setattr(
+        continuous_live_action,
+        "verified_game_visual_settings",
+        lambda **_kwargs: verified,
+    )
+
+    assert require_recent_visual_settings() is verified
 
 
 def test_listener_has_no_input_on_non_playfield_pages():

@@ -56,7 +56,22 @@ def handle_request(request: dict[str, Any], *, root: str | Path = PROJECT_ROOT /
     difficulty = str(request.get("difficulty", ""))
     compatible = store.compatible_difficulties(difficulty)
     environment = request.get("environment")
-    signature = EnvironmentSignature.from_mapping(environment) if isinstance(environment, dict) else None
+    if isinstance(environment, dict):
+        effective_environment = dict(environment)
+        runtime_options = store.runtime_options()
+        effective_environment.setdefault(
+            "note_skin_type", runtime_options["note_skin_type"]
+        )
+        effective_environment.setdefault(
+            "tap_effect", runtime_options["tap_effect"]
+        )
+        effective_environment.setdefault(
+            "judgement_assist_effect",
+            runtime_options["judgement_assist_effect"],
+        )
+        signature = EnvironmentSignature.from_mapping(effective_environment)
+    else:
+        signature = None
     pinned = store._read_selection()
     selection: dict[str, Any] = {"mode": "pinned" if difficulty in pinned else "auto", "profile": pinned.get(difficulty), "source_difficulty": None}
     if signature is not None:

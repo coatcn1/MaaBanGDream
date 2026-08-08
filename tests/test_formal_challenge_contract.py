@@ -26,13 +26,56 @@ def test_formal_mode_requires_profile_and_uses_distinct_profile_nodes():
         )
 
 
+def test_visual_evaluation_is_explicit_and_uses_formal_profile_path():
+    interface = load("interface.json")
+    experiment = next(
+        case
+        for case in interface["option"]["RealtimeMode"]["cases"]
+        if case["name"] == "VisualEvaluation"
+    )
+    override = experiment["pipeline_override"]
+    assert override["RealtimeLiveFormalModeGate"]["next"] == [
+        "RealtimeLiveRequireProfile"
+    ]
+    assert override["RealtimeLiveRequireProfile"]["custom_action_param"][
+        "visual_evaluation"
+    ] is True
+    assert override["RealtimeLiveFormalSettingsGate"]["custom_action_param"][
+        "visual_evaluation"
+    ] is True
+    for node in (
+        "RealtimeLiveFormalPlay",
+        "RealtimeLiveFormalPlayNormal",
+        "RealtimeLiveFormalPlayHard",
+        "RealtimeLiveFormalPlayExpert",
+        "RealtimeLiveFormalPlaySpecial",
+    ):
+        params = override[node]["custom_action_param"]
+        assert params == {
+            "visual_evaluation": True,
+            "run_mode": "visual-evaluation",
+        }
+
+
 def test_calibration_is_single_task_with_three_rehearsal_contract():
     interface = load("interface.json")
     task = next(task for task in interface["task"] if task["name"] == "RealtimeCalibration")
     assert task["entry"] == "RealtimeCalibration"
     nodes = load("resource/pipeline/realtime_calibration.json")
+    assert nodes["RealtimeCalibrationProcessConflictGuard"]["next"] == [
+        "RealtimeCalibrationRecover"
+    ]
+    assert nodes["RealtimeCalibrationRecover"]["next"] == [
+        "RealtimeCalibrationVisualSettingsGate"
+    ]
+    assert nodes["RealtimeCalibrationVisualSettingsGate"]["custom_action"] == (
+        "RealtimeGameEffectSettingsGate"
+    )
+    assert nodes["RealtimeCalibrationVisualSettingsGate"]["next"] == [
+        "CalibrationDifficultySetting"
+    ]
     assert nodes["RealtimeCalibrationRun"]["custom_action"] == "RealtimeCalibrationRun"
-    assert nodes["CalibrationCaptureSong"]["custom_action"] == "CalibrationSongIdentity"
+    assert "CalibrationCaptureSong" not in nodes
     assert nodes["RealtimeCalibrationRoundComplete"]["action"] == "DoNothing"
 
 
@@ -58,6 +101,13 @@ def test_challenge_points_and_profile_contract():
         200: [875, 212], 400: [875, 286], 800: [875, 359], 1600: [875, 431]
     }
     assert nodes["ChallengeProfileCheck"]["custom_action"] == "RealtimeProfileCheck"
+    assert nodes["ChallengeRecover"]["next"] == ["ChallengeVisualSettingsGate"]
+    assert nodes["ChallengeVisualSettingsGate"]["custom_action"] == (
+        "RealtimeGameEffectSettingsGate"
+    )
+    assert nodes["ChallengeVisualSettingsGate"]["next"] == [
+        "ChallengeRoundGate"
+    ]
     assert nodes["ChallengeBandMarker"]["next"] == ["ChallengeSettingsGate"]
     assert nodes["ChallengeSettingsGate"]["custom_action"] == (
         "RealtimePerformanceSettingsGate"
@@ -71,6 +121,7 @@ def test_challenge_points_and_profile_contract():
         params = nodes[name]["custom_action_param"]
         assert params["require_profile"] is True
         assert params["settings_gate_required"] is True
+        assert params["run_mode"] == "challenge"
         assert params["result_back_attempts"] == 30
         assert params["result_back_interval_seconds"] == 1.5
         assert params["note_speed"] == (

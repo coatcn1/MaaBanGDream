@@ -538,15 +538,15 @@ def test_task_entries_bootstrap_before_round_execution():
             "realtime_calibration.json",
             "RealtimeCalibration",
             "RealtimeCalibrationProcessConflictGuard",
-            None,
-            "CalibrationDifficultySetting",
+            "RealtimeCalibrationRecover",
+            "RealtimeCalibrationVisualSettingsGate",
         ),
         (
             "challenge_live.json",
             "ChallengeLive",
             "ChallengeProcessConflictGuard",
             "ChallengeRecover",
-            "ChallengeRoundGate",
+            "ChallengeVisualSettingsGate",
         ),
     )
     for filename, entry_name, guard_name, recover_name, gate_name in entries:

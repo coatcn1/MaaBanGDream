@@ -83,7 +83,7 @@
       ]
     },
     "next": [
-      "ChallengeRoundGate"
+      "ChallengeVisualSettingsGate"
     ],
     "focus": {
       "Node.Action.Failed": {
@@ -105,6 +105,17 @@
         ]
       }
     },
+    "on_error": [
+      "ChallengeFailure"
+    ]
+  },
+  "ChallengeVisualSettingsGate": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "RealtimeGameEffectSettingsGate",
+    "next": [
+      "ChallengeRoundGate"
+    ],
     "on_error": [
       "ChallengeFailure"
     ]
@@ -566,6 +577,7 @@
       "difficulty": "Easy",
       "require_profile": true,
       "settings_gate_required": true,
+      "run_mode": "challenge",
       "debug_recording": false,
       "duration_seconds": 600,
       "dpi": 240,
@@ -602,6 +614,7 @@
       "difficulty": "Normal",
       "require_profile": true,
       "settings_gate_required": true,
+      "run_mode": "challenge",
       "debug_recording": false,
       "duration_seconds": 600,
       "dpi": 240,
@@ -638,6 +651,7 @@
       "difficulty": "Hard",
       "require_profile": true,
       "settings_gate_required": true,
+      "run_mode": "challenge",
       "debug_recording": false,
       "duration_seconds": 600,
       "dpi": 240,
@@ -674,6 +688,7 @@
       "difficulty": "Expert",
       "require_profile": true,
       "settings_gate_required": true,
+      "run_mode": "challenge",
       "debug_recording": false,
       "duration_seconds": 600,
       "dpi": 240,
@@ -710,6 +725,7 @@
       "difficulty": "Special",
       "require_profile": true,
       "settings_gate_required": true,
+      "run_mode": "challenge",
       "debug_recording": false,
       "duration_seconds": 600,
       "dpi": 240,

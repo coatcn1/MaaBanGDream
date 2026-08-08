@@ -188,16 +188,44 @@ def _expected_speed(context: Context, params: dict, image) -> tuple[float, str |
     difficulty = str(params.get("difficulty", "Easy"))
     store = RealtimeProfileStore(PROJECT_ROOT / "profiles")
     if bool(params.get("require_profile", False)):
+        # Imported lazily because the visual gate reuses this module's fixed
+        # digit classifier.  At runtime the gate module is already registered.
+        from .game_effect_settings_action import verified_game_visual_settings
+
+        visual = verified_game_visual_settings()
+        runtime_options = store.runtime_options()
+        note_skin_type = (
+            visual.note_skin_type
+            if visual is not None
+            else int(runtime_options["note_skin_type"])
+        )
+        tap_effect = (
+            visual.tap_effect
+            if visual is not None
+            else int(runtime_options["tap_effect"])
+        )
+        judgement_assist_effect = (
+            visual.judgement_assist_effect
+            if visual is not None
+            else bool(runtime_options["judgement_assist_effect"])
+        )
         signature = EnvironmentSignature(
             frame_resolution(image),
             int(params.get("dpi", 240)),
             int(params.get("game_fps", 60)),
             str(params.get("render_quality", "standard")),
             1.0,
+            note_skin_type,
+            tap_effect,
+            judgement_assist_effect,
         )
-        settings = store.resolve_latest_for_environment(
-            difficulty=difficulty,
-            current_signature=signature,
+        resolver = (
+            store.resolve_latest_for_visual_evaluation_environment
+            if bool(params.get("visual_evaluation", False))
+            else store.resolve_latest_for_environment
+        )
+        settings = resolver(
+            difficulty=difficulty, current_signature=signature
         )
         return settings.note_speed, settings.profile_path.name
     speeds = store.runtime_options()["calibration_note_speeds"]

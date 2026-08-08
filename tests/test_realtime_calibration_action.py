@@ -115,6 +115,38 @@ def test_invalid_result_rounds_are_retried_within_existing_budget():
     assert formal["song_id"] == "D"
 
 
+def test_unknown_song_identity_never_counts_as_a_calibration_song():
+    missing_identity = record("discarded")
+    missing_identity.pop("song_id")
+    records = iter([
+        record("unknown"), missing_identity, record(None),
+        record("A"), record("B"), record("C"), record("D"),
+    ])
+
+    _, rehearsals, formal = CalibrationRunner(
+        lambda *_: next(records), max_attempts=10,
+    ).run()
+
+    assert [item["song_id"] for item in rehearsals] == ["A", "B", "C"]
+    assert formal["song_id"] == "D"
+
+
+def test_calibration_deduplicates_perceptually_matching_song_hashes():
+    first = "song-phash-v1-0123456789abcde0"
+    same_song_after_compression = "song-phash-v1-0123456789abcde1"
+    records = iter([
+        record(first), record(same_song_after_compression),
+        record("B"), record("C"), record("D"),
+    ])
+
+    _, rehearsals, formal = CalibrationRunner(
+        lambda *_: next(records), max_attempts=10,
+    ).run()
+
+    assert [item["song_id"] for item in rehearsals] == [first, "B", "C"]
+    assert formal["song_id"] == "D"
+
+
 def test_calibration_reuses_the_result_json_already_saved_by_the_play_action(tmp_path):
     before = result_report_snapshot(tmp_path)
     result = record("ignored")

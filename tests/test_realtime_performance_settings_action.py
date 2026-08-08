@@ -9,10 +9,15 @@ from agent.realtime.performance_settings_action import (
     DEFAULT_COORDINATES,
     RealtimePerformanceSettingsGate,
     _digit_templates,
+    _expected_speed,
     _read_speed,
     _speed_click_plan,
     clear_verified_settings,
     verified_settings,
+)
+from agent.realtime.game_effect_settings_action import (
+    _publish_verified_game_visual_settings,
+    clear_verified_game_visual_settings,
 )
 
 
@@ -64,6 +69,55 @@ def test_speed_click_plan_uses_half_tenth_cent_steps_without_wrapping():
         ("increase_010", 1),
         ("increase_001", 3),
     ]
+
+
+def test_visual_evaluation_uses_precheck_resolver_before_speed_read(monkeypatch):
+    clear_verified_game_visual_settings()
+    _publish_verified_game_visual_settings(
+        note_skin_type=7,
+        tap_effect=5,
+        judgement_assist_effect=False,
+    )
+    calls = []
+    settings = SimpleNamespace(
+        note_speed=5.0,
+        profile_path=SimpleNamespace(name="expert.json"),
+    )
+    monkeypatch.setattr(
+        "agent.realtime.performance_settings_action.RealtimeProfileStore.runtime_options",
+        lambda _store: {
+            "note_skin_type": 1,
+            "tap_effect": 1,
+            "judgement_assist_effect": True,
+        },
+    )
+    monkeypatch.setattr(
+        "agent.realtime.performance_settings_action.RealtimeProfileStore.resolve_latest_for_visual_evaluation_environment",
+        lambda _store, **kwargs: calls.append(kwargs) or settings,
+    )
+    monkeypatch.setattr(
+        "agent.realtime.performance_settings_action.RealtimeProfileStore.resolve_latest_for_environment",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("strict resolver must not run during evaluation precheck")
+        ),
+    )
+
+    speed, profile = _expected_speed(
+        SimpleNamespace(),
+        {
+            "difficulty": "Expert",
+            "require_profile": True,
+            "visual_evaluation": True,
+        },
+        np.zeros((720, 1280, 3), dtype=np.uint8),
+    )
+
+    assert (speed, profile) == (5.0, "expert.json")
+    signature = calls[0]["current_signature"]
+    assert signature.note_speed == 1.0
+    assert signature.note_skin_type == 7
+    assert signature.tap_effect == 5
+    assert signature.judgement_assist_effect is False
 
 
 def test_gate_reads_current_speed_and_uses_real_half_tenth_cent_buttons(monkeypatch):
