@@ -85,3 +85,45 @@ $python = 'D:\Documents\workplace\.tools\Miniconda3\envs\maabangdream\python.exe
 新 trace 会从相邻 `summary.json` 自动取得难度和初始偏移，并逐帧应用 trace 中记录的动态 timing feedback；使用 `--fixed-timing-offset` 才会禁用动态偏移。缺少 session 元数据的旧 trace 必须显式传入，避免把 Normal 录制静默按 Hard 的滑动 HOLD 语义回放。例如 `realtime-20260808-000656` 的正确参数是 `--difficulty Normal --timing-offset-ms -12`。
 
 `tests/test_replay_realtime_trace.py` 在本机 Git 忽略的历史录制存在时，固定验证 `realtime-20260808-000656` 的 277 个动作逐字段完全一致、150/350/500/1000 ms 注入矩阵，以及 `realtime-20260807-235842` 的真实 359 ms 长帧。其他环境没有这些私有录制时会跳过对应本地门禁，不会把日志或设备数据提交到仓库。
+
+## 2026-08-09 实机视觉组合采集结果
+
+在真实雷电模拟器（1280x720 / Normal / 流速 3.5）上完成 TYPE1–7、TAP1–5、assist on/off 的
+视觉门禁读回与演奏表现采集：
+
+| 组合 | 门禁读回 | 演奏表现 |
+| --- | --- | --- |
+| TYPE1 / TAP1 / assist off | 1->1 | 完整演奏，fps 53.2 |
+| TYPE2 / TAP1 / assist off | 1->2 | 生命耗尽（93 动作） |
+| TYPE3 / TAP1 / assist off | 2->3 | 生命耗尽（1 动作） |
+| TYPE4 / TAP1 / assist off | 3->4 | 生命耗尽（232 动作） |
+| TYPE5 / TAP1 / assist off | 5->5 | 生命耗尽（14 动作） |
+| TYPE6 / TAP1 / assist off | 5->6 | 生命耗尽（40 动作） |
+| TYPE7 / TAP1 / assist off | 6->7 | 生命耗尽（17 动作） |
+| TYPE1 / TAP2 | 1->2 | 完整演奏，304 动作，fps 53.3 |
+| TYPE1 / TAP3 | 2->3 | 生命耗尽（103 动作） |
+| TYPE1 / TAP4 | 3->4 | 完整演奏，259 动作，fps 59.9 |
+| TYPE1 / TAP5 | 4->5 | 生命耗尽（183 动作） |
+| TYPE1 / TAP4 / assist on | 0->on | 完整演奏，261 动作，fps 58.3 |
+| TYPE1 / TAP4 / assist off | on->off | 完整演奏，259 动作，fps 59.9 |
+
+胜出组合：**TYPE1 + TAP4 + assist off**。
+
+修复内容：
+
+- TYPE 读回改为整段 `TYPE1..TYPE7` 标签模板匹配（`resource/image/performance_settings/type_labels/`），
+  不再依赖窄数字字形单独分类（TYPE5 曾被读成 3，TYPE1 会拾取衬线像素）。
+- 生命保护触发后暂停覆盖层无法确认时不再升级为硬失败：触点已释放，按生命耗尽干净收尾，
+  校准正式轮可以重试而不是整体失败。
+
+胜出组合重新校准生成 `normal-20260809175514.json`（accepted=true，偏移 -6 ms）。
+随后使用该 Profile 完成三次同曲正式演奏（3/3 完整结算，miss 7–9，无 FC）：
+
+| 轮次 | perfect | great | good | bad | miss | fps |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 201 | 24 | 1 | 1 | 9 | 59.9 |
+| 2 | 208 | 18 | 1 | 1 | 7 | 51.1 |
+| 3 | 199 | 26 | 0 | 3 | 8 | 51.7 |
+
+正式验收目标（至少两次 FC、另一轮 miss<=1）尚未达到；当前引擎在 Normal Lv.14 上仍会漏 7–9 个音符。
+剩余计划：截图后端 3×300s 正式基准、Debug on/off 对照、同画面 detector 等价验证。
