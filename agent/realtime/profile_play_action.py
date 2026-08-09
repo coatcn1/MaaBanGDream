@@ -799,19 +799,31 @@ class RealtimeProfilePlay(CustomAction):
         def pause_for_life(reading) -> None:
             global _LAST_LIFE_SAFETY_ABORT
             _LAST_LIFE_SAFETY_ABORT = True
-            require_game_foreground(controller)
-            before = controller.post_screencap().wait().get()
-            controller.post_click(1237, 58).wait()
-            time.sleep(.4)
-            after = controller.post_screencap().wait().get()
-            confirmed = pause_overlay_changed(before, after)
+            confirmed = False
+            for attempt in range(2):
+                try:
+                    require_game_foreground(controller)
+                    before = controller.post_screencap().wait().get()
+                    controller.post_click(1237, 58).wait()
+                    time.sleep(.4)
+                    after = controller.post_screencap().wait().get()
+                    confirmed = pause_overlay_changed(before, after)
+                except Exception:
+                    confirmed = False
+                if confirmed:
+                    break
             print(
                 f"RealtimeProfilePlay life_safety value={reading.value} "
                 f"threshold={life_threshold} pause_confirmed={confirmed}",
                 flush=True,
             )
             if not confirmed:
-                raise RuntimeError("life safety triggered but pause overlay was not confirmed")
+                print(
+                    "RealtimeProfilePlay life_safety warning: "
+                    "pause overlay was not confirmed; touches are already "
+                    "released, continuing as a life-safety abort",
+                    flush=True,
+                )
 
         duration_value = params.get("duration_seconds", 30)
         duration_seconds = (
