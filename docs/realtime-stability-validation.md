@@ -142,5 +142,8 @@ $python = 'D:\Documents\workplace\.tools\Miniconda3\envs\maabangdream\python.exe
 detector 输出/置信度等价验证在无候选后端时可延后。RawByNetcat 的失败是 LDPlayer 上 nc 服务不可达，
 不是代码问题（CLI 已把该后端标为 controller setup failed）。
 
-Debug on/off 对照：Debug on 的三轮正式演奏已采集（fps 59.9 / 51.1 / 51.7）；
-Debug off 三轮因桌面被无关弹窗与系统侧边栏遮挡、CPU 温度偏高而暂停，待环境恢复后补跑。
+Debug on/off 对照：Debug on 的三轮正式演奏已采集（fps 59.9 / 51.1 / 51.7）。
+Debug off 三轮在 2026-08-10 尝试补跑时被桌面环境阻塞：QQ 窗口覆盖 MFA 主窗口、
+窗口 DPI 缩放异常导致开始按钮落在可视区外，且合成点击无法触发按钮；
+已把 MFA 窗口配置恢复为可用的 1145×762。待用户关闭覆盖窗口/恢复缩放后，
+在 MFA 界面把“实时演奏”Debug 设为 Off 并启动 3 次即可补齐对照。
