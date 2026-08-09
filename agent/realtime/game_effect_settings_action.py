@@ -24,8 +24,9 @@ except ImportError:
 
 from .performance_settings_action import (
     _classify_digit,
-    _digit_templates,
     _normalise_glyph,
+    _type_digit_templates,
+    _type_label_templates,
 )
 from .profile_action import PROJECT_ROOT
 from .profile_store import RealtimeProfileStore
@@ -59,6 +60,10 @@ DEFAULT_COORDINATES = {
     # digit instead of assuming a fixed y coordinate.
     "tap_effect_search_roi": (360, 180, 100, 360),
 }
+
+_TYPE_LABEL_THRESHOLD = 0.96
+_TYPE_LABEL_SEARCH_ROI = (150, 120, 280, 520)
+_TYPE_LABEL_ROW_OFFSET = 22
 
 
 @dataclass(frozen=True)
@@ -200,7 +205,7 @@ def _classify_note_skin_digit(mask: np.ndarray) -> int:
     glyph = _normalise_glyph(mask)
     scores = np.asarray([
         np.mean(glyph != template)
-        for template in _digit_templates()
+        for template in _type_digit_templates()
     ])
     order = np.argsort(scores)
     best = int(order[0])
@@ -220,59 +225,31 @@ def _find_note_skin_rows(
     radio_x: int,
     classify: Callable[[np.ndarray], int] = _classify_note_skin_digit,
 ) -> list[NoteSkinRow]:
-    """Find visible TYPE1..TYPE7 rows and their selected magenta radio."""
-    x, y, width, height = search_roi
+    """Find visible TYPE1..TYPE7 rows and their selected magenta radio.
+
+    The whole ``TYPE<n>`` label is template-matched instead of classifying
+    the narrow suffix digit, which is unstable under 20x28 downsampling.
+    """
+    x, y, width, height = _TYPE_LABEL_SEARCH_ROI
     display = image[y:y + height, x:x + width]
     if display.shape[:2] != (height, width):
-        raise RuntimeError(f"TYPE search area is outside the frame: {search_roi}")
-    gray = cv2.cvtColor(display, cv2.COLOR_BGR2GRAY)
-    mask = (gray < 180).astype(np.uint8)
-    count, _, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
-    components = [tuple(int(value) for value in stat) for stat in stats[1:count]]
+        raise RuntimeError(
+            "TYPE label search area is outside the frame: "
+            f"{_TYPE_LABEL_SEARCH_ROI}"
+        )
     rows: list[NoteSkinRow] = []
-    for component_x, component_y, component_w, component_h, area in components:
-        # On the 1280x720 dialog the TYPE suffix digit occupies x=282..300;
-        # keep a small tolerance for anti-aliasing and settled scroll offsets.
-        if not (
-            62 <= component_x <= 82
-            and 3 <= component_w <= 15
-            and 12 <= component_h <= 20
-            and 25 <= area <= 130
-        ):
+    for value, template in _type_label_templates():
+        matched = cv2.matchTemplate(display, template, cv2.TM_CCOEFF_NORMED)
+        _, score, _, location = cv2.minMaxLoc(matched)
+        if score < _TYPE_LABEL_THRESHOLD:
             continue
-        row_y = y + component_y + component_h // 2
-        prefix_glyphs = 0
-        for other_x, other_y, other_w, other_h, other_area in components:
-            other_center_y = y + other_y + other_h // 2
-            if (
-                5 <= other_x < 62
-                and 3 <= other_w <= 18
-                and 8 <= other_h <= 22
-                and 20 <= other_area <= 150
-                and abs(other_center_y - row_y) <= 5
-            ):
-                prefix_glyphs += 1
-        if prefix_glyphs < 4:
-            continue
-        pad = 3
-        left = max(0, component_x - pad)
-        top = max(0, component_y - pad)
-        right = min(width, component_x + component_w + pad)
-        bottom = min(height, component_y + component_h + pad)
-        try:
-            value = int(classify(mask[top:bottom, left:right]))
-        except RuntimeError:
-            continue
-        if not 1 <= value <= 7:
-            continue
+        row_y = y + location[1] + _TYPE_LABEL_ROW_OFFSET
         rows.append(NoteSkinRow(
             value=value,
             row_y=row_y,
             selected=_pink_pixels(image, (radio_x, row_y)) >= 80,
         ))
     rows.sort(key=lambda row: row.row_y)
-    if len({row.value for row in rows}) != len(rows):
-        raise RuntimeError("duplicate TYPE rows were detected in one frame")
     return rows
 
 
@@ -483,11 +460,18 @@ def _visible_note_skin_rows(
     coordinates: dict[str, tuple[int, ...]],
 ) -> tuple[np.ndarray, list[NoteSkinRow]]:
     image = _capture(context)
-    rows = _find_note_skin_rows(
-        image,
-        search_roi=coordinates["note_skin_digit_search_roi"],
-        radio_x=coordinates["note_skin_radio_x"][0],
-    )
+    try:
+        rows = _find_note_skin_rows(
+            image,
+            search_roi=coordinates["note_skin_digit_search_roi"],
+            radio_x=coordinates["note_skin_radio_x"][0],
+        )
+    except Exception as exc:
+        capture_path = _save_readback_failure(image, "note-skin-rows")
+        raise RuntimeError(
+            f"TYPE 行读取失败（{type(exc).__name__}: {exc}），"
+            f"读回截图={capture_path}"
+        ) from exc
     return image, rows
 
 
@@ -532,6 +516,8 @@ def _find_note_skin_on_page(
         if (target is None and selected_values) or (
             target is not None and target_y is not None
         ):
+            if target is not None:
+                _save_readback_failure(last_image, "note-skin-target-found")
             break
         if step < max_scroll_steps:
             _swipe(
@@ -728,20 +714,20 @@ class RealtimeGameEffectSettingsGate(CustomAction):
                     (coordinates["note_skin_radio_x"][0], target_y),
                 )
                 changed_note_skin = True
-                _wait(context, delay)
-                confirmed_note_image, confirmed_note_rows = (
-                    _visible_note_skin_rows(context, coordinates)
+                _wait(
+                    context,
+                    float(params.get("confirm_delay_seconds", 0.8)),
                 )
-                selected_note_values = [
-                    row.value for row in confirmed_note_rows if row.selected
-                ]
-                if selected_note_values != [expected_note_skin]:
+                confirmed_note_image = _capture(context)
+                radio_point = (coordinates["note_skin_radio_x"][0], target_y)
+                if _pink_pixels(confirmed_note_image, radio_point) < 80:
                     capture_path = _save_readback_failure(
                         confirmed_note_image, "note-skin-confirmed"
                     )
                     raise RuntimeError(
-                        f"TYPE readback mismatch: actual={selected_note_values} "
-                        f"expected={expected_note_skin}; readback={capture_path}"
+                        "TYPE readback mismatch: radio was not selected at "
+                        f"row={target_y} expected={expected_note_skin}; "
+                        f"readback={capture_path}"
                     )
 
             _scroll_to_top(

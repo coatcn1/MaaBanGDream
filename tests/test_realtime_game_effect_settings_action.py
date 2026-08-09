@@ -20,7 +20,10 @@ from agent.realtime.game_effect_settings_action import (
     clear_verified_game_visual_settings,
     verified_game_visual_settings,
 )
-from agent.realtime.performance_settings_action import _digit_templates
+from agent.realtime.performance_settings_action import (
+    _type_digit_templates,
+    _type_label_templates,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -86,19 +89,18 @@ def test_tap_effect_click_plan_uses_shortest_wrapped_path():
     assert _tap_effect_click_plan(3, 3) == ("right", 0)
 
 
-def test_find_note_skin_rows_combines_fixed_digit_position_and_pink_radio():
+def test_find_note_skin_rows_uses_label_templates_and_pink_radio():
     image = np.full((720, 1280, 3), 255, dtype=np.uint8)
     row_y = 470
-    for left in (229, 244, 259, 274):
-        cv2.rectangle(image, (left, row_y - 7), (left + 8, row_y + 7), (0, 0, 0), -1)
-    cv2.rectangle(image, (287, row_y - 7), (292, row_y + 7), (0, 0, 0), -1)
+    label = dict(_type_label_templates())[7]
+    height, width = label.shape[:2]
+    image[row_y - 22:row_y - 22 + height, 215:215 + width] = label
     cv2.circle(image, (205, row_y), 10, (110, 20, 245), -1)
 
     rows = _find_note_skin_rows(
         image,
         search_roi=(220, 180, 90, 390),
         radio_x=205,
-        classify=lambda _: 7,
     )
 
     assert [(row.value, row.row_y, row.selected) for row in rows] == [
@@ -119,14 +121,14 @@ def test_local_real_settings_frame_reads_type1_and_type2_rows():
     )
 
     assert [(row.value, row.row_y, row.selected) for row in rows] == [
-        (1, 470, True),
+        (1, 469, True),
         (2, 538, False),
     ]
 
 
 def test_note_skin_classifier_accepts_only_fixed_type_digit_templates():
     assert [
-        _classify_note_skin_digit(_digit_templates()[value])
+        _classify_note_skin_digit(_type_digit_templates()[value])
         for value in range(1, 8)
     ] == list(range(1, 8))
 

@@ -46,6 +46,12 @@ _MAXIMUM_NOTE_SPEED = 12.0
 _DIGIT_TEMPLATE_PATH = (
     PROJECT_ROOT / "resource" / "image" / "performance_settings" / "speed_digits.png"
 )
+_TYPE_DIGIT_TEMPLATE_PATH = (
+    PROJECT_ROOT / "resource" / "image" / "performance_settings" / "type_digits.png"
+)
+_TYPE_LABEL_DIR = (
+    PROJECT_ROOT / "resource" / "image" / "performance_settings" / "type_labels"
+)
 
 # Coordinates are in MaaFramework's canonical 1280x720 game frame.
 DEFAULT_COORDINATES = {
@@ -126,6 +132,42 @@ def _digit_templates() -> tuple[np.ndarray, ...]:
     if sprite is None or sprite.shape != (28, 200):
         raise RuntimeError(f"流速数字模板损坏：{_DIGIT_TEMPLATE_PATH}")
     return tuple(sprite[:, index * 20:(index + 1) * 20] >= 128 for index in range(10))
+
+
+@lru_cache(maxsize=1)
+def _type_digit_templates() -> tuple[np.ndarray, ...]:
+    """Return TYPE1..TYPE7 suffix templates captured from the real game UI.
+
+    The TYPE labels use a narrower font than the note-speed display, so the
+    shared speed templates misread TYPE5 as 3.  These templates are sampled
+    from the 1280x720 演出皮肤设定 page rows.
+    """
+    sprite = cv2.imread(str(_TYPE_DIGIT_TEMPLATE_PATH), cv2.IMREAD_GRAYSCALE)
+    if sprite is None or sprite.shape != (28, 200):
+        raise RuntimeError(f"TYPE 数字模板损坏：{_TYPE_DIGIT_TEMPLATE_PATH}")
+    return tuple(
+        sprite[:, index * 20:(index + 1) * 20] >= 128
+        for index in range(10)
+    )
+
+
+@lru_cache(maxsize=1)
+def _type_label_templates() -> tuple[tuple[int, np.ndarray], ...]:
+    """Return (TYPE value, label template) pairs for TYPE1..TYPE7.
+
+    The whole ``TYPE<n>`` label is matched instead of classifying the narrow
+    suffix digit alone, because the digit glyph is unstable at 20x28 after
+    nearest-neighbour downsampling (TYPE5 could be read as 3, and TYPE1 can
+    pick up serif pixels and read as 3 as well).
+    """
+    result = []
+    for value in range(1, 8):
+        path = _TYPE_LABEL_DIR / f"type_label_{value}.png"
+        template = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        if template is None or template.shape != (34, 95, 3):
+            raise RuntimeError(f"TYPE 标签模板损坏：{path}")
+        result.append((value, template))
+    return tuple(result)
 
 
 def _classify_digit(mask: np.ndarray) -> int:
