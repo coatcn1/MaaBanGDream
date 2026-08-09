@@ -127,3 +127,20 @@ $python = 'D:\Documents\workplace\.tools\Miniconda3\envs\maabangdream\python.exe
 
 正式验收目标（至少两次 FC、另一轮 miss<=1）尚未达到；当前引擎在 Normal Lv.14 上仍会漏 7–9 个音符。
 剩余计划：截图后端 3×300s 正式基准、Debug on/off 对照、同画面 detector 等价验证。
+
+### 截图后端 3×300s 正式基准结果（2026-08-09）
+
+| 后端 | 最大截图 | P95 | 均值 | >150ms 帧 | 结论 |
+| --- | --- | --- | --- | --- | --- |
+| EmulatorExtras（当前） | 16–31 ms | 16 ms | 3.8–4.5 ms | 0 | **timing_qualified=true** |
+| RawByNetcat | — | — | — | — | 控制器/截图初始化失败（nc 端口不可达） |
+| RawWithGzip | 312 ms | 266 ms | 229.8 ms | 3917 | 不合格 |
+| Encode | 1141 ms | 516 ms | 410.1 ms | 2195 | 不合格 |
+| EncodeToFileAndPull | 640 ms | 547 ms | 494.8 ms | 1821 | 不合格 |
+
+结论：只有当前 EmulatorExtras 通过耗时门禁，没有可切换的无损后端，因此不进入第二阶段伪异步截图/触控修复；
+detector 输出/置信度等价验证在无候选后端时可延后。RawByNetcat 的失败是 LDPlayer 上 nc 服务不可达，
+不是代码问题（CLI 已把该后端标为 controller setup failed）。
+
+Debug on/off 对照：Debug on 的三轮正式演奏已采集（fps 59.9 / 51.1 / 51.7）；
+Debug off 三轮因桌面被无关弹窗与系统侧边栏遮挡、CPU 温度偏高而暂停，待环境恢复后补跑。
