@@ -53,6 +53,9 @@ def test_debug_recorder_writes_lossless_trace_and_replay_summary(tmp_path):
     assert trace[0]["timing_feedback"]["current_offset_ms"] == 1
     assert summary["trace_frames"] == 2
     assert summary["video_frames"] == 1
+    assert summary["record_worker_finalized"] is True
+    assert summary["encoder_finalized"] is True
+    assert summary["recorder_error"] is None
     assert summary["diagnostic_counts"] == {"hold_start": 1}
     assert summary["timing_feedback"]["current_offset_ms"] == 1
     assert (recorder.output_dir / "playfield.avi").stat().st_size > 0
@@ -140,6 +143,7 @@ def test_debug_video_is_sampled_at_thirty_fps_without_losing_trace(tmp_path):
     )
     assert summary["trace_frames"] == 6
     assert summary["video_frames"] == 3
+    assert summary["dropped_video_frames"] == 0
     assert summary["video_fps"] == 30
 
 
@@ -221,10 +225,12 @@ def test_close_discards_backlog_and_times_out_without_long_block(tmp_path, monke
     )
     entered = threading.Event()
     release = threading.Event()
+    original_process = RealtimeDebugRecorder._process_record
 
     def blocked_process(self, *args, **kwargs):
         entered.set()
-        release.wait(5)
+        assert release.wait(5)
+        return original_process(self, *args, **kwargs)
 
     monkeypatch.setattr(RealtimeDebugRecorder, "_process_record", blocked_process)
     frame = np.zeros((72, 128, 3), dtype=np.uint8)
@@ -240,8 +246,25 @@ def test_close_discards_backlog_and_times_out_without_long_block(tmp_path, monke
 
     assert elapsed < .5
     assert recorder._record_queue.qsize() <= 1
+    summary_path = recorder.output_dir / "summary.json"
+    provisional = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert provisional["record_worker_finalized"] is False
+    assert provisional["encoder_finalized"] is False
+    assert "recorder worker did not stop" in provisional["recorder_error"]
+
     release.set()
-    recorder._record_thread.join(timeout=1)
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:
+        final = json.loads(summary_path.read_text(encoding="utf-8"))
+        if final["record_worker_finalized"] and final["encoder_finalized"]:
+            break
+        time.sleep(.01)
+
+    assert final["record_worker_finalized"] is True
+    assert final["encoder_finalized"] is True
+    assert final["trace_frames"] == 1
+    assert final["video_frames"] == 1
+    assert final["dropped_trace_frames"] == 12
 
 
 def test_encoder_backlog_can_be_discarded_without_blocking(tmp_path):
@@ -265,6 +288,67 @@ def test_encoder_backlog_can_be_discarded_without_blocking(tmp_path):
     assert recorder._frames.empty()
     assert recorder._dropped_video_frames > 0
     recorder.close()
+
+
+def test_encoder_timeout_summary_is_provisional_then_atomically_finalized(
+    tmp_path, monkeypatch,
+):
+    entered = threading.Event()
+    release = threading.Event()
+
+    class BlockingWriter:
+        def isOpened(self):
+            return True
+
+        def write(self, _frame):
+            entered.set()
+            assert release.wait(5)
+
+        def release(self):
+            pass
+
+    monkeypatch.setattr(
+        "agent.realtime.debug_recorder.cv2.VideoWriter",
+        lambda *_args, **_kwargs: BlockingWriter(),
+    )
+    recorder = RealtimeDebugRecorder(
+        tmp_path,
+        video_fps=30,
+        close_timeout_seconds=.05,
+    )
+    recorder.record(
+        np.zeros((72, 128, 3), dtype=np.uint8),
+        1.0,
+        [],
+        [],
+        "alive",
+    )
+    assert entered.wait(1)
+
+    started = time.perf_counter()
+    with pytest.raises(RuntimeError, match="实时调试录像写入失败"):
+        recorder.close()
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < .5
+    summary_path = recorder.output_dir / "summary.json"
+    provisional = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert provisional["record_worker_finalized"] is True
+    assert provisional["encoder_finalized"] is False
+    assert "video encoder did not stop" in provisional["recorder_error"]
+
+    release.set()
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:
+        final = json.loads(summary_path.read_text(encoding="utf-8"))
+        if final["record_worker_finalized"] and final["encoder_finalized"]:
+            break
+        time.sleep(.01)
+
+    assert final["record_worker_finalized"] is True
+    assert final["encoder_finalized"] is True
+    assert final["video_frames"] == 1
+    assert "video encoder did not stop" in final["recorder_error"]
 
 
 def test_record_write_failure_is_reported_at_close(tmp_path, monkeypatch):

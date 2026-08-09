@@ -64,8 +64,11 @@ class RealtimeDebugRecorder:
         )
         self._session_metadata_set = session_metadata is not None
         self._metadata_lock = threading.Lock()
+        self._summary_lock = threading.Lock()
+        self._summary_finalizer_lock = threading.Lock()
         self._closed = False
         self._error: BaseException | None = None
+        self._summary_finalizer_thread: threading.Thread | None = None
         self._event_count = 0
         self._released_at: dict[int, float] = {}
         self._diagnostic_counts: dict[str, int] = {}
@@ -147,32 +150,87 @@ class RealtimeDebugRecorder:
             except BaseException as exc:
                 if self._error is None:
                     self._error = exc
-            self._discard_pending_video_frames()
             if self._encode_thread.is_alive():
-                self._frames.put_nowait(_SENTINEL)
-                self._encode_thread.join(timeout=self.close_timeout_seconds)
-                if self._encode_thread.is_alive() and self._error is None:
-                    self._error = TimeoutError(
-                        "video encoder did not stop within "
-                        f"{self.close_timeout_seconds:.2f}s"
-                    )
-            try:
-                (self.output_dir / "summary.json").write_text(json.dumps({
-                    "schema_version": 1,
-                    "trace_frames": self._trace_frames,
-                    "dropped_trace_frames": self._dropped_trace_frames,
-                    "video_frames": self._video_frames,
-                    "skipped_video_frames": self._skipped_video_frames,
-                    "dropped_video_frames": self._dropped_video_frames,
-                    "video_fps": self.video_fps,
-                    "event_screenshots": self._event_count,
-                    "diagnostic_counts": self._diagnostic_counts,
-                    "timing_feedback": self._last_timing_state,
-                    "session": self._session_metadata,
-                }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            except BaseException as exc:
-                if self._error is None:
-                    self._error = exc
+                try:
+                    # The sentinel is FIFO, so a small accepted batch is
+                    # encoded before shutdown without making record() wait.
+                    self._frames.put_nowait(_SENTINEL)
+                except queue.Full:
+                    # A saturated encoder queue is diagnostic backlog, not a
+                    # reason to block realtime shutdown while it drains.
+                    self._discard_pending_video_frames()
+                    self._frames.put_nowait(_SENTINEL)
+            else:
+                self._discard_pending_video_frames()
+
+    def _summary_payload(
+        self,
+        *,
+        record_worker_finalized: bool,
+        encoder_finalized: bool,
+    ) -> dict:
+        with self._metadata_lock:
+            session = deepcopy(self._session_metadata)
+        error = self._error
+        return {
+            "schema_version": 1,
+            "record_worker_finalized": bool(record_worker_finalized),
+            "encoder_finalized": bool(encoder_finalized),
+            "recorder_error": (
+                f"{type(error).__name__}: {error}" if error is not None else None
+            ),
+            "trace_frames": self._trace_frames,
+            "dropped_trace_frames": self._dropped_trace_frames,
+            "video_frames": self._video_frames,
+            "skipped_video_frames": self._skipped_video_frames,
+            "dropped_video_frames": self._dropped_video_frames,
+            "video_fps": self.video_fps,
+            "event_screenshots": self._event_count,
+            "diagnostic_counts": dict(self._diagnostic_counts),
+            "timing_feedback": deepcopy(self._last_timing_state),
+            "session": session,
+        }
+
+    def _write_summary(
+        self,
+        *,
+        record_worker_finalized: bool,
+        encoder_finalized: bool,
+    ) -> None:
+        path = self.output_dir / "summary.json"
+        temporary = path.with_suffix(".json.tmp")
+        payload = self._summary_payload(
+            record_worker_finalized=record_worker_finalized,
+            encoder_finalized=encoder_finalized,
+        )
+        with self._summary_lock:
+            temporary.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            temporary.replace(path)
+
+    def _finalize_summary_after_workers(self) -> None:
+        self._record_thread.join()
+        self._encode_thread.join()
+        try:
+            self._write_summary(
+                record_worker_finalized=True,
+                encoder_finalized=True,
+            )
+        except BaseException as exc:
+            if self._error is None:
+                self._error = exc
+
+    def _start_summary_finalizer(self) -> None:
+        with self._summary_finalizer_lock:
+            if self._summary_finalizer_thread is not None:
+                return
+            self._summary_finalizer_thread = threading.Thread(
+                target=self._finalize_summary_after_workers,
+                daemon=True,
+            )
+            self._summary_finalizer_thread.start()
 
     def _discard_pending_records(self) -> None:
         """Release queued frame references after a worker failure or close."""
@@ -334,5 +392,29 @@ class RealtimeDebugRecorder:
                 )
         else:
             self._discard_pending_records()
+        record_worker_finalized = not self._record_thread.is_alive()
+        if record_worker_finalized:
+            if self._encode_thread.is_alive():
+                self._encode_thread.join(timeout=self.close_timeout_seconds)
+        encoder_finalized = not self._encode_thread.is_alive()
+        if (
+            record_worker_finalized
+            and not encoder_finalized
+            and self._error is None
+        ):
+            self._error = TimeoutError(
+                "video encoder did not stop within "
+                f"{self.close_timeout_seconds:.2f}s"
+            )
+        try:
+            self._write_summary(
+                record_worker_finalized=record_worker_finalized,
+                encoder_finalized=encoder_finalized,
+            )
+        except BaseException as exc:
+            if self._error is None:
+                self._error = exc
+        if not record_worker_finalized or not encoder_finalized:
+            self._start_summary_finalizer()
         if self._error is not None:
             raise RuntimeError("实时调试录像写入失败") from self._error

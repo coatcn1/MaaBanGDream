@@ -4,6 +4,7 @@ import json
 import math
 import time
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -23,6 +24,11 @@ except ImportError:
 from .profile_action import PROJECT_ROOT
 from .profile_store import EnvironmentSignature, RealtimeProfileStore
 from .rehearsal_action import frame_resolution
+from .live_session import current_live_run
+from .run_reporting import (
+    PreflightPerformanceSnapshot,
+    write_preflight_terminal_result,
+)
 
 
 @dataclass(frozen=True)
@@ -334,10 +340,56 @@ class RealtimePerformanceSettingsGate(CustomAction):
     """Read and adjust note speed on the explicitly selected first settings tab."""
 
     def run(self, context: Context, argv: CustomAction.RunArg) -> bool:
+        params: dict = {}
+        run_context = None
+        performance_snapshot = None
+
+        def capture_snapshot(snapshot: PreflightPerformanceSnapshot) -> None:
+            nonlocal performance_snapshot
+            performance_snapshot = snapshot
+
         try:
-            return self._run(context, json.loads(argv.custom_action_param or "{}"))
+            if context.tasker.stopping:
+                return True
+            params = json.loads(argv.custom_action_param or "{}")
+            run_context = current_live_run()
+            return self._run(
+                context,
+                params,
+                on_expected=capture_snapshot,
+            )
         except Exception as exc:
-            record_failure_reason(f"开演前流速设置失败：{type(exc).__name__}: {exc}")
+            if context.tasker.stopping:
+                print(
+                    "RealtimePerformanceSettingsGate stopped=true",
+                    flush=True,
+                )
+                return True
+            reason = f"{type(exc).__name__}: {exc}"
+            record_failure_reason(f"开演前流速设置失败：{reason}")
+            try:
+                # Lazy import avoids the visual gate's dependency on this
+                # module's fixed digit classifier.
+                from .game_effect_settings_action import (
+                    verified_game_visual_settings,
+                )
+
+                write_preflight_terminal_result(
+                    output_dir=PROJECT_ROOT / "screencap",
+                    params=params,
+                    terminal_stage="performance_settings_gate",
+                    reason=reason,
+                    visual_settings=verified_game_visual_settings(),
+                    performance_snapshot=performance_snapshot,
+                    run_context=run_context,
+                )
+            except Exception as artifact_error:
+                print(
+                    "RealtimePerformanceSettingsGate artifact_failed="
+                    f"{type(artifact_error).__name__}: {artifact_error}",
+                    flush=True,
+                )
+                traceback.print_exc()
             traceback.print_exc()
             print(
                 "RealtimePerformanceSettingsGate "
@@ -346,7 +398,13 @@ class RealtimePerformanceSettingsGate(CustomAction):
             )
             return False
 
-    def _run(self, context: Context, params: dict) -> bool:
+    def _run(
+        self,
+        context: Context,
+        params: dict,
+        *,
+        on_expected: Callable[[PreflightPerformanceSnapshot], None] | None = None,
+    ) -> bool:
         if context.tasker.stopping:
             return True
         difficulty = str(params.get("difficulty", "Easy"))
@@ -356,6 +414,11 @@ class RealtimePerformanceSettingsGate(CustomAction):
         before = controller.post_screencap().wait().get()
         expected, profile = _expected_speed(context, params, before)
         _speed_cents(expected)
+        if on_expected is not None:
+            on_expected(PreflightPerformanceSnapshot(
+                expected_note_speed=expected,
+                profile=profile,
+            ))
         coordinates = dict(DEFAULT_COORDINATES)
         coordinates.update(params.get("coordinates", {}))
         coordinates = {

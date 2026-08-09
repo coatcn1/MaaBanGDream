@@ -1,15 +1,23 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
-from agent.realtime import profile_play_action
+from agent.realtime import profile_play_action, run_reporting
 from agent.realtime.engine import EngineStats
-from agent.realtime.live_session import LiveRunContext
+from agent.realtime.live_session import (
+    LiveRunContext,
+    current_live_run,
+    reset_live_run,
+    update_live_run,
+)
 from agent.realtime.profile_play_action import (
+    RealtimeProfileCheck,
     _result_report_payload,
     resolve_profile,
     resolve_profile_for_settings_gate,
@@ -277,3 +285,164 @@ def test_visual_evaluation_precheck_ignores_only_speed_and_visuals(monkeypatch):
     signature = calls[0]["current_signature"]
     assert signature.note_speed == 1.0
     assert signature.note_skin_type == 7
+
+
+def test_profile_check_failure_writes_structured_preflight_result(
+    monkeypatch, tmp_path,
+):
+    reset_live_run(
+        mode="realtime",
+        difficulty="Normal",
+        expected_note_speed=None,
+        actual_note_speed=9.99,
+        prepared_for_play=True,
+    )
+    update_live_run(
+        song_id="song-phash-v1-fedcba9876543210",
+        song_id_method="song-phash-v1",
+    )
+    visual = SimpleNamespace(
+        note_skin_type=7,
+        tap_effect=5,
+        judgement_assist_effect=False,
+    )
+    monkeypatch.setattr(
+        profile_play_action, "verified_game_visual_settings", lambda: visual,
+    )
+    monkeypatch.setattr(profile_play_action, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(
+        profile_play_action,
+        "resolve_profile_for_settings_gate",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ValueError("没有实验 Profile")
+        ),
+    )
+    failure_reasons = []
+    monkeypatch.setattr(
+        profile_play_action, "record_failure_reason", failure_reasons.append,
+    )
+    context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Normal",
+        "dpi": 240,
+        "game_fps": 60,
+        "render_quality": "standard",
+        "note_speed": 2.0,
+        "visual_evaluation": True,
+    }))
+
+    assert RealtimeProfileCheck().run(context, argv) is False
+    assert current_live_run().prepared_for_play is False
+
+    reports = list((tmp_path / "screencap").glob("realtime-result-*.json"))
+    assert len(reports) == 1
+    payload = json.loads(reports[0].read_text(encoding="utf-8"))
+    assert payload["valid"] is False
+    assert payload["result_status"] == "preflight_error"
+    assert payload["terminal_stage"] == "profile_check"
+    assert payload["run_id"] == payload["session"]["run_id"]
+    assert payload["song_id"] == "song-phash-v1-fedcba9876543210"
+    assert payload["mode"] == "visual-evaluation"
+    assert payload["processed_frames"] == 0
+    assert payload["dispatched_actions"] == 0
+    assert payload["action_counts"] == {}
+    assert payload["settings"] == {
+        "expected_note_speed": 2.0,
+        "actual_note_speed": None,
+        "note_skin_type": 7,
+        "tap_effect": 5,
+        "judgement_assist": False,
+    }
+    assert payload["debug_recording_path"] is None
+    assert payload["eligible_for_profile_acceptance"] is False
+    assert payload["reason"] == "ValueError: 没有实验 Profile"
+    assert failure_reasons == ["ValueError: 没有实验 Profile"]
+    assert not list(tmp_path.rglob("summary.json"))
+
+
+def test_profile_check_stop_during_failure_is_neutral_and_writes_nothing(
+    monkeypatch, tmp_path,
+):
+    reset_live_run(mode="realtime", difficulty="Normal")
+    monkeypatch.setattr(profile_play_action, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(
+        profile_play_action,
+        "resolve_profile_for_settings_gate",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("controller stopped")
+        ),
+    )
+    failure_reasons = []
+    monkeypatch.setattr(
+        profile_play_action, "record_failure_reason", failure_reasons.append,
+    )
+
+    class Tasker:
+        reads = 0
+
+        @property
+        def stopping(self):
+            self.reads += 1
+            return self.reads >= 2
+
+    context = SimpleNamespace(tasker=Tasker())
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Normal",
+    }))
+
+    assert RealtimeProfileCheck().run(context, argv) is True
+    assert not list(tmp_path.rglob("realtime-result-*.json"))
+    assert failure_reasons == []
+
+
+def test_preflight_writer_skips_known_pre_session_visual_gate_gap(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(run_reporting, "current_live_run", lambda: None)
+
+    result = run_reporting.write_preflight_terminal_result(
+        output_dir=tmp_path / "screencap",
+        params={"difficulty": "Normal"},
+        terminal_stage="visual_settings_gate",
+        reason="visual readback failed before round context",
+    )
+
+    assert result is None
+    assert not (tmp_path / "screencap").exists()
+
+
+@pytest.mark.parametrize(("current_mode", "params", "expected_mode"), [
+    ("realtime", {"run_mode": "formal"}, "formal"),
+    ("realtime", {"run_mode": "rehearsal"}, "rehearsal"),
+    (
+        "realtime",
+        {"run_mode": "challenge", "visual_evaluation": True},
+        "challenge",
+    ),
+    ("challenge", {"visual_evaluation": True}, "visual-evaluation"),
+    ("formal", {}, "formal"),
+    ("rehearsal", {}, "rehearsal"),
+    ("challenge", {}, "challenge"),
+    ("realtime", {}, "formal"),
+    ("pending", {}, "formal"),
+])
+def test_preflight_writer_preserves_explicit_run_modes(
+    tmp_path, current_mode, params, expected_mode,
+):
+    reset_live_run(
+        mode=current_mode,
+        difficulty="Normal",
+        prepared_for_play=True,
+    )
+
+    path = run_reporting.write_preflight_terminal_result(
+        output_dir=tmp_path / expected_mode,
+        params={"difficulty": "Normal", **params},
+        terminal_stage="profile_check",
+        reason="preflight failed",
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["mode"] == expected_mode
+    assert payload["session"]["mode"] == expected_mode
+    assert current_live_run().mode == expected_mode

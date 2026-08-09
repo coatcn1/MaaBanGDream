@@ -236,6 +236,7 @@ def test_multi_live_options_and_loop_contract():
     nodes = load(ROOT / "resource/pipeline/auto_live.json")
     assert nodes["AutoLiveRoundGate"]["max_hit"] == 1
     assert nodes["AutoLiveRandomSong"]["target"] == [687, 642]
+    assert nodes["AutoLiveRandomSong"]["custom_action"] == "RandomSongSelect"
     assert nodes["AutoLiveResult"]["next"] == ["AutoLiveRoundCompleted"]
     assert nodes["AutoLiveRoundCompleted"]["next"] == [
         "AutoLiveRoundGate",
@@ -444,6 +445,8 @@ def test_realtime_multi_live_contract_and_options():
     song_mode = interface["option"]["RealtimeLiveSongMode"]
     assert song_mode["cases"][0]["pipeline_override"]["RealtimeLiveSongSelectMarker"]["next"] == ["RealtimeLiveDifficulty"]
     assert song_mode["cases"][1]["pipeline_override"]["RealtimeLiveSongSelectMarker"]["next"] == ["RealtimeLiveRandomSong"]
+    assert nodes["RealtimeLiveRandomSong"]["custom_action"] == "RandomSongSelect"
+    assert nodes["RealtimeLiveRandomSong"]["custom_action_param"]["max_attempts"] == 3
     count = interface["option"]["RealtimeLiveCount"]
     assert count["inputs"][0]["verify"] == "^(?:[1-9]|[1-9][0-9])$"
     assert count["pipeline_override"]["RealtimeLiveRoundGate"]["max_hit"] == "{Count}"

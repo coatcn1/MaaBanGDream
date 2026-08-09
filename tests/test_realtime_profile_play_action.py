@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import cv2
 import numpy as np
 import pytest
 
@@ -14,8 +15,10 @@ from agent.realtime.profile_play_action import (
     RealtimeProfilePlay,
     ResultCollectionOutcome,
     ResultCollectionStatus,
+    _dismiss_reward_popup,
     _result_report_payload,
     _write_calibration_report,
+    collect_result,
     pause_overlay_changed,
     resolve_life_policy,
 )
@@ -98,8 +101,16 @@ def test_profile_play_reuses_one_agent_controller_proxy(monkeypatch):
     assert dispatcher_options == [{}]
 
 
-def test_profile_play_refuses_pipeline_start_without_fresh_speed_gate():
+def test_profile_play_refuses_pipeline_start_without_fresh_speed_gate(
+    monkeypatch, tmp_path,
+):
     clear_verified_settings()
+    reset_live_run(
+        mode="pending",
+        difficulty="Easy",
+        prepared_for_play=True,
+    )
+    monkeypatch.setattr("agent.realtime.profile_play_action.PROJECT_ROOT", tmp_path)
     context = SimpleNamespace(
         tasker=SimpleNamespace(stopping=False, controller=Controller()),
     )
@@ -111,6 +122,54 @@ def test_profile_play_refuses_pipeline_start_without_fresh_speed_gate():
 
     with pytest.raises(RuntimeError, match="尚未实际验证游戏流速"):
         RealtimeProfilePlay()._run(context, argv)
+
+    report = next((tmp_path / "screencap").glob("realtime-result-*.json"))
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["valid"] is False
+    assert payload["result_status"] == "preflight_error"
+    assert payload["terminal_stage"] == "profile_play_preflight"
+
+
+def test_profile_play_stop_during_preflight_is_neutral_and_writes_nothing(
+    monkeypatch, tmp_path,
+):
+    reset_live_run(
+        mode="pending",
+        difficulty="Easy",
+        prepared_for_play=True,
+    )
+    tasker = Tasker()
+    context = SimpleNamespace(tasker=tasker)
+
+    def stop_while_reading_settings(_difficulty):
+        tasker.stopping = True
+        raise InterruptedError("settings read cancelled")
+
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.verified_settings",
+        stop_while_reading_settings,
+    )
+    monkeypatch.setattr("agent.realtime.profile_play_action.PROJECT_ROOT", tmp_path)
+    recorder_constructions = []
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.RealtimeDebugRecorder",
+        lambda root: recorder_constructions.append(root),
+    )
+    failure_reasons = []
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.record_failure_reason",
+        failure_reasons.append,
+    )
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Easy",
+        "settings_gate_required": True,
+        "debug_recording": True,
+    }))
+
+    assert RealtimeProfilePlay().run(context, argv) is True
+    assert recorder_constructions == []
+    assert failure_reasons == []
+    assert not list(tmp_path.rglob("realtime-result-*.json"))
 
 
 def test_pause_overlay_requires_a_material_screen_change():
@@ -392,6 +451,232 @@ def test_engine_error_writes_invalid_result_with_partial_stats(monkeypatch, tmp_
     assert payload["frame_interval_p95_ms"] == pytest.approx(22.5)
     assert payload["reason"] == payload["terminal_reason"]
     assert payload["run_id"] == payload["session"]["run_id"]
+
+
+def test_engine_interrupt_after_stop_writes_neutral_partial_result(
+    monkeypatch, tmp_path,
+):
+    reset_live_run(mode="formal", difficulty="Normal")
+    tasker = Tasker()
+    context = SimpleNamespace(tasker=tasker)
+    settings = SimpleNamespace(
+        target_fps=60,
+        timing_offset_ms=-9,
+        profile_path=SimpleNamespace(name="normal.json"),
+    )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.RealtimeProfileStore.resolve_latest",
+        lambda *args, **kwargs: settings,
+    )
+    monkeypatch.setattr("agent.realtime.profile_play_action.PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.require_game_foreground",
+        lambda _controller: None,
+    )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.ControllerTouchDispatcher",
+        lambda *_args, **_kwargs: object(),
+    )
+
+    class Engine:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def run(self, _capture, _stopping, **_kwargs):
+            tasker.stopping = True
+            error = InterruptedError("stop observed during dispatch")
+            error.realtime_stats = EngineStats(
+                17,
+                6,
+                False,
+                terminal_reason=(
+                    "实时演奏引擎异常: InterruptedError: "
+                    "stop observed during dispatch"
+                ),
+                action_counts={"tap": 6},
+                frame_interval_p50_ms=16.7,
+                frame_interval_p95_ms=22.5,
+                frame_interval_max_ms=41.0,
+                effective_fps=57.3,
+            )
+            raise error
+
+    monkeypatch.setattr("agent.realtime.profile_play_action.RealtimeEngine", Engine)
+    failure_reasons = []
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.record_failure_reason",
+        failure_reasons.append,
+    )
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Normal",
+        "duration_seconds": 600,
+        "require_completion": True,
+        "save_result_frame": True,
+        "run_mode": "formal",
+    }))
+
+    assert RealtimeProfilePlay().run(context, argv) is True
+    reports = list((tmp_path / "screencap").glob("realtime-result-*.json"))
+    assert len(reports) == 1
+    payload = json.loads(reports[0].read_text(encoding="utf-8"))
+    assert payload["valid"] is False
+    assert payload["result_status"] == "stopped"
+    assert payload["processed_frames"] == 17
+    assert payload["dispatched_actions"] == 6
+    assert payload["terminal_reason"] == "用户已停止任务"
+    assert payload["reason"] == "用户已停止任务"
+    assert failure_reasons == []
+
+
+def test_profile_resolution_failure_writes_correlated_preflight_result(
+    monkeypatch, tmp_path,
+):
+    live_run = reset_live_run(
+        mode="pending",
+        difficulty="Normal",
+        prepared_for_play=True,
+    )
+    update_live_run(
+        song_id="song-phash-v1-profile-preflight",
+        song_id_method="song-phash-v1",
+    )
+    tasker = Tasker()
+    context = SimpleNamespace(tasker=tasker)
+    verified = SimpleNamespace(
+        difficulty="Normal",
+        actual_note_speed=3.5,
+        expected_note_speed=3.5,
+        profile="normal.json",
+        verified_at=1.0,
+    )
+    visual = SimpleNamespace(
+        note_skin_type=7,
+        tap_effect=5,
+        judgement_assist_effect=False,
+    )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.verified_settings",
+        lambda _difficulty: verified,
+    )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.verified_game_visual_settings",
+        lambda: visual,
+    )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.resolve_profile",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ValueError("profile mismatch")
+        ),
+    )
+    monkeypatch.setattr("agent.realtime.profile_play_action.PROJECT_ROOT", tmp_path)
+    recorder_constructions = []
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.RealtimeDebugRecorder",
+        lambda root: recorder_constructions.append(root),
+    )
+    failure_reasons = []
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.record_failure_reason",
+        failure_reasons.append,
+    )
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Normal",
+        "require_profile": True,
+        "settings_gate_required": True,
+        "debug_recording": True,
+        "run_mode": "formal",
+    }))
+
+    assert RealtimeProfilePlay().run(context, argv) is False
+    assert recorder_constructions == []
+    reports = list((tmp_path / "screencap").glob("realtime-result-*.json"))
+    assert len(reports) == 1
+    payload = json.loads(reports[0].read_text(encoding="utf-8"))
+    assert payload["valid"] is False
+    assert payload["result_status"] == "preflight_error"
+    assert payload["terminal_stage"] == "profile_play_preflight"
+    assert payload["run_id"] == live_run.run_id
+    assert payload["song_id"] == "song-phash-v1-profile-preflight"
+    assert payload["profile"] == "normal.json"
+    assert payload["settings"]["expected_note_speed"] == pytest.approx(3.5)
+    assert payload["settings"]["actual_note_speed"] == pytest.approx(3.5)
+    assert payload["settings"]["note_skin_type"] == 7
+    assert payload["settings"]["tap_effect"] == 5
+    assert payload["settings"]["judgement_assist"] is False
+    assert payload["reason"] == "ValueError: profile mismatch"
+    assert failure_reasons == ["ValueError: profile mismatch"]
+
+
+def test_late_preflight_failure_preserves_verified_visual_and_speed(
+    monkeypatch, tmp_path,
+):
+    reset_live_run(
+        mode="pending",
+        difficulty="Normal",
+        prepared_for_play=True,
+    )
+    update_live_run(
+        song_id="song-phash-v1-visual-preflight",
+        song_id_method="song-phash-v1",
+    )
+    context = SimpleNamespace(tasker=Tasker())
+    verified = SimpleNamespace(
+        difficulty="Normal",
+        actual_note_speed=3.5,
+        expected_note_speed=3.5,
+        profile="normal.json",
+        verified_at=1.0,
+    )
+    visual = SimpleNamespace(
+        note_skin_type=7,
+        tap_effect=5,
+        judgement_assist_effect=False,
+    )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.verified_settings",
+        lambda _difficulty: verified,
+    )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.verified_game_visual_settings",
+        lambda: visual,
+    )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.RealtimeProfileStore.runtime_options",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.debug_enabled",
+        lambda: (_ for _ in ()).throw(RuntimeError("debug option failed")),
+    )
+    monkeypatch.setattr("agent.realtime.profile_play_action.PROJECT_ROOT", tmp_path)
+    recorder_constructions = []
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.RealtimeDebugRecorder",
+        lambda root: recorder_constructions.append(root),
+    )
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Normal",
+        "require_profile": False,
+        "settings_gate_required": True,
+        "debug_recording": False,
+        "run_mode": "formal",
+    }))
+
+    assert RealtimeProfilePlay().run(context, argv) is False
+    assert recorder_constructions == []
+    report = next((tmp_path / "screencap").glob("realtime-result-*.json"))
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["result_status"] == "preflight_error"
+    assert payload["terminal_stage"] == "profile_play_preflight"
+    assert payload["song_id"] == "song-phash-v1-visual-preflight"
+    assert payload["profile"] == "normal.json"
+    assert payload["settings"] == {
+        "expected_note_speed": 3.5,
+        "actual_note_speed": 3.5,
+        "note_skin_type": 7,
+        "tap_effect": 5,
+        "judgement_assist": False,
+    }
 
 
 def test_foreground_failure_does_not_start_debug_recorder(monkeypatch, tmp_path):
@@ -893,3 +1178,103 @@ def test_one_run_links_result_calibration_and_recorder_summary(
     assert result["run_id"] == summary["session"]["run_id"]
     assert result["song_id"] == calibration["song_id"]
     assert result["song_id"] == summary["session"]["song_id"]
+
+
+def test_dismiss_reward_popup_clicks_matched_button():
+    template = cv2.imread(str(profile_play_action.REWARD_OK_TEMPLATE))
+    assert template is not None
+    image = np.zeros((720, 1280, 3), dtype=np.uint8)
+    image[568:642, 562:716] = template
+    clicks = []
+    foreground_checks = []
+
+    class FakeController:
+        def post_click(self, x, y):
+            clicks.append((x, y))
+            return SimpleNamespace(wait=lambda: None)
+
+    assert _dismiss_reward_popup(
+        FakeController(),
+        image,
+        before_input=lambda: foreground_checks.append(1),
+        threshold=0.8,
+    ) is True
+    assert clicks == [(639, 605)]
+    assert foreground_checks == [1]
+
+
+def test_dismiss_reward_popup_ignores_clean_result_screen():
+    image = np.zeros((720, 1280, 3), dtype=np.uint8)
+    clicks = []
+
+    class FakeController:
+        def post_click(self, x, y):
+            clicks.append((x, y))
+            return SimpleNamespace(wait=lambda: None)
+
+    assert _dismiss_reward_popup(FakeController(), image, threshold=0.8) is False
+    assert clicks == []
+
+
+def test_collect_result_dismisses_reward_popup_before_stabilizing():
+    template = cv2.imread(str(profile_play_action.REWARD_OK_TEMPLATE))
+    popup = np.zeros((720, 1280, 3), dtype=np.uint8)
+    popup[568:642, 562:716] = template
+    clean = np.zeros((720, 1280, 3), dtype=np.uint8)
+    clean[0:10, 0:10] = 255
+    images = [popup, popup, clean, clean]
+
+    class FakeParser:
+        def parse(self, image):
+            if image is popup:
+                raise ValueError("reward popup covers digits")
+            return LiveResult(
+                perfect=100, great=0, good=0, bad=0, miss=0,
+                fast=0, slow=0, confidence=1.0,
+            )
+
+    clicks = []
+    keys = []
+
+    class FakeJob:
+        def __init__(self, value=None):
+            self.value = value
+
+        def wait(self):
+            return self
+
+        def get(self):
+            return self.value
+
+    class FakeController:
+        def post_screencap(self):
+            return FakeJob(images.pop(0))
+
+        def post_click(self, x, y):
+            clicks.append((x, y))
+            return FakeJob()
+
+        def post_click_key(self, key):
+            keys.append(key)
+            return FakeJob()
+
+    clock_state = [0.0]
+
+    def clock():
+        clock_state[0] += 1.0
+        return clock_state[0]
+
+    outcome = collect_result(
+        FakeController(),
+        lambda: False,
+        parser=FakeParser(),
+        sleeper=lambda _: None,
+        clock=clock,
+        reward_click_delay_seconds=0.0,
+        reward_threshold=0.8,
+    )
+
+    assert outcome.status is ResultCollectionStatus.STABLE
+    assert outcome.result is not None
+    assert clicks == [(639, 605)]
+    assert keys == [4]

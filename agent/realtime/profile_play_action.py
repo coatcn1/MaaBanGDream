@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import time
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 
 import cv2
 
@@ -36,10 +37,23 @@ from .profile_action import PROJECT_ROOT
 from .profile_store import EnvironmentSignature, RealtimeProfileStore
 from .rehearsal_action import frame_resolution
 from .result_parser import LiveResult, ResultParser, adjusted_timing_offset
+from .run_reporting import (
+    PreflightPerformanceSnapshot,
+    result_report_payload as _result_report_payload,
+    write_json_atomic as _write_json_atomic,
+    write_preflight_terminal_result,
+)
 from .timing_feedback import AdaptiveTimingController, TimingFeedbackDetector
 from .touch_planner import RealtimePlanner, sliding_holds_enabled
 from .runtime_options import debug_enabled
 from .performance_settings_action import verified_settings
+
+
+REWARD_CONFIRM_TEMPLATE = PROJECT_ROOT / "resource" / "image" / "result_reward_confirm.png"
+REWARD_OK_TEMPLATE = PROJECT_ROOT / "resource" / "image" / "result_reward_ok.png"
+REWARD_TEMPLATE_THRESHOLD = 0.85
+REWARD_DISMISS_LIMIT = 3
+REWARD_CLICK_DELAY_SECONDS = 1.0
 
 
 _LAST_LIFE_SAFETY_ABORT = False
@@ -97,15 +111,6 @@ def pause_overlay_changed(before, after) -> bool:
     return float(difference.mean()) >= 8.0
 
 
-def _write_json_atomic(path, payload: dict) -> None:
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(path)
-
-
 def _write_calibration_report(
     path,
     *,
@@ -132,78 +137,6 @@ def _write_calibration_report(
     if run_context is None:
         payload["song_id"] = str(song_id)
     _write_json_atomic(path, payload)
-
-
-def _result_report_payload(
-    result: LiveResult | None,
-    stats,
-    *,
-    timing_offset_ms: int,
-    suggested_timing_offset_ms: int | None,
-    run_context: LiveRunContext | None = None,
-    result_status: str | None = None,
-    reason: str | None = None,
-) -> dict:
-    context = run_context.to_mapping() if run_context is not None else {}
-    status = result_status or ("stable" if result is not None else "failed")
-    mode = str(context.get("mode") or "")
-    calibration_run = mode == "calibration" or mode.startswith("calibration-")
-    if (
-        result is not None
-        and calibration_run
-        and context.get("song_id", "unknown") == "unknown"
-    ):
-        status = "unknown_song"
-    valid = result is not None and status in {"stable", "experimental"}
-    payload = {
-        "schema_version": 1,
-        "valid": valid,
-        "result_status": status,
-        "run_id": context.get("run_id"),
-        "song_id": context.get("song_id", "unknown"),
-        "song_id_method": context.get("song_id_method", "unknown"),
-        "started_at": context.get("started_at"),
-        "mode": context.get("mode"),
-        "difficulty": context.get("difficulty"),
-        "profile": context.get("profile_name"),
-        "session": context,
-        "settings": context.get("settings", {}),
-        "debug_recording_path": context.get("recording_path"),
-        "eligible_for_profile_acceptance": (
-            valid and context.get("mode") != "visual-evaluation"
-        ),
-        "initial_timing_offset_ms": timing_offset_ms,
-        "current_timing_offset_ms": stats.final_timing_offset_ms,
-        "suggested_timing_offset_ms": suggested_timing_offset_ms,
-        "realtime_feedback_fast": stats.timing_feedback_fast,
-        "realtime_feedback_slow": stats.timing_feedback_slow,
-        "realtime_feedback_valid": stats.timing_feedback_valid,
-        "realtime_feedback_ignored": stats.timing_feedback_ignored,
-        "realtime_feedback_ignored_reasons": stats.timing_feedback_ignored_reasons,
-        "filtered_adjacent_artifacts": stats.filtered_adjacent_artifacts,
-        "rejected_hold_candidates": stats.rejected_hold_candidates,
-        "recovered_contacts": stats.recovered_contacts,
-        "processed_frames": stats.processed_frames,
-        "dispatched_actions": stats.dispatched_actions,
-        "action_counts": stats.action_counts,
-        "frame_interval_p50_ms": stats.frame_interval_p50_ms,
-        "frame_interval_p95_ms": stats.frame_interval_p95_ms,
-        "frame_interval_max_ms": stats.frame_interval_max_ms,
-        "stage_timings_ms": getattr(stats, "stage_timings_ms", {}),
-        "frame_interval_outliers": list(
-            getattr(stats, "frame_interval_outliers", ())
-        ),
-        "cleanup_failed": bool(getattr(stats, "cleanup_failed", False)),
-        "cleanup_errors": list(getattr(stats, "cleanup_errors", ())),
-        "recorder_error": getattr(stats, "recorder_error", None),
-        "effective_fps": stats.effective_fps,
-        "terminal_reason": stats.terminal_reason,
-    }
-    if result is not None:
-        payload.update(result.to_dict())
-    if reason is not None:
-        payload["reason"] = reason
-    return payload
 
 
 def _result_counts(result: LiveResult) -> tuple[int, ...]:
@@ -235,6 +168,34 @@ def _wait_until(deadline, stopping, *, clock, sleeper) -> bool:
     return not stopping()
 
 
+def _dismiss_reward_popup(
+    controller,
+    image,
+    *,
+    before_input=lambda: None,
+    templates=(REWARD_CONFIRM_TEMPLATE, REWARD_OK_TEMPLATE),
+    threshold: float = REWARD_TEMPLATE_THRESHOLD,
+) -> bool:
+    """Click a visible achievement-reward OK button, if any."""
+    best_score = threshold
+    best_point = None
+    for template_path in templates:
+        template = cv2.imread(str(template_path))
+        if template is None:
+            continue
+        matched = cv2.matchTemplate(image, template, cv2.TM_CCOEFF_NORMED)
+        _, score, _, location = cv2.minMaxLoc(matched)
+        if score > best_score:
+            best_score = score
+            height, width = template.shape[:2]
+            best_point = (location[0] + width // 2, location[1] + height // 2)
+    if best_point is None:
+        return False
+    before_input()
+    controller.post_click(*best_point).wait()
+    return True
+
+
 def collect_result(
     controller,
     stopping,
@@ -248,6 +209,10 @@ def collect_result(
     slow_interval_seconds: float = 1.5,
     medium_interval_seconds: float = 1.0,
     stability_interval_seconds: float = 1.0,
+    reward_templates=(REWARD_CONFIRM_TEMPLATE, REWARD_OK_TEMPLATE),
+    reward_threshold: float = REWARD_TEMPLATE_THRESHOLD,
+    reward_dismiss_limit: int = REWARD_DISMISS_LIMIT,
+    reward_click_delay_seconds: float = REWARD_CLICK_DELAY_SECONDS,
 ) -> ResultCollectionOutcome:
     """Use only ESC while seeking a stable result, bounded by 60 seconds."""
     parser = parser or ResultParser()
@@ -256,6 +221,8 @@ def collect_result(
     candidate: LiveResult | None = None
     candidate_at = 0.0
     last_image = None
+    none_streak = 0
+    dismissals = 0
     while clock() < deadline:
         if stopping():
             return ResultCollectionOutcome(
@@ -271,6 +238,7 @@ def collect_result(
 
         now = clock()
         if result is not None:
+            none_streak = 0
             if (
                 candidate is not None
                 and now - candidate_at >= stability_interval_seconds
@@ -298,8 +266,35 @@ def collect_result(
             continue
 
         if candidate is not None:
+            none_streak = 0
             if not _wait_until(
                 min(deadline, now + stability_interval_seconds),
+                stopping,
+                clock=clock,
+                sleeper=sleeper,
+            ):
+                return ResultCollectionOutcome(
+                    ResultCollectionStatus.STOPPED,
+                    elapsed_seconds=clock() - started_at,
+                )
+            continue
+
+        none_streak += 1
+        if (
+            none_streak >= 2
+            and dismissals < reward_dismiss_limit
+            and _dismiss_reward_popup(
+                controller,
+                image,
+                before_input=before_input,
+                templates=reward_templates,
+                threshold=reward_threshold,
+            )
+        ):
+            dismissals += 1
+            none_streak = 0
+            if not _wait_until(
+                min(deadline, now + reward_click_delay_seconds),
                 stopping,
                 clock=clock,
                 sleeper=sleeper,
@@ -447,6 +442,7 @@ class RealtimeProfileCheck(CustomAction):
     """Refuse to start a live before its accepted Profile is available."""
 
     def run(self, context: Context, argv: CustomAction.RunArg) -> bool:
+        params: dict = {}
         try:
             if context.tasker.stopping:
                 return True
@@ -462,6 +458,26 @@ class RealtimeProfileCheck(CustomAction):
             )
             return True
         except Exception as exc:
+            if context.tasker.stopping:
+                print("RealtimeProfileCheck stopped=true", flush=True)
+                return True
+            reason = f"{type(exc).__name__}: {exc}"
+            record_failure_reason(reason)
+            try:
+                write_preflight_terminal_result(
+                    output_dir=PROJECT_ROOT / "screencap",
+                    params=params,
+                    terminal_stage="profile_check",
+                    reason=reason,
+                    visual_settings=verified_game_visual_settings(),
+                )
+            except Exception as artifact_error:
+                print(
+                    "RealtimeProfileCheck artifact_failed="
+                    f"{type(artifact_error).__name__}: {artifact_error}",
+                    flush=True,
+                )
+                traceback.print_exc()
             traceback.print_exc()
             print(f"RealtimeProfileCheck failed={type(exc).__name__}: {exc}", flush=True)
             return False
@@ -486,73 +502,148 @@ class RealtimeProfilePlay(CustomAction):
         params = json.loads(argv.custom_action_param or "{}")
         if context.tasker.stopping:
             return True
-        controller = context.tasker.controller
-        require_profile = bool(params.get("require_profile", True))
-        difficulty = str(params.get("difficulty", "Easy"))
-        ignore_note_speed = bool(params.get("ignore_note_speed", False))
-        verified = None if ignore_note_speed else verified_settings(difficulty)
-        if bool(params.get("settings_gate_required", False)) and verified is None:
-            raise RuntimeError("本次开演前尚未实际验证游戏流速")
-        settings = (
-            (
-                resolve_profile_for_settings_gate(
-                    context, params, controller=controller,
+        verified = None
+        settings = None
+        visual = None
+        try:
+            controller = context.tasker.controller
+            require_profile = bool(params.get("require_profile", True))
+            difficulty = str(params.get("difficulty", "Easy"))
+            ignore_note_speed = bool(params.get("ignore_note_speed", False))
+            verified = (
+                None if ignore_note_speed else verified_settings(difficulty)
+            )
+            if (
+                bool(params.get("settings_gate_required", False))
+                and verified is None
+            ):
+                raise RuntimeError("本次开演前尚未实际验证游戏流速")
+            visual = verified_game_visual_settings()
+            if (
+                bool(params.get("settings_gate_required", False))
+                and visual is None
+            ):
+                raise RuntimeError("本次开演前尚未实际验证游戏视觉设置")
+            settings = (
+                (
+                    resolve_profile_for_settings_gate(
+                        context, params, controller=controller,
+                    )
+                    if ignore_note_speed
+                    else resolve_profile(context, params, controller=controller)
                 )
-                if ignore_note_speed
-                else resolve_profile(context, params, controller=controller)
+                if require_profile else None
             )
-            if require_profile else None
-        )
-        if context.tasker.stopping:
-            return True
-        target_fps = settings.target_fps if settings else int(params.get("target_fps", 60))
-        timing_offset_ms = (
-            settings.timing_offset_ms if settings else int(params.get("timing_offset_ms", 0))
-        )
-        runtime_options = RealtimeProfileStore(
-            PROJECT_ROOT / "profiles"
-        ).runtime_options()
-        is_rehearsal, continue_after_depleted, life_threshold = resolve_life_policy(
-            params, runtime_options,
-        )
-        visual = verified_game_visual_settings()
-        if bool(params.get("settings_gate_required", False)) and visual is None:
-            raise RuntimeError("本次开演前尚未实际验证游戏视觉设置")
-        debug_recording = bool(params.get("debug_recording") or debug_enabled())
-        run_mode = _run_mode(params, is_rehearsal=is_rehearsal)
-        expected_note_speed = (
-            verified.expected_note_speed
-            if verified is not None
-            else float(
-                getattr(settings, "note_speed", params.get("note_speed", 2.0))
+            if context.tasker.stopping:
+                return True
+            target_fps = (
+                settings.target_fps
+                if settings else int(params.get("target_fps", 60))
             )
-        )
-        actual_note_speed = (
-            verified.actual_note_speed if verified is not None else None
-        )
-        live_run = current_live_run()
-        if (
-            live_run is None
-            or run_mode == "continuous"
-            or not live_run.prepared_for_play
-        ):
-            live_run = reset_live_run(mode=run_mode, difficulty=difficulty)
-        else:
-            live_run = update_live_run(prepared_for_play=False)
-        live_run = update_live_run(
-            mode=run_mode,
-            difficulty=difficulty,
-            profile_name=(settings.profile_path.name if settings else None),
-            expected_note_speed=expected_note_speed,
-            actual_note_speed=actual_note_speed,
-            note_skin_type=(visual.note_skin_type if visual is not None else None),
-            tap_effect=(visual.tap_effect if visual is not None else None),
-            judgement_assist=(
-                visual.judgement_assist_effect if visual is not None else None
-            ),
-            debug_recording=debug_recording,
-            recording_path=None,
-        )
+            timing_offset_ms = (
+                settings.timing_offset_ms
+                if settings else int(params.get("timing_offset_ms", 0))
+            )
+            runtime_options = RealtimeProfileStore(
+                PROJECT_ROOT / "profiles"
+            ).runtime_options()
+            (
+                is_rehearsal,
+                continue_after_depleted,
+                life_threshold,
+            ) = resolve_life_policy(params, runtime_options)
+            debug_recording = bool(
+                params.get("debug_recording") or debug_enabled()
+            )
+            run_mode = _run_mode(params, is_rehearsal=is_rehearsal)
+            expected_note_speed = (
+                verified.expected_note_speed
+                if verified is not None
+                else float(
+                    getattr(
+                        settings,
+                        "note_speed",
+                        params.get("note_speed", 2.0),
+                    )
+                )
+            )
+            actual_note_speed = (
+                verified.actual_note_speed if verified is not None else None
+            )
+            live_run = current_live_run()
+            if (
+                live_run is None
+                or run_mode == "continuous"
+                or not live_run.prepared_for_play
+            ):
+                live_run = reset_live_run(
+                    mode=run_mode,
+                    difficulty=difficulty,
+                )
+            else:
+                live_run = update_live_run(prepared_for_play=False)
+            live_run = update_live_run(
+                mode=run_mode,
+                difficulty=difficulty,
+                profile_name=(settings.profile_path.name if settings else None),
+                expected_note_speed=expected_note_speed,
+                actual_note_speed=actual_note_speed,
+                note_skin_type=(
+                    visual.note_skin_type if visual is not None else None
+                ),
+                tap_effect=(visual.tap_effect if visual is not None else None),
+                judgement_assist=(
+                    visual.judgement_assist_effect
+                    if visual is not None else None
+                ),
+                debug_recording=debug_recording,
+                recording_path=None,
+            )
+        except Exception as exc:
+            if context.tasker.stopping:
+                return True
+            reason = f"{type(exc).__name__}: {exc}"
+            performance_snapshot = None
+            if verified is not None:
+                performance_snapshot = PreflightPerformanceSnapshot(
+                    expected_note_speed=float(verified.expected_note_speed),
+                    actual_note_speed=float(verified.actual_note_speed),
+                    profile=(
+                        verified.profile
+                        or (
+                            settings.profile_path.name
+                            if settings is not None else None
+                        )
+                    ),
+                )
+            elif settings is not None:
+                performance_snapshot = PreflightPerformanceSnapshot(
+                    expected_note_speed=float(
+                        getattr(
+                            settings,
+                            "note_speed",
+                            params.get("note_speed", 2.0),
+                        )
+                    ),
+                    profile=settings.profile_path.name,
+                )
+            try:
+                write_preflight_terminal_result(
+                    output_dir=PROJECT_ROOT / "screencap",
+                    params=params,
+                    terminal_stage="profile_play_preflight",
+                    reason=reason,
+                    visual_settings=visual,
+                    performance_snapshot=performance_snapshot,
+                )
+            except Exception as artifact_error:
+                print(
+                    "RealtimeProfilePlay preflight_artifact_failed="
+                    f"{type(artifact_error).__name__}: {artifact_error}",
+                    flush=True,
+                )
+                traceback.print_exc()
+            raise
 
         def write_failure_artifacts(
             stats: EngineStats,
@@ -740,6 +831,19 @@ class RealtimeProfilePlay(CustomAction):
             )
         except Exception as exc:
             error_stats = getattr(exc, "realtime_stats", None)
+            if error_stats is not None and context.tasker.stopping:
+                stopped_reason = "用户已停止任务"
+                stopped_stats = replace(
+                    error_stats,
+                    stopped=True,
+                    terminal_reason=stopped_reason,
+                )
+                write_failure_artifacts(
+                    stopped_stats,
+                    result_status="stopped",
+                    reason=stopped_reason,
+                )
+                return True
             if error_stats is None:
                 cleanup_errors = []
                 recorder_error = None
