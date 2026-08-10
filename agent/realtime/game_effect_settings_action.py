@@ -531,7 +531,54 @@ def _find_note_skin_on_page(
     if last_image is None:
         raise RuntimeError("TYPE page was not captured")
     if target is None and len(selected_values) != 1:
-        raise RuntimeError("unable to read the selected TYPE1..TYPE7 radio")
+        # Fall back to locating the pink radio rows directly, then mapping
+        # each to the nearest detected TYPE row.  The selected row's label can
+        # occasionally fail the template match (selection highlight), so the
+        # radio is the more reliable signal.
+        if last_image is not None:
+            hsv = cv2.cvtColor(last_image, cv2.COLOR_BGR2HSV)
+            radio_mask = (
+                (((hsv[:, :, 0] <= 12) | (hsv[:, :, 0] >= 145))
+                 & (hsv[:, :, 1] >= 100)
+                 & (hsv[:, :, 2] >= 150))
+            ).astype(np.uint8)
+            _, _, radio_stats, radio_centroids = cv2.connectedComponentsWithStats(
+                radio_mask, 8
+            )
+            radio_x = coordinates["note_skin_radio_x"][0]
+            pink_ys = []
+            for index, (x, y, width, height, area) in enumerate(
+                radio_stats[1:], start=1
+            ):
+                center_x, center_y = radio_centroids[index]
+                if (
+                    abs(center_x - radio_x) <= 25
+                    and 150 <= center_y <= 570
+                    and 15 <= width <= 30
+                    and 15 <= height <= 30
+                    and area >= 250
+                ):
+                    pink_ys.append(float(center_y))
+            if pink_ys:
+                visible_rows = _find_note_skin_rows(
+                    last_image,
+                    search_roi=coordinates["note_skin_digit_search_roi"],
+                    radio_x=radio_x,
+                )
+                for pink_y in pink_ys:
+                    if not visible_rows:
+                        break
+                    nearest = min(
+                        visible_rows,
+                        key=lambda row: abs(row.row_y - pink_y),
+                    )
+                    if abs(nearest.row_y - pink_y) <= 30:
+                        selected_values.add(nearest.value)
+        capture_path = _save_readback_failure(
+            last_image, "note-skin-selected"
+        )
+        if len(selected_values) != 1:
+            raise RuntimeError("unable to read the selected TYPE1..TYPE7 radio")
     selected = next(iter(selected_values)) if selected_values else None
     return selected, target_y, last_image
 
