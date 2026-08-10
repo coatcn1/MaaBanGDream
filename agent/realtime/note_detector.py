@@ -60,6 +60,10 @@ class NoteDetector:
         self._stationary: dict[tuple[NoteKind, int], tuple[float, float, int]] = {}
 
     COLOR_RANGES = (
+        # TYPE4 heads are solid cyan diamonds (H~100..108); TYPE1 uses pale
+        # cyan spindles in the same band.  Keep the original hue range and
+        # widen the geometry below instead: TYPE4 heads are much smaller and
+        # squarer than TYPE1's outline-laden spindles.
         (NoteKind.TAP, (82, 70, 155), (108, 255, 255)),
         # At the game's 100% long-note opacity the translucent body measures
         # roughly H=48..68, S=34..171, V=145..240. Include the body, not only
@@ -257,8 +261,8 @@ class NoteDetector:
                 is_chevron,
             ))
 
-        # The magenta outline of an ordinary head sits on top of its cyan or
-        # yellow component. Remove it before looking for vertical stacks.
+        # The magenta/white outline of an ordinary head sits on top of its
+        # cyan or yellow component. Remove it before looking for stacks.
         candidates = [
             (candidate, is_chevron)
             for candidate, is_chevron in candidates
@@ -380,7 +384,10 @@ class NoteDetector:
                 maximum_area = 120000 if kind == NoteKind.HOLD else 9000
                 if not 45 <= original_area <= maximum_area or width < 4 or height < 2:
                     continue
-                if kind != NoteKind.HOLD and width / max(height, 1) < 1.15:
+                if (
+                    kind != NoteKind.HOLD
+                    and width / max(height, 1) < 0.85
+                ):
                     continue
                 component = labels[top:top + height, left:left + width] == label
                 original_width = width * 2
@@ -458,7 +465,7 @@ class NoteDetector:
                 # approach the player, so reject components that are too narrow
                 # for their depth in the perspective playfield.
                 if kind in (NoteKind.TAP, NoteKind.SKILL):
-                    minimum_width = 12 + progress * 45
+                    minimum_width = 6 + progress * 18
                 elif kind == NoteKind.FLICK:
                     minimum_width = 10 + progress * 35
                 else:

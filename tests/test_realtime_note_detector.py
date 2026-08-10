@@ -38,6 +38,22 @@ def test_regular_purple_ring_is_not_misclassified_as_flick():
     assert [note.kind for note in notes if note.lane == 3] == [NoteKind.TAP]
 
 
+def test_detector_finds_small_square_type4_heads():
+    image = _frame()
+    # TYPE4 heads are solid cyan diamonds that stay small (roughly 14x12 px)
+    # in the upper playfield, unlike TYPE1's outline-laden spindles.  The old
+    # minimum-width curve (12 + 45*progress) rejected them entirely.
+    cv2.rectangle(image, (633, 224), (647, 236), (55, 185, 255), -1)
+    cv2.rectangle(image, (688, 224), (702, 236), (55, 185, 255), -1)
+
+    notes = NoteDetector(input_color_order="RGB").detect(image, timestamp=1.0)
+
+    assert {(note.kind, note.lane) for note in notes} == {
+        (NoteKind.TAP, 3),
+        (NoteKind.TAP, 4),
+    }
+
+
 def test_detector_collapses_flick_chevrons_into_one_flick_head():
     image = _frame()
     # A real flick has multiple vertically aligned magenta chevrons above its
