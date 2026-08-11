@@ -744,7 +744,20 @@ class RealtimeProfilePlay(CustomAction):
                 ),
                 debug_recorder=recorder,
                 timing_feedback_detector=TimingFeedbackDetector(),
-                timing_controller=AdaptiveTimingController(timing_offset_ms),
+                timing_controller=AdaptiveTimingController(
+                    timing_offset_ms,
+                    # Dense slide passages (Hard+) register heavy FAST feedback
+                    # from preemptive chord taps; the in-song adaptation then
+                    # drifts the offset later and makes occluded heads miss.
+                    # Keep the calibrated offset fixed on slide charts.
+                    maximum_live_adjustment_ms=(
+                        0
+                        if sliding_holds_enabled(
+                            str(params.get("difficulty", "Easy"))
+                        )
+                        else 12
+                    ),
+                ),
             )
         except Exception as setup_error:
             cleanup_errors = []
