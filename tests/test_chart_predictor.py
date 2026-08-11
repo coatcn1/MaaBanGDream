@@ -151,3 +151,35 @@ def test_chart_tail_does_not_release_slide_before_finger_reaches_tail_lane():
     planner._state._active_hold_lane[5] = 3
     at_tail = planner.update([], anchor + 7.42)
     assert not [a for a in at_tail if a.reason == "chart-tail"]
+
+
+def test_phantom_hold_lane_is_freed_before_a_due_chart_head():
+    chart = _synthetic_chart()
+    planner, predictor = _planner_with_calibrated_predictor(chart)
+    anchor = 100.0
+    predictor._anchor_time = anchor
+
+    # A phantom hold starts on lane 3 (no chart head near its start) at song
+    # 1.0 (engine anchor + 4.0 with offset -3.0), then drifts onto lane 5
+    # where the chart has a head at 4.0625 (engine anchor + 7.06).
+    started = planner.update([
+        ObservedNote(NoteKind.HOLD, 3, 640, 470, 100, 200, anchor + 4.0)
+    ], now=anchor + 4.0)
+    assert [action.kind for action in started] == [ActionKind.DOWN]
+    planner._state._active_hold_lane[3] = 5
+
+    # Before the due head the phantom stays; at the head time it is released
+    # and the restart cooldown is cleared so the real body can start.
+    before = planner.update([], anchor + 6.8)
+    assert not [a for a in before if a.reason == "chart-lane-free"]
+    at_head = planner.update([], anchor + 7.08)
+    assert [a.reason for a in at_head if a.kind == ActionKind.UP] == [
+        "chart-lane-free"
+    ]
+    assert 5 not in planner._state._hold_released_at
+
+    # The real body on lane 5 now starts immediately.
+    real = planner.update([
+        ObservedNote(NoteKind.HOLD, 5, 940, 470, 100, 200, anchor + 7.1)
+    ], now=anchor + 7.1)
+    assert [action.kind for action in real] == [ActionKind.DOWN]

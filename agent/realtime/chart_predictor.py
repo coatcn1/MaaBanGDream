@@ -359,6 +359,8 @@ class ChartPredictor:
                         "chart-lane-free",
                         actions,
                     )
+                    state._previous.pop((NoteKind.HOLD, lane), None)
+                    state._hold_released_at.pop(lane, None)
                     self.expected_hold_tail.pop(contact, None)
                     break
                 if expected is None:
@@ -375,6 +377,8 @@ class ChartPredictor:
                             "chart-lane-free",
                             actions,
                         )
+                        state._previous.pop((NoteKind.HOLD, lane), None)
+                        state._hold_released_at.pop(lane, None)
                         break
                 return
             if lane in set(state._active_hold_lane.values()):
@@ -418,6 +422,55 @@ class ChartPredictor:
             chart_time_s=round(judgement.time_s, 3),
             body_y=round(body.y, 2),
         )
+
+    def _free_lane_for_hold_head(
+        self,
+        lane: int,
+        judgement: ChartJudgement,
+        now: float,
+        actions: list[TouchAction],
+        state: PlannerState,
+        holds: HoldPipeline,
+        song_now: float,
+    ) -> None:
+        """Release a lane-occupying hold before a real head is due.
+
+        Phantom/drifted holds (started on a residue body, then moved onto a
+        lane with a real upcoming head) block the normal hold pipeline: the
+        real head's body is visible but the lane stays occupied.  When the
+        chart says a hold head is due on that lane, release the occupant if
+        its own chart tail has passed or it has no chart identity and is old
+        enough that it cannot be a real hold in this song.
+        """
+        for contact, active_lane in list(state._active_hold_lane.items()):
+            if active_lane != lane:
+                continue
+            expected = self.expected_hold_tail.get(contact)
+            if expected is not None:
+                if song_now < expected[0] - 0.05:
+                    continue
+            else:
+                started = state._hold_started.get(contact, now)
+                if now - started < 2.0:
+                    continue
+            holds._release_hold(
+                contact,
+                lane,
+                now,
+                "chart-lane-free",
+                actions,
+            )
+            state._previous.pop((NoteKind.HOLD, lane), None)
+            state._hold_released_at.pop(lane, None)
+            self.expected_hold_tail.pop(contact, None)
+            state.record_diagnostic(
+                "chart_lane_freed",
+                now,
+                lane=lane,
+                contact=contact,
+                chart_head_s=round(judgement.time_s, 3),
+            )
+            return
 
     def _schedule_hold_tails(
         self,
@@ -511,6 +564,29 @@ class ChartPredictor:
                 samples=len(self.calibration_samples),
             )
             self._calibration_diagnosed = True
+        # Free lanes for due hold heads regardless of press prediction: the
+        # normal hold pipeline can then start the real head next frame.
+        song_now = self._relative(now) + self.song_offset_s
+        for lane in range(self.chart.LANE_COUNT):
+            next_judgement = self.chart.next_judgement(
+                lane, song_now - 0.05
+            )
+            if (
+                next_judgement is None
+                or next_judgement.kind != "hold-head"
+                or next_judgement.time_s - song_now > 0.06
+            ):
+                continue
+            if lane in set(state._active_hold_lane.values()):
+                self._free_lane_for_hold_head(
+                    lane,
+                    next_judgement,
+                    now,
+                    actions,
+                    state,
+                    holds,
+                    song_now,
+                )
         if self.predict_presses:
             self._predict_presses(
                 notes, tracked_notes, now, actions, state, holds

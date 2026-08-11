@@ -548,6 +548,22 @@ class HoldPipeline:
                     or should_pair_rescue
                     )
                 ):
+                    if getattr(self._state, "_debug_holds", False) and note.lane == 2:
+                        print(
+                            "HOLDSTART", round(now, 3),
+                            "restart_allowed", restart_allowed,
+                            "body_confirmed", body_confirmed,
+                            "should_rescue", should_rescue,
+                            "should_cross", should_cross,
+                            "should_pair_rescue", should_pair_rescue,
+                            "head", round(head, 1),
+                            "prev_head", None if previous is None else round(self._hold_head(previous), 1),
+                            "release_age", round(release_age, 3),
+                            "suppress", round(
+                                now - self._state._last_trigger.get(note.lane, float("-inf")), 3
+                            ),
+                            flush=True,
+                        )
                     tracking_tail = (
                         self._hold_tail(linked_body)
                         if linked_body is not None else tail
