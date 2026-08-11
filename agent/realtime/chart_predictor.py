@@ -44,7 +44,7 @@ class ChartPredictor:
         judgement_y: float = 565,
         min_calibration_samples: int = 16,
         predict_presses: bool = False,
-        press_bias_ms: int = 30,
+        press_bias_ms: int = 0,
     ) -> None:
         self.chart = chart
         self.judgement_y = float(judgement_y)
