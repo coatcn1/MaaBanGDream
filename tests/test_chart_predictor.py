@@ -97,7 +97,7 @@ def test_chart_tail_releases_hold_whose_body_vanished():
     # Body vanishes.  Before the chart tail time the hold must stay down.
     before = planner.update([], anchor + 7.35)
     assert not [a for a in before if a.kind == ActionKind.UP]
-    released = planner.update([], anchor + 7.39)
+    released = planner.update([], anchor + 7.42)
     assert [(a.kind, a.reason) for a in released] == [
         (ActionKind.UP, "chart-tail")
     ]
@@ -131,6 +131,8 @@ def test_chart_tail_releases_visible_body_at_chart_time():
             NoteKind.HOLD, 5, 940, 500, 100, 180, anchor + 7.38,
         )
     ], anchor + 7.38)
+    assert not [a for a in at_tail if a.kind == ActionKind.UP]
+    at_tail = planner.update([], anchor + 7.42)
     assert [(a.kind, a.reason) for a in at_tail] == [
         (ActionKind.UP, "chart-tail")
     ]
@@ -154,5 +156,5 @@ def test_chart_tail_does_not_release_slide_before_finger_reaches_tail_lane():
     assert [action.kind for action in started] == [ActionKind.DOWN]
     # Force the active hold onto lane 3 (finger has not reached lane 5).
     planner._state._active_hold_lane[5] = 3
-    at_tail = planner.update([], anchor + 7.39)
+    at_tail = planner.update([], anchor + 7.42)
     assert not [a for a in at_tail if a.reason == "chart-tail"]

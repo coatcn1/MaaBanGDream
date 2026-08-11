@@ -44,11 +44,13 @@ class ChartPredictor:
         judgement_y: float = 565,
         min_calibration_samples: int = 16,
         predict_presses: bool = False,
+        press_bias_ms: int = 30,
     ) -> None:
         self.chart = chart
         self.judgement_y = float(judgement_y)
         self.min_calibration_samples = int(min_calibration_samples)
         self.predict_presses = bool(predict_presses)
+        self.press_bias_s = int(press_bias_ms) / 1000.0
         self.calibrated = False
         self.song_offset_s = 0.0
         self.calibration_samples: list[tuple[float, int, str, float]] = []
@@ -252,7 +254,8 @@ class ChartPredictor:
             )
             if next_judgement is None:
                 continue
-            lead = next_judgement.time_s - song_now
+            target = next_judgement.time_s + self.press_bias_s
+            lead = target - song_now
             if not -0.05 <= lead <= 0.06:
                 continue
             # Only skip when a recent press on this lane already covered the
@@ -269,7 +272,7 @@ class ChartPredictor:
                 and kind == expected_kind
                 and abs(
                     (self._relative(timestamp) + self.song_offset_s)
-                    - next_judgement.time_s
+                    - target
                 ) <= 0.12
                 for timestamp, kind in (
                     (state._last_trigger.get(lane), last_kind),
@@ -347,7 +350,7 @@ class ChartPredictor:
                 expected = self.expected_hold_tail.get(contact)
                 if (
                     expected is not None
-                    and song_now >= expected[0] - 0.05
+                    and song_now >= expected[0] + self.press_bias_s - 0.05
                 ):
                     holds._release_hold(
                         contact,
@@ -454,7 +457,7 @@ class ChartPredictor:
             if contact not in state._active_hold_tail:
                 self.expected_hold_tail.pop(contact, None)
                 continue
-            if song_now < tail_time - 0.015:
+            if song_now < tail_time + self.press_bias_s - 0.015:
                 continue
             lane = state._active_hold_lane.get(contact, contact)
             if lane != tail_lane:
