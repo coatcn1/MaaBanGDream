@@ -442,3 +442,63 @@ TAP4 确实让 hold 候选极干净（rejected 13–19 vs TAP1 的 313–343）�
 救援）在重放中无恢复或给 TAP1 带来小风险，均回滚。结论：TAP4 的 hold 噪声低
 是真实优势，但其 flick/tap 召回小幅变差没有可用的规划器修复手段；要发挥 TAP4
 优势需要检测器层面的 TAP4 专属标定（flick 匹配阈值、头入轨时机），当前未实施。
+
+### 2026-08-12 BestDori 谱面对齐工具链（谱面身份 / 漏判定位）
+
+用户确认当前曲目固定为 SAVIOR OF SONG，并给出 BestDori 谱面页面
+（`https://bestdori.com/tool/chart/306/hard/SAVIOR-OF-SONG`）。谱面 JSON
+端点实际是 `/api/charts/{id}/{difficulty}.json`（如
+`https://bestdori.com/api/charts/306/hard.json`），需要带浏览器
+Referer/Origin 头才能绕过 403。
+
+新增两个离线工具：
+
+- `scripts/align_trace_to_chart.py`：把 trace 的动作时间轴对齐到 BestDori
+  谱面判定时间轴（粗-细网格搜索引擎启动偏移），输出每轮的
+  matched/missed/spurious、漏判清单和多余动作清单；支持
+  `--json <file>` 落盘完整报告。
+- `scripts/compare_chart_timelines.py`：两轮 trace 之间按 lane 对齐动作
+  序列，判断是否同一张谱（解决 song-phash 碰撞无法区分谱面的问题）。
+
+谱面身份结论：`song_identity.py` 的 ROI `(40,110,410,490)` 实际是选歌列表
+区域，绝大部分像素是固定 UI 和选中态高亮，不同歌曲/难度的 phash 只差
+2–3 bit，落在 `same_song` 的 8-bit 容差内——因此 phash 不能证明“同谱”。
+要做同谱对比必须用动作时间线/谱面对齐，而不是 phash。
+
+### 2026-08-12 TAP4 卡死 hold 根因与修复
+
+用谱面对齐复盘 TYPE1+TAP4 完整结算轮 `realtime-20260811-224139`
+（game miss=10）时发现一个确定性 Bug：
+
+1. 歌曲 75.30s 处 lane 0 的 hold 正常释放，但释放瞬间其尾环（height 16、
+   confidence 0）被检测为 lane 1 的新 hold 头；
+2. 旧代码的 `_linked_hold_body` 把这个小头链接到**同一帧正在释放的
+   lane 0 宽 body**（宽 316px，横向覆盖到 lane 1），使弱片段获得
+   `body_confirmed=True` 并启动新 hold；
+3. 该幽灵 hold 挂在 contact 1 上持续 **16.9 秒**（直到
+   `hold_max_seconds` failsafe），期间 lane 0 被 `occupied_lanes` 占住，
+   真实 hold（79.844s–80.156s）从未启动 → 2 个判定丢失；
+4. 同配置 TAP1 轮次无此卡死（hold 时长 >5s 的轮数为 0），TAP4 专属。
+
+修复（`agent/realtime/touch_planner/holds.py`）：`_linked_hold_body` 现在
+排除 `_hold_released_at` 中最近 `hold_start_suppress_seconds`（0.35s）内
+释放过的 lane 上的 body——刚释放的旧 body 不再为新头背书。只排除“刚释放”，
+不排除“仍活跃”：lane 5 活跃 hold 的 body 仍可为 lane 6 的齐奏新头提供
+链接（避免误伤和弦对）。
+
+离线重放验证（同 trace、同 planner 配置）：
+
+| 轮次 | 修复前（录制） | 修复后重放 |
+| --- | --- | --- |
+| TAP4 224139 | matched 396 / missed 2 / spurious 106 | matched 397 / missed 1 / spurious 105 |
+| TAP1 225018 | matched 394 / missed 4 / spurious 122 | matched 394 / missed 4 / spurious 122（零回归） |
+
+Normal 黄金重放（`realtime-20260808-000656`、`realtime-20260807-235842`）
+保持精确一致；全量 pytest 518 通过（含 2 个新回归测试）。剩余 1 个
+hold-tail 漏判（80.156s）是 TAP1/TAP4 共有的尾释放 grace 问题
+（body 提前消失时 0.35s grace 使释放晚约 0.4s），本次未改动。
+
+另确认：TAP4 总多余动作（106）低于同配置 TAP1 冻结轮（122–144），
+但 lane 3 集中了 30 个幽灵 TAP（TAP1 为 11–18）；它们与真实音符
+判定的“按错轨道”无关，游戏按空轨处理，不是 miss 主因。检测器级
+“宽扁条过滤”会误杀 3/115 个贴线真实音符，已证伪，未采用。
