@@ -567,3 +567,30 @@ Normal 黄金重放不受影响（`chart_prediction` 默认关闭）。527 项 p
 7 / 7 / 7 / 7；低 FPS 时仍有约一半轮次在密集段生命耗尽。剩余瓶颈：
 1) tap 触发时机偏早（钳制导致 offset 无效，需放宽触发线或改用
    FAST/SLOW 驱动的自适应）；2) 40 FPS 下密集段 tracker/漂移问题。
+
+### 2026-08-12 触发钳制修复（关键突破）
+
+`ordinary._ordinary_trigger_y` 原来用 `min(judgement_y-3, calibrated,
+predicted)`，预测线（~557px）永远赢，导致 -20ms 偏移对 tap 无效、
+所有高 FPS 轮 FAST 70–86。改为 Hard+ 用
+`min(judgement_y+6, max(calibrated, predicted))`：
+
+- 负偏移能把触发推迟到线上附近（~571px），预测线仍是正偏移/慢捕获的
+  下限；
+- 物理跨线兜底保留，并新增“当前 y 已到线即触发”（已 fired 轨道除外）；
+- Normal 完全走旧逻辑，黄金重放精确不变（528 项 pytest 通过）。
+
+真机复验（TAP1 与 TAP4 各一轮三连，55–60 FPS）：
+
+| 配置 | 三轮 miss | result FAST/SLOW |
+| --- | --- | --- |
+| TAP1 + 新触发 | 6 / 4 / 3 | 19/11、11/18、18/24 |
+| TAP4 + 新触发 | 4 / 4 / 3 | 11/29、11/30、10/32 |
+
+FAST 从 70–86 降到 10–11，SLOW 略高（11–32），与历史 miss=3 轮的
+“稍偏慢”特征一致；三轮全部完成。这是 TAP4 首次连续三轮 miss≤4 且
+全部结算。剩余死亡轮（约 1/4）死前漏判仅 2–4 个，全部是 hold 头/尾
+（tracker 漂移/被占用），tap 覆盖与时机已不再是瓶颈。
+
+按压预测（chart_predict_presses）维持关闭：新触发下未再完成 A/B
+（环境门禁/恢复反复 flake），待稳定环境补测；代码与 +30ms 偏置保留。
