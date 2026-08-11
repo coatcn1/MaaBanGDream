@@ -841,9 +841,13 @@ class RealtimeGameEffectSettingsGate(CustomAction):
             )
             required_tap = expected_tap if apply_changes else actual_tap
             if confirmed_tap != required_tap:
+                capture_path = _save_readback_failure(
+                    _capture(context), "tap-effect-confirm"
+                )
                 raise RuntimeError(
                     f"TAP EFFECT 复核失败：实际 {confirmed_tap}，"
-                    f"期望 {required_tap}"
+                    f"期望 {required_tap}，点击方向={direction} 次数={count} "
+                    f"行={tap_row_y}，读回截图={capture_path}"
                 )
 
             final_assist = expected_assist if apply_changes else actual_assist
