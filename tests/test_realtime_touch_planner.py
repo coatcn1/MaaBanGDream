@@ -152,16 +152,15 @@ def test_occluded_long_falling_head_fires_just_before_trigger_target():
     )
     now = 1.00
     actions = []
-    for y in (480, 500, 520, 540, 549, 556):
+    for y in (480, 500, 520, 540, 549, 556, 562, 566):
         actions.extend(planner.update([
             ObservedNote(NoteKind.TAP, 3, 640, y, 40, 20, now)
         ], now=now))
         now += 0.016
 
-    # The head is tracked from far up (minimum_y ~480), but a slide body can
-    # swallow it a few pixels before the trigger target. A strongly trusted
-    # long-falling head within 6 px of the target must still fire, otherwise
-    # Hard dense passages turn into silent misses.
+    # The head is tracked from far up (minimum_y ~480). On Hard the trigger
+    # honours the calibrated offset up to the judgement line, so a strongly
+    # trusted head fires as it crosses the line instead of several px early.
     assert [(action.kind, action.lane) for action in actions] == [
         (ActionKind.TAP, 3)
     ]
@@ -817,13 +816,15 @@ def test_tracked_note_keeps_dispatch_lead_when_profile_offset_is_negative():
         [_note(NoteKind.TAP, 2, 561, 1.02)], now=1.02
     )
     due = planner.update(
-        [_note(NoteKind.TAP, 2, 562, 1.03)], now=1.03
+        [_note(NoteKind.TAP, 2, 572, 1.03)], now=1.03
     )
 
-    assert [(action.kind, action.reason) for action in before] == [
+    # A negative offset asks for a later press on slide charts: the head is
+    # not pressed while still several px above the line.
+    assert before == []
+    assert [(action.kind, action.reason) for action in due] == [
         (ActionKind.TAP, "crossing")
     ]
-    assert due == []
 
 
 def test_low_capture_fps_predicts_a_crossing_before_the_next_frame():
@@ -840,7 +841,13 @@ def test_low_capture_fps_predicts_a_crossing_before_the_next_frame():
         ObservedNote(NoteKind.TAP, 2, 490, 556, 80, 18, 1.15)
     ], now=1.15)
 
-    assert [(action.kind, action.reason) for action in predicted] == [
+    # The calibrated target is later than the one-frame predictive line; the
+    # note keeps falling and the immutable physical crossing still fires.
+    assert predicted == []
+    crossed = planner.update([
+        ObservedNote(NoteKind.TAP, 2, 490, 568, 80, 18, 1.18)
+    ], now=1.18)
+    assert [(action.kind, action.reason) for action in crossed] == [
         (ActionKind.TAP, "crossing")
     ]
 

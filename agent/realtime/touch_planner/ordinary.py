@@ -129,7 +129,19 @@ class OrdinaryPipeline:
             max(.006, self._state._frame_interval_seconds * .65),
         )
         predicted = self._config.judgement_y - velocity * predictive_lead
-        return min(self._config.judgement_y - 3.0, calibrated, predicted)
+        if not self._config.enable_slide:
+            # Normal keeps the historical bounded trigger untouched.
+            return min(self._config.judgement_y - 3.0, calibrated, predicted)
+        # A negative calibrated offset asks for a later press (closer to the
+        # line).  The old ``min`` let the one-frame predictive lead always
+        # win, so the offset had no effect on taps and rounds stayed
+        # FAST-heavy (game suggested -25..-44 ms).  Honour the offset up to a
+        # few pixels below the line while keeping the predictive lead as the
+        # floor for positive offsets and slow capture cadence.
+        return min(
+            self._config.judgement_y + 6.0,
+            max(calibrated, predicted),
+        )
 
     def _crossed_ordinary_trigger(
         self,
@@ -149,6 +161,7 @@ class OrdinaryPipeline:
         return (
             previous_y < target <= tracked.note.y
             or previous_y < self._config.judgement_y <= tracked.note.y
+            or tracked.note.y >= self._config.judgement_y
         )
 
     def _reclassified_crossing(
