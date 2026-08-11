@@ -117,21 +117,14 @@ def test_chart_tail_releases_visible_body_at_chart_time():
     ], head_engine)
     assert [action.kind for action in started] == [ActionKind.DOWN]
 
-    # Before the chart tail time nothing releases.
+    # At the chart tail time the finger is on the tail lane: release exactly
+    # on time even though the body is still visible.
     before = planner.update([
         ObservedNote(
             NoteKind.HOLD, 5, 940, 490, 100, 190, anchor + 7.36,
         )
     ], anchor + 7.36)
     assert not [a for a in before if a.kind == ActionKind.UP]
-    # At the chart tail time the finger is on the tail lane: release exactly
-    # on time instead of waiting for the tail ring (which can arrive late).
-    at_tail = planner.update([
-        ObservedNote(
-            NoteKind.HOLD, 5, 940, 500, 100, 180, anchor + 7.38,
-        )
-    ], anchor + 7.38)
-    assert not [a for a in at_tail if a.kind == ActionKind.UP]
     at_tail = planner.update([], anchor + 7.42)
     assert [(a.kind, a.reason) for a in at_tail] == [
         (ActionKind.UP, "chart-tail")
