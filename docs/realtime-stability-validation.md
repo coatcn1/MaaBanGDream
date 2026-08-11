@@ -393,3 +393,19 @@ miss 4–7），不存在某个简单阈值能稳定消除。Hard 与 Normal 的
 结论：TYPE4 在现有检测器下 Hard 不可行——小菱形头导致 hold 头确认（33 vs 43）
 和 flick 识别（16 vs 25）明显偏低，不是特效干扰问题。TYPE1+TAP1 仍是实际最优，
 已还原为默认组合；游戏内设置也已由门禁从 TYPE4/TAP1 改回 TYPE1/TAP1。
+
+### 2026-08-11 TYPE1+TAP4 Hard 对照（用户建议）
+
+用户建议保留 TYPE1（识别好）换 TAP4（视觉干扰少）。补测结果：
+
+| 轮次 | miss | 结果 | 关键指标 |
+| --- | --- | --- | --- |
+| 1 | 10 | 完整结算 | hold 45 / flick 21 / rejected_holds 19 |
+| 2 | — | 85 秒生命耗尽 | hold 46 / flick 27 / rejected_holds 13 / tap 390 |
+
+TAP4 确实让 hold 候选极干净（rejected 13–19 vs TAP1 的 313–343），hold 数
+（45–46）也不输 TAP1，但 tap 动作量（390 vs 430）和 miss（10 vs 2–7）明显更差，
+第 2 轮仍死亡。TYPE1+TAP1 仍是 Hard 最优组合；默认已还原。
+
+另修复一个真实竞态 Bug：绿条释放与同一帧 MOVE 竞争时
+`cannot move inactive touch contact` 会让整首歌崩溃（`fcfef94`，已推送）。
