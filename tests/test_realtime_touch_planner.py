@@ -1273,6 +1273,63 @@ def test_released_hold_tail_cannot_be_rescued_as_a_tap_on_the_same_lane():
     assert lingering_tail == []
 
 
+def test_released_hold_body_does_not_validate_new_weak_head_on_adjacent_lane():
+    """TAP EFFECT 4 regression: a just-released body must not start a new hold.
+
+    In the SAVIOR OF SONG Hard TAP4 trace the lane-0 hold released at the
+    same frame a 16 px fragment appeared on lane 1 at the judgement line.
+    The wide lane-0 body (which spans into lane 1) was still visible and
+    validated the fragment as a linked hold head.  The phantom hold then
+    stuck around for 17 s and blocked the real lane-0 hold that followed.
+    """
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+    started = planner.update([
+        ObservedNote(NoteKind.HOLD, 0, 190, 405, 100, 320, 1.0)
+    ], now=1.0)
+    assert [action.kind for action in started] == [ActionKind.DOWN]
+
+    same_frame = planner.update([
+        # The wide old body, still visible while its tail ring releases.
+        ObservedNote(NoteKind.HOLD, 0, 199, 499, 316, 88, 2.0),
+        # Its tail ring at the judgement line.
+        ObservedNote(NoteKind.HOLD, 0, 213, 563, 126, 16, 2.0),
+        # A weak fragment on the adjacent lane that used to link to the body.
+        ObservedNote(NoteKind.HOLD, 1, 319, 563, 34, 16, 2.0),
+    ], now=2.0)
+
+    assert [(action.kind, action.reason) for action in same_frame] == [
+        (ActionKind.UP, "tail-ring")
+    ]
+    assert not [action for action in same_frame if action.kind == ActionKind.DOWN]
+
+
+def test_fresh_body_still_validates_detached_head_after_release_cooldown():
+    """A genuinely new body keeps the detached-head rescue path."""
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+    started = planner.update([
+        ObservedNote(NoteKind.HOLD, 0, 190, 405, 100, 320, 1.0)
+    ], now=1.0)
+    assert [action.kind for action in started] == [ActionKind.DOWN]
+    released = planner.update([
+        ObservedNote(NoteKind.HOLD, 0, 190, 572, 100, 18, 2.0)
+    ], now=2.0)
+    assert [action.kind for action in released] == [ActionKind.UP]
+
+    # 0.5 s later, a different lane shows a fresh body plus a thin playable
+    # head at the line.  The release cooldown must not block this pair.
+    rescued = planner.update([
+        ObservedNote(NoteKind.HOLD, 2, 500, 430, 120, 140, 2.50),
+        ObservedNote(NoteKind.HOLD, 2, 500, 555, 34, 16, 2.50),
+    ], now=2.50)
+    assert [(action.kind, action.lane, action.reason) for action in rescued] == [
+        (ActionKind.DOWN, 2, "rescue")
+    ]
+
+
 def test_real_crossing_note_after_hold_release_is_not_suppressed():
     planner = RealtimePlanner(
         judgement_y=565, timing_offset_ms=0, rescue_first_visible=True

@@ -134,10 +134,12 @@ class HoldPipeline:
         """Far end of a falling green bar: release only after it reaches line."""
         return note.y - note.height / 2
 
-    @staticmethod
     def _linked_hold_body(
+        self,
         head: ObservedNote,
         hold_notes: list[ObservedNote],
+        *,
+        now: float,
     ) -> ObservedNote | None:
         """Prove a detached head from the continuous body immediately above.
 
@@ -145,7 +147,21 @@ class HoldPipeline:
         ahead across lanes plus a thin playable head ring at the judgement
         line.  The ring alone is deliberately insufficient hold evidence; the
         spatially connected high-confidence body makes the pair trustworthy.
+
+        A body that is still tracked as an active hold, or that belongs to a
+        hold released moments ago, must not validate a NEW head: its tail ring
+        and the previous body can overlap the next lane for a few frames and
+        would otherwise restart a phantom hold that sticks around for the
+        hold_max_seconds failsafe (observed with TAP EFFECT 4 in SAVIOR OF
+        SONG Hard: a 16 px tail fragment on lane 1 linked to the lane-0 body
+        that was released in the same frame, then blocked lane 0 for 17 s).
         """
+        suppress_window = self._config.hold_start_suppress_seconds
+        recent_release_lanes = {
+            lane
+            for lane, released_at in self._state._hold_released_at.items()
+            if now - released_at < suppress_window
+        }
         head_top = head.y - head.height / 2
         candidates = []
         for body in hold_notes:
@@ -153,6 +169,7 @@ class HoldPipeline:
                 body is head
                 or body.height < 80
                 or body.hold_body_confidence < .8
+                or body.lane in recent_release_lanes
             ):
                 continue
             body_bottom = body.y + body.height / 2
@@ -436,7 +453,7 @@ class HoldPipeline:
 
             if note.kind == NoteKind.HOLD:
                 linked_body = self._linked_hold_body(
-                    note, hold_notes
+                    note, hold_notes, now=now
                 )
                 should_rescue = (
                     self._config.rescue_first_visible
