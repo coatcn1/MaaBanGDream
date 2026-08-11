@@ -205,6 +205,7 @@ class NoteDetector:
         )
         count, labels, stats, centroids = cv2.connectedComponentsWithStats(mask)
         candidates: list[tuple[ObservedNote, bool]] = []
+        raw_components: list[dict[str, object]] = []
         for label in range(1, count):
             left, top, width, height, area = stats[label]
             original_width = int(width * 2)
@@ -248,8 +249,17 @@ class NoteDetector:
                 or original_width > width_cap
             ):
                 continue
-            candidates.append((
-                ObservedNote(
+            raw_components.append({
+                "lane": lane,
+                "x": float(x),
+                "y": float(y),
+                "left": float(left * 2),
+                "right": float((left + width) * 2),
+                "top": float(top * 2 + self.PLAYFIELD_TOP),
+                "bottom": float((top + height) * 2 + self.PLAYFIELD_TOP),
+                "original_width": original_width,
+                "original_height": original_height,
+                "note": ObservedNote(
                     NoteKind.FLICK,
                     lane,
                     float(x),
@@ -258,8 +268,83 @@ class NoteDetector:
                     original_height,
                     timestamp,
                 ),
+            })
+            candidates.append((
+                raw_components[-1]["note"],  # type: ignore[arg-type]
                 is_chevron,
             ))
+
+        # Horizontal flick arrows render as two wide flat magenta wing bars
+        # (with chevron halves above/below) that the row-extent test cannot
+        # recognise on its own. Left as fragments, the wings become "tap
+        # siblings" and shadow the chevron half, so the whole arrow is tapped
+        # instead of flicked - which the game judges as a miss. Reassemble the
+        # wings into one FLICK and consume every fragment inside its bbox.
+        flat_bars = [
+            item for item in raw_components
+            if int(item["original_width"]) >= 56
+            and int(item["original_height"]) <= 18
+            and int(item["original_width"])
+            / max(1, int(item["original_height"])) >= 4.0
+        ]
+        consumed_ids: set[int] = set()
+        horizontal_flicks: list[ObservedNote] = []
+        if flat_bars:
+            bars = sorted(flat_bars, key=lambda item: float(item["x"]))
+            groups: list[list[dict[str, object]]] = []
+            current = [bars[0]]
+            for bar in bars[1:]:
+                previous = current[-1]
+                if (
+                    abs(float(bar["y"]) - float(previous["y"])) <= 18
+                    and float(bar["left"]) - float(previous["right"]) <= 90
+                ):
+                    current.append(bar)
+                else:
+                    groups.append(current)
+                    current = [bar]
+            groups.append(current)
+            for group in groups:
+                if len(group) < 2:
+                    continue
+                left = min(float(item["left"]) for item in group)
+                right = max(float(item["right"]) for item in group)
+                top = min(float(item["top"]) for item in group)
+                bottom = max(float(item["bottom"]) for item in group)
+                if right - left < 100:
+                    continue
+                center_x = (left + right) / 2
+                center_y = (top + bottom) / 2
+                centers = self.centers_at(center_y)
+                lane = min(
+                    range(len(centers)),
+                    key=lambda i: abs(center_x - centers[i]),
+                )
+                assembly = ObservedNote(
+                    NoteKind.FLICK,
+                    lane,
+                    float(center_x),
+                    float(center_y),
+                    int(right - left),
+                    int(bottom - top),
+                    timestamp,
+                )
+                horizontal_flicks.append(assembly)
+                half_width = (right - left) / 2 + 20
+                half_height = (bottom - top) / 2 + 25
+                for item in raw_components:
+                    if (
+                        abs(float(item["x"]) - center_x) <= half_width
+                        and abs(float(item["y"]) - center_y) <= half_height
+                    ):
+                        consumed_ids.add(id(item["note"]))
+        if consumed_ids:
+            candidates = [
+                (note, is_chevron)
+                for note, is_chevron in candidates
+                if id(note) not in consumed_ids
+            ]
+            candidates.extend((note, True) for note in horizontal_flicks)
 
         # The magenta/white outline of an ordinary head sits on top of its
         # cyan or yellow component. Remove it before looking for stacks.
@@ -516,7 +601,7 @@ class NoteDetector:
                     and id(note) not in consumed
                     and note.lane == hold.lane
                     and abs(note.x - hold.x) <= max(50.0, hold.width * .4)
-                    and -20 <= top - note.y <= 35
+                    and -30 <= top - note.y <= 40
                 ):
                     consumed.add(id(note))
                     annotated[id(hold)] = replace(hold, hold_tail_flick=True)

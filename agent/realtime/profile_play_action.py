@@ -1142,7 +1142,6 @@ class RealtimeProfilePlay(CustomAction):
         if not success:
             if (
                 run_mode in {"calibration-rehearsal", "calibration-formal"}
-                and not stats.aborted_for_life
                 and not stats.cleanup_failed
             ):
                 print(

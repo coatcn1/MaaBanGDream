@@ -386,6 +386,74 @@ def test_incomplete_round_records_structured_result_and_calibration_can_retry(
         assert calibration["mode"] == run_mode
 
 
+def test_life_depleted_calibration_formal_round_can_retry(monkeypatch, tmp_path):
+    reset_live_run(mode="calibration", difficulty="Hard")
+    tasker = Tasker()
+    context = SimpleNamespace(tasker=tasker)
+    settings = SimpleNamespace(
+        target_fps=60,
+        timing_offset_ms=0,
+        profile_path=SimpleNamespace(name="hard.json"),
+    )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.RealtimeProfileStore.resolve_latest",
+        lambda *args, **kwargs: settings,
+    )
+    monkeypatch.setattr("agent.realtime.profile_play_action.PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.require_game_foreground",
+        lambda _controller: None,
+    )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.ControllerTouchDispatcher",
+        lambda *_args, **_kwargs: object(),
+    )
+
+    class Engine:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def run(self, _capture, _stopping, **_kwargs):
+            return EngineStats(
+                3438,
+                391,
+                False,
+                aborted_for_life=True,
+                life_depleted=True,
+                completed=False,
+                terminal_reason="生命值触发安全停止",
+            )
+
+    monkeypatch.setattr("agent.realtime.profile_play_action.RealtimeEngine", Engine)
+    reasons = []
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.record_failure_reason",
+        reasons.append,
+    )
+    params = {
+        "difficulty": "Hard",
+        "duration_seconds": 600,
+        "require_completion": True,
+        "wait_for_completion": True,
+        "save_result_frame": True,
+        "run_mode": "calibration-formal",
+        "calibration_report": "screencap/calibration-life-retry.json",
+    }
+    argv = SimpleNamespace(custom_action_param=json.dumps(params))
+
+    assert RealtimeProfilePlay()._run(context, argv) is True
+    assert reasons == []
+    calibration = json.loads(
+        (tmp_path / "screencap" / "calibration-life-retry.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert calibration["valid"] is False
+    assert calibration["survived"] is False
+    assert calibration["completed"] is False
+    assert calibration["mode"] == "calibration-formal"
+
+
 def test_engine_error_writes_invalid_result_with_partial_stats(monkeypatch, tmp_path):
     reset_live_run(mode="formal", difficulty="Normal")
     tasker = Tasker()
