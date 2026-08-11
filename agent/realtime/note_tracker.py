@@ -49,16 +49,9 @@ class MultiNoteTracker:
 
     ORDINARY_KINDS = frozenset({NoteKind.TAP, NoteKind.SKILL, NoteKind.FLICK})
 
-    def __init__(
-        self,
-        *,
-        memory_seconds: float = .15,
-        max_samples: int = 5,
-        keep_downward_on_jitter: bool = False,
-    ):
+    def __init__(self, *, memory_seconds: float = .15, max_samples: int = 5):
         self.memory_seconds = float(memory_seconds)
         self.max_samples = max(3, min(5, int(max_samples)))
-        self.keep_downward_on_jitter = bool(keep_downward_on_jitter)
         self._tracks: dict[int, _Track] = {}
         self._current_ids: set[int] = set()
         self._next_id = 1
@@ -170,15 +163,7 @@ class MultiNoteTracker:
                     track.motion_samples += 1
                     track.downward_motion_frames = (
                         track.downward_motion_frames + 1
-                        if note.y > latest.y
-                        else (
-                            0
-                            if (
-                                latest.y - note.y > 6
-                                or not self.keep_downward_on_jitter
-                            )
-                            else track.downward_motion_frames
-                        )
+                        if note.y > latest.y else 0
                     )
                 track.minimum_y = min(track.minimum_y, note.y)
                 track.last_seen = now
