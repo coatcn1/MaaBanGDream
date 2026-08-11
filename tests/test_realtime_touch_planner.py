@@ -1402,6 +1402,42 @@ def test_adjacent_track_with_reversed_motion_is_filtered_during_hold():
     assert planner.filtered_adjacent_artifacts == 1
 
 
+def test_slide_hold_keeps_center_tap_on_adjacent_lane_with_jittered_motion():
+    planner = RealtimePlanner(
+        judgement_y=565,
+        timing_offset_ms=0,
+        rescue_first_visible=True,
+        enable_slide=True,
+    )
+    for timestamp, hold_y, hold_h in (
+        (1.00, 310, 510),
+        (1.05, 330, 500),
+        (1.10, 350, 490),
+    ):
+        planner.update([
+            ObservedNote(NoteKind.HOLD, 2, 500, hold_y, 220, hold_h, timestamp)
+        ], now=timestamp)
+    actions = []
+    # The lane-3 tap sits at its own lane centre; a small upward fragment
+    # jitter keeps downward credit below the trust threshold, so the old
+    # blanket adjacent-hold suppression swallowed the real note. Slide charts
+    # must only suppress taps that actually hug the hold edge.
+    for timestamp, tap_y in (
+        (1.00, 540),
+        (1.04, 545),
+        (1.08, 543),
+        (1.12, 570),
+    ):
+        actions.extend(planner.update([
+            ObservedNote(NoteKind.TAP, 3, 640, tap_y, 60, 30, timestamp)
+        ], now=timestamp))
+
+    assert any(
+        action.kind == ActionKind.TAP and action.lane == 3
+        for action in actions
+    )
+
+
 def test_predicted_hold_release_waits_at_least_three_hundred_ms():
     planner = RealtimePlanner(
         judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
