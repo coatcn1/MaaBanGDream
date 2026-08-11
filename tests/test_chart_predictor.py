@@ -153,6 +153,85 @@ def test_chart_tail_does_not_release_slide_before_finger_reaches_tail_lane():
     assert not [a for a in at_tail if a.reason == "chart-tail"]
 
 
+def _planner_with_press_rescue(chart: ChartTimeline):
+    planner = RealtimePlanner(
+        judgement_y=565,
+        timing_offset_ms=0,
+        rescue_first_visible=True,
+        enable_slide=True,
+        chart_timeline=chart,
+        chart_prediction=True,
+        chart_predict_presses=True,
+    )
+    predictor = planner._chart_predictor
+    assert predictor is not None
+    predictor.calibrated = True
+    predictor.song_offset_s = -3.0
+    return planner, predictor
+
+
+def test_chart_press_rescues_tap_only_after_due_time():
+    chart = _synthetic_chart()
+    planner, predictor = _planner_with_press_rescue(chart)
+    anchor = 100.0
+    predictor._anchor_time = anchor
+
+    # Lane 1 tap at song 2.03125 -> engine anchor + 5.03125.  Before the
+    # due time the chart must not preempt the detector.
+    early = planner.update([], anchor + 4.99)
+    assert not [a for a in early if a.reason == "chart-predicted"]
+
+    # Right after the due time, with no detector action, the rescue fires.
+    at_due = planner.update([], anchor + 5.07)
+    rescued = [a for a in at_due if a.reason == "chart-predicted"]
+    assert len(rescued) == 1
+    assert rescued[0].lane == 1
+    assert rescued[0].kind == ActionKind.TAP
+
+    # A second frame in the same lane window must not double-press.
+    again = planner.update([], anchor + 5.09)
+    assert not [a for a in again if a.reason == "chart-predicted"]
+
+
+def test_chart_press_does_not_rescue_when_crossing_covered_the_note():
+    chart = _synthetic_chart()
+    planner, predictor = _planner_with_press_rescue(chart)
+    anchor = 100.0
+    predictor._anchor_time = anchor
+
+    # A real detector crossing at the chart time (song 2.03125 -> engine
+    # anchor + 5.03125) already dispatched a tap on lane 1; the chart must
+    # stay quiet instead of adding a second press.
+    planner._state._last_trigger[1] = anchor + 5.03
+    planner._state._last_trigger_action_kind[1] = ActionKind.TAP
+    after = planner.update([], anchor + 5.08)
+    assert not [a for a in after if a.reason == "chart-predicted"]
+
+
+def test_chart_press_suppresses_duplicate_crossing_on_same_lane():
+    chart = _synthetic_chart()
+    planner, predictor = _planner_with_press_rescue(chart)
+    anchor = 100.0
+    predictor._anchor_time = anchor
+
+    # The chart rescues the lane-1 tap after due (song 2.03125 -> engine
+    # anchor + 5.03125).  A detector crossing fragment arriving ~80 ms later
+    # is the same note and must be filtered, not dispatched twice.
+    at_due = planner.update([], anchor + 5.07)
+    assert [a.reason for a in at_due if a.kind == ActionKind.TAP] == [
+        "chart-predicted",
+    ]
+    # The delayed fragment keeps descending; its crossing is the same note
+    # and must be filtered by the chart-press suppression.
+    now = anchor + 5.10
+    for y in (420, 440, 460, 480, 500, 520, 540, 555, 563, 568):
+        now += 0.016
+        late = planner.update([
+            ObservedNote(NoteKind.TAP, 1, 430, y, 20, 10, now),
+        ], now=now)
+        assert not [a for a in late if a.reason == "crossing"]
+
+
 def test_phantom_hold_lane_is_freed_before_a_due_chart_head():
     chart = _synthetic_chart()
     planner, predictor = _planner_with_calibrated_predictor(chart)

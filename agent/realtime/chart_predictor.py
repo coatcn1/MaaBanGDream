@@ -94,6 +94,12 @@ class ChartPredictor:
         """
         if not self.calibrated or not self.predict_presses:
             return True
+        last_pred = self._last_predicted.get(lane, float("-inf"))
+        if engine_time - last_pred <= 0.15:
+            # The chart already pressed this lane in the last ~150 ms; a
+            # detector crossing right after it is the same note's delayed
+            # fragment and must not dispatch a duplicate input.
+            return False
         song_now = self._relative(engine_time) + self.song_offset_s
         judgement = self.chart.judgement_near(
             lane,
@@ -246,6 +252,15 @@ class ChartPredictor:
         state: PlannerState,
         holds: HoldPipeline,
     ) -> None:
+        """Rescue taps whose chart judgement time has already passed.
+
+        The detector is the primary trigger for ordinary taps.  A note can
+        still be stuck on a residue, swallowed by a drifted hold body, or
+        first visible only after the line, leaving the lane with no action.
+        The chart then presses the tap shortly AFTER the judgement time so
+        the input matches the game's judgement instead of preempting the
+        detector with an early press.
+        """
         song_now = self._relative(now) + self.song_offset_s
         occupied_lanes = set(state._active_hold_lane.values())
         for lane in range(self.chart.LANE_COUNT):
@@ -256,7 +271,7 @@ class ChartPredictor:
                 continue
             target = next_judgement.time_s + self.press_bias_s
             lead = target - song_now
-            if not -0.05 <= lead <= 0.06:
+            if not -0.12 <= lead <= -0.03:
                 continue
             # Only skip when a recent press on this lane already covered the
             # chart note.  Junk presses far from the chart time (or from a
@@ -309,6 +324,7 @@ class ChartPredictor:
                     lane=lane,
                     chart_time_s=round(next_judgement.time_s, 3),
                     lead_ms=round(lead * 1000, 1),
+                    rescue=True,
                 )
                 self._mistimed_lanes.pop(lane, None)
             elif next_judgement.kind == "hold-head":
