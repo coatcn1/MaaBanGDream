@@ -14,7 +14,8 @@ class OrdinaryPipeline:
         self._config = config
         self._state = state
         self._note_tracker = MultiNoteTracker(
-            memory_seconds=config.track_memory_seconds
+            memory_seconds=config.track_memory_seconds,
+            keep_downward_on_jitter=config.enable_slide,
         )
 
     def _record_diagnostic(

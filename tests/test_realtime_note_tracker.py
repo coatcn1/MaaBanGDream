@@ -77,3 +77,42 @@ def test_tracker_exposes_origin_motion_and_trigger_metadata():
     assert fired.downward_motion_frames == 2
     assert fired.fired
     assert fired.last_fired_at == 1.05
+
+
+def test_slide_chart_merges_boundary_hugging_adjacent_lane_fragments():
+    tracker = MultiNoteTracker(
+        memory_seconds=.3,
+        keep_downward_on_jitter=True,
+    )
+    tracked = tracker.update([
+        # One physical note split at the lane 2/3 boundary: both fragments hug
+        # the shared boundary instead of sitting at their lane centres.
+        ObservedNote(NoteKind.TAP, 2, 560, 500, 50, 16, 0),
+        ObservedNote(NoteKind.TAP, 3, 585, 502, 55, 18, 0),
+    ], 0)
+
+    assert len(tracked) == 1
+    assert tracked[0].note.lane == 3
+
+
+def test_slide_chart_keeps_real_adjacent_chord_partners_separate():
+    tracker = MultiNoteTracker(
+        memory_seconds=.3,
+        keep_downward_on_jitter=True,
+    )
+    tracked = tracker.update([
+        ObservedNote(NoteKind.TAP, 2, 500, 500, 50, 16, 0),
+        ObservedNote(NoteKind.TAP, 3, 630, 502, 55, 18, 0),
+    ], 0)
+
+    assert len(tracked) == 2
+
+
+def test_plain_chart_does_not_merge_adjacent_lane_fragments():
+    tracker = MultiNoteTracker(memory_seconds=.3)
+    tracked = tracker.update([
+        ObservedNote(NoteKind.TAP, 2, 560, 500, 50, 16, 0),
+        ObservedNote(NoteKind.TAP, 3, 585, 502, 55, 18, 0),
+    ], 0)
+
+    assert len(tracked) == 2
