@@ -79,25 +79,22 @@ def test_tracker_exposes_origin_motion_and_trigger_metadata():
     assert fired.last_fired_at == 1.05
 
 
-def test_slide_chart_fragment_jitter_keeps_head_anchor_and_downward_credit():
+def test_small_fragment_jitter_keeps_downward_motion_credit():
     tracker = MultiNoteTracker(
         memory_seconds=.3,
         keep_downward_on_jitter=True,
     )
     tracker.update([note(500, 0)], 0)
     tracker.update([note(520, .02)], .02)
-    head = tracker.update([note(540, .04)], .04)[0]
+    tracker.update([note(540, .04)], .04)
     # Dense slide passages swap the representative fragment between the head
-    # and an upper ring within the tracker's 6 px upward tolerance. Moving the
-    # representative upward makes the trigger line unreachable; the track must
-    # keep the playable head anchor and its downward credit.
+    # and an upper ring within the tracker's 6 px upward tolerance. Resetting
+    # downward credit on every small jitter makes the track permanently
+    # untrusted and silently misses the note.
     jittered = tracker.update([note(535, .06)], .06)[0]
     restored = tracker.update([note(555, .08)], .08)[0]
 
-    assert head.note.y == 540
-    assert jittered.note.y == 540
     assert jittered.downward_motion_frames == 2
-    assert restored.note.y == 555
     assert restored.downward_motion_frames == 3
 
 

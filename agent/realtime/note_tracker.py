@@ -165,19 +165,6 @@ class MultiNoteTracker:
             for track, note in assignments:
                 latest = track.samples[-1]
                 if abs(note.y - latest.y) >= .2 or abs(note.x - latest.x) >= .2:
-                    if (
-                        self.keep_downward_on_jitter
-                        and note.y < latest.y
-                    ):
-                        # A slide body can occlude the playable head and leave
-                        # only upper trail fragments visible. The assignment
-                        # stays compatible within the 6 px upward tolerance,
-                        # but moving the representative upward makes the
-                        # trigger line unreachable. Keep the head anchor and
-                        # only refresh liveness.
-                        track.last_seen = now
-                        current_ids.add(track.track_id)
-                        continue
                     track.samples.append(note)
                     track.samples = track.samples[-self.max_samples:]
                     track.motion_samples += 1
