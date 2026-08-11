@@ -22,6 +22,7 @@ class PlannerConfig:
     hold_restart_cooldown_seconds: float
     post_release_rescue_seconds: float
     hold_start_suppress_seconds: float
+    flick_residue_suppress_seconds: float
 
 
 class PlannerState:

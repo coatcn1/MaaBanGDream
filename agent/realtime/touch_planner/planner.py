@@ -37,6 +37,7 @@ class RealtimePlanner:
         # untracked residue is suppressed.
         post_release_rescue_seconds: float = 0.65,
         hold_start_suppress_seconds: float = 0.35,
+        flick_residue_suppress_seconds: float = 0.45,
     ):
         self._config = PlannerConfig(
             judgement_y=float(judgement_y),
@@ -52,6 +53,7 @@ class RealtimePlanner:
             hold_restart_cooldown_seconds=hold_restart_cooldown_seconds,
             post_release_rescue_seconds=post_release_rescue_seconds,
             hold_start_suppress_seconds=hold_start_suppress_seconds,
+            flick_residue_suppress_seconds=flick_residue_suppress_seconds,
         )
         self._state = PlannerState(timing_offset_ms=timing_offset_ms)
         self._holds = HoldPipeline(self._config, self._state)

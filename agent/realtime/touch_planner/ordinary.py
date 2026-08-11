@@ -479,6 +479,34 @@ class OrdinaryPipeline:
                         height=note.height,
                     )
                     continue
+                flick_residue = (
+                    note.kind == NoteKind.TAP
+                    and self._state._last_trigger_action_kind.get(note.lane)
+                    == ActionKind.FLICK
+                    and now - self._state._last_trigger.get(
+                        note.lane, float("-inf")
+                    ) <= self._config.flick_residue_suppress_seconds
+                )
+                if flick_residue:
+                    # A flick's playable ring often survives as a separate
+                    # first-visible fragment below the line after the arrow
+                    # already dispatched. Firing it as a TAP adds a spurious
+                    # input on the same lane and can turn a clean flick into
+                    # a miss on the next judgement.
+                    self._note_tracker.mark_fired(tracked.track_id, now)
+                    self._record_diagnostic(
+                        "flick_ring_residue_suppressed",
+                        now,
+                        lane=note.lane,
+                        track_id=tracked.track_id,
+                        y=round(note.y, 2),
+                        flick_age_ms=round(
+                            (now - self._state._last_trigger.get(
+                                note.lane, now
+                            )) * 1000
+                        ),
+                    )
+                    continue
                 kind = ActionKind.FLICK if note.kind == NoteKind.FLICK else ActionKind.TAP
                 actions.append(TouchAction(
                     kind, note.lane, now, reason="rescue", track_id=tracked.track_id

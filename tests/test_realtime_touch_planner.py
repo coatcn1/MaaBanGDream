@@ -117,6 +117,33 @@ def test_tap_ring_cannot_fire_after_its_flick_was_already_dispatched():
     assert ring == []
 
 
+def test_late_flick_ring_residue_is_suppressed_beyond_retrigger_window():
+    planner = RealtimePlanner(
+        judgement_y=565,
+        timing_offset_ms=0,
+        retrigger_seconds=.12,
+        rescue_first_visible=True,
+    )
+    planner.update([
+        ObservedNote(NoteKind.FLICK, 1, 360, 480, 58, 22, 1.00)
+    ], now=1.00)
+    flick = planner.update([
+        ObservedNote(NoteKind.FLICK, 1, 360, 520, 58, 22, 1.04),
+        ObservedNote(NoteKind.TAP, 1, 400, 565, 82, 6, 1.04),
+    ], now=1.04)
+    # Real Hard traces show the playable ring surviving ~0.4 s after the
+    # arrow dispatched; it is first seen at the line and would otherwise be
+    # rescued as a spurious TAP.
+    ring = planner.update([
+        ObservedNote(NoteKind.TAP, 1, 400, 575, 82, 6, 1.42)
+    ], now=1.42)
+
+    assert [(action.kind, action.lane) for action in flick] == [
+        (ActionKind.FLICK, 1)
+    ]
+    assert ring == []
+
+
 def test_stale_flick_fragment_cannot_shadow_a_later_tap_crossing():
     planner = RealtimePlanner(
         judgement_y=565,
