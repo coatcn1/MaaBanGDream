@@ -73,6 +73,8 @@ class RealtimePlanner:
             if chart_timeline is not None and chart_prediction
             else None
         )
+        if self._chart_predictor is not None:
+            self._ordinary._chart_gate = self._chart_predictor
 
     @property
     def has_active_holds(self) -> bool:

@@ -10,9 +10,16 @@ from .state import PlannerConfig, PlannerState
 class OrdinaryPipeline:
     """Tap/flick judgement: tracks, rescues, lane sweep, bookkeeping."""
 
-    def __init__(self, config: PlannerConfig, state: PlannerState) -> None:
+    def __init__(
+        self,
+        config: PlannerConfig,
+        state: PlannerState,
+        *,
+        chart_gate: object | None = None,
+    ) -> None:
         self._config = config
         self._state = state
+        self._chart_gate = chart_gate
         self._note_tracker = MultiNoteTracker(
             memory_seconds=config.track_memory_seconds,
             keep_downward_on_jitter=config.enable_slide,
@@ -545,6 +552,23 @@ class OrdinaryPipeline:
                         y=round(note.y, 2),
                         motion_samples=tracked.motion_samples,
                         downward_motion_frames=tracked.downward_motion_frames,
+                    )
+                    continue
+                if (
+                    self._chart_gate is not None
+                    and hasattr(self._chart_gate, "validate_crossing")
+                    and not self._chart_gate.validate_crossing(
+                        note.lane, now
+                    )
+                ):
+                    self._note_tracker.mark_fired(tracked.track_id, now)
+                    self._record_diagnostic(
+                        "chart_mistimed_crossing_suppressed",
+                        now,
+                        lane=note.lane,
+                        track_id=tracked.track_id,
+                        y=round(note.y, 2),
+                        reason="crossing",
                     )
                     continue
                 kind = ActionKind.FLICK if note.kind == NoteKind.FLICK else ActionKind.TAP

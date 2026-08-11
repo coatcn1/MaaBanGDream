@@ -60,6 +60,7 @@ class ChartPredictor:
         self._calibration_diagnosed = False
         self._calibration_failed_diagnosed = False
         self._anchor_time: float | None = None
+        self._mistimed_lanes: dict[int, tuple[float, float]] = {}
 
     def reset(self) -> None:
         self.calibrated = False
@@ -73,12 +74,40 @@ class ChartPredictor:
         self._calibration_diagnosed = False
         self._calibration_failed_diagnosed = False
         self._anchor_time = None
+        self._mistimed_lanes = {}
 
     def _relative(self, engine_time: float) -> float:
         """Convert an absolute monotonic engine time to song-relative time."""
         if self._anchor_time is None:
             self._anchor_time = engine_time
         return engine_time - self._anchor_time
+
+    def validate_crossing(self, lane: int, engine_time: float) -> bool:
+        """Return True when a crossing on ``lane`` matches the chart timing.
+
+        Junk fragments near the line fire crossings on the right lane but
+        far from the chart time.  Such crossings are suppressed and replaced
+        by a chart-timed press, so the game receives one correctly-timed
+        input instead of an early/late miss.
+        """
+        if not self.calibrated or not self.predict_presses:
+            return True
+        song_now = self._relative(engine_time) + self.song_offset_s
+        judgement = self.chart.judgement_near(
+            lane,
+            song_now,
+            window_s=0.14,
+        )
+        if (
+            judgement is not None
+            and judgement.kind in ("tap", "hold-head")
+            and abs(judgement.time_s - song_now) <= 0.14
+        ):
+            return True
+        next_judgement = self.chart.next_judgement(lane, song_now - 0.05)
+        if next_judgement is not None and next_judgement.kind == "tap":
+            self._mistimed_lanes[lane] = (engine_time, next_judgement.time_s)
+        return False
 
     def _feed_calibration(
         self,
@@ -146,7 +175,8 @@ class ChartPredictor:
                 best_delta_sum = delta_sum
             offset += 0.005
         best_offset = refined_offset
-        if best_count < max(6, self.min_calibration_samples - 2):
+        required_matches = max(6, int(self.min_calibration_samples * 0.6))
+        if best_count < required_matches:
             self.calibration_failed = True
             return
         self.song_offset_s = best_offset
@@ -184,10 +214,17 @@ class ChartPredictor:
                     return True
                 continue
             if tracked.velocity_y <= 100:
-                # A single-sample or jittered track near the line is still
-                # owned by the detector pipeline (crossing/rescue will press
-                # it); only doubt tracks far above with no velocity.
-                if tracked.note.y >= self.judgement_y - 120:
+                # A near-line track with no usable velocity only blocks the
+                # chart press if it is a TRUSTED falling track (the pipeline
+                # will fire crossing/rescue).  Junk fragments with 1-2 samples
+                # never fire, so the chart must still rescue the note.
+                trusted_without_velocity = (
+                    tracked.note.y >= self.judgement_y - 120
+                    and tracked.motion_samples >= 3
+                    and tracked.downward_motion_frames >= 2
+                    and tracked.minimum_y <= self.judgement_y - 40
+                )
+                if trusted_without_velocity:
                     return True
                 continue
             remaining = self.judgement_y - tracked.note.y
@@ -208,15 +245,8 @@ class ChartPredictor:
     ) -> None:
         song_now = self._relative(now) + self.song_offset_s
         occupied_lanes = set(state._active_hold_lane.values())
-        recent_lanes = {
-            lane for lane, timestamp in state._last_trigger.items()
-            if now - timestamp < 0.12
-        } | {
-            lane for lane, timestamp in self._last_predicted.items()
-            if now - timestamp < 0.12
-        }
         for lane in range(self.chart.LANE_COUNT):
-            if lane in occupied_lanes or lane in recent_lanes:
+            if lane in occupied_lanes:
                 continue
             next_judgement = self.chart.next_judgement(
                 lane, song_now - 0.08
@@ -226,13 +256,32 @@ class ChartPredictor:
             lead = next_judgement.time_s - song_now
             if not -0.05 <= lead <= 0.06:
                 continue
+            # Only skip when a recent press on this lane already covered the
+            # chart note.  Junk presses far from the chart time (or from a
+            # different note) must not silence the prediction.
+            covered = any(
+                timestamp is not None
+                and abs(
+                    (self._relative(timestamp) + self.song_offset_s)
+                    - next_judgement.time_s
+                ) <= 0.12
+                for timestamp in (
+                    state._last_trigger.get(lane),
+                    self._last_predicted.get(lane),
+                )
+            )
+            if covered:
+                continue
             if next_judgement.kind == "tap":
+                mistimed_at, _ = self._mistimed_lanes.get(
+                    lane, (float("-inf"), 0.0)
+                )
                 if self._track_will_judge(
                     tracked_notes,
                     lane,
                     chart_time_s=next_judgement.time_s,
                     now=now,
-                ):
+                ) and now - mistimed_at > 0.6:
                     continue
                 actions.append(TouchAction(
                     ActionKind.TAP,
@@ -251,6 +300,7 @@ class ChartPredictor:
                     chart_time_s=round(next_judgement.time_s, 3),
                     lead_ms=round(lead * 1000, 1),
                 )
+                self._mistimed_lanes.pop(lane, None)
             # Hold heads are deliberately left to the detector pipeline: a
             # blind DOWN would need to register planner hold state to avoid
             # a second hold start, which is riskier than the occlusion cases
@@ -293,13 +343,6 @@ class ChartPredictor:
         ):
             if contact not in state._active_hold_tail:
                 self.expected_hold_tail.pop(contact, None)
-                continue
-            unseen_for = now - state._hold_seen.get(contact, now)
-            if unseen_for < 0.05:
-                # The body is still visible; the hold pipeline will release
-                # at the tail ring in its own time.  Chart-tail exists to
-                # rescue bodies that VANISH before the tail reaches the line
-                # (the grace delay would otherwise release up to 0.4 s late).
                 continue
             if song_now < tail_time - 0.015:
                 continue

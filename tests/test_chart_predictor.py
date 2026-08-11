@@ -103,7 +103,7 @@ def test_chart_tail_releases_hold_whose_body_vanished():
     ]
 
 
-def test_chart_tail_waits_for_visible_body():
+def test_chart_tail_releases_visible_body_at_chart_time():
     chart = _synthetic_chart()
     planner, predictor = _planner_with_calibrated_predictor(chart)
     anchor = 100.0
@@ -117,11 +117,42 @@ def test_chart_tail_waits_for_visible_body():
     ], head_engine)
     assert [action.kind for action in started] == [ActionKind.DOWN]
 
-    # A continuing falling body is still visible at the tail time; the hold
-    # pipeline owns the release and chart-tail must stay silent.
-    at_tail = planner.update([
+    # Before the chart tail time nothing releases.
+    before = planner.update([
         ObservedNote(
             NoteKind.HOLD, 5, 940, 490, 100, 190, anchor + 7.36,
         )
     ], anchor + 7.36)
+    assert not [a for a in before if a.kind == ActionKind.UP]
+    # At the chart tail time the finger is on the tail lane: release exactly
+    # on time instead of waiting for the tail ring (which can arrive late).
+    at_tail = planner.update([
+        ObservedNote(
+            NoteKind.HOLD, 5, 940, 500, 100, 180, anchor + 7.38,
+        )
+    ], anchor + 7.38)
+    assert [(a.kind, a.reason) for a in at_tail] == [
+        (ActionKind.UP, "chart-tail")
+    ]
+
+
+def test_chart_tail_does_not_release_slide_before_finger_reaches_tail_lane():
+    chart = _synthetic_chart()
+    planner, predictor = _planner_with_calibrated_predictor(chart)
+    anchor = 100.0
+    predictor._anchor_time = anchor
+
+    # Start a slide on lane 5 (head at song 4.0625).  The chart tail is at
+    # song 4.375 on lane 5, but keep the finger on lane 5 (straight hold in
+    # the synthetic chart); simulate a slide by moving the active lane.
+    head_engine = anchor + 7.0625
+    started = planner.update([
+        ObservedNote(
+            NoteKind.HOLD, 5, 940, 470, 100, 200, head_engine - 0.05,
+        )
+    ], head_engine)
+    assert [action.kind for action in started] == [ActionKind.DOWN]
+    # Force the active hold onto lane 3 (finger has not reached lane 5).
+    planner._state._active_hold_lane[5] = 3
+    at_tail = planner.update([], anchor + 7.39)
     assert not [a for a in at_tail if a.reason == "chart-tail"]
