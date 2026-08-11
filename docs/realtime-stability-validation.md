@@ -255,3 +255,47 @@ offset 11→17ms 只把 fast/slow 从“慢多快少”拉回平衡，miss 无�
 最终选择 **TYPE1 + TAP1 + assist off** 作为默认组合（`selection.json` 已回写）。
 TYPE4 的视觉主观分更高，但真机 miss 不如 TYPE1；下一阶段若要继续降低 miss，
 应从 TYPE1 的漏判（flick/hold/同轨密集）入手，而不是更换按键皮肤。
+
+## 2026-08-11 Hard 难度推进（尚未达到 Normal 同级稳定性）
+
+目标：Hard 难度稳定达到 Normal 同级准确率。当前 Normal 基线（TYPE1/TAP1）：
+6 轮 miss 2/1/1/2/2/1，均值 1.5。Hard 尚未达到该水平，仍在推进。
+
+### Hard 校准
+
+Hard 三次排练可完整通过（miss 2/6/6，hit_rate 0.985–0.995），但正式验证轮在
+约 55–70 秒生命耗尽导致整体失败。已修复校准流程：`calibration-formal` 生命耗尽
+不再让整个校准失败，而是写入 `valid:false` 报告并允许重试
+（`profile_play_action.py`，新增 `test_life_depleted_calibration_formal_round_can_retry`）。
+
+### Hard 正式轮实验（TYPE1/TAP1，手动 hard Profile `hard-20260811090000.json`）
+
+| 配置 | 轮次 miss | 结果 |
+| --- | --- | --- |
+| offset 0（初版） | 4, 6, 死亡@55s | 2/3 存活 |
+| offset +12 | 7, 死亡@66s | 1/2 存活 |
+| offset 0 + 遮挡修复 | 死亡@76s | 未存活 |
+| offset -20 + 遮挡修复 | 1, 5, 死亡@70s | 2/3 存活，最佳轮 miss=1 |
+
+### 已提交的 Hard 相关修复
+
+- `fix: detect horizontal flick arrows...`：Hard 谱存在横向/非上向 flick 箭头的
+  宽扁翼条，重新组装为 FLICK，避免被当普通音符点掉。
+- `fix: suppress late flick ring residue rescues...`：flick 触发后同轨 0.45s 内
+  的 first-visible TAP 残片不再补一次多余点击。
+- `fix: fire trusted long-falling heads occluded just before the trigger target
+  on slide charts`：滑条（Hard+）谱中，长距离可信下落音符在触发线前几像素被
+  绿条遮挡丢失时，允许在目标线下方 6px 内提前触发。Normal（无滑条）行为不变，
+  黄金重放测试保持精确一致。
+
+### 根因与剩余差距
+
+离线 trace 取证（死亡轮 `realtime-20260811-094641`）发现：密集滑条段中，音符头
+在判定线附近被绿条遮挡，跟踪器发生碎片重分配（y 回跳、down_frames 清零），
+导致长下落轨道在到达触发线前丢失；重放对比显示修复后该轮多打出 6 个此前丢失的
+动作。各轮死亡时间随修复逐步延长（55→62→66→70→76→84s），但最难的 B/C 两首
+在最后 5–10 秒仍会漏掉足够多的音符把生命打空。
+
+尚未解决：密集滑条段的跟踪器重分配与“滑条相邻音符”过滤仍是漏判主要来源，
+需要更深入的 tracker 改造（同物理音符的碎片合并、轨道防回跳）才能达到
+Normal 同级稳定性。当前状态：Hard 最佳轮 miss=1，但最差轮仍可能死亡。
