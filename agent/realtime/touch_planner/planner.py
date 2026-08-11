@@ -123,6 +123,22 @@ class RealtimePlanner:
             },
         )
         if self._chart_predictor is not None:
+            if self._chart_predictor.predict_presses:
+                # Any transient press far from the chart time is a mistimed
+                # junk/rescue/dropout input: drop it and let the chart press
+                # the note at the correct moment.  Structural hold actions
+                # (DOWN/UP/MOVE) are handled by the hold pipelines.
+                actions = [
+                    action
+                    for action in actions
+                    if not (
+                        action.kind in (ActionKind.TAP, ActionKind.FLICK)
+                        and action.contact is None
+                        and not self._chart_predictor.validate_crossing(
+                            action.lane, action.timestamp
+                        )
+                    )
+                ]
             actions = self._chart_predictor.update(
                 notes,
                 tracked_notes,

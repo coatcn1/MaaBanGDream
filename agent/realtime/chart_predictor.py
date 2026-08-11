@@ -17,7 +17,7 @@ stays disabled for the whole run (a different song is being played).
 
 from __future__ import annotations
 
-from .chart_timeline import ChartTimeline
+from .chart_timeline import ChartJudgement, ChartTimeline
 from .note_detector import NoteKind, ObservedNote
 from .note_tracker import TrackedNote
 from .touch_planner.actions import ActionKind, TouchAction
@@ -96,12 +96,12 @@ class ChartPredictor:
         judgement = self.chart.judgement_near(
             lane,
             song_now,
-            window_s=0.14,
+            window_s=0.12,
         )
         if (
             judgement is not None
             and judgement.kind in ("tap", "hold-head")
-            and abs(judgement.time_s - song_now) <= 0.14
+            and abs(judgement.time_s - song_now) <= 0.12
         ):
             return True
         next_judgement = self.chart.next_judgement(lane, song_now - 0.05)
@@ -242,12 +242,11 @@ class ChartPredictor:
         now: float,
         actions: list[TouchAction],
         state: PlannerState,
+        holds: HoldPipeline,
     ) -> None:
         song_now = self._relative(now) + self.song_offset_s
         occupied_lanes = set(state._active_hold_lane.values())
         for lane in range(self.chart.LANE_COUNT):
-            if lane in occupied_lanes:
-                continue
             next_judgement = self.chart.next_judgement(
                 lane, song_now - 0.08
             )
@@ -259,20 +258,28 @@ class ChartPredictor:
             # Only skip when a recent press on this lane already covered the
             # chart note.  Junk presses far from the chart time (or from a
             # different note) must not silence the prediction.
+            expected_kind = (
+                ActionKind.DOWN
+                if next_judgement.kind == "hold-head"
+                else ActionKind.TAP
+            )
+            last_kind = state._last_trigger_action_kind.get(lane)
             covered = any(
                 timestamp is not None
+                and kind == expected_kind
                 and abs(
                     (self._relative(timestamp) + self.song_offset_s)
                     - next_judgement.time_s
                 ) <= 0.12
-                for timestamp in (
-                    state._last_trigger.get(lane),
-                    self._last_predicted.get(lane),
+                for timestamp, kind in (
+                    (state._last_trigger.get(lane), last_kind),
                 )
             )
             if covered:
                 continue
             if next_judgement.kind == "tap":
+                if lane in occupied_lanes:
+                    continue
                 mistimed_at, _ = self._mistimed_lanes.get(
                     lane, (float("-inf"), 0.0)
                 )
@@ -301,10 +308,113 @@ class ChartPredictor:
                     lead_ms=round(lead * 1000, 1),
                 )
                 self._mistimed_lanes.pop(lane, None)
-            # Hold heads are deliberately left to the detector pipeline: a
-            # blind DOWN would need to register planner hold state to avoid
-            # a second hold start, which is riskier than the occlusion cases
-            # already covered by the trusted rescue paths.
+            elif next_judgement.kind == "hold-head":
+                self._predict_hold_head(
+                    notes,
+                    lane,
+                    next_judgement,
+                    now,
+                    actions,
+                    state,
+                    holds,
+                    song_now,
+                )
+
+    def _predict_hold_head(
+        self,
+        notes: list[ObservedNote],
+        lane: int,
+        judgement: ChartJudgement,
+        now: float,
+        actions: list[TouchAction],
+        state: PlannerState,
+        holds: HoldPipeline,
+        song_now: float,
+    ) -> None:
+        """Press a hold head at the chart time when the detector cannot.
+
+        The detector can lose hold heads in dense slide sections (green-body
+        occlusion or a drifted hold occupying the lane).  A visible high
+        confidence body on the lane is strong evidence, so the chart presses
+        the head and registers the hold in the planner state to prevent a
+        second start.  A lane occupied by a hold whose chart tail has already
+        passed is force-released first.
+        """
+        if lane in set(state._active_hold_lane.values()):
+            for contact, active_lane in list(state._active_hold_lane.items()):
+                if active_lane != lane:
+                    continue
+                expected = self.expected_hold_tail.get(contact)
+                if (
+                    expected is not None
+                    and song_now >= expected[0] - 0.05
+                ):
+                    holds._release_hold(
+                        contact,
+                        lane,
+                        now,
+                        "chart-lane-free",
+                        actions,
+                    )
+                    self.expected_hold_tail.pop(contact, None)
+                    break
+                if expected is None:
+                    # A hold without any chart pair is a phantom (drifted
+                    # body).  Real holds in this chart last at most ~1.6 s;
+                    # an occupant older than 2 s must be stuck and is
+                    # blocking the real head that is due now.
+                    started = state._hold_started.get(contact, now)
+                    if now - started >= 2.0:
+                        holds._release_hold(
+                            contact,
+                            lane,
+                            now,
+                            "chart-lane-free",
+                            actions,
+                        )
+                        break
+                return
+            if lane in set(state._active_hold_lane.values()):
+                return
+        body = next(
+            (
+                note for note in notes
+                if (
+                    note.kind == NoteKind.HOLD
+                    and note.lane == lane
+                    and note.y + note.height / 2 >= self.judgement_y - 80
+                )
+            ),
+            None,
+        )
+        if body is None:
+            return
+        contact = lane
+        state._active_hold_tail[contact] = body.y - body.height / 2
+        state._hold_started[contact] = now
+        state._hold_confirmed.add(contact)
+        state._active_hold_lane[contact] = lane
+        state._active_hold_x[contact] = float(body.x)
+        actions.append(TouchAction(
+            ActionKind.DOWN,
+            lane,
+            now,
+            contact,
+            "chart-predicted",
+            target_x=max(120, min(1160, round(body.x))),
+        ))
+        self.predicted_presses += 1
+        self._last_predicted[lane] = now
+        state._last_trigger[lane] = now
+        state._last_trigger_action_kind[lane] = ActionKind.DOWN
+        state.record_diagnostic(
+            "chart_predicted_hold_head",
+            now,
+            lane=lane,
+            contact=contact,
+            chart_time_s=round(judgement.time_s, 3),
+            body_y=round(body.y, 2),
+        )
 
     def _schedule_hold_tails(
         self,
@@ -399,7 +509,9 @@ class ChartPredictor:
             )
             self._calibration_diagnosed = True
         if self.predict_presses:
-            self._predict_presses(notes, tracked_notes, now, actions, state)
+            self._predict_presses(
+                notes, tracked_notes, now, actions, state, holds
+            )
         self._schedule_hold_tails(actions)
         self._release_due_holds(now, actions, state, holds)
         return actions

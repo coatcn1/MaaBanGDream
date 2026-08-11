@@ -111,6 +111,7 @@ class RealtimeProfileStore:
         "judgement_assist_effect": True,
         "tap_effect": 1,
         "chart_prediction_enabled": False,
+        "chart_predict_presses": False,
         "calibration_note_speeds": {
             "Easy": 2.0,
             "Normal": 2.0,
@@ -243,6 +244,9 @@ class RealtimeProfileStore:
         chart_prediction_enabled = options.get("chart_prediction_enabled", False)
         if not isinstance(chart_prediction_enabled, bool):
             raise ValueError("chart_prediction_enabled 必须是布尔值")
+        chart_predict_presses = options.get("chart_predict_presses", False)
+        if not isinstance(chart_predict_presses, bool):
+            raise ValueError("chart_predict_presses 必须是布尔值")
         try:
             threshold = int(options.get("life_exit_threshold", 200))
         except (TypeError, ValueError) as exc:
@@ -278,6 +282,7 @@ class RealtimeProfileStore:
             "judgement_assist_effect": judgement_assist,
             "tap_effect": tap_effect,
             "chart_prediction_enabled": chart_prediction_enabled,
+            "chart_predict_presses": chart_predict_presses,
             "calibration_note_speeds": speeds,
         }
 

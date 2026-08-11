@@ -554,6 +554,9 @@ class RealtimeProfilePlay(CustomAction):
                     str(params.get("difficulty", "Easy"))
                 )
             )
+            chart_predict_presses = bool(
+                runtime_options.get("chart_predict_presses", False)
+            )
             chart_timeline = None
             if chart_prediction_enabled:
                 chart_path = (
@@ -758,6 +761,10 @@ class RealtimeProfilePlay(CustomAction):
                     ),
                     chart_timeline=chart_timeline,
                     chart_prediction=chart_prediction_enabled,
+                    chart_predict_presses=(
+                        chart_predict_presses
+                        and chart_prediction_enabled
+                    ),
                 ),
                 touch,
                 life_detector=LifeDetector(),
