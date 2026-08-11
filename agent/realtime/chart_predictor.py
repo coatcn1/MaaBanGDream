@@ -350,7 +350,7 @@ class ChartPredictor:
                 expected = self.expected_hold_tail.get(contact)
                 if (
                     expected is not None
-                    and song_now >= expected[0] + self.press_bias_s - 0.05
+                    and song_now >= expected[0] - 0.05
                 ):
                     holds._release_hold(
                         contact,
@@ -457,7 +457,7 @@ class ChartPredictor:
             if contact not in state._active_hold_tail:
                 self.expected_hold_tail.pop(contact, None)
                 continue
-            if song_now < tail_time + self.press_bias_s - 0.015:
+            if song_now < tail_time - 0.015:
                 continue
             lane = state._active_hold_lane.get(contact, contact)
             if lane != tail_lane:
