@@ -47,6 +47,7 @@ from .timing_feedback import AdaptiveTimingController, TimingFeedbackDetector
 from .touch_planner import RealtimePlanner, sliding_holds_enabled
 from .runtime_options import debug_enabled
 from .performance_settings_action import verified_settings
+from .chart_timeline import ChartTimeline
 
 
 REWARD_CONFIRM_TEMPLATE = PROJECT_ROOT / "resource" / "image" / "result_reward_confirm.png"
@@ -547,6 +548,30 @@ class RealtimeProfilePlay(CustomAction):
             runtime_options = RealtimeProfileStore(
                 PROJECT_ROOT / "profiles"
             ).runtime_options()
+            chart_prediction_enabled = (
+                bool(runtime_options.get("chart_prediction_enabled", False))
+                and sliding_holds_enabled(
+                    str(params.get("difficulty", "Easy"))
+                )
+            )
+            chart_timeline = None
+            if chart_prediction_enabled:
+                chart_path = (
+                    PROJECT_ROOT / "resource" / "charts" / "song-306-hard.json"
+                )
+                if chart_path.is_file():
+                    chart_timeline = ChartTimeline.from_json(chart_path)
+                    print(
+                        "RealtimeProfilePlay chart_prediction=on",
+                        flush=True,
+                    )
+                else:
+                    chart_prediction_enabled = False
+                    print(
+                        "RealtimeProfilePlay chart_prediction=off "
+                        "chart file missing",
+                        flush=True,
+                    )
             (
                 is_rehearsal,
                 continue_after_depleted,
@@ -731,6 +756,8 @@ class RealtimeProfilePlay(CustomAction):
                     enable_slide=sliding_holds_enabled(
                         str(params.get("difficulty", "Easy"))
                     ),
+                    chart_timeline=chart_timeline,
+                    chart_prediction=chart_prediction_enabled,
                 ),
                 touch,
                 life_detector=LifeDetector(),

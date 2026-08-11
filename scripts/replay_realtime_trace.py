@@ -18,6 +18,7 @@ from agent.realtime.touch_planner import (
     TouchAction,
     sliding_holds_enabled,
 )
+from agent.realtime.chart_timeline import ChartTimeline
 
 
 def trace_replay_metadata(path: Path) -> dict[str, object]:
@@ -137,12 +138,18 @@ def replay(
     inject_gap_ms: int = 0,
     drop_frames: int = 0,
     fault_after_frame: int | None = None,
+    chart: ChartTimeline | None = None,
+    chart_prediction: bool = False,
+    chart_predict_presses: bool = False,
 ) -> dict[str, object]:
     planner = RealtimePlanner(
         judgement_y=565,
         timing_offset_ms=timing_offset_ms,
         rescue_first_visible=True,
         enable_slide=sliding_holds_enabled(difficulty),
+        chart_timeline=chart,
+        chart_prediction=chart_prediction,
+        chart_predict_presses=chart_predict_presses,
     )
     recorded: list[TouchAction] = []
     replayed: list[TouchAction] = []
@@ -191,6 +198,15 @@ def replay(
             ) for action in frame.get("actions", []))
             replayed.extend(planner.update(notes, now))
             diagnostics.extend(planner.drain_diagnostics())
+    chart_stats = (
+        {
+            "enabled": chart_prediction,
+            "calibrated": planner.chart_calibrated,
+            "predicted_presses": planner.chart_predicted_presses,
+            "predicted_releases": planner.chart_predicted_releases,
+        }
+        if chart_prediction else None
+    )
     active_holds_after_replay = bool(planner.has_active_holds)
     cleanup_actions = planner.reset(last_now)
     hold_releases = [
@@ -284,6 +300,7 @@ def replay(
             "recorded_feedback_enabled": use_recorded_timing_feedback,
             "recorded_adjustments": recorded_timing_adjustments,
         },
+        "chart_prediction": chart_stats,
     }
     if collect:
         result["actions_sequence"] = [
@@ -334,6 +351,22 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--chart",
+        type=Path,
+        default=None,
+        help="Official chart JSON (BestDori raw chart) for chart prediction",
+    )
+    parser.add_argument(
+        "--chart-prediction",
+        action="store_true",
+        help="Enable chart-backed predicted presses and hold-tail releases",
+    )
+    parser.add_argument(
+        "--chart-predict-presses",
+        action="store_true",
+        help="Also predict imminent tap presses (default: tail releases only)",
+    )
+    parser.add_argument(
         "--inject-gap-ms",
         type=int,
         default=0,
@@ -376,6 +409,10 @@ def main() -> None:
         if args.timing_offset_ms is not None
         else int(metadata.get("timing_offset_ms", 0))
     )
+    chart = (
+        ChartTimeline.from_json(args.chart)
+        if args.chart is not None else None
+    )
     if args.benchmark > 0:
         times = []
         for _ in range(args.benchmark):
@@ -388,6 +425,9 @@ def main() -> None:
                 inject_gap_ms=args.inject_gap_ms,
                 drop_frames=args.drop_frames,
                 fault_after_frame=args.fault_after_frame,
+                chart=chart,
+                chart_prediction=args.chart_prediction,
+                chart_predict_presses=args.chart_predict_presses,
             )
             times.append(time.perf_counter() - started)
         print(json.dumps({
@@ -406,6 +446,9 @@ def main() -> None:
         inject_gap_ms=args.inject_gap_ms,
         drop_frames=args.drop_frames,
         fault_after_frame=args.fault_after_frame,
+        chart=chart,
+        chart_prediction=args.chart_prediction,
+        chart_predict_presses=args.chart_predict_presses,
     )
     if args.dump_actions is not None:
         payload = {

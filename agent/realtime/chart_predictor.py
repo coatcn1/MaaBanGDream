@@ -1,0 +1,362 @@
+"""Chart-backed prediction for occluded notes and hold-tail releases.
+
+The detector loses Hard slide-chart notes that are occluded by green trails
+just before the judgement line, and hold releases can be late because the
+grace window waits for the body to vanish.  With a bundled official chart
+timeline the planner can:
+
+1. calibrate the engine-to-song offset from the first trusted crossings;
+2. press an imminent tap/hold-head when no trusted track is near the line
+   (the detector missed it);
+3. release active holds exactly at the chart tail time.
+
+Prediction is only active for Hard+ runs with a matching chart.  Calibration
+fails closed: if the first actions do not line up with the chart, prediction
+stays disabled for the whole run (a different song is being played).
+"""
+
+from __future__ import annotations
+
+from .chart_timeline import ChartTimeline
+from .note_detector import NoteKind, ObservedNote
+from .note_tracker import TrackedNote
+from .touch_planner.actions import ActionKind, TouchAction
+from .touch_planner.holds import HoldPipeline
+from .touch_planner.state import PlannerState
+
+
+TRUSTED_CALIBRATION_REASONS = {
+    "crossing",
+    "rescue",
+    "reclassified-crossing",
+    "predicted-crossing-rescue",
+    "predicted-dropout-rescue",
+}
+
+
+class ChartPredictor:
+    """Optional chart-timeline safety net for Hard+ realtime play."""
+
+    def __init__(
+        self,
+        chart: ChartTimeline,
+        *,
+        judgement_y: float = 565,
+        min_calibration_samples: int = 16,
+        predict_presses: bool = False,
+    ) -> None:
+        self.chart = chart
+        self.judgement_y = float(judgement_y)
+        self.min_calibration_samples = int(min_calibration_samples)
+        self.predict_presses = bool(predict_presses)
+        self.calibrated = False
+        self.song_offset_s = 0.0
+        self.calibration_samples: list[tuple[float, int, str, float]] = []
+        self.expected_hold_tail: dict[int, tuple[float, int]] = {}
+        self.predicted_presses = 0
+        self.predicted_releases = 0
+        self.calibration_failed = False
+        self._last_predicted: dict[int, float] = {}
+        self._calibration_diagnosed = False
+        self._calibration_failed_diagnosed = False
+        self._anchor_time: float | None = None
+
+    def reset(self) -> None:
+        self.calibrated = False
+        self.song_offset_s = 0.0
+        self.calibration_samples = []
+        self.expected_hold_tail = {}
+        self.predicted_presses = 0
+        self.predicted_releases = 0
+        self.calibration_failed = False
+        self._last_predicted = {}
+        self._calibration_diagnosed = False
+        self._calibration_failed_diagnosed = False
+        self._anchor_time = None
+
+    def _relative(self, engine_time: float) -> float:
+        """Convert an absolute monotonic engine time to song-relative time."""
+        if self._anchor_time is None:
+            self._anchor_time = engine_time
+        return engine_time - self._anchor_time
+
+    def _feed_calibration(
+        self,
+        actions: list[TouchAction],
+    ) -> None:
+        if self.calibrated or self.calibration_failed:
+            return
+        for action in actions:
+            if (
+                action.kind not in (ActionKind.TAP, ActionKind.FLICK, ActionKind.DOWN)
+                or action.reason not in TRUSTED_CALIBRATION_REASONS
+            ):
+                continue
+            expected_kind = (
+                "hold-head" if action.kind == ActionKind.DOWN else "tap"
+            )
+            self.calibration_samples.append((
+                self._relative(action.timestamp),
+                action.lane,
+                expected_kind,
+                0.0,
+            ))
+        if len(self.calibration_samples) < self.min_calibration_samples:
+            return
+
+        def count_matches(offset_s: float) -> tuple[int, float]:
+            total = 0
+            delta_sum = 0.0
+            for engine_time, lane, kind, _ in self.calibration_samples:
+                judgement = self.chart.judgement_near(
+                    lane,
+                    engine_time + offset_s,
+                    window_s=0.12,
+                )
+                if judgement is not None and judgement.kind == kind:
+                    total += 1
+                    delta_sum += abs(
+                        (engine_time + offset_s) - judgement.time_s
+                    )
+            return total, delta_sum
+
+        best_offset = 0.0
+        best_count = -1
+        best_delta_sum = float("inf")
+        offset = -8.0
+        while offset <= 1.0:
+            count, delta_sum = count_matches(offset)
+            if count > best_count or (
+                count == best_count and delta_sum < best_delta_sum
+            ):
+                best_count = count
+                best_offset = offset
+                best_delta_sum = delta_sum
+            offset += 0.02
+        # Refine around the coarse winner with a fine step.
+        refined_offset = best_offset
+        offset = best_offset - 0.1
+        while offset <= best_offset + 0.1:
+            count, delta_sum = count_matches(offset)
+            if count > best_count or (
+                count == best_count and delta_sum < best_delta_sum
+            ):
+                best_count = count
+                refined_offset = offset
+                best_delta_sum = delta_sum
+            offset += 0.005
+        best_offset = refined_offset
+        if best_count < max(6, self.min_calibration_samples - 2):
+            self.calibration_failed = True
+            return
+        self.song_offset_s = best_offset
+        self.calibrated = True
+
+    def _track_will_judge(
+        self,
+        tracked_notes: list[TrackedNote],
+        lane: int,
+        *,
+        chart_time_s: float,
+        now: float,
+    ) -> bool:
+        """True when a falling track on ``lane`` will judge this chart note.
+
+        The normal pipeline presses at the trigger line, roughly 0.15-0.2 s
+        before the chart time (perspective lead + capture latency).  A track
+        whose predicted crossing is near the chart note means the detector
+        already owns the note; predicting a press would only duplicate it.
+        """
+        target_engine = chart_time_s - self.song_offset_s
+        for tracked in tracked_notes:
+            if (
+                tracked.note.kind not in (
+                    NoteKind.TAP, NoteKind.FLICK, NoteKind.SKILL
+                )
+                or tracked.note.lane != lane
+            ):
+                continue
+            if tracked.fired:
+                # The note was already pressed.  A fired track sitting at the
+                # line (or just past it) is the same note; a fired track far
+                # above belongs to an earlier judgement and is irrelevant.
+                if tracked.note.y >= self.judgement_y - 15:
+                    return True
+                continue
+            if tracked.velocity_y <= 100:
+                # A single-sample or jittered track near the line is still
+                # owned by the detector pipeline (crossing/rescue will press
+                # it); only doubt tracks far above with no velocity.
+                if tracked.note.y >= self.judgement_y - 120:
+                    return True
+                continue
+            remaining = self.judgement_y - tracked.note.y
+            if remaining <= 0:
+                continue
+            crossing_at = self._relative(now) + remaining / tracked.velocity_y
+            if abs(crossing_at - target_engine) <= 0.15:
+                return True
+        return False
+
+    def _predict_presses(
+        self,
+        notes: list[ObservedNote],
+        tracked_notes: list[TrackedNote],
+        now: float,
+        actions: list[TouchAction],
+        state: PlannerState,
+    ) -> None:
+        song_now = self._relative(now) + self.song_offset_s
+        occupied_lanes = set(state._active_hold_lane.values())
+        recent_lanes = {
+            lane for lane, timestamp in state._last_trigger.items()
+            if now - timestamp < 0.12
+        } | {
+            lane for lane, timestamp in self._last_predicted.items()
+            if now - timestamp < 0.12
+        }
+        for lane in range(self.chart.LANE_COUNT):
+            if lane in occupied_lanes or lane in recent_lanes:
+                continue
+            next_judgement = self.chart.next_judgement(
+                lane, song_now - 0.08
+            )
+            if next_judgement is None:
+                continue
+            lead = next_judgement.time_s - song_now
+            if not -0.05 <= lead <= 0.06:
+                continue
+            if next_judgement.kind == "tap":
+                if self._track_will_judge(
+                    tracked_notes,
+                    lane,
+                    chart_time_s=next_judgement.time_s,
+                    now=now,
+                ):
+                    continue
+                actions.append(TouchAction(
+                    ActionKind.TAP,
+                    lane,
+                    now,
+                    reason="chart-predicted",
+                ))
+                self.predicted_presses += 1
+                self._last_predicted[lane] = now
+                state._last_trigger[lane] = now
+                state._last_trigger_action_kind[lane] = ActionKind.TAP
+                state.record_diagnostic(
+                    "chart_predicted_press",
+                    now,
+                    lane=lane,
+                    chart_time_s=round(next_judgement.time_s, 3),
+                    lead_ms=round(lead * 1000, 1),
+                )
+            # Hold heads are deliberately left to the detector pipeline: a
+            # blind DOWN would need to register planner hold state to avoid
+            # a second hold start, which is riskier than the occlusion cases
+            # already covered by the trusted rescue paths.
+
+    def _schedule_hold_tails(
+        self,
+        actions: list[TouchAction],
+    ) -> None:
+        """Remember chart tail times for holds whose head just started."""
+        for action in actions:
+            if action.kind != ActionKind.DOWN:
+                continue
+            if action.contact in self.expected_hold_tail:
+                continue
+            head = self.chart.judgement_near(
+                action.lane,
+                self._relative(action.timestamp) + self.song_offset_s,
+                window_s=0.35,
+            )
+            if head is None or head.kind != "hold-head":
+                continue
+            tail = self.chart.hold_tail_for_head(head)
+            if tail is not None:
+                self.expected_hold_tail[action.contact] = (
+                    tail.time_s,
+                    tail.lane,
+                )
+
+    def _release_due_holds(
+        self,
+        now: float,
+        actions: list[TouchAction],
+        state: PlannerState,
+        holds: HoldPipeline,
+    ) -> None:
+        song_now = self._relative(now) + self.song_offset_s
+        for contact, (tail_time, tail_lane) in list(
+            self.expected_hold_tail.items()
+        ):
+            if contact not in state._active_hold_tail:
+                self.expected_hold_tail.pop(contact, None)
+                continue
+            unseen_for = now - state._hold_seen.get(contact, now)
+            if unseen_for < 0.05:
+                # The body is still visible; the hold pipeline will release
+                # at the tail ring in its own time.  Chart-tail exists to
+                # rescue bodies that VANISH before the tail reaches the line
+                # (the grace delay would otherwise release up to 0.4 s late).
+                continue
+            if song_now < tail_time - 0.015:
+                continue
+            lane = state._active_hold_lane.get(contact, contact)
+            if lane != tail_lane:
+                # The finger has not yet followed the slide to the tail
+                # lane; releasing now would drop the tail judgement.  Let the
+                # hold pipeline release when the tail ring reaches the line.
+                continue
+            holds._release_hold(
+                contact,
+                lane,
+                now,
+                "chart-tail",
+                actions,
+            )
+            self.predicted_releases += 1
+            self.expected_hold_tail.pop(contact, None)
+            state.record_diagnostic(
+                "chart_predicted_release",
+                now,
+                contact=contact,
+                lane=lane,
+                chart_time_s=round(tail_time, 3),
+            )
+
+    def update(
+        self,
+        notes: list[ObservedNote],
+        tracked_notes: list[TrackedNote],
+        now: float,
+        actions: list[TouchAction],
+        state: PlannerState,
+        holds: HoldPipeline,
+    ) -> list[TouchAction]:
+        """Return ``actions`` plus any chart-predicted inputs."""
+        self._relative(now)
+        self._feed_calibration(actions)
+        if not self.calibrated:
+            if self.calibration_failed and not self._calibration_failed_diagnosed:
+                state.record_diagnostic(
+                    "chart_calibration_failed",
+                    now,
+                    samples=len(self.calibration_samples),
+                )
+                self._calibration_failed_diagnosed = True
+            return actions
+        if not self._calibration_diagnosed:
+            state.record_diagnostic(
+                "chart_calibrated",
+                now,
+                offset_ms=round(self.song_offset_s * 1000, 1),
+                samples=len(self.calibration_samples),
+            )
+            self._calibration_diagnosed = True
+        if self.predict_presses:
+            self._predict_presses(notes, tracked_notes, now, actions, state)
+        self._schedule_hold_tails(actions)
+        self._release_due_holds(now, actions, state, holds)
+        return actions

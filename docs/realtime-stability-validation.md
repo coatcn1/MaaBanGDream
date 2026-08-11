@@ -502,3 +502,28 @@ hold-tail 漏判（80.156s）是 TAP1/TAP4 共有的尾释放 grace 问题
 但 lane 3 集中了 30 个幽灵 TAP（TAP1 为 11–18）；它们与真实音符
 判定的“按错轨道”无关，游戏按空轨处理，不是 miss 主因。检测器级
 “宽扁条过滤”会误杀 3/115 个贴线真实音符，已证伪，未采用。
+
+### 2026-08-12 谱面时间轴预测 v1：chart-tail 尾释放救援
+
+实现 `agent/realtime/chart_timeline.py`（BestDori 谱面解析、
+`resource/charts/song-306-hard.json` 固定数据）与
+`agent/realtime/chart_predictor.py`（`ChartPredictor`）：
+
+- 用前 16 个可信动作粗-细网格校准引擎↔谱面偏移（0.02s 粗搜 + 0.005s
+  细搜，同计数取时差总和最小）；校准失败则整轮关闭（防止换歌误判）。
+- **chart-tail 救援**：hold 身体在尾判定前消失时（现有 0.35s grace
+  会导致释放晚 ~0.4s 被判定 miss），按谱面尾时间释放；仅在身体不可见
+  且手指当前 lane == 谱面尾 lane 时触发，避免提前释放滑条尾。
+- 按压预测（`chart_predict_presses`）保留代码但默认关闭：离线重放显示
+  86% 的预测按压会与正常 crossing 重复，密集谱会打到下一个音符，需
+  真机调参后再启用。
+
+离线重放（同一 trace、同一 planner 配置）：
+
+| 轮次 | 无图表基线 | chart-tail v1 |
+| --- | --- | --- |
+| TAP4 224139 | 397/1/105（修复卡死 hold 后） | **398/0/104**，3 次按谱面时间释放，最长 hold 3.3s→1.8s |
+| TAP1 225018 | 394/4/122 | 394/4/122（零回归，1 次消失身体救援） |
+
+Normal 黄金重放不受影响（`chart_prediction` 默认关闭）。527 项 pytest
+通过（含 chart_timeline / chart_predictor 7 项新测试）。
