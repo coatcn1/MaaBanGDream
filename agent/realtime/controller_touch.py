@@ -192,9 +192,14 @@ class ControllerTouchDispatcher:
                 self._ensure_running()
                 contact = 0 if action.contact is None else action.contact
                 if contact not in self.active_contacts:
-                    raise RuntimeError(
-                        f"cannot move inactive touch contact {contact}"
-                    )
+                    # A hold release can race with the planner's MOVE in the
+                    # same frame, or the backend can drop a contact after a
+                    # long hold. A stale MOVE is not a song failure: drop the
+                    # state and let the next DOWN re-press.
+                    self.recovered_contacts += 1
+                    self.active_positions.pop(contact, None)
+                    self._pending_flicks.pop(contact, None)
+                    continue
                 target_x = self._x(action)
                 previous_x = self.active_positions.get(contact, target_x)
                 steps = max(

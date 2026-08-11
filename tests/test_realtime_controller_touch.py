@@ -287,3 +287,18 @@ def test_long_hold_move_is_interpolated_into_continuous_steps():
         for left, right in zip(positions, positions[1:])
     )
     assert touch.active_positions == {3: 605}
+
+
+def test_stale_move_for_inactive_contact_is_skipped_not_fatal():
+    controller = Controller()
+    touch = ControllerTouchDispatcher(controller, lambda: False)
+    # A hold release can race with the planner's MOVE in the same frame; the
+    # contact is no longer down, so the MOVE must be dropped instead of
+    # crashing the whole song.
+    touch.dispatch([
+        TouchAction(ActionKind.MOVE, 3, 1.0, 2, "hold-follow"),
+    ])
+
+    assert controller.calls == []
+    assert touch.recovered_contacts == 1
+    assert touch.active_contacts == set()
