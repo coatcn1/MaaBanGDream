@@ -144,6 +144,29 @@ def test_late_flick_ring_residue_is_suppressed_beyond_retrigger_window():
     assert ring == []
 
 
+def test_occluded_long_falling_head_fires_just_before_trigger_target():
+    planner = RealtimePlanner(
+        judgement_y=565,
+        timing_offset_ms=0,
+        rescue_first_visible=True,
+    )
+    now = 1.00
+    actions = []
+    for y in (480, 500, 520, 540, 549, 556):
+        actions.extend(planner.update([
+            ObservedNote(NoteKind.TAP, 3, 640, y, 40, 20, now)
+        ], now=now))
+        now += 0.016
+
+    # The head is tracked from far up (minimum_y ~480), but a slide body can
+    # swallow it a few pixels before the trigger target. A strongly trusted
+    # long-falling head within 6 px of the target must still fire, otherwise
+    # Hard dense passages turn into silent misses.
+    assert [(action.kind, action.lane) for action in actions] == [
+        (ActionKind.TAP, 3)
+    ]
+
+
 def test_stale_flick_fragment_cannot_shadow_a_later_tap_crossing():
     planner = RealtimePlanner(
         judgement_y=565,

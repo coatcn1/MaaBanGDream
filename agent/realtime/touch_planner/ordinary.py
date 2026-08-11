@@ -516,7 +516,17 @@ class OrdinaryPipeline:
             if tracked.previous_y is None or tracked.velocity_y <= 0:
                 continue
             target = self._ordinary_trigger_y(tracked.velocity_y)
-            if self._crossed_ordinary_trigger(tracked, target):
+            near_target_crossing = (
+                self._config.enable_slide
+                and
+                tracked.previous_y is not None
+                and tracked.previous_y < target
+                and tracked.note.y >= target - 6
+                and tracked.minimum_y <= self._config.judgement_y - 60
+                and tracked.motion_samples >= 8
+                and tracked.downward_motion_frames >= 3
+            )
+            if near_target_crossing or self._crossed_ordinary_trigger(tracked, target):
                 trusted_crossing = trusted_crossing_track(tracked, self._config.judgement_y)
                 if not trusted_crossing:
                     # A PERFECT glyph or lane-light fragment can disappear,
