@@ -565,46 +565,15 @@ class OrdinaryPipeline:
                 or not 200 <= tracked.velocity_y <= 2500
                 or not self._config.judgement_y - 60 <= note.y < self._config.judgement_y
                 or not 0 < now - tracked.last_seen <= .12
+                or any(
+                    not current.fired
+                    and current.note.lane == note.lane
+                    and abs(current.note.y - note.y) <= 120
+                    and abs(current.note.x - note.x) <= 120
+                    for current in tracked_notes
+                )
             ):
                 continue
-            blocking_fragments = [
-                current for current in tracked_notes
-                if not current.fired
-                and current.note.lane == note.lane
-                and abs(current.note.y - note.y) <= 120
-                and abs(current.note.x - note.x) <= 120
-            ]
-            if blocking_fragments:
-                if any(
-                    current.downward_motion_frames >= 2
-                    for current in blocking_fragments
-                ):
-                    # A genuinely dense second note is falling with real
-                    # motion; do not rescue over it.
-                    continue
-                lane_center = lane_center_x(note.lane, note.y)
-                lane_spacing = max(
-                    24.0,
-                    abs(
-                        lane_center_x(1, note.y)
-                        - lane_center_x(0, note.y)
-                    ),
-                )
-                occlusion_eligible = (
-                    self._config.enable_slide
-                    and note.lane not in self._state._active_hold_lane.values()
-                    and tracked.motion_samples >= 6
-                    and tracked.downward_motion_frames >= 4
-                    and tracked.minimum_y <= self._config.judgement_y - 100
-                    and 250 <= tracked.velocity_y <= 2500
-                    and abs(note.x - lane_center) <= lane_spacing * .25
-                )
-                if not occlusion_eligible:
-                    continue
-                # The nearby fragments are the same occluded note re-identified
-                # near the line; consume them so they cannot fire a duplicate.
-                for current in blocking_fragments:
-                    self._note_tracker.mark_fired(current.track_id, now)
             target = self._ordinary_trigger_y(tracked.velocity_y)
             remaining = max(0.0, target - note.y)
             predicted_at = (

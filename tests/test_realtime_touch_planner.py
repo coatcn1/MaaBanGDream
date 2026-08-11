@@ -167,35 +167,6 @@ def test_occluded_long_falling_head_fires_just_before_trigger_target():
     ]
 
 
-def test_occlusion_rescue_consumes_low_confidence_fragment_on_slide_chart():
-    planner = RealtimePlanner(
-        judgement_y=565,
-        timing_offset_ms=0,
-        rescue_first_visible=True,
-        enable_slide=True,
-    )
-    now = 1.00
-    for y in (300, 340, 380, 420, 460, 500, 520):
-        planner.update([
-            ObservedNote(NoteKind.TAP, 3, 640, y, 40, 20, now)
-        ], now=now)
-        now += 0.016
-    # The head is occluded; only a late low-confidence fragment is visible.
-    # It is not compatible with the head track (12 px above the last head),
-    # so it becomes a separate track. The stale head has not yet reached the
-    # near-target window and must rescue through the occlusion, consuming the
-    # fragment so it cannot double-fire.
-    actions = planner.update([
-        ObservedNote(NoteKind.TAP, 3, 630, 508, 30, 10, now)
-    ], now=now)
-    actions.extend(planner.update([], now=now + 0.016))
-
-    assert sum(
-        1 for action in actions
-        if action.kind == ActionKind.TAP and action.lane == 3
-    ) == 1
-
-
 def test_stale_flick_fragment_cannot_shadow_a_later_tap_crossing():
     planner = RealtimePlanner(
         judgement_y=565,
