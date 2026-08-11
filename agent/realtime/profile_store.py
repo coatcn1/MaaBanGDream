@@ -110,6 +110,7 @@ class RealtimeProfileStore:
         "note_skin_type": 1,
         "judgement_assist_effect": True,
         "tap_effect": 1,
+        "chart_prediction_enabled": False,
         "calibration_note_speeds": {
             "Easy": 2.0,
             "Normal": 2.0,
@@ -239,6 +240,9 @@ class RealtimeProfileStore:
             raise ValueError("tap_effect 必须是 1..5 的整数") from exc
         if tap_effect_raw != tap_effect or not 1 <= tap_effect <= 5:
             raise ValueError("tap_effect 必须是 1..5 的整数")
+        chart_prediction_enabled = options.get("chart_prediction_enabled", False)
+        if not isinstance(chart_prediction_enabled, bool):
+            raise ValueError("chart_prediction_enabled 必须是布尔值")
         try:
             threshold = int(options.get("life_exit_threshold", 200))
         except (TypeError, ValueError) as exc:
@@ -273,6 +277,7 @@ class RealtimeProfileStore:
             "note_skin_type": note_skin_type,
             "judgement_assist_effect": judgement_assist,
             "tap_effect": tap_effect,
+            "chart_prediction_enabled": chart_prediction_enabled,
             "calibration_note_speeds": speeds,
         }
 
