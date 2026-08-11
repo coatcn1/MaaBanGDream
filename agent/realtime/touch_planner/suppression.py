@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from ..note_tracker import TrackedNote
 from .actions import ActionKind, TouchAction
-from .geometry import lane_center_x, trusted_crossing_track
+from .geometry import trusted_crossing_track
 from .state import PlannerConfig, PlannerState
 
 
@@ -78,22 +78,6 @@ class JudgementSuppressor:
                     and trusted_crossing_track(track, self._config.judgement_y)
                 )
             )
-
-        def tap_hugs_hold_edge(action: TouchAction, hold_lane: int) -> bool:
-            if action.lane == hold_lane:
-                return True
-            track = tracked_by_id.get(action.track_id)
-            if track is None:
-                # No geometry: keep the conservative adjacent suppression.
-                return True
-            note = track.note
-            center = lane_center_x(note.lane, note.y)
-            spacing = max(
-                24.0,
-                abs(lane_center_x(1, note.y) - lane_center_x(0, note.y)),
-            )
-            toward = 1.0 if hold_lane > note.lane else -1.0
-            return (note.x - center) * toward > spacing * .2
 
         def same_physical_fragment(
             action: TouchAction,
@@ -240,25 +224,11 @@ class JudgementSuppressor:
                 )
                 for lane, timestamp in self._state._last_trigger.items()
             )
-            if self._config.enable_slide:
-                covered_by_hold_start = (
-                    action.kind == ActionKind.TAP
-                    and not trusted(action)
-                    and any(
-                        abs(action.lane - lane) <= 1
-                        and tap_hugs_hold_edge(action, lane)
-                        for lane in current_down_lanes
-                    )
-                )
-            else:
-                covered_by_hold_start = (
-                    action.kind == ActionKind.TAP
-                    and not trusted(action)
-                    and any(
-                        abs(action.lane - lane) <= 1
-                        for lane in current_down_lanes
-                    )
-                )
+            covered_by_hold_start = (
+                action.kind == ActionKind.TAP
+                and not trusted(action)
+                and any(abs(action.lane - lane) <= 1 for lane in current_down_lanes)
+            )
             if recently_covered or covered_by_hold_start:
                 continue
             kept.append(action)
