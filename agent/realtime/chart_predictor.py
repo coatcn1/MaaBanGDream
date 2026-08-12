@@ -21,6 +21,7 @@ from .chart_timeline import ChartJudgement, ChartTimeline
 from .note_detector import NoteKind, ObservedNote
 from .note_tracker import TrackedNote
 from .touch_planner.actions import ActionKind, TouchAction
+from .touch_planner.geometry import lane_center_x
 from .touch_planner.holds import HoldPipeline
 from .touch_planner.state import PlannerState
 
@@ -108,7 +109,7 @@ class ChartPredictor:
         )
         if (
             judgement is not None
-            and judgement.kind in ("tap", "hold-head")
+            and judgement.kind == "tap"
             and abs(judgement.time_s - song_now) <= 0.12
         ):
             return True
@@ -357,7 +358,11 @@ class ChartPredictor:
         confidence body on the lane is strong evidence, so the chart presses
         the head and registers the hold in the planner state to prevent a
         second start.  A lane occupied by a hold whose chart tail has already
-        passed is force-released first.
+        passed is force-released first.  For straight holds whose green body
+        is fully occluded, the fixed chart is authoritative: the head is
+        pressed without a sighting and released on the same lane at the tail
+        time.  Slides never get a blind press because the finger must follow
+        the visible body across lanes.
         """
         if lane in set(state._active_hold_lane.values()):
             for contact, active_lane in list(state._active_hold_lane.items()):
@@ -378,6 +383,8 @@ class ChartPredictor:
                     state._previous.pop((NoteKind.HOLD, lane), None)
                     state._hold_released_at.pop(lane, None)
                     self.expected_hold_tail.pop(contact, None)
+                    state._blind_hold_contacts.discard(contact)
+                    state._chart_tail_lane.pop(contact, None)
                     break
                 if expected is None:
                     # A hold without any chart pair is a phantom (drifted
@@ -395,6 +402,8 @@ class ChartPredictor:
                         )
                         state._previous.pop((NoteKind.HOLD, lane), None)
                         state._hold_released_at.pop(lane, None)
+                        state._blind_hold_contacts.discard(contact)
+                        state._chart_tail_lane.pop(contact, None)
                         break
                 return
             if lane in set(state._active_hold_lane.values()):
@@ -411,13 +420,39 @@ class ChartPredictor:
             None,
         )
         if body is None:
-            return
+            tail = self.chart.hold_tail_for_head(judgement)
+            if tail is None or tail.lane != judgement.lane:
+                return
+            recent_release = state._hold_released_at.get(
+                lane, float("-inf")
+            )
+            if now - recent_release < 0.35:
+                # The previous hold's tail ring can linger on the lane and
+                # would otherwise start a phantom head.
+                return
+            last_tap = state._last_trigger.get(lane, float("-inf"))
+            if now - last_tap < 0.06:
+                # A tap dispatched within the same instant is the same note
+                # (or a same-frame chord) and must not be double-pressed.
+                return
+            body = ObservedNote(
+                NoteKind.HOLD,
+                lane,
+                lane_center_x(lane, self.judgement_y),
+                self.judgement_y - 60,
+                1,
+                1,
+                now,
+            )
+        blind = body.width == 1 and body.height == 1
         contact = lane
         state._active_hold_tail[contact] = body.y - body.height / 2
         state._hold_started[contact] = now
         state._hold_confirmed.add(contact)
         state._active_hold_lane[contact] = lane
         state._active_hold_x[contact] = float(body.x)
+        if blind:
+            state._blind_hold_contacts.add(contact)
         actions.append(TouchAction(
             ActionKind.DOWN,
             lane,
@@ -491,6 +526,7 @@ class ChartPredictor:
     def _schedule_hold_tails(
         self,
         actions: list[TouchAction],
+        state: PlannerState,
     ) -> None:
         """Remember chart tail times for holds whose head just started."""
         for action in actions:
@@ -511,6 +547,7 @@ class ChartPredictor:
                     tail.time_s,
                     tail.lane,
                 )
+                state._chart_tail_lane[action.contact] = tail.lane
 
     def _release_due_holds(
         self,
@@ -525,15 +562,56 @@ class ChartPredictor:
         ):
             if contact not in state._active_hold_tail:
                 self.expected_hold_tail.pop(contact, None)
+                state._blind_hold_contacts.discard(contact)
+                state._chart_tail_lane.pop(contact, None)
                 continue
             if song_now < tail_time - 0.015:
                 continue
             lane = state._active_hold_lane.get(contact, contact)
             if lane != tail_lane:
-                # The finger has not yet followed the slide to the tail
-                # lane; releasing now would drop the tail judgement.  Let the
-                # hold pipeline release when the tail ring reaches the line.
-                continue
+                if contact in state._blind_hold_contacts:
+                    # A chart-pressed straight hold: the finger stayed on the
+                    # head lane and the release position does not matter.
+                    pass
+                elif song_now >= tail_time - 0.25:
+                    # The slide body vanished before the finger reached the
+                    # tail lane.  The fixed chart knows the final lane, so
+                    # move the finger there and release in the same frame.
+                    previous_lane = lane
+                    target_x = lane_center_x(tail_lane, self.judgement_y)
+                    actions.append(TouchAction(
+                        ActionKind.MOVE,
+                        tail_lane,
+                        now,
+                        contact,
+                        "chart-tail-move",
+                        target_x=round(target_x),
+                    ))
+                    state._active_hold_lane[contact] = tail_lane
+                    state._active_hold_x[contact] = float(target_x)
+                    lane = tail_lane
+                    state.record_diagnostic(
+                        "chart_tail_move",
+                        now,
+                        contact=contact,
+                        previous_lane=previous_lane,
+                        tail_lane=tail_lane,
+                        chart_time_s=round(tail_time, 3),
+                    )
+                else:
+                    continue
+            partner = state._hold_chord_partner.get(contact)
+            if partner is not None:
+                partner_expected = self.expected_hold_tail.get(partner)
+                if partner_expected is not None:
+                    # Each contact has its own chart tail (possibly on a
+                    # different lane, e.g. a simultaneous slide pair).  The
+                    # generic paired release lifts the partner on the lane it
+                    # happens to be on, dropping that tail judgement.  Unlink
+                    # so this frame's own loop releases each contact at its
+                    # chart tail and final lane.
+                    state._hold_chord_partner.pop(contact, None)
+                    state._hold_chord_partner.pop(partner, None)
             holds._release_hold(
                 contact,
                 lane,
@@ -543,6 +621,8 @@ class ChartPredictor:
             )
             self.predicted_releases += 1
             self.expected_hold_tail.pop(contact, None)
+            state._blind_hold_contacts.discard(contact)
+            state._chart_tail_lane.pop(contact, None)
             state.record_diagnostic(
                 "chart_predicted_release",
                 now,
@@ -607,6 +687,6 @@ class ChartPredictor:
             self._predict_presses(
                 notes, tracked_notes, now, actions, state, holds
             )
-        self._schedule_hold_tails(actions)
+        self._schedule_hold_tails(actions, state)
         self._release_due_holds(now, actions, state, holds)
         return actions

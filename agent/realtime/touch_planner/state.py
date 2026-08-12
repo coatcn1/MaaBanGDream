@@ -54,6 +54,8 @@ class PlannerState:
         self._last_hold_rejection: dict[int, float] = {}
         self._active_hold_lane: dict[int, int] = {}
         self._active_hold_x: dict[int, float] = {}
+        self._blind_hold_contacts: set[int] = set()
+        self._chart_tail_lane: dict[int, int] = {}
         self._hold_last_moved_at: dict[int, float] = {}
         self._diagnostics: list[dict[str, object]] = []
         self.filtered_adjacent_artifacts = 0
@@ -80,6 +82,8 @@ class PlannerState:
         self._last_hold_rejection.clear()
         self._active_hold_lane.clear()
         self._active_hold_x.clear()
+        self._blind_hold_contacts.clear()
+        self._chart_tail_lane.clear()
         self._hold_last_moved_at.clear()
         self._hold_tail_flick.clear()
         self._previous.clear()

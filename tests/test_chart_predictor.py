@@ -149,8 +149,17 @@ def test_chart_tail_does_not_release_slide_before_finger_reaches_tail_lane():
     assert [action.kind for action in started] == [ActionKind.DOWN]
     # Force the active hold onto lane 3 (finger has not reached lane 5).
     planner._state._active_hold_lane[5] = 3
+    # Before the move lead the chart must not touch the contact.
+    before_lead = planner.update([], anchor + 7.10)
+    assert not [a for a in before_lead if a.reason == "chart-tail"]
+    assert not [a for a in before_lead if a.reason == "chart-tail-move"]
+    # Near the tail the chart moves the finger to the tail lane and releases
+    # in the same frame even though the slide body is not visible.
     at_tail = planner.update([], anchor + 7.42)
-    assert not [a for a in at_tail if a.reason == "chart-tail"]
+    moves = [a for a in at_tail if a.reason == "chart-tail-move"]
+    releases = [a for a in at_tail if a.reason == "chart-tail"]
+    assert len(moves) == 1 and moves[0].lane == 5
+    assert len(releases) == 1 and releases[0].lane == 5
 
 
 def _planner_with_press_rescue(chart: ChartTimeline):
@@ -229,7 +238,149 @@ def test_chart_press_suppresses_duplicate_crossing_on_same_lane():
         late = planner.update([
             ObservedNote(NoteKind.TAP, 1, 430, y, 20, 10, now),
         ], now=now)
-        assert not [a for a in late if a.reason == "crossing"]
+    assert not [a for a in late if a.reason == "crossing"]
+
+
+def test_chart_presses_occluded_straight_hold_head_without_body():
+    chart = _synthetic_chart()
+    planner, predictor = _planner_with_press_rescue(chart)
+    anchor = 100.0
+    predictor._anchor_time = anchor
+
+    # Hold head at song 4.0625 -> engine anchor + 7.0625; straight tail at
+    # song 4.375 on the same lane.  With no visible body the chart presses
+    # the head after due and releases it on the same lane at the tail time.
+    pressed = planner.update([], anchor + 7.10)
+    downs = [a for a in pressed if a.kind == ActionKind.DOWN]
+    assert len(downs) == 1
+    assert downs[0].lane == 5
+    assert downs[0].reason == "chart-predicted"
+
+    before_tail = planner.update([], anchor + 7.35)
+    assert not [a for a in before_tail if a.kind == ActionKind.UP]
+    at_tail = planner.update([], anchor + 7.42)
+    assert [(a.kind, a.reason) for a in at_tail] == [
+        (ActionKind.UP, "chart-tail"),
+    ]
+
+
+def test_chart_does_not_blind_press_slide_hold():
+    # Slide: head on lane 5, tail on lane 3.  Without a visible body the
+    # finger cannot follow the slide, so the chart must not blind-press.
+    chart = ChartTimeline([
+        ChartJudgement(2.0, 5, "hold-head", 0),
+        ChartJudgement(2.5, 3, "hold-tail", 0),
+    ], bpm=192.0)
+    planner, predictor = _planner_with_press_rescue(chart)
+    anchor = 100.0
+    predictor._anchor_time = anchor
+
+    pressed = planner.update([], anchor + 2.08)
+    assert not [a for a in pressed if a.kind == ActionKind.DOWN]
+
+
+def test_chart_blind_press_handles_recent_tap_on_lane():
+    chart = _synthetic_chart()
+    planner, predictor = _planner_with_press_rescue(chart)
+    anchor = 100.0
+    predictor._anchor_time = anchor
+
+    # A tap within the same instant is the same note: no double press.
+    planner._state._last_trigger[5] = anchor + 7.07
+    planner._state._last_trigger_action_kind[5] = ActionKind.TAP
+    pressed = planner.update([], anchor + 7.10)
+    assert not [a for a in pressed if a.kind == ActionKind.DOWN]
+
+    # A tap ~80 ms earlier is the same head misdetected as a tap (the chart
+    # has no tap on this lane near the head), so the blind press must still
+    # fire instead of letting the hold head slip.
+    planner._state._last_trigger[5] = anchor + 7.02
+    pressed = planner.update([], anchor + 7.10)
+    assert [a.kind for a in pressed if a.reason == "chart-predicted"] == [
+        ActionKind.DOWN,
+    ]
+
+
+def test_chart_tail_does_not_lift_partner_before_its_own_slide_tail():
+    # Two simultaneous slide holds: lane0->lane2 and lane4->lane6, with the
+    # second tail 33 ms later.  Releasing the first must not lift the second
+    # as a chord partner before its own chart tail.
+    chart = ChartTimeline([
+        ChartJudgement(2.0, 0, "hold-head", 0),
+        ChartJudgement(2.4, 2, "hold-tail", 0),
+        ChartJudgement(2.0, 4, "hold-head", 1),
+        ChartJudgement(2.5, 6, "hold-tail", 1),
+    ], bpm=192.0)
+    planner, predictor = _planner_with_press_rescue(chart)
+    anchor = 100.0
+    predictor._anchor_time = anchor
+    state = planner._state
+
+    state._active_hold_tail[0] = 500.0
+    state._active_hold_tail[4] = 500.0
+    state._active_hold_lane[0] = 2
+    state._active_hold_lane[4] = 5
+    state._hold_started[0] = anchor + 5.0
+    state._hold_started[4] = anchor + 5.0
+    state._hold_confirmed.update((0, 4))
+    predictor.expected_hold_tail[0] = (2.4, 2)
+    predictor.expected_hold_tail[4] = (2.5, 6)
+    state._hold_chord_partner[0] = 4
+    state._hold_chord_partner[4] = 0
+
+    # engine anchor + 5.43 -> song 2.43: contact 0 tail due, contact 4 not.
+    first = planner.update([], anchor + 5.43)
+    ups0 = [a for a in first if a.kind == ActionKind.UP and a.contact == 0]
+    ups4 = [a for a in first if a.kind == ActionKind.UP and a.contact == 4]
+    assert [a.reason for a in ups0] == ["chart-tail"]
+    assert not ups4
+    assert 4 in state._active_hold_tail
+    assert 0 not in state._hold_chord_partner
+    assert 4 not in state._hold_chord_partner
+
+    # engine anchor + 5.53 -> song 2.53: contact 4's own slide tail is due;
+    # the chart moves the finger to lane 6 and releases it there.
+    second = planner.update([], anchor + 5.53)
+    moves = [a for a in second if a.reason == "chart-tail-move"]
+    ups4 = [a for a in second if a.kind == ActionKind.UP and a.contact == 4]
+    assert len(moves) == 1 and moves[0].lane == 6
+    assert [a.reason for a in ups4] == ["chart-tail"]
+    assert ups4[0].lane == 6
+
+
+def test_hold_tail_ring_on_wrong_lane_waits_for_chart_tail():
+    # Slide lane0 -> lane2.  A tail ring appears on lane 1 (wrong lane): the
+    # hold pipeline must not release there; the chart moves the finger to
+    # lane 2 and releases at the chart tail time.
+    chart = ChartTimeline([
+        ChartJudgement(2.0, 0, "hold-head", 0),
+        ChartJudgement(2.4, 2, "hold-tail", 0),
+    ], bpm=192.0)
+    planner, predictor = _planner_with_press_rescue(chart)
+    anchor = 100.0
+    predictor._anchor_time = anchor
+    state = planner._state
+
+    state._active_hold_tail[0] = 500.0
+    state._active_hold_lane[0] = 1
+    state._hold_started[0] = anchor + 5.0
+    state._hold_confirmed.add(0)
+    predictor.expected_hold_tail[0] = (2.4, 2)
+    state._chart_tail_lane[0] = 2
+
+    # engine anchor + 5.20 -> song 2.20: tail ring on lane 1, not due yet.
+    ring = planner.update([
+        ObservedNote(NoteKind.HOLD, 1, 480, 570, 80, 20, anchor + 5.20),
+    ], now=anchor + 5.20)
+    assert not [a for a in ring if a.kind == ActionKind.UP]
+
+    # engine anchor + 5.42 -> song 2.42: chart tail due; move to lane 2 and
+    # release there in the same frame.
+    at_tail = planner.update([], anchor + 5.42)
+    moves = [a for a in at_tail if a.reason == "chart-tail-move"]
+    releases = [a for a in at_tail if a.reason == "chart-tail"]
+    assert len(moves) == 1 and moves[0].lane == 2
+    assert len(releases) == 1 and releases[0].lane == 2
 
 
 def test_phantom_hold_lane_is_freed_before_a_due_chart_head():
