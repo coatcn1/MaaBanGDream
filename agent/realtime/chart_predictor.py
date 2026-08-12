@@ -364,10 +364,16 @@ class ChartPredictor:
         time.  Slides never get a blind press because the finger must follow
         the visible body across lanes.
         """
-        if lane in set(state._active_hold_lane.values()):
-            for contact, active_lane in list(state._active_hold_lane.items()):
-                if active_lane != lane:
-                    continue
+        if (
+            lane in set(state._active_hold_lane.values())
+            or lane in state._active_hold_tail
+        ):
+            # The lane is occupied either by a hold whose finger is on it or
+            # by the hold that started on it (the finger may have followed a
+            # slide elsewhere).  Never start a second hold on the same lane.
+            if lane in state._active_hold_tail:
+                contact = lane
+                active_lane = state._active_hold_lane.get(contact, contact)
                 expected = self.expected_hold_tail.get(contact)
                 if (
                     expected is not None
@@ -375,20 +381,19 @@ class ChartPredictor:
                 ):
                     holds._release_hold(
                         contact,
-                        lane,
+                        active_lane,
                         now,
                         "chart-lane-free",
                         actions,
                     )
-                    state._previous.pop((NoteKind.HOLD, lane), None)
-                    state._hold_released_at.pop(lane, None)
+                    state._previous.pop((NoteKind.HOLD, active_lane), None)
+                    state._hold_released_at.pop(active_lane, None)
                     self.expected_hold_tail.pop(contact, None)
                     state._blind_hold_contacts.discard(contact)
                     state._chart_tail_lane.pop(contact, None)
                     state._blind_slide_path.pop(contact, None)
                     state._blind_slide_last_lane.pop(contact, None)
-                    break
-                if expected is None:
+                elif expected is None:
                     # A hold without any chart pair is a phantom (drifted
                     # body).  Real holds in this chart last at most ~1.6 s;
                     # an occupant older than 2 s must be stuck and is
@@ -397,21 +402,18 @@ class ChartPredictor:
                     if now - started >= 2.0:
                         holds._release_hold(
                             contact,
-                            lane,
+                            active_lane,
                             now,
                             "chart-lane-free",
                             actions,
                         )
-                        state._previous.pop((NoteKind.HOLD, lane), None)
-                        state._hold_released_at.pop(lane, None)
+                        state._previous.pop((NoteKind.HOLD, active_lane), None)
+                        state._hold_released_at.pop(active_lane, None)
                         state._blind_hold_contacts.discard(contact)
                         state._chart_tail_lane.pop(contact, None)
                         state._blind_slide_path.pop(contact, None)
                         state._blind_slide_last_lane.pop(contact, None)
-                        break
-                return
-            if lane in set(state._active_hold_lane.values()):
-                return
+            return
         body = next(
             (
                 note for note in notes
