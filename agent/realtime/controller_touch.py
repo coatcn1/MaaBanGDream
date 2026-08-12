@@ -37,7 +37,7 @@ class ControllerTouchDispatcher:
         stopping: Callable[[], bool],
         *,
         sleeper: Callable[[float], None] = time.sleep,
-        maximum_move_step: int = 80,
+        maximum_move_step: int = 160,
     ) -> None:
         self.controller = controller
         self.stopping = stopping
@@ -188,6 +188,7 @@ class ControllerTouchDispatcher:
                 self._down(action, 0 if action.contact is None else action.contact)
             for action, contact in transient_contacts:
                 self._down(action, contact)
+            pending_moves: list[_Job] = []
             for action in moves:
                 self._ensure_running()
                 contact = 0 if action.contact is None else action.contact
@@ -210,10 +211,16 @@ class ControllerTouchDispatcher:
                     interpolated_x = round(
                         previous_x + (target_x - previous_x) * step / steps
                     )
-                    self.controller.post_touch_move(
+                    pending_moves.append(self.controller.post_touch_move(
                         interpolated_x, 590, contact, 50
-                    ).wait()
+                    ))
                 self.active_positions[contact] = target_x
+            # MOVE commands are a serial stream: posting them all preserves
+            # order, and waiting on the final job covers the whole batch.
+            # Waiting on every interpolated step serializes the emulator
+            # round-trip and stalls the capture loop in dense slide sections.
+            if pending_moves:
+                pending_moves[-1].wait()
             for action in deferred_releases:
                 self._ensure_running()
                 contact = 0 if action.contact is None else action.contact
