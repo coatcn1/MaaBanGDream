@@ -976,6 +976,9 @@ class RealtimeProfilePlay(CustomAction):
             f"tap_effect={live_run.tap_effect} "
             f"judgement_assist={live_run.judgement_assist} "
             f"touch_recoveries={stats.recovered_contacts} "
+            f"input_wait_count={stats.input_wait_count} "
+            f"input_wait_total_ms={stats.input_wait_total_ms:.1f} "
+            f"input_wait_max_ms={stats.input_wait_max_ms:.1f} "
             f"reason={stats.terminal_reason}",
             flush=True,
         )

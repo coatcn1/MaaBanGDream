@@ -47,6 +47,9 @@ class ControllerTouchDispatcher:
         self.active_positions: dict[int, int] = {}
         self._pending_flicks: dict[int, _PendingFlick] = {}
         self.recovered_contacts = 0
+        self.wait_seconds_total = 0.0
+        self.wait_count = 0
+        self.wait_max_seconds = 0.0
         self._flick_phases = ((.012, 545), (.024, 490), (.036, 455))
         self._flick_release_after = .048
 
@@ -61,7 +64,7 @@ class ControllerTouchDispatcher:
         return max(120, min(1160, int(action.target_x)))
 
     def _release(self, contact: int) -> None:
-        self.controller.post_touch_up(contact).wait()
+        self._wait(self.controller.post_touch_up(contact))
         self.active_contacts.discard(contact)
         self.active_positions.pop(contact, None)
         self._pending_flicks.pop(contact, None)
@@ -78,15 +81,23 @@ class ControllerTouchDispatcher:
             self.recovered_contacts += 1
         x = self._x(action)
         try:
-            self.controller.post_touch_down(x, 590, contact, 50).wait()
+            self._wait(self.controller.post_touch_down(x, 590, contact, 50))
         except Exception as exc:
             if not self._is_active_contact_error(exc):
                 raise
             self._release(contact)
             self.recovered_contacts += 1
-            self.controller.post_touch_down(x, 590, contact, 50).wait()
+            self._wait(self.controller.post_touch_down(x, 590, contact, 50))
         self.active_contacts.add(contact)
         self.active_positions[contact] = x
+
+    def _wait(self, job: _Job) -> None:
+        started = time.perf_counter()
+        job.wait()
+        elapsed = time.perf_counter() - started
+        self.wait_seconds_total += elapsed
+        self.wait_count += 1
+        self.wait_max_seconds = max(self.wait_max_seconds, elapsed)
 
     def synchronize(self) -> None:
         """Release contacts owned by this dispatcher without desynchronizing MTouch.
@@ -99,7 +110,7 @@ class ControllerTouchDispatcher:
         """
         for contact in sorted(self.active_contacts):
             try:
-                self.controller.post_touch_up(contact).wait()
+                self._wait(self.controller.post_touch_up(contact))
             except Exception:
                 pass
         self.active_contacts.clear()
@@ -116,16 +127,16 @@ class ControllerTouchDispatcher:
                 and elapsed >= self._flick_phases[pending.next_phase][0]
             ):
                 _, y = self._flick_phases[pending.next_phase]
-                self.controller.post_touch_move(
+                self._wait(self.controller.post_touch_move(
                     self.LANE_CENTERS[pending.lane],
                     y,
                     contact,
                     50,
-                ).wait()
+                ))
                 pending.next_phase += 1
             if elapsed < self._flick_release_after:
                 continue
-            self.controller.post_touch_up(contact).wait()
+            self._wait(self.controller.post_touch_up(contact))
             self.active_contacts.discard(contact)
             self.active_positions.pop(contact, None)
             self._pending_flicks.pop(contact, None)
@@ -180,7 +191,7 @@ class ControllerTouchDispatcher:
                 self._ensure_running()
                 contact = 0 if action.contact is None else action.contact
                 if contact in self.active_contacts:
-                    self.controller.post_touch_up(contact).wait()
+                    self._wait(self.controller.post_touch_up(contact))
                     self.active_contacts.discard(contact)
                     self.active_positions.pop(contact, None)
                     self._pending_flicks.pop(contact, None)
@@ -188,7 +199,6 @@ class ControllerTouchDispatcher:
                 self._down(action, 0 if action.contact is None else action.contact)
             for action, contact in transient_contacts:
                 self._down(action, contact)
-            pending_moves: list[_Job] = []
             for action in moves:
                 self._ensure_running()
                 contact = 0 if action.contact is None else action.contact
@@ -211,20 +221,14 @@ class ControllerTouchDispatcher:
                     interpolated_x = round(
                         previous_x + (target_x - previous_x) * step / steps
                     )
-                    pending_moves.append(self.controller.post_touch_move(
+                    self.controller.post_touch_move(
                         interpolated_x, 590, contact, 50
-                    ))
+                    )
                 self.active_positions[contact] = target_x
-            # MOVE commands are a serial stream: posting them all preserves
-            # order, and waiting on the final job covers the whole batch.
-            # Waiting on every interpolated step serializes the emulator
-            # round-trip and stalls the capture loop in dense slide sections.
-            if pending_moves:
-                pending_moves[-1].wait()
             for action in deferred_releases:
                 self._ensure_running()
                 contact = 0 if action.contact is None else action.contact
-                self.controller.post_touch_up(contact).wait()
+                self._wait(self.controller.post_touch_up(contact))
                 self.active_contacts.discard(contact)
                 self.active_positions.pop(contact, None)
             for action, contact in transient_contacts:
@@ -235,7 +239,7 @@ class ControllerTouchDispatcher:
                     )
                     continue
                 self._ensure_running()
-                self.controller.post_touch_up(contact).wait()
+                self._wait(self.controller.post_touch_up(contact))
                 self.active_contacts.discard(contact)
                 self.active_positions.pop(contact, None)
             for action in conversions:

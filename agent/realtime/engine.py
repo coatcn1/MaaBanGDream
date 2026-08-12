@@ -60,6 +60,9 @@ class EngineStats:
     frame_interval_max_ms: float = 0.0
     effective_fps: float = 0.0
     recovered_contacts: int = 0
+    input_wait_count: int = 0
+    input_wait_total_ms: float = 0.0
+    input_wait_max_ms: float = 0.0
     stage_timings_ms: dict[str, dict[str, object]] = field(default_factory=dict)
     frame_interval_outliers: tuple[dict[str, object], ...] = ()
     cleanup_failed: bool = False
@@ -243,6 +246,15 @@ class RealtimeEngine:
                 recovered_contacts=int(
                     getattr(self.touch, "recovered_contacts", 0)
                 ),
+                input_wait_count=int(
+                    getattr(self.touch, "wait_count", 0)
+                ),
+                input_wait_total_ms=float(
+                    getattr(self.touch, "wait_seconds_total", 0.0)
+                ) * 1000.0,
+                input_wait_max_ms=float(
+                    getattr(self.touch, "wait_max_seconds", 0.0)
+                ) * 1000.0,
                 stage_timings_ms=stage_timings_ms,
                 frame_interval_outliers=tuple(frame_interval_outliers),
             )
