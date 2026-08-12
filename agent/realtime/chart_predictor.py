@@ -385,6 +385,8 @@ class ChartPredictor:
                     self.expected_hold_tail.pop(contact, None)
                     state._blind_hold_contacts.discard(contact)
                     state._chart_tail_lane.pop(contact, None)
+                    state._blind_slide_path.pop(contact, None)
+                    state._blind_slide_last_lane.pop(contact, None)
                     break
                 if expected is None:
                     # A hold without any chart pair is a phantom (drifted
@@ -404,6 +406,8 @@ class ChartPredictor:
                         state._hold_released_at.pop(lane, None)
                         state._blind_hold_contacts.discard(contact)
                         state._chart_tail_lane.pop(contact, None)
+                        state._blind_slide_path.pop(contact, None)
+                        state._blind_slide_last_lane.pop(contact, None)
                         break
                 return
             if lane in set(state._active_hold_lane.values()):
@@ -421,7 +425,7 @@ class ChartPredictor:
         )
         if body is None:
             tail = self.chart.hold_tail_for_head(judgement)
-            if tail is None or tail.lane != judgement.lane:
+            if tail is None:
                 return
             recent_release = state._hold_released_at.get(
                 lane, float("-inf")
@@ -435,10 +439,11 @@ class ChartPredictor:
                 # A tap dispatched within the same instant is the same note
                 # (or a same-frame chord) and must not be double-pressed.
                 return
+            head_lane = judgement.lane
             body = ObservedNote(
                 NoteKind.HOLD,
-                lane,
-                lane_center_x(lane, self.judgement_y),
+                head_lane,
+                lane_center_x(head_lane, self.judgement_y),
                 self.judgement_y - 60,
                 1,
                 1,
@@ -449,10 +454,21 @@ class ChartPredictor:
         state._active_hold_tail[contact] = body.y - body.height / 2
         state._hold_started[contact] = now
         state._hold_confirmed.add(contact)
-        state._active_hold_lane[contact] = lane
+        state._active_hold_lane[contact] = contact
         state._active_hold_x[contact] = float(body.x)
         if blind:
             state._blind_hold_contacts.add(contact)
+            tail = self.chart.hold_tail_for_head(judgement)
+            if tail is not None and tail.lane != contact:
+                # Slide pressed without a visible body: the finger follows a
+                # linear lane interpolation to the chart tail lane, then the
+                # chart releases it at the tail time.
+                state._blind_slide_path[contact] = (
+                    contact,
+                    tail.lane,
+                    judgement.time_s,
+                    tail.time_s,
+                )
         actions.append(TouchAction(
             ActionKind.DOWN,
             lane,
@@ -564,6 +580,8 @@ class ChartPredictor:
                 self.expected_hold_tail.pop(contact, None)
                 state._blind_hold_contacts.discard(contact)
                 state._chart_tail_lane.pop(contact, None)
+                state._blind_slide_path.pop(contact, None)
+                state._blind_slide_last_lane.pop(contact, None)
                 continue
             if song_now < tail_time - 0.015:
                 continue
@@ -623,12 +641,75 @@ class ChartPredictor:
             self.expected_hold_tail.pop(contact, None)
             state._blind_hold_contacts.discard(contact)
             state._chart_tail_lane.pop(contact, None)
+            state._blind_slide_path.pop(contact, None)
+            state._blind_slide_last_lane.pop(contact, None)
             state.record_diagnostic(
                 "chart_predicted_release",
                 now,
                 contact=contact,
                 lane=lane,
                 chart_time_s=round(tail_time, 3),
+            )
+
+    def _drive_blind_slides(
+        self,
+        now: float,
+        actions: list[TouchAction],
+        state: PlannerState,
+    ) -> None:
+        """Move blind-pressed slide contacts along the chart's lane path.
+
+        A slide pressed without a visible body has no detector track to
+        follow.  The fixed chart knows the head/tail lanes, so the finger is
+        moved along a linear lane interpolation; the tail release is handled
+        by ``_release_due_holds`` at the chart tail time.
+        """
+        if not state._blind_slide_path:
+            return
+        song_now = self._relative(now) + self.song_offset_s
+        for contact, (
+            head_lane,
+            tail_lane,
+            head_time,
+            tail_time,
+        ) in list(state._blind_slide_path.items()):
+            if contact not in state._active_hold_tail:
+                state._blind_slide_path.pop(contact, None)
+                state._blind_slide_last_lane.pop(contact, None)
+                continue
+            if tail_time <= head_time:
+                continue
+            progress = min(
+                1.0,
+                max(0.0, (song_now - head_time) / (tail_time - head_time)),
+            )
+            target_lane = round(
+                head_lane + (tail_lane - head_lane) * progress
+            )
+            previous_lane = state._blind_slide_last_lane.get(
+                contact, head_lane
+            )
+            if target_lane == previous_lane:
+                continue
+            target_x = lane_center_x(target_lane, self.judgement_y)
+            actions.append(TouchAction(
+                ActionKind.MOVE,
+                target_lane,
+                now,
+                contact,
+                "chart-slide-move",
+                target_x=round(target_x),
+            ))
+            state._active_hold_lane[contact] = target_lane
+            state._active_hold_x[contact] = float(target_x)
+            state._blind_slide_last_lane[contact] = target_lane
+            state.record_diagnostic(
+                "chart_slide_move",
+                now,
+                contact=contact,
+                previous_lane=previous_lane,
+                target_lane=target_lane,
+                progress=round(progress, 3),
             )
 
     def update(
@@ -688,5 +769,6 @@ class ChartPredictor:
                 notes, tracked_notes, now, actions, state, holds
             )
         self._schedule_hold_tails(actions, state)
+        self._drive_blind_slides(now, actions, state)
         self._release_due_holds(now, actions, state, holds)
         return actions

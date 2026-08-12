@@ -264,9 +264,10 @@ def test_chart_presses_occluded_straight_hold_head_without_body():
     ]
 
 
-def test_chart_does_not_blind_press_slide_hold():
+def test_chart_blind_presses_slide_and_follows_chart_path():
     # Slide: head on lane 5, tail on lane 3.  Without a visible body the
-    # finger cannot follow the slide, so the chart must not blind-press.
+    # chart presses the head, drives a linear lane path, and releases at the
+    # tail time on the tail lane.
     chart = ChartTimeline([
         ChartJudgement(2.0, 5, "hold-head", 0),
         ChartJudgement(2.5, 3, "hold-tail", 0),
@@ -275,8 +276,21 @@ def test_chart_does_not_blind_press_slide_hold():
     anchor = 100.0
     predictor._anchor_time = anchor
 
-    pressed = planner.update([], anchor + 2.08)
-    assert not [a for a in pressed if a.kind == ActionKind.DOWN]
+    pressed = planner.update([], anchor + 5.07)
+    downs = [a for a in pressed if a.kind == ActionKind.DOWN]
+    assert len(downs) == 1
+    assert downs[0].lane == 5
+    assert downs[0].reason == "chart-predicted"
+
+    # Halfway through the slide the finger should be around lane 4.
+    mid = planner.update([], anchor + 5.25)
+    moves = [a for a in mid if a.reason == "chart-slide-move"]
+    assert len(moves) == 1 and moves[0].lane == 4
+
+    # At the tail time the contact is released on the tail lane.
+    end = planner.update([], anchor + 5.53)
+    releases = [a for a in end if a.reason == "chart-tail"]
+    assert len(releases) == 1 and releases[0].lane == 3
 
 
 def test_chart_blind_press_handles_recent_tap_on_lane():
