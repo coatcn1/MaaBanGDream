@@ -193,6 +193,7 @@ class ControllerTouchDispatcher:
             self.active_contacts.discard(contact)
             self.active_positions.pop(contact, None)
             self._pending_flicks.pop(contact, None)
+            self._last_released[contact] = time.monotonic()
 
     def dispatch(self, actions: list[TouchAction]) -> None:
         persistent = [action for action in actions if action.kind == ActionKind.DOWN]
@@ -238,7 +239,14 @@ class ControllerTouchDispatcher:
             self._actual(0 if action.contact is None else action.contact)
             for action in persistent
         )
-        available = [contact for contact in range(10) if contact not in reserved]
+        # Prefer the high contacts (7-9) for transient taps so a tap never
+        # occupies a lane contact (0-6) that the next hold on that lane will
+        # immediately re-press; reusing a just-released tap contact is what
+        # makes the backend report "already active".
+        transient_order = [7, 8, 9, 0, 1, 2, 3, 4, 5, 6]
+        available = [
+            contact for contact in transient_order if contact not in reserved
+        ]
         if len(transients) > len(available):
             raise RuntimeError("MaaFramework 可用触点不足")
         transient_contacts = list(zip(transients, available))
