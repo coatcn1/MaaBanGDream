@@ -79,6 +79,12 @@ class ControllerTouchDispatcher:
         if contact in self.active_contacts:
             self._release(contact)
             self.recovered_contacts += 1
+            # The game's input thread may not have consumed the UP yet; a
+            # re-press within the same millisecond can be coalesced and leave
+            # the contact stuck again.  Yield briefly so the UP lands before
+            # the DOWN.  This is the exceptional desync-recovery path, not
+            # the normal hot path.
+            self.sleeper(0.015)
         x = self._x(action)
         try:
             self._wait(self.controller.post_touch_down(x, 590, contact, 50))
