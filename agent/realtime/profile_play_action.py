@@ -60,6 +60,75 @@ REWARD_CLICK_DELAY_SECONDS = 1.0
 _LAST_LIFE_SAFETY_ABORT = False
 
 
+class StallSafeCapture:
+    """Screencap wrapper that never blocks the engine for a full stall.
+
+    LDPlayer's EmulatorExtras screencap can freeze for 200-400 ms under
+    load.  A blocking capture stalls the whole engine loop, so every note
+    due during that window goes unhit and the song fails.  This wrapper
+    keeps at most one screencap job in flight, polls it with a short
+    timeout, and reuses the last completed frame while the backend is
+    stuck.  The loop therefore keeps advancing its clock, and the
+    chart-timeline after-due rescues keep pressing notes during the stall.
+    """
+
+    def __init__(self, controller, *, timeout_seconds: float = 0.05):
+        self._controller = controller
+        self._timeout_seconds = float(timeout_seconds)
+        self._last_image = None
+        self._pending = None
+        self.stall_count = 0
+
+    @staticmethod
+    def _job_done(job) -> bool:
+        try:
+            return bool(job.done)
+        except Exception:
+            return True
+
+    def _poll(self, job) -> bool:
+        deadline = time.monotonic() + self._timeout_seconds
+        while time.monotonic() < deadline:
+            if self._job_done(job):
+                return True
+            time.sleep(0.005)
+        return self._job_done(job)
+
+    def __call__(self):
+        if self._pending is not None and not self._job_done(self._pending):
+            # A previous screencap is still stuck; reuse the last frame so
+            # the engine clock and chart rescues keep advancing.
+            self.stall_count += 1
+            return self._last_image
+        if self._pending is not None:
+            try:
+                image = self._pending.get()
+                if image is not None:
+                    self._last_image = image
+            except Exception:
+                pass
+            self._pending = None
+        job = self._controller.post_screencap()
+        if not self._poll(job):
+            # The fresh screencap itself is stuck: keep the previous frame
+            # and let the next call re-poll the same job.
+            self._pending = job
+            self.stall_count += 1
+            return self._last_image
+        try:
+            image = job.get()
+        except Exception:
+            image = None
+        if image is None:
+            if self._last_image is None:
+                # First frame must exist before the detector can run.
+                image = self._controller.post_screencap().wait().get()
+            else:
+                image = self._last_image
+        self._last_image = image
+        return image
+
+
 def _run_mode(params: dict, *, is_rehearsal: bool) -> str:
     explicit = params.get("run_mode")
     if explicit:
@@ -875,8 +944,9 @@ class RealtimeProfilePlay(CustomAction):
             None if duration_value is None else float(duration_value)
         )
         try:
+            stall_safe_capture = StallSafeCapture(controller)
             stats = engine.run(
-                lambda: controller.post_screencap().wait().get(),
+                stall_safe_capture,
                 lambda: context.tasker.stopping,
                 duration_seconds=duration_seconds,
                 target_fps=target_fps,
