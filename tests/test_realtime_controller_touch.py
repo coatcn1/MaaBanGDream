@@ -149,9 +149,10 @@ def test_stale_internal_contact_is_released_before_reuse():
 
     assert controller.calls == [
         ("up", 6),
-        ("down", 6, 1060, 590, 50),
+        ("down", 7, 1060, 590, 50),
     ]
     assert touch.recovered_contacts == 1
+    assert touch._contact_alias == {6: 7}
 
 
 def test_controller_reported_active_contact_is_released_and_retried_once():
@@ -181,9 +182,10 @@ def test_controller_reported_active_contact_is_released_and_retried_once():
     assert controller.calls == [
         ("down", 6, 1060, 590, 50),
         ("up", 6),
-        ("down", 6, 1060, 590, 50),
+        ("down", 7, 1060, 590, 50),
     ]
     assert touch.recovered_contacts == 1
+    assert touch._contact_alias == {6: 7}
 
 
 def test_synchronize_does_not_send_up_for_contacts_unknown_to_dispatcher():

@@ -46,6 +46,7 @@ class ControllerTouchDispatcher:
         self.active_contacts: set[int] = set()
         self.active_positions: dict[int, int] = {}
         self._pending_flicks: dict[int, _PendingFlick] = {}
+        self._contact_alias: dict[int, int] = {}
         self.recovered_contacts = 0
         self.down_recoveries = 0
         self.stale_move_recoveries = 0
@@ -65,21 +66,40 @@ class ControllerTouchDispatcher:
             return self.LANE_CENTERS[action.lane]
         return max(120, min(1160, int(action.target_x)))
 
-    def _release(self, contact: int) -> None:
-        self._wait(self.controller.post_touch_up(contact))
-        self.active_contacts.discard(contact)
-        self.active_positions.pop(contact, None)
-        self._pending_flicks.pop(contact, None)
+    def _actual(self, planned: int) -> int:
+        return self._contact_alias.get(planned, planned)
+
+    def _pick_fallback_contact(self, planned: int) -> int:
+        alias_targets = set(self._contact_alias.values())
+        for contact in range(7, 10):
+            if contact not in self.active_contacts and contact not in alias_targets:
+                return contact
+        for contact in range(10):
+            if (
+                contact not in self.active_contacts
+                and contact not in alias_targets
+                and contact != planned
+            ):
+                return contact
+        return planned
+
+    def _release(self, planned: int) -> None:
+        actual = self._contact_alias.pop(planned, planned)
+        self._wait(self.controller.post_touch_up(actual))
+        self.active_contacts.discard(actual)
+        self.active_positions.pop(actual, None)
+        self._pending_flicks.pop(actual, None)
 
     @staticmethod
     def _is_active_contact_error(exc: BaseException) -> bool:
         message = str(exc).lower()
         return "contact" in message and "already active" in message
 
-    def _down(self, action: TouchAction, contact: int) -> None:
+    def _down(self, action: TouchAction, planned: int) -> None:
         self._ensure_running()
-        if contact in self.active_contacts:
-            self._release(contact)
+        actual = self._actual(planned)
+        if actual in self.active_contacts:
+            self._release(planned)
             self.recovered_contacts += 1
             self.down_recoveries += 1
             # The game's input thread may not have consumed the UP yet; a
@@ -88,18 +108,24 @@ class ControllerTouchDispatcher:
             # the DOWN.  This is the exceptional desync-recovery path, not
             # the normal hot path.
             self.sleeper(0.015)
+            # Use a fresh contact so the stale backend state for the old
+            # contact cannot swallow this press.
+            actual = self._pick_fallback_contact(planned)
+            self._contact_alias[planned] = actual
         x = self._x(action)
         try:
-            self._wait(self.controller.post_touch_down(x, 590, contact, 50))
+            self._wait(self.controller.post_touch_down(x, 590, actual, 50))
         except Exception as exc:
             if not self._is_active_contact_error(exc):
                 raise
-            self._release(contact)
+            self._release(planned)
             self.recovered_contacts += 1
             self.down_recoveries += 1
-            self._wait(self.controller.post_touch_down(x, 590, contact, 50))
-        self.active_contacts.add(contact)
-        self.active_positions[contact] = x
+            actual = self._pick_fallback_contact(planned)
+            self._contact_alias[planned] = actual
+            self._wait(self.controller.post_touch_down(x, 590, actual, 50))
+        self.active_contacts.add(actual)
+        self.active_positions[actual] = x
 
     def _wait(self, job: _Job) -> None:
         started = time.perf_counter()
@@ -126,6 +152,7 @@ class ControllerTouchDispatcher:
         self.active_contacts.clear()
         self.active_positions.clear()
         self._pending_flicks.clear()
+        self._contact_alias.clear()
 
     def advance(self, now: float) -> None:
         """Advance pending flick gestures without sleeping in the capture loop."""
@@ -183,7 +210,7 @@ class ControllerTouchDispatcher:
             action for action in transients
             if action.kind == ActionKind.FLICK
             and action.contact is not None
-            and action.contact in self.active_contacts
+            and self._actual(action.contact) in self.active_contacts
         ]
         if conversions:
             conversion_ids = {id(action) for action in conversions}
@@ -191,7 +218,10 @@ class ControllerTouchDispatcher:
                 action for action in transients if id(action) not in conversion_ids
             ]
         reserved = set(self.active_contacts)
-        reserved.update(0 if action.contact is None else action.contact for action in persistent)
+        reserved.update(
+            self._actual(0 if action.contact is None else action.contact)
+            for action in persistent
+        )
         available = [contact for contact in range(10) if contact not in reserved]
         if len(transients) > len(available):
             raise RuntimeError("MaaFramework 可用触点不足")
@@ -200,11 +230,9 @@ class ControllerTouchDispatcher:
             for action in pre_releases:
                 self._ensure_running()
                 contact = 0 if action.contact is None else action.contact
-                if contact in self.active_contacts:
-                    self._wait(self.controller.post_touch_up(contact))
-                    self.active_contacts.discard(contact)
-                    self.active_positions.pop(contact, None)
-                    self._pending_flicks.pop(contact, None)
+                actual = self._actual(contact)
+                if actual in self.active_contacts:
+                    self._release(contact)
             for action in persistent:
                 self._down(action, 0 if action.contact is None else action.contact)
             for action, contact in transient_contacts:
@@ -212,18 +240,20 @@ class ControllerTouchDispatcher:
             for action in moves:
                 self._ensure_running()
                 contact = 0 if action.contact is None else action.contact
-                if contact not in self.active_contacts:
+                actual = self._actual(contact)
+                if actual not in self.active_contacts:
                     # A hold release can race with the planner's MOVE in the
                     # same frame, or the backend can drop a contact after a
                     # long hold. A stale MOVE is not a song failure: drop the
                     # state and let the next DOWN re-press.
                     self.recovered_contacts += 1
                     self.stale_move_recoveries += 1
-                    self.active_positions.pop(contact, None)
-                    self._pending_flicks.pop(contact, None)
+                    self._contact_alias.pop(contact, None)
+                    self.active_positions.pop(actual, None)
+                    self._pending_flicks.pop(actual, None)
                     continue
                 target_x = self._x(action)
-                previous_x = self.active_positions.get(contact, target_x)
+                previous_x = self.active_positions.get(actual, target_x)
                 steps = max(
                     1,
                     math.ceil(abs(target_x - previous_x) / self.maximum_move_step),
@@ -233,15 +263,13 @@ class ControllerTouchDispatcher:
                         previous_x + (target_x - previous_x) * step / steps
                     )
                     self.controller.post_touch_move(
-                        interpolated_x, 590, contact, 50
+                        interpolated_x, 590, actual, 50
                     )
-                self.active_positions[contact] = target_x
+                self.active_positions[actual] = target_x
             for action in deferred_releases:
                 self._ensure_running()
                 contact = 0 if action.contact is None else action.contact
-                self._wait(self.controller.post_touch_up(contact))
-                self.active_contacts.discard(contact)
-                self.active_positions.pop(contact, None)
+                self._release(contact)
             for action, contact in transient_contacts:
                 if action.kind == ActionKind.FLICK:
                     self._pending_flicks[contact] = _PendingFlick(
@@ -254,7 +282,7 @@ class ControllerTouchDispatcher:
                 self.active_contacts.discard(contact)
                 self.active_positions.pop(contact, None)
             for action in conversions:
-                self._pending_flicks[action.contact] = _PendingFlick(
+                self._pending_flicks[self._actual(action.contact)] = _PendingFlick(
                     action.lane,
                     float(action.timestamp),
                 )
