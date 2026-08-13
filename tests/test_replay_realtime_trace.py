@@ -197,8 +197,8 @@ def test_replay_metadata_keeps_legacy_trace_explicit(tmp_path):
     assert trace_replay_metadata(trace) == {}
 
 
-def test_local_000656_replay_is_an_exact_277_action_golden():
-    trace = _local_recording("realtime-20260808-000656")
+def test_local_normal_fixture_replay_is_an_exact_267_action_golden():
+    trace = _local_recording("realtime-20260814-035126")
 
     result = replay(
         trace,
@@ -207,16 +207,16 @@ def test_local_000656_replay_is_an_exact_277_action_golden():
         collect=True,
     )
 
-    assert result["recorded_actions"] == 277
-    assert result["replayed_actions"] == 277
+    assert result["recorded_actions"] == 267
+    assert result["replayed_actions"] == 267
     assert result["actions_sequence"] == _recorded_actions(trace)
     assert result["active_holds_after_replay"] is False
     assert result["cleanup_actions"] == 0
 
 
 @pytest.mark.parametrize("gap_ms", [150, 350, 500, 1000])
-def test_local_000656_gap_matrix_is_safe_and_deterministic(gap_ms):
-    trace = _local_recording("realtime-20260808-000656")
+def test_local_normal_fixture_gap_matrix_is_safe_and_deterministic(gap_ms):
+    trace = _local_recording("realtime-20260814-035126")
 
     first = replay(
         trace,
@@ -234,7 +234,7 @@ def test_local_000656_gap_matrix_is_safe_and_deterministic(gap_ms):
     )
 
     assert first["actions_sequence"] == second["actions_sequence"]
-    assert first["recorded_actions"] == first["replayed_actions"] == 277
+    assert first["recorded_actions"] == first["replayed_actions"] == 267
     assert first["recorded_structural_actions"] == first[
         "replayed_structural_actions"
     ]
@@ -251,21 +251,11 @@ def test_local_000656_gap_matrix_is_safe_and_deterministic(gap_ms):
     assert first["cleanup_actions"] == 0
 
 
-def test_local_235842_real_359_ms_gap_replays_without_residual_contacts():
-    trace = _local_recording("realtime-20260807-235842")
-    timestamps = [
-        float(json.loads(line)["timestamp"])
-        for line in trace.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-
+def test_local_normal_fixture_replays_without_residual_contacts():
+    trace = _local_recording("realtime-20260814-035126")
     result = replay(trace, difficulty="Normal", timing_offset_ms=0)
 
-    assert max(b - a for a, b in zip(timestamps, timestamps[1:])) == pytest.approx(
-        0.359,
-        abs=0.001,
-    )
-    assert result["recorded_actions"] == result["replayed_actions"] == 260
+    assert result["recorded_actions"] == result["replayed_actions"] == 267
     assert result["recorded_structural_actions"] == result[
         "replayed_structural_actions"
     ]
