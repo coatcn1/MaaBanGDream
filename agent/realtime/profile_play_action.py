@@ -848,14 +848,23 @@ class RealtimeProfilePlay(CustomAction):
                 timing_feedback_detector=TimingFeedbackDetector(),
                 timing_controller=AdaptiveTimingController(
                     timing_offset_ms,
-                    # Slide charts used to keep the offset frozen because the
-                    # old preemptive press mode produced heavy FAST feedback.
-                    # Taps are now after-due rescues and the game's own
-                    # recommendation drifts several ms per session, so let
-                    # Hard+ adapt with a bounded range to shed early taps that
-                    # otherwise drain life in the finale.
-                    maximum_live_adjustment_ms=(
-                        15
+                    # Hard+ sessions drift their game-side input latency by
+                    # 10-20 ms run to run; adapt faster and wider so the
+                    # finale does not play at the wrong end of the window.
+                    # Normal keeps the gentler defaults.
+                    **(
+                        {
+                            "step_ms": 2,
+                            "minimum_samples": 8,
+                            "imbalance": 6,
+                            "window_size": 12,
+                            "adjustment_cooldown_seconds": 1.0,
+                            "maximum_live_adjustment_ms": 20,
+                        }
+                        if sliding_holds_enabled(
+                            str(params.get("difficulty", "Easy"))
+                        )
+                        else {}
                     ),
                 ),
             )
@@ -1043,6 +1052,8 @@ class RealtimeProfilePlay(CustomAction):
             f"tap_effect={live_run.tap_effect} "
             f"judgement_assist={live_run.judgement_assist} "
             f"touch_recoveries={stats.recovered_contacts} "
+            f"down_recoveries={stats.down_recoveries} "
+            f"stale_move_recoveries={stats.stale_move_recoveries} "
             f"input_wait_count={stats.input_wait_count} "
             f"input_wait_total_ms={stats.input_wait_total_ms:.1f} "
             f"input_wait_max_ms={stats.input_wait_max_ms:.1f} "

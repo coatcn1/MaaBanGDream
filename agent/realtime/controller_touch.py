@@ -47,6 +47,8 @@ class ControllerTouchDispatcher:
         self.active_positions: dict[int, int] = {}
         self._pending_flicks: dict[int, _PendingFlick] = {}
         self.recovered_contacts = 0
+        self.down_recoveries = 0
+        self.stale_move_recoveries = 0
         self.wait_seconds_total = 0.0
         self.wait_count = 0
         self.wait_max_seconds = 0.0
@@ -79,6 +81,7 @@ class ControllerTouchDispatcher:
         if contact in self.active_contacts:
             self._release(contact)
             self.recovered_contacts += 1
+            self.down_recoveries += 1
             # The game's input thread may not have consumed the UP yet; a
             # re-press within the same millisecond can be coalesced and leave
             # the contact stuck again.  Yield briefly so the UP lands before
@@ -93,6 +96,7 @@ class ControllerTouchDispatcher:
                 raise
             self._release(contact)
             self.recovered_contacts += 1
+            self.down_recoveries += 1
             self._wait(self.controller.post_touch_down(x, 590, contact, 50))
         self.active_contacts.add(contact)
         self.active_positions[contact] = x
@@ -214,6 +218,7 @@ class ControllerTouchDispatcher:
                     # long hold. A stale MOVE is not a song failure: drop the
                     # state and let the next DOWN re-press.
                     self.recovered_contacts += 1
+                    self.stale_move_recoveries += 1
                     self.active_positions.pop(contact, None)
                     self._pending_flicks.pop(contact, None)
                     continue

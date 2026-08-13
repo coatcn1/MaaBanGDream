@@ -60,6 +60,8 @@ class EngineStats:
     frame_interval_max_ms: float = 0.0
     effective_fps: float = 0.0
     recovered_contacts: int = 0
+    down_recoveries: int = 0
+    stale_move_recoveries: int = 0
     input_wait_count: int = 0
     input_wait_total_ms: float = 0.0
     input_wait_max_ms: float = 0.0
@@ -245,6 +247,12 @@ class RealtimeEngine:
                 ),
                 recovered_contacts=int(
                     getattr(self.touch, "recovered_contacts", 0)
+                ),
+                down_recoveries=int(
+                    getattr(self.touch, "down_recoveries", 0)
+                ),
+                stale_move_recoveries=int(
+                    getattr(self.touch, "stale_move_recoveries", 0)
                 ),
                 input_wait_count=int(
                     getattr(self.touch, "wait_count", 0)
