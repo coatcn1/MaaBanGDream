@@ -47,6 +47,8 @@ class ControllerTouchDispatcher:
         self.active_positions: dict[int, int] = {}
         self._pending_flicks: dict[int, _PendingFlick] = {}
         self._contact_alias: dict[int, int] = {}
+        self._last_used: dict[int, float] = {}
+        self._last_released: dict[int, float] = {}
         self.recovered_contacts = 0
         self.down_recoveries = 0
         self.stale_move_recoveries = 0
@@ -89,6 +91,7 @@ class ControllerTouchDispatcher:
         self.active_contacts.discard(actual)
         self.active_positions.pop(actual, None)
         self._pending_flicks.pop(actual, None)
+        self._last_released[planned] = time.monotonic()
 
     @staticmethod
     def _is_active_contact_error(exc: BaseException) -> bool:
@@ -112,6 +115,16 @@ class ControllerTouchDispatcher:
             # contact cannot swallow this press.
             actual = self._pick_fallback_contact(planned)
             self._contact_alias[planned] = actual
+        elif (
+            planned in self._last_released
+            and time.monotonic() - self._last_released[planned] >= 0.02
+            and time.monotonic() - self._last_released[planned] < 0.5
+        ):
+            # The backend can still consider a recently released contact
+            # active even though our bookkeeping cleared it.  MTouch accepts
+            # UP for an inactive contact, so proactively clear the stale
+            # backend state before the DOWN (no recovery accounting needed).
+            self._wait(self.controller.post_touch_up(actual))
         x = self._x(action)
         try:
             self._wait(self.controller.post_touch_down(x, 590, actual, 50))
@@ -126,6 +139,7 @@ class ControllerTouchDispatcher:
             self._wait(self.controller.post_touch_down(x, 590, actual, 50))
         self.active_contacts.add(actual)
         self.active_positions[actual] = x
+        self._last_used[planned] = float(action.timestamp)
 
     def _wait(self, job: _Job) -> None:
         started = time.perf_counter()
@@ -153,6 +167,8 @@ class ControllerTouchDispatcher:
         self.active_positions.clear()
         self._pending_flicks.clear()
         self._contact_alias.clear()
+        self._last_used.clear()
+        self._last_released.clear()
 
     def advance(self, now: float) -> None:
         """Advance pending flick gestures without sleeping in the capture loop."""
