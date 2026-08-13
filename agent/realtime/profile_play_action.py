@@ -100,6 +100,13 @@ class StallSafeCapture:
             # Start the next capture immediately so it overlaps the engine's
             # detection/planning work (true double buffering).
             self._pending = self._controller.post_screencap()
+        if self._last_image is None and not self._job_done(self._pending):
+            # The very first frame must exist before the detector can run;
+            # blocking once here is unavoidable and only happens at startup.
+            self._pending.wait()
+            self._last_image = self._pending.get()
+            self._pending = self._controller.post_screencap()
+            return self._last_image
         if self._job_done(self._pending):
             try:
                 image = self._pending.get()
