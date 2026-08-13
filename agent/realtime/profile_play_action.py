@@ -780,16 +780,14 @@ class RealtimeProfilePlay(CustomAction):
                 timing_feedback_detector=TimingFeedbackDetector(),
                 timing_controller=AdaptiveTimingController(
                     timing_offset_ms,
-                    # Dense slide passages (Hard+) register heavy FAST feedback
-                    # from preemptive chord taps; the in-song adaptation then
-                    # drifts the offset later and makes occluded heads miss.
-                    # Keep the calibrated offset fixed on slide charts.
+                    # Slide charts used to keep the offset frozen because the
+                    # old preemptive press mode produced heavy FAST feedback.
+                    # Taps are now after-due rescues and the game's own
+                    # recommendation drifts several ms per session, so let
+                    # Hard+ adapt with a bounded range to shed early taps that
+                    # otherwise drain life in the finale.
                     maximum_live_adjustment_ms=(
-                        0
-                        if sliding_holds_enabled(
-                            str(params.get("difficulty", "Easy"))
-                        )
-                        else 12
+                        15
                     ),
                 ),
             )
