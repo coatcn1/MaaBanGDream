@@ -105,12 +105,13 @@
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "CommonRecover",
-    "custom_action_param": {
-      "home_node": "HomeMarker",
-      "modal_cancel_nodes": [
-        "QuitConfirmCancel"
-      ],
-      "escape_interval_ms": 1500,
+  "custom_action_param": {
+   "home_node": "HomeMarker",
+   "modal_cancel_nodes": [
+    "QuitConfirmCancel"
+   ],
+   "reboot_emulator_on_failure": true,
+   "escape_interval_ms": 1500,
       "escape_timeout_ms": 60000,
       "restart_limit": 2,
       "restart_wait_ms": 5000,

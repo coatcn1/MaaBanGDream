@@ -589,29 +589,54 @@ class RealtimeGameEffectSettingsGate(CustomAction):
 
     def run(self, context: Context, argv: CustomAction.RunArg) -> bool:
         clear_verified_game_visual_settings()
+        max_attempts = 3
+        last_error: Exception | None = None
         try:
             decoded = json.loads(argv.custom_action_param or "{}")
-            return self._run(
-                context,
-                decoded if isinstance(decoded, dict) else {},
-            )
+            params = decoded if isinstance(decoded, dict) else {}
         except _StopRequested:
             print(
                 "RealtimeGameEffectSettingsGate stopped=true verified=false",
                 flush=True,
             )
             return True
-        except Exception as exc:
+        except Exception:
+            params = {}
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return self._run(context, dict(params))
+            except _StopRequested:
+                print(
+                    "RealtimeGameEffectSettingsGate stopped=true verified=false",
+                    flush=True,
+                )
+                return True
+            except RuntimeError as exc:
+                last_error = exc
+                if attempt >= max_attempts:
+                    break
+                print(
+                    "RealtimeGameEffectSettingsGate "
+                    f"retry={attempt}/{max_attempts} "
+                    f"failed={type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+                _wait(context, 1.0)
+            except Exception as exc:
+                last_error = exc
+                break
+        if last_error is not None:
             record_failure_reason(
-                f"游戏演出特效设置失败：{type(exc).__name__}: {exc}"
+                f"游戏演出特效设置失败："
+                f"{type(last_error).__name__}: {last_error}"
             )
             traceback.print_exc()
             print(
                 "RealtimeGameEffectSettingsGate "
-                f"failed={type(exc).__name__}: {exc}",
+                f"failed={type(last_error).__name__}: {last_error}",
                 flush=True,
             )
-            return False
+        return False
 
     def _run(self, context: Context, params: dict) -> bool:
         if context.tasker.stopping:

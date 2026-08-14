@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import time
 import traceback
 from typing import Any
@@ -34,6 +35,56 @@ def _wait_unless_stopping(context: Context, seconds: float) -> bool:
             return False
         time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
     return not context.tasker.stopping
+
+
+def _wait_for_adb(adb_path: str, serial: str, timeout: float = 90.0) -> bool:
+    """Wait until ``serial`` is back online after an emulator reboot."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            output = subprocess.run(
+                [adb_path, "-s", serial, "get-state"],
+                capture_output=True,
+                text=True,
+                timeout=8,
+            )
+            if output.returncode == 0 and output.stdout.strip() == "device":
+                return True
+        except Exception:
+            pass
+        time.sleep(2.0)
+    return False
+
+
+def _reboot_ldplayer(
+    console_path: str,
+    index: int,
+    adb_path: str,
+    serial: str,
+) -> bool:
+    """Reboot the LDPlayer emulator instance via its console."""
+    try:
+        result = subprocess.run(
+            [console_path, "reboot", "--index", str(index)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except Exception as exc:
+        log_task(
+            "游戏启动",
+            "模拟器",
+            "ERROR",
+            f"模拟器重启命令失败：{type(exc).__name__}: {exc}",
+        )
+        return False
+    log_task(
+        "游戏启动",
+        "模拟器",
+        "INFO",
+        f"模拟器重启命令已发送：rc={result.returncode} {result.stdout.strip()}",
+    )
+    return _wait_for_adb(adb_path, serial)
 
 
 def _package_running(controller: Any, package: str) -> bool | None:
@@ -118,6 +169,18 @@ class CommonRecover(CustomAction):
         package = str(params.get("package", "com.bilibili.star.bili"))
         restart_limit = int(params.get("restart_limit", 2))
         restart_wait = int(params.get("restart_wait_ms", 5000)) / 1000
+        reboot_emulator_on_failure = bool(
+            params.get("reboot_emulator_on_failure", False)
+        )
+        emulator_console = str(
+            params.get(
+                "emulator_console",
+                "E:/leidian/mrfz/ldconsole.exe",
+            )
+        )
+        emulator_index = int(params.get("emulator_index", 1000))
+        adb_path = str(params.get("adb_path", "E:/leidian/mrfz/adb.exe"))
+        adb_serial = str(params.get("adb_serial", "emulator-7554"))
         startup_grace = int(params.get("startup_grace_ms", 0)) / 1000
         click_nodes = [str(node) for node in params.get("click_nodes", [])]
         modal_cancel_nodes = [
@@ -157,7 +220,11 @@ class CommonRecover(CustomAction):
                 return True
             return False
 
-        for restart in range(restart_limit + 1):
+        emulator_rebooted = False
+        restart = 0
+        while restart <= restart_limit + (1 if emulator_rebooted else 0):
+            restart_round = restart
+            restart += 1
             login_started = not login_mode
             login_seen = False
             login_tap_attempted = False
@@ -220,7 +287,7 @@ class CommonRecover(CustomAction):
                         f"已识别主页，状态：{login_status}",
                     )
                     return True
-                if back_only and restart == 0:
+                if back_only and restart_round == 0:
                     safe_story_clicked = False
                     for node in back_only_click_nodes:
                         result = context.run_recognition(node, image)
@@ -251,7 +318,7 @@ class CommonRecover(CustomAction):
                 # bounded app restart must switch to the normal login state
                 # machine instead of continuing to press BACK on the title
                 # screen.
-                if (back_only and restart == 0) or login_recovery_active:
+                if (back_only and restart_round == 0) or login_recovery_active:
                     if context.tasker.stopping:
                         return True
                     controller.post_click_key(4).wait()
@@ -364,7 +431,7 @@ class CommonRecover(CustomAction):
                     )
                 if not _wait_unless_stopping(context, interval):
                     return True
-            if restart < restart_limit:
+            if restart_round < restart_limit:
                 if context.tasker.stopping:
                     return True
                 controller.post_stop_app(package).wait()
@@ -377,10 +444,43 @@ class CommonRecover(CustomAction):
                     "重启",
                     "WARN",
                     f"{int(timeout)} 秒内未识别主页，"
-                    f"正在重启游戏（第 {restart + 1}/{restart_limit} 次）",
+                    f"正在重启游戏（第 {restart_round + 1}/{restart_limit} 次）",
                 )
                 if not _wait_unless_stopping(context, restart_wait):
                     return True
+            elif (
+                not emulator_rebooted
+                and reboot_emulator_on_failure
+                and restart_round == restart_limit
+            ):
+                if context.tasker.stopping:
+                    return True
+                log_task(
+                    "游戏启动",
+                    "模拟器",
+                    "WARN",
+                    f"游戏重启 {restart_limit} 次仍未识别主页，正在重启模拟器",
+                )
+                if _reboot_ldplayer(
+                    emulator_console,
+                    emulator_index,
+                    adb_path,
+                    adb_serial,
+                ):
+                    emulator_rebooted = True
+                    app_started = True
+                    controller = context.tasker.controller
+                    controller.post_start_app(package).wait()
+                    if not _wait_unless_stopping(context, restart_wait):
+                        return True
+                else:
+                    log_task(
+                        "游戏启动",
+                        "模拟器",
+                        "ERROR",
+                        "模拟器重启后 adb 未恢复；本次任务停止",
+                    )
+                    return False
         log_task(
             "游戏启动",
             "结束",
