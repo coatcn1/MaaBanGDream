@@ -85,6 +85,44 @@ class ControllerTouchDispatcher:
                 return contact
         return planned
 
+    def _pick_hold_contact(self, planned: int) -> int:
+        """Allocate a touch id for a hold, preferring one not recently used.
+
+        Reusing a hold contact shortly after its release lets the backend's
+        stale "active" state swallow the press.  Rotate through 0-9, skipping
+        active contacts, alias targets and contacts released in the last 2 s.
+        """
+        now = time.monotonic()
+        recent = {
+            contact
+            for contact, released_at in self._last_released.items()
+            if now - released_at < 2.0
+        }
+        alias_targets = set(self._contact_alias.values())
+        first_choices = (
+            [planned]
+            + [contact for contact in range(7) if contact != planned]
+            + [7, 8, 9]
+        )
+        for contact in first_choices:
+            if (
+                contact not in self.active_contacts
+                and contact not in alias_targets
+                and contact not in recent
+            ):
+                return contact
+        # Fall back to the least recently released free contact.
+        best = planned
+        best_released = float("-inf")
+        for contact in range(10):
+            if contact in self.active_contacts or contact in alias_targets:
+                continue
+            released_at = self._last_released.get(contact, float("-inf"))
+            if released_at > best_released:
+                best = contact
+                best_released = released_at
+        return best
+
     def _release(self, planned: int) -> None:
         actual = self._contact_alias.pop(planned, planned)
         self._wait(self.controller.post_touch_up(actual))
@@ -100,8 +138,8 @@ class ControllerTouchDispatcher:
 
     def _down(self, action: TouchAction, planned: int) -> None:
         self._ensure_running()
-        actual = self._actual(planned)
-        if actual in self.active_contacts:
+        stale_actual = self._contact_alias.get(planned, planned)
+        if stale_actual in self.active_contacts:
             self._release(planned)
             self.recovered_contacts += 1
             self.down_recoveries += 1
@@ -111,19 +149,15 @@ class ControllerTouchDispatcher:
             # the DOWN.  This is the exceptional desync-recovery path, not
             # the normal hot path.
             self.sleeper(0.015)
-            # Use a fresh contact so the stale backend state for the old
-            # contact cannot swallow this press.
-            actual = self._pick_fallback_contact(planned)
-            self._contact_alias[planned] = actual
-        elif (
-            planned in self._last_released
-            and time.monotonic() - self._last_released[planned] >= 0.02
-            and time.monotonic() - self._last_released[planned] < 0.5
+        actual = self._pick_hold_contact(planned)
+        self._contact_alias[planned] = actual
+        if (
+            actual in self._last_released
+            and time.monotonic() - self._last_released[actual] >= 0.02
+            and time.monotonic() - self._last_released[actual] < 0.5
         ):
-            # The backend can still consider a recently released contact
-            # active even though our bookkeeping cleared it.  MTouch accepts
-            # UP for an inactive contact, so proactively clear the stale
-            # backend state before the DOWN (no recovery accounting needed).
+            # Fallback allocation had to reuse a recently released contact;
+            # proactively clear the backend state before the DOWN.
             self._wait(self.controller.post_touch_up(actual))
         x = self._x(action)
         try:

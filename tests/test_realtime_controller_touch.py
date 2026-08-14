@@ -131,10 +131,11 @@ def test_same_frame_hold_release_precedes_contact_reuse():
     assert controller.calls == [
         ("down", 6, 640, 590, 50),
         ("up", 6),
-        ("down", 6, 1060, 590, 50),
+        ("down", 0, 1060, 590, 50),
     ]
-    assert touch.active_contacts == {6}
-    assert touch.active_positions == {6: 1060}
+    assert touch.active_contacts == {0}
+    assert touch.active_positions == {0: 1060}
+    assert touch._contact_alias == {6: 0}
 
 
 def test_stale_internal_contact_is_released_before_reuse():
@@ -149,10 +150,10 @@ def test_stale_internal_contact_is_released_before_reuse():
 
     assert controller.calls == [
         ("up", 6),
-        ("down", 7, 1060, 590, 50),
+        ("down", 0, 1060, 590, 50),
     ]
     assert touch.recovered_contacts == 1
-    assert touch._contact_alias == {6: 7}
+    assert touch._contact_alias == {6: 0}
 
 
 def test_controller_reported_active_contact_is_released_and_retried_once():
