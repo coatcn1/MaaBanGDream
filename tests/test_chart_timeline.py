@@ -40,6 +40,7 @@ def test_hold_tail_pairing_and_slide_tail_lane():
     assert tail.kind == "hold-tail"
     assert tail.time_s == 14.53125
     assert tail.lane == 0
+    assert not tail.tail_flick
 
     # The 11.25 s slide starts on lane 0 and ends on lane 4; its tail must
     # be looked up on the tail lane, not the head lane.
@@ -49,3 +50,4 @@ def test_hold_tail_pairing_and_slide_tail_lane():
     assert slide_tail is not None
     assert slide_tail.lane == 4
     assert slide_tail.time_s == 11.5625
+    assert slide_tail.tail_flick

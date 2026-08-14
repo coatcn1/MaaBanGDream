@@ -131,6 +131,40 @@ def test_chart_tail_releases_visible_body_at_chart_time():
     ]
 
 
+def test_chart_slide_tail_release_emits_flick_without_visual_marker():
+    chart = ChartTimeline([
+        ChartJudgement(2.0, 0, "hold-head", 0, tail_flick=True),
+        ChartJudgement(2.5, 3, "hold-tail", 0, tail_flick=True),
+    ], bpm=192.0)
+    planner, predictor = _planner_with_calibrated_predictor(chart)
+    anchor = 100.0
+    predictor._anchor_time = anchor
+
+    # Engine anchor + 5.0 -> song 2.0: visible slide head on lane 0.
+    head_engine = anchor + 5.0
+    started = planner.update([
+        ObservedNote(
+            NoteKind.HOLD, 0, 190, 470, 100, 200, head_engine - 0.05,
+        )
+    ], head_engine)
+    assert [a.kind for a in started] == [ActionKind.DOWN]
+
+    # Finger follows the slide body onto the tail lane before the tail time.
+    planner.update([
+        ObservedNote(
+            NoteKind.HOLD, 3, 640, 480, 100, 190, anchor + 5.20,
+        )
+    ], anchor + 5.20)
+
+    # Even without any pink tail-ring marker, the fixed chart knows the tail
+    # is a slide flick and must emit FLICK instead of a plain UP.
+    at_tail = planner.update([], anchor + 5.53)
+    releases = [a for a in at_tail if a.reason == "chart-tail"]
+    assert len(releases) == 1
+    assert releases[0].kind == ActionKind.FLICK
+    assert releases[0].lane == 3
+
+
 def test_chart_tail_does_not_release_slide_before_finger_reaches_tail_lane():
     chart = _synthetic_chart()
     planner, predictor = _planner_with_calibrated_predictor(chart)

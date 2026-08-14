@@ -22,6 +22,7 @@ class ChartJudgement:
     lane: int
     kind: str
     note_index: int
+    tail_flick: bool = False
 
 
 class ChartTimeline:
@@ -85,17 +86,20 @@ class ChartTimeline:
                     continue
                 head = min(visible, key=lambda item: float(item["beat"]))
                 tail = max(visible, key=lambda item: float(item["beat"]))
+                tail_flick = note_type == "Slide"
                 judgements.append(ChartJudgement(
                     _beat_to_seconds(float(head["beat"]), bpm),
                     int(head["lane"]),
                     "hold-head",
                     note_index,
+                    tail_flick=tail_flick,
                 ))
                 judgements.append(ChartJudgement(
                     _beat_to_seconds(float(tail["beat"]), bpm),
                     int(tail["lane"]),
                     "hold-tail",
                     note_index,
+                    tail_flick=tail_flick,
                 ))
                 note_index += 1
                 continue

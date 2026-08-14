@@ -471,6 +471,9 @@ class ChartPredictor:
                     judgement.time_s,
                     tail.time_s,
                 )
+        tail = self.chart.hold_tail_for_head(judgement)
+        if tail is not None and tail.tail_flick:
+            state._hold_tail_flick.add(contact)
         actions.append(TouchAction(
             ActionKind.DOWN,
             lane,
@@ -566,6 +569,11 @@ class ChartPredictor:
                     tail.lane,
                 )
                 state._chart_tail_lane[action.contact] = tail.lane
+                if tail.tail_flick:
+                    # Slide tails must end with a swipe.  The fixed chart is
+                    # authoritative, so do not depend on the detector
+                    # spotting the pink arrow on the tail ring.
+                    state._hold_tail_flick.add(action.contact)
 
     def _release_due_holds(
         self,
