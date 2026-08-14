@@ -189,6 +189,28 @@ def test_controller_reported_active_contact_is_released_and_retried_once():
     assert touch._contact_alias == {6: 7}
 
 
+def test_transient_tap_release_uses_aliased_contact():
+    controller = Controller()
+    touch = ControllerTouchDispatcher(controller, lambda: False)
+
+    touch.dispatch([TouchAction(ActionKind.TAP, 3, 1.0)])
+
+    assert controller.calls == [("down", 7, 640, 590, 50), ("up", 7)]
+    assert touch.active_contacts == set()
+    assert touch._contact_alias == {}
+
+    # The second tap is only 100 ms later, so contact 7 is still in the
+    # 2-second cool-down window and must be aliased to a fresh contact. The
+    # release must target the aliased contact, otherwise the backend keeps
+    # it pressed and the next tap desyncs.
+    touch.dispatch([TouchAction(ActionKind.TAP, 4, 1.1)])
+
+    assert controller.calls[-2:] == [("down", 0, 790, 590, 50), ("up", 0)]
+    assert touch.active_contacts == set()
+    assert touch._contact_alias == {}
+    assert touch.recovered_contacts == 0
+
+
 def test_synchronize_does_not_send_up_for_contacts_unknown_to_dispatcher():
     controller = Controller()
     touch = ControllerTouchDispatcher(controller, lambda: False)

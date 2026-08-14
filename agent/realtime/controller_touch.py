@@ -228,6 +228,14 @@ class ControllerTouchDispatcher:
             self.active_positions.pop(contact, None)
             self._pending_flicks.pop(contact, None)
             self._last_released[contact] = time.monotonic()
+            # A hold converted into a flick keeps the planned alias until the
+            # swipe completes; the release above frees the actual contact, so
+            # forget every planned id that pointed at it.
+            self._contact_alias = {
+                planned: actual
+                for planned, actual in self._contact_alias.items()
+                if actual != contact
+            }
 
     def dispatch(self, actions: list[TouchAction]) -> None:
         persistent = [action for action in actions if action.kind == ActionKind.DOWN]
@@ -329,16 +337,18 @@ class ControllerTouchDispatcher:
                 contact = 0 if action.contact is None else action.contact
                 self._release(contact)
             for action, contact in transient_contacts:
+                actual = self._contact_alias.pop(contact, contact)
                 if action.kind == ActionKind.FLICK:
-                    self._pending_flicks[contact] = _PendingFlick(
+                    self._pending_flicks[actual] = _PendingFlick(
                         action.lane,
                         float(action.timestamp),
                     )
                     continue
                 self._ensure_running()
-                self._wait(self.controller.post_touch_up(contact))
-                self.active_contacts.discard(contact)
-                self.active_positions.pop(contact, None)
+                self._wait(self.controller.post_touch_up(actual))
+                self.active_contacts.discard(actual)
+                self.active_positions.pop(actual, None)
+                self._last_released[actual] = time.monotonic()
             for action in conversions:
                 self._pending_flicks[self._actual(action.contact)] = _PendingFlick(
                     action.lane,
