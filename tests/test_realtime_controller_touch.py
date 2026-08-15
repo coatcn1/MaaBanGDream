@@ -129,9 +129,9 @@ def test_same_frame_hold_release_precedes_contact_reuse():
     ])
 
     assert controller.calls == [
-        ("down", 6, 640, 590, 50),
+        ("down", 6, 640, 590, 1),
         ("up", 6),
-        ("down", 0, 1060, 590, 50),
+        ("down", 0, 1060, 590, 1),
     ]
     assert touch.active_contacts == {0}
     assert touch.active_positions == {0: 1060}
@@ -150,7 +150,7 @@ def test_stale_internal_contact_is_released_before_reuse():
 
     assert controller.calls == [
         ("up", 6),
-        ("down", 0, 1060, 590, 50),
+        ("down", 0, 1060, 590, 1),
     ]
     assert touch.recovered_contacts == 1
     assert touch._contact_alias == {6: 0}
@@ -181,9 +181,9 @@ def test_controller_reported_active_contact_is_released_and_retried_once():
     ])
 
     assert controller.calls == [
-        ("down", 6, 1060, 590, 50),
+        ("down", 6, 1060, 590, 1),
         ("up", 6),
-        ("down", 7, 1060, 590, 50),
+        ("down", 7, 1060, 590, 1),
     ]
     assert touch.recovered_contacts == 1
     assert touch._contact_alias == {6: 7}
@@ -195,7 +195,7 @@ def test_transient_tap_release_uses_aliased_contact():
 
     touch.dispatch([TouchAction(ActionKind.TAP, 3, 1.0)])
 
-    assert controller.calls == [("down", 7, 640, 590, 50), ("up", 7)]
+    assert controller.calls == [("down", 7, 640, 590, 1), ("up", 7)]
     assert touch.active_contacts == set()
     assert touch._contact_alias == {}
 
@@ -205,7 +205,7 @@ def test_transient_tap_release_uses_aliased_contact():
     # it pressed and the next tap desyncs.
     touch.dispatch([TouchAction(ActionKind.TAP, 4, 1.1)])
 
-    assert controller.calls[-2:] == [("down", 0, 790, 590, 50), ("up", 0)]
+    assert controller.calls[-2:] == [("down", 0, 790, 590, 1), ("up", 0)]
     assert touch.active_contacts == set()
     assert touch._contact_alias == {}
     assert touch.recovered_contacts == 0
@@ -299,8 +299,8 @@ def test_move_keeps_the_existing_hold_contact_and_uses_detected_x():
     ])
 
     assert controller.calls == [
-        ("down", 5, 921, 590, 50),
-        ("move", 5, 1013, 590, 50),
+        ("down", 5, 921, 590, 1),
+        ("move", 5, 1013, 590, 1),
     ]
 
 
@@ -325,7 +325,7 @@ def test_long_hold_move_is_interpolated_into_continuous_steps():
 
     moves = [call for call in controller.calls if call[0] == "move"]
     positions = [200, *(call[2] for call in moves)]
-    assert moves[-1] == ("move", 3, 605, 590, 50)
+    assert moves[-1] == ("move", 3, 605, 590, 1)
     assert all(
         0 < right - left <= 80
         for left, right in zip(positions, positions[1:])

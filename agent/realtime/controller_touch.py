@@ -161,7 +161,7 @@ class ControllerTouchDispatcher:
             self._wait(self.controller.post_touch_up(actual))
         x = self._x(action)
         try:
-            self._wait(self.controller.post_touch_down(x, 590, actual, 50))
+            self._wait(self.controller.post_touch_down(x, 590, actual, 1))
         except Exception as exc:
             if not self._is_active_contact_error(exc):
                 raise
@@ -170,7 +170,7 @@ class ControllerTouchDispatcher:
             self.down_recoveries += 1
             actual = self._pick_fallback_contact(planned)
             self._contact_alias[planned] = actual
-            self._wait(self.controller.post_touch_down(x, 590, actual, 50))
+            self._wait(self.controller.post_touch_down(x, 590, actual, 1))
         self.active_contacts.add(actual)
         self.active_positions[actual] = x
         self._last_used[planned] = float(action.timestamp)
@@ -239,7 +239,7 @@ class ControllerTouchDispatcher:
                     self.LANE_CENTERS[pending.lane],
                     y,
                     contact,
-                    50,
+                    1,
                 ))
                 pending.next_phase += 1
             if elapsed < self._flick_release_after:
@@ -350,7 +350,7 @@ class ControllerTouchDispatcher:
                         previous_x + (target_x - previous_x) * step / steps
                     )
                     self.controller.post_touch_move(
-                        interpolated_x, 590, actual, 50
+                        interpolated_x, 590, actual, 1
                     )
                 self.active_positions[actual] = target_x
             for action in deferred_releases:
