@@ -88,6 +88,11 @@ if (Test-Path -LiteralPath $instanceConfigDirectory) {
     Get-ChildItem -LiteralPath $instanceConfigDirectory -Filter '*.json' -File | ForEach-Object {
         $instanceConfig = Get-Content -LiteralPath $_.FullName -Raw -Encoding utf8 | ConvertFrom-Json
         $instanceConfig | Add-Member -NotePropertyName 'ContinueRunningWhenError' -NotePropertyValue $false -Force
+        # MaaTouch's injected events are silently ignored by the game's live
+        # screen on LDPlayer 9 after emulator restarts, while Minitouch stays
+        # reliable.  The ADB device probe resets InputMethods on every MFA
+        # start, so pin the input mode here (the UI setting overrides it).
+        $instanceConfig | Add-Member -NotePropertyName 'AdbControlInputType' -NotePropertyValue 'MinitouchAndAdbKey' -Force
         $instanceConfig | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $_.FullName -Encoding utf8
     }
 }
