@@ -1054,6 +1054,7 @@ class RealtimeProfilePlay(CustomAction):
             f"touch_recoveries={stats.recovered_contacts} "
             f"down_recoveries={stats.down_recoveries} "
             f"stale_move_recoveries={stats.stale_move_recoveries} "
+            f"touch_resets={stats.touch_resets} "
             f"input_wait_count={stats.input_wait_count} "
             f"input_wait_total_ms={stats.input_wait_total_ms:.1f} "
             f"input_wait_max_ms={stats.input_wait_max_ms:.1f} "

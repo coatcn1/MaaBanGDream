@@ -230,6 +230,25 @@ def test_synchronize_releases_only_contacts_owned_by_dispatcher():
     assert controller.calls == [("up", 1), ("up", 6)]
 
 
+def test_force_release_all_clears_every_contact_and_state():
+    controller = Controller()
+    touch = ControllerTouchDispatcher(controller, lambda: False)
+    touch.active_contacts.update({0, 3, 9})
+    touch.active_positions.update({0: 640, 3: 640, 9: 640})
+    touch._contact_alias.update({2: 3, 7: 9})
+    touch._last_released.update({3: 1.0, 9: 1.0})
+
+    touch.force_release_all()
+
+    assert [call for call in controller.calls if call[0] == "up"] == [
+        ("up", contact) for contact in range(10)
+    ]
+    assert touch.active_contacts == set()
+    assert touch.active_positions == {}
+    assert touch._contact_alias == {}
+    assert touch._last_released == {}
+
+
 def test_stop_during_dispatch_releases_every_active_contact():
     controller = Controller()
     checks = 0

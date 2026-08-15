@@ -62,6 +62,7 @@ class EngineStats:
     recovered_contacts: int = 0
     down_recoveries: int = 0
     stale_move_recoveries: int = 0
+    touch_resets: int = 0
     input_wait_count: int = 0
     input_wait_total_ms: float = 0.0
     input_wait_max_ms: float = 0.0
@@ -109,6 +110,10 @@ class RealtimeEngine:
         continue_after_life_depleted: bool = False,
         life_exit_threshold: int | None = None,
         on_life_safety: Callable[[object], None] | None = None,
+        touch_reset_life_threshold: int = 300,
+        touch_reset_cooldown_seconds: float = 5.0,
+        touch_reset_period_seconds: float = 15.0,
+        touch_reset_recent_action_seconds: float = 0.35,
     ) -> EngineStats:
         if duration_seconds is not None and not 1 <= duration_seconds <= 600:
             raise ValueError("duration_seconds 必须在 1..600 之间")
@@ -128,6 +133,9 @@ class RealtimeEngine:
         completed = False
         life_depleted = False
         below_threshold_streak = 0
+        touch_resets = 0
+        last_touch_reset_at = float("-inf")
+        reading = None
         safety_reading = None
         base_stats: EngineStats | None = None
         run_error: Exception | None = None
@@ -254,6 +262,7 @@ class RealtimeEngine:
                 stale_move_recoveries=int(
                     getattr(self.touch, "stale_move_recoveries", 0)
                 ),
+                touch_resets=touch_resets,
                 input_wait_count=int(
                     getattr(self.touch, "wait_count", 0)
                 ),
@@ -446,6 +455,33 @@ class RealtimeEngine:
                 active_contacts = len(
                     getattr(self.touch, "active_contacts", ())
                 )
+                reset_touch = getattr(self.touch, "force_release_all", None)
+                if reset_touch is not None:
+                    life_drop_reset = (
+                        self.life_guard is not None
+                        and self.life_guard.alive_confirmed
+                        and reading is not None
+                        and reading.value <= touch_reset_life_threshold
+                        and now - last_transient_action_at
+                        <= touch_reset_recent_action_seconds
+                        and now - last_touch_reset_at
+                        >= touch_reset_cooldown_seconds
+                    )
+                    periodic_reset = (
+                        active_contacts == 0
+                        and now - last_touch_reset_at
+                        >= touch_reset_period_seconds
+                    )
+                    if life_drop_reset or periodic_reset:
+                        reset_touch()
+                        touch_resets += 1
+                        last_touch_reset_at = now
+                        print(
+                            "RealtimeTouchReset reason="
+                            + ("life-drop" if life_drop_reset else "periodic")
+                            + f" life_value={reading.value if reading is not None else -1}",
+                            flush=True,
+                        )
                 current_frame_context = {
                     "frame": frames,
                     "notes": len(notes),

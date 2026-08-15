@@ -204,6 +204,27 @@ class ControllerTouchDispatcher:
         self._last_used.clear()
         self._last_released.clear()
 
+    def force_release_all(self) -> None:
+        """Release every touch id to clear silently stuck backend state.
+
+        The emulator/game input stream can stop accepting presses even though
+        MaaFramework reports every DOWN as successful: a pointer stuck inside
+        the game blocks all later touches, so taps disappear as MISS with no
+        tap effect.  Posting UP for all ten ids clears that state; MTouch
+        accepts UP for an inactive contact, so this is safe between notes.
+        """
+        for contact in range(10):
+            try:
+                self._wait(self.controller.post_touch_up(contact))
+            except Exception:
+                pass
+        self.active_contacts.clear()
+        self.active_positions.clear()
+        self._pending_flicks.clear()
+        self._contact_alias.clear()
+        self._last_used.clear()
+        self._last_released.clear()
+
     def advance(self, now: float) -> None:
         """Advance pending flick gestures without sleeping in the capture loop."""
         self._ensure_running()
