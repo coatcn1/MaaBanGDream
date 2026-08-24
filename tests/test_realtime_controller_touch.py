@@ -7,7 +7,11 @@ from agent.realtime.touch_planner import ActionKind, TouchAction
 
 
 class Job:
+    def __init__(self):
+        self.wait_calls = 0
+
     def wait(self):
+        self.wait_calls += 1
         return self
 
 
@@ -22,18 +26,24 @@ class FailingJob(Job):
 class Controller:
     def __init__(self):
         self.calls = []
+        self.jobs = []
+
+    def _job(self):
+        job = Job()
+        self.jobs.append(job)
+        return job
 
     def post_touch_down(self, x, y, contact=0, pressure=1):
         self.calls.append(("down", contact, x, y, pressure))
-        return Job()
+        return self._job()
 
     def post_touch_move(self, x, y, contact=0, pressure=1):
         self.calls.append(("move", contact, x, y, pressure))
-        return Job()
+        return self._job()
 
     def post_touch_up(self, contact=0):
         self.calls.append(("up", contact))
-        return Job()
+        return self._job()
 
 
 def test_native_dispatch_keeps_hold_contact_while_tapping_and_flicking():
@@ -48,9 +58,9 @@ def test_native_dispatch_keeps_hold_contact_while_tapping_and_flicking():
 
     assert ("up", 3) not in controller.calls
     assert delays == []
-    flick_contacts = set(touch.active_contacts) - {3}
-    assert len(flick_contacts) == 1
-    assert touch.active_contacts == {3, *flick_contacts}
+    transient_contacts = set(touch.active_contacts) - {3}
+    assert len(transient_contacts) == 2
+    assert touch.active_contacts == {3, *transient_contacts}
 
     touch.advance(1.117)
     touch.advance(1.134)
@@ -129,12 +139,13 @@ def test_same_frame_hold_release_precedes_contact_reuse():
     ])
 
     assert controller.calls == [
-        ("down", 6, 640, 590, 50),
+        ("down", 6, 640, 590, 1),
         ("up", 6),
-        ("down", 6, 1060, 590, 50),
+        ("down", 0, 1060, 590, 1),
     ]
-    assert touch.active_contacts == {6}
-    assert touch.active_positions == {6: 1060}
+    assert touch.active_contacts == {0}
+    assert touch.active_positions == {0: 1060}
+    assert touch._contact_alias == {6: 0}
 
 
 def test_stale_internal_contact_is_released_before_reuse():
@@ -149,9 +160,10 @@ def test_stale_internal_contact_is_released_before_reuse():
 
     assert controller.calls == [
         ("up", 6),
-        ("down", 6, 1060, 590, 50),
+        ("down", 0, 1060, 590, 1),
     ]
     assert touch.recovered_contacts == 1
+    assert touch._contact_alias == {6: 0}
 
 
 def test_controller_reported_active_contact_is_released_and_retried_once():
@@ -179,11 +191,44 @@ def test_controller_reported_active_contact_is_released_and_retried_once():
     ])
 
     assert controller.calls == [
-        ("down", 6, 1060, 590, 50),
+        ("down", 6, 1060, 590, 1),
         ("up", 6),
-        ("down", 6, 1060, 590, 50),
+        ("down", 7, 1060, 590, 1),
     ]
     assert touch.recovered_contacts == 1
+    assert touch._contact_alias == {6: 7}
+
+
+def test_transient_tap_release_uses_aliased_contact():
+    controller = Controller()
+    touch = ControllerTouchDispatcher(controller, lambda: False)
+
+    touch.dispatch([TouchAction(ActionKind.TAP, 3, 1.0)])
+
+    assert controller.calls == [("down", 7, 640, 590, 1)]
+    assert touch.active_contacts == {7}
+    assert touch._contact_alias == {}
+
+    touch.advance(1.025)
+
+    assert controller.calls[-1] == ("up", 7)
+    assert touch.active_contacts == set()
+
+    # The second tap is only 100 ms later, so contact 7 is still in the
+    # 2-second cool-down window and must be aliased to a fresh contact. The
+    # release must target the aliased contact, otherwise the backend keeps
+    # it pressed and the next tap desyncs.
+    touch.dispatch([TouchAction(ActionKind.TAP, 4, 1.1)])
+
+    assert controller.calls[-1] == ("down", 0, 790, 590, 1)
+    assert touch.active_contacts == {0}
+    assert touch._contact_alias == {}
+    assert touch.recovered_contacts == 0
+
+    touch.advance(1.125)
+
+    assert controller.calls[-1] == ("up", 0)
+    assert touch.active_contacts == set()
 
 
 def test_synchronize_does_not_send_up_for_contacts_unknown_to_dispatcher():
@@ -203,6 +248,83 @@ def test_synchronize_releases_only_contacts_owned_by_dispatcher():
     touch.synchronize()
 
     assert controller.calls == [("up", 1), ("up", 6)]
+
+
+def test_force_release_all_clears_every_contact_and_state():
+    controller = Controller()
+    touch = ControllerTouchDispatcher(controller, lambda: False)
+    touch.active_contacts.update({0, 3, 9})
+    touch.active_positions.update({0: 640, 3: 640, 9: 640})
+    touch._contact_alias.update({2: 3, 7: 9})
+    touch._last_released.update({3: 1.0, 9: 1.0})
+
+    touch.force_release_all()
+
+    assert [call for call in controller.calls if call[0] == "up"] == [
+        ("up", contact) for contact in range(10)
+    ]
+    assert touch.active_contacts == set()
+    assert touch.active_positions == {}
+    assert touch._contact_alias == {}
+    assert touch._last_released == {}
+
+
+def test_emergency_release_all_posts_without_waiting_in_hot_path():
+    controller = Controller()
+    touch = ControllerTouchDispatcher(controller, lambda: False)
+    touch.active_contacts.update({0, 3, 9})
+    touch.active_positions.update({0: 640, 3: 640, 9: 640})
+    touch._contact_alias.update({2: 3, 7: 9})
+
+    touch.emergency_release_all()
+
+    assert [call for call in controller.calls if call[0] == "up"] == [
+        ("up", contact) for contact in range(10)
+    ]
+    assert sum(job.wait_calls for job in controller.jobs) == 0
+    assert touch.active_contacts == set()
+
+
+def test_flick_advance_never_waits_for_move_or_release_jobs():
+    controller = Controller()
+    touch = ControllerTouchDispatcher(controller, lambda: False)
+
+    touch.dispatch([TouchAction(ActionKind.FLICK, 3, 1.0)])
+    for job in controller.jobs:
+        job.wait_calls = 0
+
+    touch.advance(1.017)
+    touch.advance(1.034)
+    touch.advance(1.051)
+    touch.advance(1.068)
+
+    assert sum(job.wait_calls for job in controller.jobs) == 0
+    assert touch.active_contacts == set()
+    assert touch.active_positions == {}
+    assert touch._contact_alias == {}
+
+
+def test_tap_pulse_spans_frames_and_never_waits_for_touch_jobs():
+    controller = Controller()
+    touch = ControllerTouchDispatcher(controller, lambda: False)
+
+    touch.dispatch([TouchAction(ActionKind.TAP, 3, 1.0)])
+
+    assert controller.calls == [("down", 7, 640, 590, 1)]
+    assert touch.active_contacts == {7}
+    assert sum(job.wait_calls for job in controller.jobs) == 0
+
+    touch.advance(1.017)
+    assert controller.calls == [("down", 7, 640, 590, 1)]
+    assert touch.active_contacts == {7}
+
+    touch.advance(1.025)
+    assert controller.calls == [
+        ("down", 7, 640, 590, 1),
+        ("up", 7),
+    ]
+    assert touch.active_contacts == set()
+    assert sum(job.wait_calls for job in controller.jobs) == 0
 
 
 def test_stop_during_dispatch_releases_every_active_contact():
@@ -255,8 +377,8 @@ def test_move_keeps_the_existing_hold_contact_and_uses_detected_x():
     ])
 
     assert controller.calls == [
-        ("down", 5, 921, 590, 50),
-        ("move", 5, 1013, 590, 50),
+        ("down", 5, 921, 590, 1),
+        ("move", 5, 1013, 590, 1),
     ]
 
 
@@ -281,9 +403,24 @@ def test_long_hold_move_is_interpolated_into_continuous_steps():
 
     moves = [call for call in controller.calls if call[0] == "move"]
     positions = [200, *(call[2] for call in moves)]
-    assert moves[-1] == ("move", 3, 605, 590, 50)
+    assert moves[-1] == ("move", 3, 605, 590, 1)
     assert all(
         0 < right - left <= 80
         for left, right in zip(positions, positions[1:])
     )
     assert touch.active_positions == {3: 605}
+
+
+def test_stale_move_for_inactive_contact_is_skipped_not_fatal():
+    controller = Controller()
+    touch = ControllerTouchDispatcher(controller, lambda: False)
+    # A hold release can race with the planner's MOVE in the same frame; the
+    # contact is no longer down, so the MOVE must be dropped instead of
+    # crashing the whole song.
+    touch.dispatch([
+        TouchAction(ActionKind.MOVE, 3, 1.0, 2, "hold-follow"),
+    ])
+
+    assert controller.calls == []
+    assert touch.recovered_contacts == 1
+    assert touch.active_contacts == set()

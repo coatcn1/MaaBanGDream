@@ -15,6 +15,9 @@ from maa.agent.agent_server import AgentServer
 from maa.context import Context
 from maa.custom_action import CustomAction
 
+from .live_session import reset_live_run, update_live_run
+from .song_identity import identify_song
+
 
 DIFFICULTY_TARGETS = {
     "Easy": (715, 545),
@@ -47,6 +50,15 @@ class RealtimeDifficultySelect(CustomAction):
             if requested not in DIFFICULTY_TARGETS:
                 raise ValueError(f"unsupported difficulty: {requested}")
             attempts = int(params.get("max_attempts", 3))
+            if context.tasker.stopping:
+                return True
+            reset_live_run(
+                mode=str(params.get("mode", "realtime")),
+                difficulty=requested,
+                profile_name=params.get("profile_name"),
+                expected_note_speed=params.get("note_speed"),
+                debug_recording=bool(params.get("debug_recording", False)),
+            )
             controller = context.tasker.controller
             target = DIFFICULTY_TARGETS[requested]
             for attempt in range(1, attempts + 1):
@@ -64,6 +76,17 @@ class RealtimeDifficultySelect(CustomAction):
                     flush=True,
                 )
                 if recognized == requested:
+                    identity = identify_song(image)
+                    update_live_run(
+                        song_id=identity.song_id,
+                        song_id_method=identity.method,
+                        prepared_for_play=True,
+                    )
+                    print(
+                        "RealtimeDifficultySelect "
+                        f"song={identity.song_id} method={identity.method}",
+                        flush=True,
+                    )
                     return True
             print(
                 f"RealtimeDifficultySelect failed requested={requested} "

@@ -99,3 +99,20 @@ def test_ineligible_feedback_is_recorded_but_never_adjusts():
     assert controller.valid_samples == 0
     assert controller.ignored_samples == 6
     assert controller.ignored_reasons == {"active_hold": 6}
+
+
+def test_frozen_controller_keeps_calibrated_offset_under_heavy_feedback():
+    controller = AdaptiveTimingController(
+        -20,
+        maximum_live_adjustment_ms=0,
+        minimum_samples=3,
+        imbalance=2,
+        adjustment_cooldown_seconds=0,
+    )
+
+    for index in range(20):
+        controller.update(None, index)
+        controller.update(TimingFeedback.FAST, index + .01)
+
+    assert controller.current_offset_ms == -20
+    assert controller.fast_samples == 20

@@ -11,7 +11,7 @@
     "action": "Custom",
     "custom_action": "ProcessConflictGuard",
     "next": [
-      "CalibrationDifficultySetting"
+      "RealtimeCalibrationRecover"
     ],
     "on_error": [
       "RealtimeCalibrationFailure"
@@ -31,6 +31,60 @@
         ]
       }
     }
+  },
+  "RealtimeCalibrationRecover": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "CommonRecover",
+    "custom_action_param": {
+      "home_node": "RealtimeLiveHomeMarker",
+      "modal_cancel_nodes": [
+        "QuitConfirmCancel"
+      ],
+      "click_nodes": [
+        "AutoLiveLoginTap",
+        "AutoLiveLoginNext",
+        "AutoLiveCommonClose",
+        "AutoLiveStorySkipConfirmLarge",
+        "AutoLiveStorySkipConfirm",
+        "AutoLiveStorySkip",
+        "AutoLiveStoryMenu"
+      ],
+      "escape_interval_ms": 1500,
+      "escape_timeout_ms": 60000,
+      "restart_limit": 2,
+      "restart_wait_ms": 5000,
+      "startup_grace_ms": 12000,
+      "login_start_node": "AutoLiveLoginScreenMarker",
+      "login_start_target": [
+        640,
+        635
+      ],
+      "login_marker_priority_attempts": 3,
+      "escape_after_login_start": true,
+      "package": "com.bilibili.star.bili",
+      "login_tap_target": [
+        640,
+        360
+      ]
+    },
+    "next": [
+      "RealtimeCalibrationVisualSettingsGate"
+    ],
+    "on_error": [
+      "RealtimeCalibrationFailure"
+    ]
+  },
+  "RealtimeCalibrationVisualSettingsGate": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "RealtimeGameEffectSettingsGate",
+    "next": [
+      "CalibrationDifficultySetting"
+    ],
+    "on_error": [
+      "RealtimeCalibrationFailure"
+    ]
   },
   "CalibrationDifficultySetting": {
     "recognition": "DirectHit",
@@ -86,6 +140,9 @@
     "custom_action": "CommonRecover",
     "custom_action_param": {
       "home_node": "RealtimeLiveHomeMarker",
+      "modal_cancel_nodes": [
+        "QuitConfirmCancel"
+      ],
       "click_nodes": [
         "AutoLiveLoginTap",
         "AutoLiveLoginNext",
@@ -120,14 +177,6 @@
         ]
       }
     }
-  },
-  "CalibrationCaptureSong": {
-    "recognition": "DirectHit",
-    "action": "Custom",
-    "custom_action": "CalibrationSongIdentity",
-    "next": [
-      "RealtimeLiveDifficulty"
-    ]
   },
   "RealtimeCalibrationRoundComplete": {
     "recognition": "DirectHit",

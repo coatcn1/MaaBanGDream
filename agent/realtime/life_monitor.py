@@ -43,12 +43,29 @@ class LifeDetector:
         # previous lower hue bound (35) turned a real 250/1000 bar (H≈25)
         # into zero and caused a false safety abort.
         green = cv2.inRange(hsv, (20, 40, 55), (95, 255, 255))
-        columns = np.count_nonzero(green, axis=0) >= max(3, bar.shape[0] // 5)
-        filled = 0
-        for present in columns:
-            if not present:
-                break
-            filled += 1
+        # The depleted red fill is brighter than the dark red empty track.
+        # Keep the brightness floor high so the track cannot count as 1000.
+        red = cv2.inRange(hsv, (0, 100, 235), (10, 255, 255))
+        red |= cv2.inRange(hsv, (170, 100, 235), (179, 255, 255))
+        fill = cv2.bitwise_or(green, red)
+        columns = np.count_nonzero(fill, axis=0) >= max(3, bar.shape[0] // 5)
+        present_columns = np.flatnonzero(columns)
+        if not len(present_columns) or present_columns[0] > 8:
+            return LifeReading(True, 0)
+        # The bar's rounded left edge can leave a few unfilled pixels before
+        # a real depleted red segment.  Measure through that edge and allow
+        # only tiny anti-aliasing gaps inside the contiguous fill.
+        filled = int(present_columns[0])
+        gaps = 0
+        for present in columns[filled:]:
+            if present:
+                filled += 1
+                gaps = 0
+            else:
+                gaps += 1
+                if gaps > 2:
+                    break
+                filled += 1
         return LifeReading(True, min(1000, max(0, round(1000 * filled / bar.shape[1]))))
 
 

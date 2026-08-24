@@ -10,11 +10,19 @@ from .state import PlannerConfig, PlannerState
 class OrdinaryPipeline:
     """Tap/flick judgement: tracks, rescues, lane sweep, bookkeeping."""
 
-    def __init__(self, config: PlannerConfig, state: PlannerState) -> None:
+    def __init__(
+        self,
+        config: PlannerConfig,
+        state: PlannerState,
+        *,
+        chart_gate: object | None = None,
+    ) -> None:
         self._config = config
         self._state = state
+        self._chart_gate = chart_gate
         self._note_tracker = MultiNoteTracker(
-            memory_seconds=config.track_memory_seconds
+            memory_seconds=config.track_memory_seconds,
+            keep_downward_on_jitter=config.enable_slide,
         )
 
     def _record_diagnostic(
@@ -121,7 +129,19 @@ class OrdinaryPipeline:
             max(.006, self._state._frame_interval_seconds * .65),
         )
         predicted = self._config.judgement_y - velocity * predictive_lead
-        return min(self._config.judgement_y - 3.0, calibrated, predicted)
+        if not self._config.enable_slide:
+            # Normal keeps the historical bounded trigger untouched.
+            return min(self._config.judgement_y - 3.0, calibrated, predicted)
+        # A negative calibrated offset asks for a later press (closer to the
+        # line).  The old ``min`` let the one-frame predictive lead always
+        # win, so the offset had no effect on taps and rounds stayed
+        # FAST-heavy (game suggested -25..-44 ms).  Honour the offset up to a
+        # few pixels below the line while keeping the predictive lead as the
+        # floor for positive offsets and slow capture cadence.
+        return min(
+            self._config.judgement_y + 6.0,
+            max(calibrated, predicted),
+        )
 
     def _crossed_ordinary_trigger(
         self,
@@ -141,6 +161,7 @@ class OrdinaryPipeline:
         return (
             previous_y < target <= tracked.note.y
             or previous_y < self._config.judgement_y <= tracked.note.y
+            or tracked.note.y >= self._config.judgement_y
         )
 
     def _reclassified_crossing(
@@ -479,6 +500,34 @@ class OrdinaryPipeline:
                         height=note.height,
                     )
                     continue
+                flick_residue = (
+                    note.kind == NoteKind.TAP
+                    and self._state._last_trigger_action_kind.get(note.lane)
+                    == ActionKind.FLICK
+                    and now - self._state._last_trigger.get(
+                        note.lane, float("-inf")
+                    ) <= self._config.flick_residue_suppress_seconds
+                )
+                if flick_residue:
+                    # A flick's playable ring often survives as a separate
+                    # first-visible fragment below the line after the arrow
+                    # already dispatched. Firing it as a TAP adds a spurious
+                    # input on the same lane and can turn a clean flick into
+                    # a miss on the next judgement.
+                    self._note_tracker.mark_fired(tracked.track_id, now)
+                    self._record_diagnostic(
+                        "flick_ring_residue_suppressed",
+                        now,
+                        lane=note.lane,
+                        track_id=tracked.track_id,
+                        y=round(note.y, 2),
+                        flick_age_ms=round(
+                            (now - self._state._last_trigger.get(
+                                note.lane, now
+                            )) * 1000
+                        ),
+                    )
+                    continue
                 kind = ActionKind.FLICK if note.kind == NoteKind.FLICK else ActionKind.TAP
                 actions.append(TouchAction(
                     kind, note.lane, now, reason="rescue", track_id=tracked.track_id
@@ -488,7 +537,17 @@ class OrdinaryPipeline:
             if tracked.previous_y is None or tracked.velocity_y <= 0:
                 continue
             target = self._ordinary_trigger_y(tracked.velocity_y)
-            if self._crossed_ordinary_trigger(tracked, target):
+            near_target_crossing = (
+                self._config.enable_slide
+                and
+                tracked.previous_y is not None
+                and tracked.previous_y < target
+                and tracked.note.y >= target - 6
+                and tracked.minimum_y <= self._config.judgement_y - 60
+                and tracked.motion_samples >= 8
+                and tracked.downward_motion_frames >= 3
+            )
+            if near_target_crossing or self._crossed_ordinary_trigger(tracked, target):
                 trusted_crossing = trusted_crossing_track(tracked, self._config.judgement_y)
                 if not trusted_crossing:
                     # A PERFECT glyph or lane-light fragment can disappear,
@@ -506,6 +565,23 @@ class OrdinaryPipeline:
                         y=round(note.y, 2),
                         motion_samples=tracked.motion_samples,
                         downward_motion_frames=tracked.downward_motion_frames,
+                    )
+                    continue
+                if (
+                    self._chart_gate is not None
+                    and hasattr(self._chart_gate, "validate_crossing")
+                    and not self._chart_gate.validate_crossing(
+                        note.lane, now
+                    )
+                ):
+                    self._note_tracker.mark_fired(tracked.track_id, now)
+                    self._record_diagnostic(
+                        "chart_mistimed_crossing_suppressed",
+                        now,
+                        lane=note.lane,
+                        track_id=tracked.track_id,
+                        y=round(note.y, 2),
+                        reason="crossing",
                     )
                     continue
                 kind = ActionKind.FLICK if note.kind == NoteKind.FLICK else ActionKind.TAP

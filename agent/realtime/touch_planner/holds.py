@@ -134,10 +134,12 @@ class HoldPipeline:
         """Far end of a falling green bar: release only after it reaches line."""
         return note.y - note.height / 2
 
-    @staticmethod
     def _linked_hold_body(
+        self,
         head: ObservedNote,
         hold_notes: list[ObservedNote],
+        *,
+        now: float,
     ) -> ObservedNote | None:
         """Prove a detached head from the continuous body immediately above.
 
@@ -145,7 +147,21 @@ class HoldPipeline:
         ahead across lanes plus a thin playable head ring at the judgement
         line.  The ring alone is deliberately insufficient hold evidence; the
         spatially connected high-confidence body makes the pair trustworthy.
+
+        A body that is still tracked as an active hold, or that belongs to a
+        hold released moments ago, must not validate a NEW head: its tail ring
+        and the previous body can overlap the next lane for a few frames and
+        would otherwise restart a phantom hold that sticks around for the
+        hold_max_seconds failsafe (observed with TAP EFFECT 4 in SAVIOR OF
+        SONG Hard: a 16 px tail fragment on lane 1 linked to the lane-0 body
+        that was released in the same frame, then blocked lane 0 for 17 s).
         """
+        suppress_window = self._config.hold_start_suppress_seconds
+        recent_release_lanes = {
+            lane
+            for lane, released_at in self._state._hold_released_at.items()
+            if now - released_at < suppress_window
+        }
         head_top = head.y - head.height / 2
         candidates = []
         for body in hold_notes:
@@ -153,6 +169,7 @@ class HoldPipeline:
                 body is head
                 or body.height < 80
                 or body.hold_body_confidence < .8
+                or body.lane in recent_release_lanes
             ):
                 continue
             body_bottom = body.y + body.height / 2
@@ -217,6 +234,12 @@ class HoldPipeline:
         current_holds: dict[int, tuple[ObservedNote, bool]] = {}
         used_notes: set[int] = set()
         for contact in sorted(self._state._active_hold_tail):
+            if contact in self._state._blind_hold_contacts:
+                # A chart-pressed straight hold has no visible body to follow.
+                # Keep the finger on the head lane and let the chart release
+                # the contact at the tail time instead of latching it to an
+                # unrelated green fragment.
+                continue
             previous_tail = self._state._active_hold_tail[contact]
             previous_seen = self._state._hold_seen.get(contact, now)
             elapsed = max(0.0, now - previous_seen)
@@ -372,12 +395,18 @@ class HoldPipeline:
             if continuing:
                 previous_tail = self._state._active_hold_tail[contact]
                 hold_age = now - self._state._hold_started.get(contact, now)
+                chart_tail_lane = self._state._chart_tail_lane.get(contact)
+                wrong_release_lane = (
+                    chart_tail_lane is not None
+                    and chart_tail_lane != note.lane
+                )
                 tail_ring_at_line = (
                     note.height <= 30
                     and note.width >= 70
                     and note.y >= 555
                     and contact in self._state._hold_confirmed
                     and hold_age >= .30
+                    and not wrong_release_lane
                 )
                 if tail_ring_at_line:
                     self._release_hold(contact, note.lane, now, "tail-ring", actions)
@@ -385,12 +414,13 @@ class HoldPipeline:
                 if (
                     hold_age >= .30
                     and previous_tail < self._config.hold_release_y <= tail
+                    and not wrong_release_lane
                 ):
                     self._release_hold(
                         contact, note.lane, now, "tail-crossing", actions
                     )
                     continue
-                if note.height >= 40:
+                if note.height >= 40 and not wrong_release_lane:
                     self._predict_hold_release(
                         contact, previous_tail, previous_seen or now, tail, now
                     )
@@ -436,7 +466,7 @@ class HoldPipeline:
 
             if note.kind == NoteKind.HOLD:
                 linked_body = self._linked_hold_body(
-                    note, hold_notes
+                    note, hold_notes, now=now
                 )
                 should_rescue = (
                     self._config.rescue_first_visible
@@ -531,6 +561,22 @@ class HoldPipeline:
                     or should_pair_rescue
                     )
                 ):
+                    if getattr(self._state, "_debug_holds", False) and note.lane == 2:
+                        print(
+                            "HOLDSTART", round(now, 3),
+                            "restart_allowed", restart_allowed,
+                            "body_confirmed", body_confirmed,
+                            "should_rescue", should_rescue,
+                            "should_cross", should_cross,
+                            "should_pair_rescue", should_pair_rescue,
+                            "head", round(head, 1),
+                            "prev_head", None if previous is None else round(self._hold_head(previous), 1),
+                            "release_age", round(release_age, 3),
+                            "suppress", round(
+                                now - self._state._last_trigger.get(note.lane, float("-inf")), 3
+                            ),
+                            flush=True,
+                        )
                     tracking_tail = (
                         self._hold_tail(linked_body)
                         if linked_body is not None else tail
@@ -627,6 +673,11 @@ class HoldPipeline:
                 and held_for >= .30
             ):
                 lane = self._state._active_hold_lane.get(contact, contact)
+                chart_tail_lane = self._state._chart_tail_lane.get(contact)
+                if chart_tail_lane is not None and chart_tail_lane != lane:
+                    # Predicted release belongs to a different lane than the
+                    # chart tail; the chart predictor handles this contact.
+                    continue
                 self._release_hold(contact, lane, now, "predicted-tail", actions)
         for contact, started in list(self._state._hold_started.items()):
             if (

@@ -81,6 +81,16 @@ def test_timing_adjustment_moves_toward_balanced_feedback():
     assert adjusted_timing_offset(10, balanced) == 10
 
 
+def test_timing_adjustment_step_uses_wider_bounds():
+    slow = LiveResult(80, 20, 0, 0, 5, 0, 20)
+    fast = LiveResult(80, 20, 0, 0, 5, 20, 0)
+    extreme = LiveResult(80, 20, 0, 0, 5, 30, 0)
+
+    assert adjusted_timing_offset(0, slow) == 12
+    assert adjusted_timing_offset(0, fast) == -12
+    assert adjusted_timing_offset(0, extreme) == -12
+
+
 def test_result_parser_rejects_impossible_fast_slow_total():
     result = LiveResult(10, 0, 0, 0, 0, 8, 5)
     with pytest.raises(ValueError, match="结算统计不一致"):

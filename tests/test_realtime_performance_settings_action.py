@@ -1,18 +1,26 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import cv2
 import numpy as np
 
+from agent.realtime import performance_settings_action
+from agent.realtime.live_session import reset_live_run, update_live_run
 from agent.realtime.performance_settings_action import (
     DEFAULT_COORDINATES,
     RealtimePerformanceSettingsGate,
     _digit_templates,
+    _expected_speed,
     _read_speed,
     _speed_click_plan,
     clear_verified_settings,
     verified_settings,
+)
+from agent.realtime.game_effect_settings_action import (
+    _publish_verified_game_visual_settings,
+    clear_verified_game_visual_settings,
 )
 
 
@@ -64,6 +72,55 @@ def test_speed_click_plan_uses_half_tenth_cent_steps_without_wrapping():
         ("increase_010", 1),
         ("increase_001", 3),
     ]
+
+
+def test_visual_evaluation_uses_precheck_resolver_before_speed_read(monkeypatch):
+    clear_verified_game_visual_settings()
+    _publish_verified_game_visual_settings(
+        note_skin_type=7,
+        tap_effect=5,
+        judgement_assist_effect=False,
+    )
+    calls = []
+    settings = SimpleNamespace(
+        note_speed=5.0,
+        profile_path=SimpleNamespace(name="expert.json"),
+    )
+    monkeypatch.setattr(
+        "agent.realtime.performance_settings_action.RealtimeProfileStore.runtime_options",
+        lambda _store: {
+            "note_skin_type": 1,
+            "tap_effect": 1,
+            "judgement_assist_effect": True,
+        },
+    )
+    monkeypatch.setattr(
+        "agent.realtime.performance_settings_action.RealtimeProfileStore.resolve_latest_for_visual_evaluation_environment",
+        lambda _store, **kwargs: calls.append(kwargs) or settings,
+    )
+    monkeypatch.setattr(
+        "agent.realtime.performance_settings_action.RealtimeProfileStore.resolve_latest_for_environment",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("strict resolver must not run during evaluation precheck")
+        ),
+    )
+
+    speed, profile = _expected_speed(
+        SimpleNamespace(),
+        {
+            "difficulty": "Expert",
+            "require_profile": True,
+            "visual_evaluation": True,
+        },
+        np.zeros((720, 1280, 3), dtype=np.uint8),
+    )
+
+    assert (speed, profile) == (5.0, "expert.json")
+    signature = calls[0]["current_signature"]
+    assert signature.note_speed == 1.0
+    assert signature.note_skin_type == 7
+    assert signature.tap_effect == 5
+    assert signature.judgement_assist_effect is False
 
 
 def test_gate_reads_current_speed_and_uses_real_half_tenth_cent_buttons(monkeypatch):
@@ -299,3 +356,161 @@ def test_gate_reclicks_first_tab_when_the_initial_tab_switch_is_dropped(
     })
     assert clicks.count(DEFAULT_COORDINATES["first_tab"]) == 2
     assert verified_settings("Easy").actual_note_speed == 2.0
+
+
+def test_settings_gate_failure_writes_structured_preflight_result(
+    monkeypatch, tmp_path,
+):
+    clear_verified_settings()
+    clear_verified_game_visual_settings()
+    _publish_verified_game_visual_settings(
+        note_skin_type=6,
+        tap_effect=4,
+        judgement_assist_effect=False,
+    )
+    reset_live_run(
+        mode="realtime",
+        difficulty="Expert",
+        expected_note_speed=5.0,
+        actual_note_speed=8.88,
+        prepared_for_play=True,
+    )
+    update_live_run(
+        song_id="song-phash-v1-0011223344556677",
+        song_id_method="song-phash-v1",
+    )
+    monkeypatch.setattr(performance_settings_action, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(
+        RealtimePerformanceSettingsGate,
+        "_run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("speed readback failed")
+        ),
+    )
+    context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Expert",
+        "require_profile": True,
+        "dpi": 240,
+        "game_fps": 60,
+        "render_quality": "standard",
+        "visual_evaluation": True,
+    }))
+
+    assert RealtimePerformanceSettingsGate().run(context, argv) is False
+
+    reports = list((tmp_path / "screencap").glob("realtime-result-*.json"))
+    assert len(reports) == 1
+    payload = json.loads(reports[0].read_text(encoding="utf-8"))
+    assert payload["valid"] is False
+    assert payload["result_status"] == "preflight_error"
+    assert payload["terminal_stage"] == "performance_settings_gate"
+    assert payload["run_id"] == payload["session"]["run_id"]
+    assert payload["song_id"] == "song-phash-v1-0011223344556677"
+    assert payload["mode"] == "visual-evaluation"
+    assert payload["settings"] == {
+        "expected_note_speed": 5.0,
+        "actual_note_speed": None,
+        "note_skin_type": 6,
+        "tap_effect": 4,
+        "judgement_assist": False,
+    }
+    assert payload["processed_frames"] == 0
+    assert payload["dispatched_actions"] == 0
+    assert payload["debug_recording_path"] is None
+    assert payload["eligible_for_profile_acceptance"] is False
+    assert not list(tmp_path.rglob("summary.json"))
+
+
+def test_settings_readback_failure_keeps_expected_profile_snapshot(
+    monkeypatch, tmp_path,
+):
+    clear_verified_settings()
+    clear_verified_game_visual_settings()
+    _publish_verified_game_visual_settings(
+        note_skin_type=3,
+        tap_effect=2,
+        judgement_assist_effect=True,
+    )
+    live_run = reset_live_run(
+        mode="challenge",
+        difficulty="Expert",
+        expected_note_speed=None,
+        actual_note_speed=None,
+        prepared_for_play=True,
+    )
+    update_live_run(
+        song_id="song-phash-v1-8899aabbccddeeff",
+        song_id_method="song-phash-v1",
+    )
+    monkeypatch.setattr(performance_settings_action, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(
+        performance_settings_action,
+        "_expected_speed",
+        lambda *_args, **_kwargs: (5.0, "expert-accepted.json"),
+    )
+    def fail_readback(*_args, **_kwargs):
+        reset_live_run(
+            mode="formal",
+            difficulty="Easy",
+            prepared_for_play=True,
+        )
+        raise RuntimeError("speed digits unreadable")
+
+    monkeypatch.setattr(
+        performance_settings_action, "_read_speed", fail_readback,
+    )
+    monkeypatch.setattr(
+        performance_settings_action, "_click", lambda *_args: None,
+    )
+    monkeypatch.setattr(performance_settings_action.time, "sleep", lambda _s: None)
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=_Controller()),
+    )
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Expert",
+        "require_profile": True,
+        "run_mode": "challenge",
+        "first_tab_attempts": 1,
+    }))
+
+    assert RealtimePerformanceSettingsGate().run(context, argv) is False
+
+    report = next((tmp_path / "screencap").glob("realtime-result-*.json"))
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["run_id"] == live_run.run_id
+    assert payload["song_id"] == "song-phash-v1-8899aabbccddeeff"
+    assert payload["mode"] == "challenge"
+    assert payload["profile"] == "expert-accepted.json"
+    assert payload["settings"]["expected_note_speed"] == 5.0
+    assert payload["settings"]["actual_note_speed"] is None
+
+
+def test_settings_gate_stop_during_failure_is_neutral_and_writes_nothing(
+    monkeypatch, tmp_path,
+):
+    reset_live_run(mode="realtime", difficulty="Expert")
+    monkeypatch.setattr(performance_settings_action, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(
+        RealtimePerformanceSettingsGate,
+        "_run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("controller stopped")
+        ),
+    )
+
+    class Tasker:
+        reads = 0
+
+        @property
+        def stopping(self):
+            self.reads += 1
+            return self.reads >= 2
+
+    context = SimpleNamespace(tasker=Tasker())
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Expert",
+    }))
+
+    assert RealtimePerformanceSettingsGate().run(context, argv) is True
+    assert not list(tmp_path.rglob("realtime-result-*.json"))

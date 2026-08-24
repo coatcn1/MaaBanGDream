@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import traceback
 from datetime import datetime
@@ -16,15 +15,94 @@ from .rehearsal_action import frame_resolution
 from .result_parser import LiveResult, adjusted_timing_offset
 from .runtime_options import calibration_difficulty, debug_enabled
 from .difficulty_action import DIFFICULTY_TARGETS
+from .game_effect_settings_action import verified_game_visual_settings
+from .live_session import current_song_id
 
 
-_CURRENT_SONG_ID = "unknown"
 PLAY_NODES = {
     "Easy": "RealtimeLivePlay", "Normal": "RealtimeLivePlayNormal",
     "Hard": "RealtimeLivePlayHard", "Expert": "RealtimeLivePlayExpert",
     "Special": "RealtimeLivePlaySpecial",
 }
 CALIBRATION_ROUND_ENTRY = "RealtimeCalibrationSingleLive"
+
+
+def calibration_round_plan(
+    *,
+    difficulty: str,
+    note_speed: float,
+    calibration_debug: bool,
+    formal: bool,
+    play_node: str,
+    offset: int,
+    report_path: Path,
+) -> tuple[dict, dict]:
+    """Build the self-contained pipeline override for one calibration round."""
+    play_params = {
+        "difficulty": difficulty, "require_profile": False,
+        "target_fps": 60, "timing_offset_ms": offset,
+        "debug_recording": calibration_debug,
+        "duration_seconds": 600, "dpi": 240, "game_fps": 60,
+        "render_quality": "standard", "note_speed": note_speed,
+        "settings_gate_required": True,
+        "run_mode": (
+            "calibration-formal"
+            if formal else "calibration-rehearsal"
+        ),
+        "wait_for_completion": True, "completion_missing_frames": 120,
+        "require_completion": True, "save_result_frame": True,
+        "result_back_attempts": 30, "result_back_interval_seconds": 1.5,
+        "rehearsal_mode": not formal,
+        "calibration_report": str(report_path),
+    }
+    start_next = [play_node]
+    override = {
+        "RealtimeLiveFreeLive": {
+            "next": ["RealtimeLiveSongSelectMarker"]
+        },
+        "RealtimeLiveSongSelectMarker": {"next": ["RealtimeLiveDifficulty"]},
+        "RealtimeLiveDifficulty": {
+            "custom_action_param": {
+                "difficulty": difficulty,
+                "max_attempts": 3,
+                "mode": (
+                    "calibration-formal"
+                    if formal else "calibration-rehearsal"
+                ),
+                "note_speed": note_speed,
+                "debug_recording": calibration_debug,
+            }
+        },
+        "RealtimeLiveFormalSettingsGate": {
+            "custom_action_param": {
+                "difficulty": difficulty,
+                "require_profile": False,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard",
+            }
+        },
+        "RealtimeLiveRehearsalSettingsGate": {
+            "custom_action_param": {
+                "difficulty": difficulty,
+                "require_profile": False,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard",
+            }
+        },
+        "RealtimeLiveRehearsalStart": {"next": start_next},
+        "RealtimeLiveFormalStart": {"next": start_next},
+        "RealtimeLiveReturnHome": {
+            "next": ["RealtimeCalibrationRoundComplete"]
+        },
+        play_node: {"custom_action_param": play_params},
+    }
+    if formal:
+        override["RealtimeLiveFormalModeGate"] = {
+            "next": ["RealtimeLiveRehearsalToFormal", "RealtimeLiveFormalReady"]
+        }
+    return play_params, override
 
 
 def result_report_snapshot(root: Path) -> dict[str, tuple[int, int]]:
@@ -53,10 +131,6 @@ def latest_result_report_since(
     raise RuntimeError("校准单轮未找到本轮已保存的结算报告")
 
 
-def current_song_id() -> str:
-    return _CURRENT_SONG_ID
-
-
 def result_from_mapping(value: dict) -> LiveResult:
     return LiveResult(**{key: value[key] for key in ("perfect", "great", "good", "bad", "miss", "fast", "slow")}, confidence=float(value.get("confidence", 1)))
 
@@ -65,23 +139,12 @@ def calibration_passed(result: LiveResult, survived: bool) -> bool:
     return bool(survived and result.hit_rate >= .80)
 
 
-@AgentServer.custom_action("CalibrationSongIdentity")
-class CalibrationSongIdentity(CustomAction):
-    def run(self, context: Context, argv: CustomAction.RunArg) -> bool:
-        global _CURRENT_SONG_ID
-        if context.tasker.stopping:
-            return True
-        image = context.tasker.controller.post_screencap().wait().get()
-        if context.tasker.stopping:
-            return True
-        crop = image[110:600, 40:450]
-        _CURRENT_SONG_ID = "random-" + hashlib.sha256(crop.tobytes()).hexdigest()[:16]
-        print(f"RealtimeCalibration song={_CURRENT_SONG_ID}", flush=True)
-        return True
-
-
 class CalibrationRunner:
-    """Decision logic for three distinct rehearsals and one formal validation."""
+    """Run three valid rehearsals and one valid formal validation.
+
+    Calibration targets timing-offset feedback, not song diversity, so
+    repeated songs are accepted and no song-identity validation is applied.
+    """
 
     def __init__(self, run_round, *, max_attempts: int = 10):
         self.run_round = run_round
@@ -89,7 +152,7 @@ class CalibrationRunner:
 
     def run(self, initial_offset: int = 0):
         offset = int(initial_offset)
-        rehearsals, used = [], set()
+        rehearsals = []
         for _ in range(self.max_attempts):
             if len(rehearsals) == 3:
                 break
@@ -101,8 +164,8 @@ class CalibrationRunner:
             effective_offset = int(record.get("timing_offset_ms", round_initial_offset))
             suggested_offset = adjusted_timing_offset(effective_offset, result)
             offset = max(
-                round_initial_offset - 5,
-                min(round_initial_offset + 5, suggested_offset),
+                round_initial_offset - 15,
+                min(round_initial_offset + 15, suggested_offset),
             )
             record = {
                 **record,
@@ -110,11 +173,9 @@ class CalibrationRunner:
                 "initial_timing_offset_ms": round_initial_offset,
                 "suggested_timing_offset_ms": offset,
             }
-            if record["song_id"] not in used:
-                rehearsals.append(record)
-                used.add(record["song_id"])
+            rehearsals.append(record)
         if len(rehearsals) != 3:
-            raise RuntimeError("十次尝试内未取得三首不同歌曲的有效排练结果")
+            raise RuntimeError("十次尝试内未取得三次有效排练结果")
         if not any(record["passed"] for record in rehearsals):
             raise RuntimeError("三首排练全部失败，校准已终止")
         formal = None
@@ -122,12 +183,14 @@ class CalibrationRunner:
             candidate = self.run_round(True, offset)
             if candidate.get("valid") is False:
                 continue
-            if candidate["song_id"] not in used:
-                result = result_from_mapping(candidate)
-                formal = {**candidate, "passed": calibration_passed(result, bool(candidate["survived"]))}
-                break
+            result = result_from_mapping(candidate)
+            formal = {
+                **candidate,
+                "passed": calibration_passed(result, bool(candidate["survived"])),
+            }
+            break
         if formal is None:
-            raise RuntimeError("十次尝试内未选到不同的第四首正式验证歌曲")
+            raise RuntimeError("十次尝试内未取得有效正式验证结果")
         return offset, rehearsals, formal
 
 
@@ -165,61 +228,23 @@ class RealtimeCalibration(CustomAction):
                 flush=True,
             )
             reports_before = result_report_snapshot(PROJECT_ROOT / "screencap")
-            play_params = {
-                "difficulty": difficulty, "require_profile": False,
-                "target_fps": 60, "timing_offset_ms": offset,
-                "debug_recording": calibration_debug,
-                "duration_seconds": 600, "dpi": 240, "game_fps": 60,
-                "render_quality": "standard", "note_speed": note_speed,
-                "settings_gate_required": True,
-                "wait_for_completion": True, "completion_missing_frames": 120,
-                "require_completion": True, "save_result_frame": True,
-                "result_back_attempts": 30, "result_back_interval_seconds": 1.5,
-                "rehearsal_mode": not formal,
-                "calibration_report": (
-                    "screencap/calibration-round-"
-                    f"{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.json"
-                ),
-            }
-            start_next = [play_node]
-            override = {
-                "RealtimeLiveSongSelectMarker": {"next": ["RealtimeLiveRandomSong"]},
-                "RealtimeLiveRandomSong": {"next": ["CalibrationCaptureSong"]},
-                "RealtimeLiveDifficulty": {
-                    "custom_action_param": {"difficulty": difficulty, "max_attempts": 3}
-                },
-                "RealtimeLiveFormalSettingsGate": {
-                    "custom_action_param": {
-                        "difficulty": difficulty,
-                        "require_profile": False,
-                        "dpi": 240,
-                        "game_fps": 60,
-                        "render_quality": "standard",
-                    }
-                },
-                "RealtimeLiveRehearsalSettingsGate": {
-                    "custom_action_param": {
-                        "difficulty": difficulty,
-                        "require_profile": False,
-                        "dpi": 240,
-                        "game_fps": 60,
-                        "render_quality": "standard",
-                    }
-                },
-                "RealtimeLiveRehearsalStart": {"next": start_next},
-                "RealtimeLiveFormalStart": {"next": start_next},
-                "RealtimeLiveReturnHome": {
-                    "next": ["RealtimeCalibrationRoundComplete"]
-                },
-                play_node: {"custom_action_param": play_params},
-            }
-            if formal:
-                override["RealtimeLiveFormalModeGate"] = {"next": ["RealtimeLiveRehearsalToFormal", "RealtimeLiveFormalReady"]}
+            report_path = PROJECT_ROOT / (
+                "screencap/calibration-round-"
+                f"{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.json"
+            )
+            play_params, override = calibration_round_plan(
+                difficulty=difficulty,
+                note_speed=note_speed,
+                calibration_debug=calibration_debug,
+                formal=formal,
+                play_node=play_node,
+                offset=offset,
+                report_path=report_path,
+            )
             detail = context.run_task(CALIBRATION_ROUND_ENTRY, override)
             if detail is None or not detail.status.succeeded:
                 status = None if detail is None else detail.status
                 raise RuntimeError(f"校准单轮 Maa 任务执行失败: {status}")
-            report_path = PROJECT_ROOT / play_params["calibration_report"]
             report = (
                 json.loads(report_path.read_text(encoding="utf-8"))
                 if report_path.exists()
@@ -236,9 +261,15 @@ class RealtimeCalibration(CustomAction):
 
         runner = CalibrationRunner(run_round)
         offset, rehearsals, formal = runner.run(int(params.get("timing_offset_ms", 0)))
+        visual = verified_game_visual_settings()
+        if visual is None:
+            raise RuntimeError("校准未经过游戏视觉设置读回验证")
         image = context.tasker.controller.post_screencap().wait().get()
         signature = EnvironmentSignature(
             frame_resolution(image), 240, 60, "standard", note_speed,
+            visual.note_skin_type,
+            visual.tap_effect,
+            visual.judgement_assist_effect,
         )
         payload = {
             "created_at": datetime.now().isoformat(timespec="seconds"),

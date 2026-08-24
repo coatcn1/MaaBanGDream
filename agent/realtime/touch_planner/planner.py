@@ -6,6 +6,8 @@ from .holds import HoldPipeline
 from .ordinary import OrdinaryPipeline
 from .suppression import JudgementSuppressor
 from ..note_detector import ObservedNote
+from ..chart_timeline import ChartTimeline
+from ..chart_predictor import ChartPredictor
 
 
 class RealtimePlanner:
@@ -37,6 +39,10 @@ class RealtimePlanner:
         # untracked residue is suppressed.
         post_release_rescue_seconds: float = 0.65,
         hold_start_suppress_seconds: float = 0.35,
+        flick_residue_suppress_seconds: float = 0.45,
+        chart_timeline: ChartTimeline | None = None,
+        chart_prediction: bool = False,
+        chart_predict_presses: bool = False,
     ):
         self._config = PlannerConfig(
             judgement_y=float(judgement_y),
@@ -52,11 +58,23 @@ class RealtimePlanner:
             hold_restart_cooldown_seconds=hold_restart_cooldown_seconds,
             post_release_rescue_seconds=post_release_rescue_seconds,
             hold_start_suppress_seconds=hold_start_suppress_seconds,
+            flick_residue_suppress_seconds=flick_residue_suppress_seconds,
         )
         self._state = PlannerState(timing_offset_ms=timing_offset_ms)
         self._holds = HoldPipeline(self._config, self._state)
         self._ordinary = OrdinaryPipeline(self._config, self._state)
         self._suppression = JudgementSuppressor(self._config, self._state)
+        self._chart_predictor = (
+            ChartPredictor(
+                chart_timeline,
+                judgement_y=float(judgement_y),
+                predict_presses=chart_predict_presses,
+            )
+            if chart_timeline is not None and chart_prediction
+            else None
+        )
+        if self._chart_predictor is not None:
+            self._ordinary._chart_gate = self._chart_predictor
 
     @property
     def has_active_holds(self) -> bool:
@@ -96,7 +114,7 @@ class RealtimePlanner:
         )
         self._holds.finish_frame(selected_by_lane, now, actions)
         self._ordinary.finish_frame(notes, now, actions)
-        return self._suppression.filter(
+        actions = self._suppression.filter(
             actions,
             now,
             {
@@ -104,6 +122,32 @@ class RealtimePlanner:
                 for tracked in tracked_notes + stale_tracked_notes
             },
         )
+        if self._chart_predictor is not None:
+            if self._chart_predictor.predict_presses:
+                # Any transient press far from the chart time is a mistimed
+                # junk/rescue/dropout input: drop it and let the chart press
+                # the note at the correct moment.  Structural hold actions
+                # (DOWN/UP/MOVE) are handled by the hold pipelines.
+                actions = [
+                    action
+                    for action in actions
+                    if not (
+                        action.kind in (ActionKind.TAP, ActionKind.FLICK)
+                        and action.contact is None
+                        and not self._chart_predictor.validate_crossing(
+                            action.lane, action.timestamp
+                        )
+                    )
+                ]
+            actions = self._chart_predictor.update(
+                notes,
+                tracked_notes,
+                now,
+                actions,
+                self._state,
+                self._holds,
+            )
+        return actions
 
     def reset(self, now: float) -> list[TouchAction]:
         actions = []
@@ -114,6 +158,8 @@ class RealtimePlanner:
             ))
         self._state.reset()
         self._ordinary.reset_tracker()
+        if self._chart_predictor is not None:
+            self._chart_predictor.reset()
         return actions
 
     # Backward-compatible accessors for tests and the engine.
@@ -192,6 +238,27 @@ class RealtimePlanner:
     @_frame_interval_seconds.setter
     def _frame_interval_seconds(self, value: float) -> None:
         self._state._frame_interval_seconds = value
+
+    @property
+    def chart_predicted_presses(self) -> int:
+        return (
+            self._chart_predictor.predicted_presses
+            if self._chart_predictor is not None else 0
+        )
+
+    @property
+    def chart_predicted_releases(self) -> int:
+        return (
+            self._chart_predictor.predicted_releases
+            if self._chart_predictor is not None else 0
+        )
+
+    @property
+    def chart_calibrated(self) -> bool:
+        return (
+            self._chart_predictor.calibrated
+            if self._chart_predictor is not None else False
+        )
 
     @property
     def filtered_adjacent_artifacts(self) -> int:

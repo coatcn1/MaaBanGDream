@@ -1,8 +1,10 @@
 import json
 import os
+from pathlib import Path
 
 from agent.realtime.calibration_action import (
     CalibrationRunner,
+    calibration_round_plan,
     latest_result_report_since,
     result_report_snapshot,
 )
@@ -14,8 +16,49 @@ def record(song, *, hit=100, miss=0, fast=0, slow=0, survived=True):
             "completed": True, "confidence": 1.0}
 
 
-def test_calibration_collects_three_distinct_rehearsals_then_distinct_formal():
-    records = iter([record("A", slow=20), record("A"), record("B"), record("C"), record("D")])
+def test_calibration_round_plan_never_falls_back_to_prepare():
+    report = Path("screencap/calibration-round-test.json")
+    play_params, override = calibration_round_plan(
+        difficulty="Normal",
+        note_speed=3.5,
+        calibration_debug=True,
+        formal=False,
+        play_node="RealtimeLivePlayNormal",
+        offset=-13,
+        report_path=report,
+    )
+    assert override["RealtimeLiveFreeLive"]["next"] == [
+        "RealtimeLiveSongSelectMarker"
+    ]
+    assert override["RealtimeLiveSongSelectMarker"]["next"] == [
+        "RealtimeLiveDifficulty"
+    ]
+    assert "RandomSongSelect" not in json.dumps(override, ensure_ascii=False)
+    assert "RealtimeLivePrepare" not in str(override)
+    assert play_params["run_mode"] == "calibration-rehearsal"
+    assert play_params["rehearsal_mode"] is True
+    assert play_params["calibration_report"] == str(report)
+
+
+def test_calibration_round_plan_forces_formal_mode_gate():
+    report = Path("screencap/calibration-round-test.json")
+    _, override = calibration_round_plan(
+        difficulty="Normal",
+        note_speed=3.5,
+        calibration_debug=True,
+        formal=True,
+        play_node="RealtimeLivePlayNormal",
+        offset=-13,
+        report_path=report,
+    )
+    assert override["RealtimeLiveFormalModeGate"]["next"] == [
+        "RealtimeLiveRehearsalToFormal",
+        "RealtimeLiveFormalReady",
+    ]
+
+
+def test_calibration_accepts_repeated_song_rehearsals_then_formal():
+    records = iter([record("A", slow=20), record("A"), record("A"), record("A")])
     calls = []
 
     def run_round(formal, offset):
@@ -23,11 +66,12 @@ def test_calibration_collects_three_distinct_rehearsals_then_distinct_formal():
         return next(records)
 
     offset, rehearsals, formal = CalibrationRunner(run_round).run()
-    assert [item["song_id"] for item in rehearsals] == ["A", "B", "C"]
-    assert formal["song_id"] == "D"
+    assert len(rehearsals) == 3
+    assert all(item["song_id"] == "A" for item in rehearsals)
+    assert formal["song_id"] == "A"
     assert formal["passed"] is True
-    assert offset == 5
-    assert [formal for formal, _ in calls] == [False, False, False, False, True]
+    assert offset == 12
+    assert [formal for formal, _ in calls] == [False, False, False, True]
 
 
 def test_failed_rehearsal_counts_and_adjusts_offset():
@@ -38,7 +82,7 @@ def test_failed_rehearsal_counts_and_adjusts_offset():
     offset, rehearsals, formal = CalibrationRunner(lambda *_: next(records)).run()
     assert [item["song_id"] for item in rehearsals] == ["bad", "A", "B"]
     assert rehearsals[0]["passed"] is False
-    assert offset == 5
+    assert offset == 12
     assert formal["passed"]
 
 
@@ -58,8 +102,8 @@ def test_next_round_starts_from_the_live_adjusted_offset():
     offset, _, _ = CalibrationRunner(run_round).run()
 
     assert calls[0] == (False, 0)
-    assert calls[1] == (False, 5)
-    assert offset == 5
+    assert calls[1] == (False, 15)
+    assert offset == 15
 
 
 def test_three_failed_rehearsals_stop_before_formal():
@@ -89,12 +133,12 @@ def test_formal_failure_returns_unaccepted_candidate():
     assert formal["passed"] is False
 
 
-def test_calibration_is_bounded_when_no_three_valid_songs():
-    runner = CalibrationRunner(lambda *_: record("same"), max_attempts=4)
+def test_calibration_is_bounded_when_no_three_valid_results():
+    runner = CalibrationRunner(lambda *_: {"valid": False}, max_attempts=4)
     try:
         runner.run()
     except RuntimeError as exc:
-        assert "三首不同歌曲" in str(exc)
+        assert "三次有效排练" in str(exc)
     else:
         raise AssertionError("calibration should be bounded")
 
@@ -113,6 +157,21 @@ def test_invalid_result_rounds_are_retried_within_existing_budget():
 
     assert [item["song_id"] for item in rehearsals] == ["A", "B", "C"]
     assert formal["song_id"] == "D"
+
+
+def test_unknown_song_identity_still_counts_when_result_is_valid():
+    missing_identity = record("discarded")
+    missing_identity.pop("song_id")
+    records = iter([
+        record("unknown"), missing_identity, record(None), record("A"),
+    ])
+
+    _, rehearsals, formal = CalibrationRunner(
+        lambda *_: next(records), max_attempts=10,
+    ).run()
+
+    assert len(rehearsals) == 3
+    assert formal["song_id"] == "A"
 
 
 def test_calibration_reuses_the_result_json_already_saved_by_the_play_action(tmp_path):
