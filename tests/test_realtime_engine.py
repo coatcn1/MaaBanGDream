@@ -62,6 +62,20 @@ class Touch:
         self.closed += 1
 
 
+class ResetTrackingTouch(Touch):
+    def __init__(self):
+        super().__init__()
+        self.active_contacts = set()
+        self.force_release_calls = 0
+        self.emergency_release_calls = 0
+
+    def force_release_all(self):
+        self.force_release_calls += 1
+
+    def emergency_release_all(self):
+        self.emergency_release_calls += 1
+
+
 def build(fail=False):
     clock = Clock()
     planner = Planner()
@@ -144,6 +158,60 @@ def test_engine_exception_still_releases_everything():
     assert stats.stage_timings_ms["capture"]["max"] == pytest.approx(20.0)
     assert planner.resets == 1
     assert touch.closed == 1
+
+
+def test_engine_does_not_force_release_all_during_periodic_idle():
+    clock = Clock()
+    planner = Planner()
+    touch = ResetTrackingTouch()
+    engine = RealtimeEngine(Detector(), planner, touch, clock)
+
+    def capture():
+        clock.value += 0.02
+        return np.zeros((1, 1, 3), dtype=np.uint8)
+
+    stats = engine.run(
+        capture,
+        lambda: False,
+        duration_seconds=31,
+        target_fps=60,
+    )
+
+    assert touch.force_release_calls == 0
+    assert stats.touch_resets == 0
+
+
+def test_engine_uses_nonblocking_emergency_release_on_severe_life_drop():
+    clock = Clock()
+    planner = Planner()
+    touch = ResetTrackingTouch()
+    engine = RealtimeEngine(Detector(), planner, touch, clock)
+
+    class FallingLife:
+        def __init__(self):
+            self.frames = 0
+
+        def detect(self, image):
+            self.frames += 1
+            return LifeReading(True, 1000 if self.frames <= 3 else 250)
+
+    engine.life_detector = FallingLife()
+    engine.life_guard = LifeGuard(confirm_frames=3)
+
+    def capture():
+        clock.value += 0.02
+        return np.zeros((720, 1280, 3), dtype=np.uint8)
+
+    stats = engine.run(
+        capture,
+        lambda: False,
+        duration_seconds=1,
+        target_fps=60,
+    )
+
+    assert touch.force_release_calls == 0
+    assert touch.emergency_release_calls == 1
+    assert stats.touch_resets == 1
 
 
 @pytest.mark.parametrize("failure_stage", ["capture", "detector", "planner", "dispatch"])

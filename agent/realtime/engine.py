@@ -112,7 +112,6 @@ class RealtimeEngine:
         on_life_safety: Callable[[object], None] | None = None,
         touch_reset_life_threshold: int = 300,
         touch_reset_cooldown_seconds: float = 5.0,
-        touch_reset_period_seconds: float = 15.0,
         touch_reset_recent_action_seconds: float = 0.35,
     ) -> EngineStats:
         if duration_seconds is not None and not 1 <= duration_seconds <= 600:
@@ -455,7 +454,9 @@ class RealtimeEngine:
                 active_contacts = len(
                     getattr(self.touch, "active_contacts", ())
                 )
-                reset_touch = getattr(self.touch, "force_release_all", None)
+                reset_touch = getattr(
+                    self.touch, "emergency_release_all", None
+                )
                 if reset_touch is not None:
                     life_drop_reset = (
                         self.life_guard is not None
@@ -467,18 +468,12 @@ class RealtimeEngine:
                         and now - last_touch_reset_at
                         >= touch_reset_cooldown_seconds
                     )
-                    periodic_reset = (
-                        active_contacts == 0
-                        and now - last_touch_reset_at
-                        >= touch_reset_period_seconds
-                    )
-                    if life_drop_reset or periodic_reset:
+                    if life_drop_reset:
                         reset_touch()
                         touch_resets += 1
                         last_touch_reset_at = now
                         print(
-                            "RealtimeTouchReset reason="
-                            + ("life-drop" if life_drop_reset else "periodic")
+                            "RealtimeTouchReset reason=life-drop"
                             + f" life_value={reading.value if reading is not None else -1}",
                             flush=True,
                         )

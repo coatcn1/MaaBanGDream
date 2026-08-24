@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import cv2
 import numpy as np
+import pytest
 import agent.realtime.game_effect_settings_action as action_module
 
 from agent.realtime.game_effect_settings_action import (

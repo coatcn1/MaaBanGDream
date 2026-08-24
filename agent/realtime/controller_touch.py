@@ -26,6 +26,11 @@ class _PendingFlick:
     next_phase: int = 0
 
 
+@dataclass
+class _PendingTap:
+    started_at: float
+
+
 class ControllerTouchDispatcher:
     """Dispatch planner output through MaaFramework's native multi-touch API."""
 
@@ -45,6 +50,7 @@ class ControllerTouchDispatcher:
         self.maximum_move_step = max(20, int(maximum_move_step))
         self.active_contacts: set[int] = set()
         self.active_positions: dict[int, int] = {}
+        self._pending_taps: dict[int, _PendingTap] = {}
         self._pending_flicks: dict[int, _PendingFlick] = {}
         self._contact_alias: dict[int, int] = {}
         self._last_used: dict[int, float] = {}
@@ -57,6 +63,7 @@ class ControllerTouchDispatcher:
         self.wait_max_seconds = 0.0
         self._flick_phases = ((.012, 545), (.024, 490), (.036, 455))
         self._flick_release_after = .048
+        self._tap_release_after = .024
 
     def _ensure_running(self) -> None:
         if self.stopping():
@@ -128,6 +135,7 @@ class ControllerTouchDispatcher:
         self._wait(self.controller.post_touch_up(actual))
         self.active_contacts.discard(actual)
         self.active_positions.pop(actual, None)
+        self._pending_taps.pop(actual, None)
         self._pending_flicks.pop(actual, None)
         self._last_released[planned] = time.monotonic()
 
@@ -136,7 +144,13 @@ class ControllerTouchDispatcher:
         message = str(exc).lower()
         return "contact" in message and "already active" in message
 
-    def _down(self, action: TouchAction, planned: int) -> None:
+    def _down(
+        self,
+        action: TouchAction,
+        planned: int,
+        *,
+        wait_for_job: bool = True,
+    ) -> None:
         self._ensure_running()
         stale_actual = self._contact_alias.get(planned, planned)
         if stale_actual in self.active_contacts:
@@ -161,7 +175,9 @@ class ControllerTouchDispatcher:
             self._wait(self.controller.post_touch_up(actual))
         x = self._x(action)
         try:
-            self._wait(self.controller.post_touch_down(x, 590, actual, 1))
+            job = self.controller.post_touch_down(x, 590, actual, 1)
+            if wait_for_job:
+                self._wait(job)
         except Exception as exc:
             if not self._is_active_contact_error(exc):
                 raise
@@ -199,6 +215,7 @@ class ControllerTouchDispatcher:
                 pass
         self.active_contacts.clear()
         self.active_positions.clear()
+        self._pending_taps.clear()
         self._pending_flicks.clear()
         self._contact_alias.clear()
         self._last_used.clear()
@@ -220,6 +237,30 @@ class ControllerTouchDispatcher:
                 pass
         self.active_contacts.clear()
         self.active_positions.clear()
+        self._pending_taps.clear()
+        self._pending_flicks.clear()
+        self._contact_alias.clear()
+        self._last_used.clear()
+        self._last_released.clear()
+
+    def emergency_release_all(self) -> None:
+        """Post an all-contact release without waiting in the hot path.
+
+        A severe life drop can mean that the device-side touch stream is
+        stuck even though MaaFramework accepted every command.  Queueing UP
+        for all ids can recover that stream, but synchronously waiting for
+        ten jobs stalls capture and skips the very notes this safeguard is
+        meant to protect.  Song-boundary cleanup still uses the synchronous
+        ``synchronize``/``force_release_all`` paths.
+        """
+        for contact in range(10):
+            try:
+                self.controller.post_touch_up(contact)
+            except Exception:
+                pass
+        self.active_contacts.clear()
+        self.active_positions.clear()
+        self._pending_taps.clear()
         self._pending_flicks.clear()
         self._contact_alias.clear()
         self._last_used.clear()
@@ -228,6 +269,19 @@ class ControllerTouchDispatcher:
     def advance(self, now: float) -> None:
         """Advance pending flick gestures without sleeping in the capture loop."""
         self._ensure_running()
+        for contact, pending in list(self._pending_taps.items()):
+            if float(now) - pending.started_at < self._tap_release_after:
+                continue
+            self.controller.post_touch_up(contact)
+            self.active_contacts.discard(contact)
+            self.active_positions.pop(contact, None)
+            self._pending_taps.pop(contact, None)
+            self._last_released[contact] = time.monotonic()
+            self._contact_alias = {
+                planned: actual
+                for planned, actual in self._contact_alias.items()
+                if actual != contact
+            }
         for contact, pending in list(self._pending_flicks.items()):
             elapsed = float(now) - pending.started_at
             while (
@@ -235,16 +289,22 @@ class ControllerTouchDispatcher:
                 and elapsed >= self._flick_phases[pending.next_phase][0]
             ):
                 _, y = self._flick_phases[pending.next_phase]
-                self._wait(self.controller.post_touch_move(
+                # MaaFramework preserves the post order.  Waiting here can
+                # block capture for 150-250 ms when the emulator input thread
+                # hiccups, which skips an entire dense phrase.  Hold MOVE is
+                # already queued the same way in dispatch().
+                self.controller.post_touch_move(
                     self.LANE_CENTERS[pending.lane],
                     y,
                     contact,
                     1,
-                ))
+                )
                 pending.next_phase += 1
             if elapsed < self._flick_release_after:
                 continue
-            self._wait(self.controller.post_touch_up(contact))
+            # The contact cooldown prevents immediate reuse, so the release
+            # can remain asynchronous without racing the next DOWN.
+            self.controller.post_touch_up(contact)
             self.active_contacts.discard(contact)
             self.active_positions.pop(contact, None)
             self._pending_flicks.pop(contact, None)
@@ -323,7 +383,12 @@ class ControllerTouchDispatcher:
             for action in persistent:
                 self._down(action, 0 if action.contact is None else action.contact)
             for action, contact in transient_contacts:
-                self._down(action, contact)
+                # A transient is deliberately held across frames.  Posting
+                # DOWN and immediately waiting for UP produced sub-millisecond
+                # pulses that LDPlayer/BanG Dream intermittently discarded.
+                # MaaFramework preserves command order, so keep the hot path
+                # nonblocking and let advance() release the contact later.
+                self._down(action, contact, wait_for_job=False)
             for action in moves:
                 self._ensure_running()
                 contact = 0 if action.contact is None else action.contact
@@ -358,6 +423,7 @@ class ControllerTouchDispatcher:
                 contact = 0 if action.contact is None else action.contact
                 self._release(contact)
             for action, contact in transient_contacts:
+                self._ensure_running()
                 actual = self._contact_alias.pop(contact, contact)
                 if action.kind == ActionKind.FLICK:
                     self._pending_flicks[actual] = _PendingFlick(
@@ -365,11 +431,9 @@ class ControllerTouchDispatcher:
                         float(action.timestamp),
                     )
                     continue
-                self._ensure_running()
-                self._wait(self.controller.post_touch_up(actual))
-                self.active_contacts.discard(actual)
-                self.active_positions.pop(actual, None)
-                self._last_released[actual] = time.monotonic()
+                self._pending_taps[actual] = _PendingTap(
+                    float(action.timestamp),
+                )
             for action in conversions:
                 self._pending_flicks[self._actual(action.contact)] = _PendingFlick(
                     action.lane,
