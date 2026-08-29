@@ -1,0 +1,741 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-08-24T16:39:04.845247Z",
+  "source": {
+    "provider": "bestdori",
+    "song_index_url": "https://bestdori.com/api/songs/all.7.json",
+    "runtime_network_access": false
+  },
+  "songs": [
+    {
+      "bestdori_song_id": 85,
+      "display_title": "ハッピーシンセサイザ",
+      "category": "cover",
+      "titles": [
+        "ハッピーシンセサイザ",
+        "Happy Synthesizer",
+        "ハッピーシンセサイザ",
+        "ハッピーシンセサイザ",
+        "해피 신시사이저"
+      ],
+      "fingerprints": [
+        "song-jacket-phash-v2-cb95caf3442b931e"
+      ],
+      "jackets": [
+        {
+          "name": "085_happy_synthe",
+          "source_url": "https://bestdori.com/assets/jp/musicjacket/musicjacket90_rip/assets-star-forassetbundle-startapp-musicjacket-musicjacket90-085_happy_synthe-jacket.png",
+          "raw_sha256": "0cbe5497305507237c20f8c3947648bfeb30259413411048aa88a9d74f68208b",
+          "fingerprint": "song-jacket-phash-v2-cb95caf3442b931e"
+        }
+      ],
+      "difficulties": {
+        "easy": {
+          "path": "bestdori/85/easy.json",
+          "level": 7,
+          "expected_notes": 169,
+          "source_url": "https://bestdori.com/api/charts/85/easy.json",
+          "raw_sha256": "34a2aa064d9890143983629f82484e356cd05dbcea22520c7844ddb2b0886814",
+          "chart_sha256": "680997bd4d2a33df0e09e254787a8533a87411b254fad3e4b0b36087bcfaf52e"
+        },
+        "normal": {
+          "path": "bestdori/85/normal.json",
+          "level": 12,
+          "expected_notes": 339,
+          "source_url": "https://bestdori.com/api/charts/85/normal.json",
+          "raw_sha256": "a893bdfbbcfdbacb7df18d3c6b22b689cf80256b3609d5fca6490804a100fdd7",
+          "chart_sha256": "8483d0f4a50c5b8a09f81111f14909010885e6bc75560dc5a851f1de58803b2f"
+        },
+        "hard": {
+          "path": "bestdori/85/hard.json",
+          "level": 20,
+          "expected_notes": 611,
+          "source_url": "https://bestdori.com/api/charts/85/hard.json",
+          "raw_sha256": "6eecbf293153b5ab25b7f4302d2309a68d9f627230dea7117baf6d554b31c87c",
+          "chart_sha256": "92daa930c08c7f9b3a46f67ef6d1a485c662eb836a8e6d0569dac2eefa634bfe"
+        },
+        "expert": {
+          "path": "bestdori/85/expert.json",
+          "level": 27,
+          "expected_notes": 933,
+          "source_url": "https://bestdori.com/api/charts/85/expert.json",
+          "raw_sha256": "5ca279acea2b8416ca7ee85bc61f74eb35ee6651315e62e2755a0f6c86c05fe0",
+          "chart_sha256": "0713614ea21cfdd7f579620ba7ab4413266f03483716e38f1d1f92c326809799"
+        },
+        "special": {
+          "path": "bestdori/85/special.json",
+          "level": 25,
+          "expected_notes": 917,
+          "source_url": "https://bestdori.com/api/charts/85/special.json",
+          "raw_sha256": "66f8ca79d8a3dcffeb6f27a23c868b165e193971fafdc288e53f1db6d398dd96",
+          "chart_sha256": "ccd41d73610fe269b3e52759c6f4d38148f6e01779eaf1fc18a36c3e500c5a5a"
+        }
+      }
+    },
+    {
+      "bestdori_song_id": 125,
+      "display_title": "天下トーイツ A to Z☆",
+      "category": "original",
+      "titles": [
+        "天下トーイツA to Z☆",
+        "Unite! From A To Z",
+        "天下トーイツ A to Z☆",
+        "天下トーイツ A to Z☆",
+        "천하통일 A to Z☆"
+      ],
+      "fingerprints": [
+        "song-jacket-phash-v2-91cf93606ab9ae72",
+        "song-jacket-phash-v2-d08927a56e6667f8"
+      ],
+      "jackets": [
+        {
+          "name": "125_tenka_touitsu",
+          "source_url": "https://bestdori.com/assets/jp/musicjacket/musicjacket130_rip/assets-star-forassetbundle-startapp-musicjacket-musicjacket130-125_tenka_touitsu-jacket.png",
+          "raw_sha256": "3e392975391d0a830b8bee5211ff83495afb3e198b76cc6db24f63b89e49ac3d",
+          "fingerprint": "song-jacket-phash-v2-d08927a56e6667f8"
+        },
+        {
+          "name": "125_tenka_touitsu_1",
+          "source_url": "https://bestdori.com/assets/jp/musicjacket/musicjacket130_rip/assets-star-forassetbundle-startapp-musicjacket-musicjacket130-125_tenka_touitsu_1-jacket.png",
+          "raw_sha256": "41bde133b5b1a39bea20084dcb38075e0209f6a99e948c88c0de7d04d9cf8bbf",
+          "fingerprint": "song-jacket-phash-v2-91cf93606ab9ae72"
+        }
+      ],
+      "difficulties": {
+        "easy": {
+          "path": "bestdori/125/easy.json",
+          "level": 8,
+          "expected_notes": 173,
+          "source_url": "https://bestdori.com/api/charts/125/easy.json",
+          "raw_sha256": "2879785ecd94833a5926f555b0bc4f352da07e20d5b9d1177ae058f94a6a61e6",
+          "chart_sha256": "9c877f6f1144d5c2c56d0bc8d68c2955d98e6949df063cd903e319f069579044"
+        },
+        "normal": {
+          "path": "bestdori/125/normal.json",
+          "level": 13,
+          "expected_notes": 247,
+          "source_url": "https://bestdori.com/api/charts/125/normal.json",
+          "raw_sha256": "93214ed67db5b521f4565cae36f2a06dbe269b73843ce685dbb697b38d87f877",
+          "chart_sha256": "9d30d32263bba333af02a37d112d1de61a1b305ebb48f6a261e5b3bf14a669ca"
+        },
+        "hard": {
+          "path": "bestdori/125/hard.json",
+          "level": 22,
+          "expected_notes": 503,
+          "source_url": "https://bestdori.com/api/charts/125/hard.json",
+          "raw_sha256": "15a24c79d4e1b312e8a6e71e26e44415e92474a431174865e6a426d2b6d8e2e8",
+          "chart_sha256": "eae41cc4dc26dc9be4da32a47dba9390bc758399b816f5928ca4e702434cf2a4"
+        },
+        "expert": {
+          "path": "bestdori/125/expert.json",
+          "level": 26,
+          "expected_notes": 713,
+          "source_url": "https://bestdori.com/api/charts/125/expert.json",
+          "raw_sha256": "05720d5c48fc51fad0076f5ee0fae919b20886b7b510ff1c90ca27c8b2df9d34",
+          "chart_sha256": "e5bfd3e875e69cd870b8a1c39a5af07108c589f7eda701072f5f958f4b5120ad"
+        },
+        "special": {
+          "path": "bestdori/125/special.json",
+          "level": 25,
+          "expected_notes": 622,
+          "source_url": "https://bestdori.com/api/charts/125/special.json",
+          "raw_sha256": "fce410a6d7dc7d738f54b531f4efe7a52cab55a81cbb2efd74412a8ac01f01bc",
+          "chart_sha256": "02daeec938b7916c2ca690545deb3c3271c85366eb4eff63525f86abd0d61e76"
+        }
+      }
+    },
+    {
+      "bestdori_song_id": 170,
+      "display_title": "Jumpin'",
+      "category": "original",
+      "titles": [
+        "Jumpin'",
+        "Jumpin'",
+        "Jumpin'",
+        "Jumpin'",
+        "Jumpin'"
+      ],
+      "fingerprints": [
+        "song-jacket-phash-v2-973a1ab764944ed6",
+        "song-jacket-phash-v2-e192962d586cb3d7"
+      ],
+      "jackets": [
+        {
+          "name": "170_jumpin",
+          "source_url": "https://bestdori.com/assets/jp/musicjacket/musicjacket170_rip/assets-star-forassetbundle-startapp-musicjacket-musicjacket170-170_jumpin-jacket.png",
+          "raw_sha256": "e0b11f95ace131a5ef58321a09588943484524aca845cd58ded57a72e69ef883",
+          "fingerprint": "song-jacket-phash-v2-e192962d586cb3d7"
+        },
+        {
+          "name": "170_jumpin_1",
+          "source_url": "https://bestdori.com/assets/jp/musicjacket/musicjacket170_rip/assets-star-forassetbundle-startapp-musicjacket-musicjacket170-170_jumpin_1-jacket.png",
+          "raw_sha256": "58bb37cb3c7f85e3487a8763a0aad0efd27ebfcf6d5e41113b75bd1c00b5da69",
+          "fingerprint": "song-jacket-phash-v2-973a1ab764944ed6"
+        }
+      ],
+      "difficulties": {
+        "easy": {
+          "path": "bestdori/170/easy.json",
+          "level": 10,
+          "expected_notes": 125,
+          "source_url": "https://bestdori.com/api/charts/170/easy.json",
+          "raw_sha256": "bb51fd491dc5ddf1c84f935828076d5d37a597e6dda102d93e8dec544a26381d",
+          "chart_sha256": "ba88ca558310757869a113fecc609f620f5a2dd3b632ac53a7b279840535a366"
+        },
+        "normal": {
+          "path": "bestdori/170/normal.json",
+          "level": 15,
+          "expected_notes": 204,
+          "source_url": "https://bestdori.com/api/charts/170/normal.json",
+          "raw_sha256": "b06d509fb691c845baad95c31a5a09a9d31b89367d45be8847d4c5df757449df",
+          "chart_sha256": "a3685f0d225ae21d5ab62719da2d3db5c880c94354745225af0a73d81c5874b6"
+        },
+        "hard": {
+          "path": "bestdori/170/hard.json",
+          "level": 22,
+          "expected_notes": 370,
+          "source_url": "https://bestdori.com/api/charts/170/hard.json",
+          "raw_sha256": "b9b7f832cf05f63ea4ac179e12c5b76f22b2b44ccd9af638fcbb6bca20f9473d",
+          "chart_sha256": "3e9b5c983f9bca85a12f63e5d66c6eb6a7b2cc11710f2d7da05416a03c2db626"
+        },
+        "expert": {
+          "path": "bestdori/170/expert.json",
+          "level": 26,
+          "expected_notes": 561,
+          "source_url": "https://bestdori.com/api/charts/170/expert.json",
+          "raw_sha256": "85d346404da40f865fdc463b1f35fb1f0cd8d448f85c7078a9f090634bbdca86",
+          "chart_sha256": "295dfd22ec72b6fcaef37596b90e59e8b601a0ff3ffaf46d993311b989c73fdf"
+        }
+      }
+    },
+    {
+      "bestdori_song_id": 306,
+      "display_title": "SAVIOR OF SONG",
+      "category": "cover",
+      "titles": [
+        "SAVIOR OF SONG",
+        "SAVIOR OF SONG",
+        "SAVIOR OF SONG",
+        "SAVIOR OF SONG",
+        "SAVIOR OF SONG"
+      ],
+      "fingerprints": [
+        "song-jacket-phash-v2-c4e03f1a6a4b6bec"
+      ],
+      "jackets": [
+        {
+          "name": "306_savior_of_song",
+          "source_url": "https://bestdori.com/assets/jp/musicjacket/musicjacket310_rip/assets-star-forassetbundle-startapp-musicjacket-musicjacket310-306_savior_of_song-jacket.png",
+          "raw_sha256": "bee4a05150e9b37220485e53ce8afd0c2288e072c92e439fbe1b0a63d4576812",
+          "fingerprint": "song-jacket-phash-v2-c4e03f1a6a4b6bec"
+        }
+      ],
+      "difficulties": {
+        "easy": {
+          "path": "bestdori/306/easy.json",
+          "level": 9,
+          "expected_notes": 133,
+          "source_url": "https://bestdori.com/api/charts/306/easy.json",
+          "raw_sha256": "91294eebc4f51a1a7d596c2cf47388d12b2e8788080b81e1fda14880f3aa2a69",
+          "chart_sha256": "da819b63e57feda1627a9d2387ed5368a16474b8d5a17265f4377fe42a479557"
+        },
+        "normal": {
+          "path": "bestdori/306/normal.json",
+          "level": 14,
+          "expected_notes": 246,
+          "source_url": "https://bestdori.com/api/charts/306/normal.json",
+          "raw_sha256": "4ed55c287b50ea69a938a86ee58768962180b42b975f65877fa39bd3b91cbb41",
+          "chart_sha256": "324c0be260eb4e51c37ad202fc563b8c4529ef33a397ce73111d5d46b2f69dfb"
+        },
+        "hard": {
+          "path": "bestdori/306/hard.json",
+          "level": 20,
+          "expected_notes": 401,
+          "source_url": "https://bestdori.com/api/charts/306/hard.json",
+          "raw_sha256": "dae89fde59c35e80b2380922528c2b1b0c29f7420d38301f007008bf6de28c5b",
+          "chart_sha256": "871ee0c589c7658b1d58cb5f4f0578564cad5f74416e7dadd061ec9903a17fcd"
+        },
+        "expert": {
+          "path": "bestdori/306/expert.json",
+          "level": 28,
+          "expected_notes": 772,
+          "source_url": "https://bestdori.com/api/charts/306/expert.json",
+          "raw_sha256": "6f319531915bc2722426ac23c92f58f62a1b56d6cf1c43277ca99b244126dbbd",
+          "chart_sha256": "455b409cc124474409777058e1b428ed877944684a3556cb17e99ddbe0596f0e"
+        },
+        "special": {
+          "path": "bestdori/306/special.json",
+          "level": 27,
+          "expected_notes": 727,
+          "source_url": "https://bestdori.com/api/charts/306/special.json",
+          "raw_sha256": "f65e25400e59e5e1c7cbfcb42d42a6124b22dd5804f6585a9943b0675cb454bc",
+          "chart_sha256": "99b438f0a61f787cf269ed7e0d75b71260eff8dba6666e3ccaad9bdf8ce5b0d3"
+        }
+      }
+    },
+    {
+      "bestdori_song_id": 325,
+      "display_title": "EXIST",
+      "category": "original",
+      "titles": [
+        "EXIST",
+        "EXIST",
+        "EXIST",
+        "EXIST",
+        "EXIST"
+      ],
+      "fingerprints": [
+        "song-jacket-phash-v2-8f81b0d7d039dd47"
+      ],
+      "jackets": [
+        {
+          "name": "325_exist",
+          "source_url": "https://bestdori.com/assets/jp/musicjacket/musicjacket330_rip/assets-star-forassetbundle-startapp-musicjacket-musicjacket330-325_exist-jacket.png",
+          "raw_sha256": "aa20c6904b7a38791723fc048d71239fe19573e9f50630eb149bff79297a7893",
+          "fingerprint": "song-jacket-phash-v2-8f81b0d7d039dd47"
+        }
+      ],
+      "difficulties": {
+        "easy": {
+          "path": "bestdori/325/easy.json",
+          "level": 7,
+          "expected_notes": 90,
+          "source_url": "https://bestdori.com/api/charts/325/easy.json",
+          "raw_sha256": "440868c2df2341b302ecfc4e850ee84806fb08aa0410f13c8b08e0cbe5e720f4",
+          "chart_sha256": "43c0d20b56be67f4f8b6ef5207151a30b9ab03f67b19f1d4c663efd3d98db09b"
+        },
+        "normal": {
+          "path": "bestdori/325/normal.json",
+          "level": 13,
+          "expected_notes": 172,
+          "source_url": "https://bestdori.com/api/charts/325/normal.json",
+          "raw_sha256": "07f71a1b6af0f34d64784e7d9e731bc6d8fbff8cefbd63766133fc79a09b76ca",
+          "chart_sha256": "356211a22ad0b470455312056d76ff8cb47a782a8e339ba78ba7def53de04530"
+        },
+        "hard": {
+          "path": "bestdori/325/hard.json",
+          "level": 20,
+          "expected_notes": 326,
+          "source_url": "https://bestdori.com/api/charts/325/hard.json",
+          "raw_sha256": "d790bc6fc5bbb078a37a0571cbc502a3f02cba32939f0d28e2795ec11fa2a131",
+          "chart_sha256": "9ae6a2458ef32f16370172fc681fce3ada4b2b674b0b9fc1bb24f097d3fc83d7"
+        },
+        "expert": {
+          "path": "bestdori/325/expert.json",
+          "level": 26,
+          "expected_notes": 560,
+          "source_url": "https://bestdori.com/api/charts/325/expert.json",
+          "raw_sha256": "6fa488dca878a379218e7a568773e4e78ad3b67a1b67b6e7e424afeb5479636a",
+          "chart_sha256": "142e6672eae513321bc1821a2d2e71823a855a824cf5623912037f74df11c658"
+        }
+      }
+    },
+    {
+      "bestdori_song_id": 489,
+      "display_title": "迷星叫",
+      "category": "original",
+      "titles": [
+        "迷星叫",
+        "Mayoiuta",
+        "迷星叫",
+        "迷星叫"
+      ],
+      "fingerprints": [
+        "song-jacket-phash-v2-a92dd6cae59692c3"
+      ],
+      "jackets": [
+        {
+          "name": "489_mayoiuta",
+          "source_url": "https://bestdori.com/assets/jp/musicjacket/musicjacket490_rip/assets-star-forassetbundle-startapp-musicjacket-musicjacket490-489_mayoiuta-jacket.png",
+          "raw_sha256": "09793b65b14ba057f206a523794d8a1947132a7cf6941c4ac2b8ad2f70a81ede",
+          "fingerprint": "song-jacket-phash-v2-a92dd6cae59692c3"
+        }
+      ],
+      "difficulties": {
+        "easy": {
+          "path": "bestdori/489/easy.json",
+          "level": 6,
+          "expected_notes": 73,
+          "source_url": "https://bestdori.com/api/charts/489/easy.json",
+          "raw_sha256": "b9350d4d24bf93f37bbbb4e29af0e44a01a108fb93a7ffa722d44e31a3db98f7",
+          "chart_sha256": "12cd81a00c2a20263785a675e0c963d92c007da8290c7759621f6dda3fe93934"
+        },
+        "normal": {
+          "path": "bestdori/489/normal.json",
+          "level": 13,
+          "expected_notes": 173,
+          "source_url": "https://bestdori.com/api/charts/489/normal.json",
+          "raw_sha256": "4462b28bbf3629b6e94bb36c89cb01a4311333833b1dbef2aa9d78b10ece72f6",
+          "chart_sha256": "098e98666fcccbd2f439ef69a19a7893f1205de6132c2a4cd733d9d6a2e1ea62"
+        },
+        "hard": {
+          "path": "bestdori/489/hard.json",
+          "level": 19,
+          "expected_notes": 311,
+          "source_url": "https://bestdori.com/api/charts/489/hard.json",
+          "raw_sha256": "56b6ed7ad179462e793f54760f26e4e7b24921743de93edb5369e7632c889350",
+          "chart_sha256": "5ff543d4b4a2e3c4b177f6079c8afbe02d49bc0399fc3cd8beb5e1e48604c277"
+        },
+        "expert": {
+          "path": "bestdori/489/expert.json",
+          "level": 26,
+          "expected_notes": 641,
+          "source_url": "https://bestdori.com/api/charts/489/expert.json",
+          "raw_sha256": "129a43f3a757fbc6b0451778a01d3cdfc2e62203478737b836b3eb2701356eaa",
+          "chart_sha256": "f6fe967fa01bc3253d2a9132b84be37a54668c0e65ce29a68050726cb215ce19"
+        },
+        "special": {
+          "path": "bestdori/489/special.json",
+          "level": 27,
+          "expected_notes": 651,
+          "source_url": "https://bestdori.com/api/charts/489/special.json",
+          "raw_sha256": "31e3b326fd619192782e8f4a2b1f3d13257232a77f46a22427e1e3431beebb5b",
+          "chart_sha256": "88939f217c21bbe4f9bc1e5e5b85abe9a4af041ed390ba29aa5a0eccc4483cc2"
+        }
+      }
+    },
+    {
+      "bestdori_song_id": 499,
+      "display_title": "アイウエ",
+      "category": "cover",
+      "titles": [
+        "アイウエ",
+        "AIUE",
+        "アイウエ"
+      ],
+      "fingerprints": [
+        "song-jacket-phash-v2-b9a9251726035edf"
+      ],
+      "jackets": [
+        {
+          "name": "499_aiue",
+          "source_url": "https://bestdori.com/assets/jp/musicjacket/musicjacket500_rip/assets-star-forassetbundle-startapp-musicjacket-musicjacket500-499_aiue-jacket.png",
+          "raw_sha256": "1cfaf1b0f8a586b4b8bdeed2cfff2f177a160f346c26bc8271f528b907c4ece2",
+          "fingerprint": "song-jacket-phash-v2-b9a9251726035edf"
+        }
+      ],
+      "difficulties": {
+        "easy": {
+          "path": "bestdori/499/easy.json",
+          "level": 7,
+          "expected_notes": 105,
+          "source_url": "https://bestdori.com/api/charts/499/easy.json",
+          "raw_sha256": "b7d046e900522c42d98efc8782cfbdb7125947c5b1d04c859e026d1c351e5e00",
+          "chart_sha256": "c7eeb5e07f0faca3ec727e4bf5c0eec58ae577a1c356b1765d2ee01c4d6fb09f"
+        },
+        "normal": {
+          "path": "bestdori/499/normal.json",
+          "level": 13,
+          "expected_notes": 213,
+          "source_url": "https://bestdori.com/api/charts/499/normal.json",
+          "raw_sha256": "6ea8bf13c2c0dd208b1e3ff3888e4d1203bbba6718e51eeca7b9dc171934b3f5",
+          "chart_sha256": "b426e436ee8723830f4f5ad2d4523ac351a414a287eadb0a43b7b6eef8abe385"
+        },
+        "hard": {
+          "path": "bestdori/499/hard.json",
+          "level": 21,
+          "expected_notes": 436,
+          "source_url": "https://bestdori.com/api/charts/499/hard.json",
+          "raw_sha256": "672acae6bf956b174b60b92c8ba30f0d48bd3847108858d7db2385e8e3d5e6fd",
+          "chart_sha256": "17e9cfbfe565ca09d665bbfbf0e365fc1665bced93854cffaf90f89d1e40a6a3"
+        },
+        "expert": {
+          "path": "bestdori/499/expert.json",
+          "level": 26,
+          "expected_notes": 669,
+          "source_url": "https://bestdori.com/api/charts/499/expert.json",
+          "raw_sha256": "89ffa8b5d67b88b5cae56cb034cd11079749ca9afd6f7c8f8ad9b44d7abc2e6c",
+          "chart_sha256": "ce48dde61fd2bb3995dacd2476d1c2ff7c7e822b7143c73dc17203394e6f2186"
+        }
+      }
+    },
+    {
+      "bestdori_song_id": 522,
+      "display_title": "詩超絆",
+      "category": "original",
+      "titles": [
+        "詩超絆",
+        "Utakotoba",
+        "詩超絆",
+        "詩超絆"
+      ],
+      "fingerprints": [
+        "song-jacket-phash-v2-c41f38e997320fc7"
+      ],
+      "jackets": [
+        {
+          "name": "522_utakotoba",
+          "source_url": "https://bestdori.com/assets/jp/musicjacket/musicjacket530_rip/assets-star-forassetbundle-startapp-musicjacket-musicjacket530-522_utakotoba-jacket.png",
+          "raw_sha256": "cbb2bee8df4024b5d22ba8ce0487c859cf206cf51a408506ef47441656208923",
+          "fingerprint": "song-jacket-phash-v2-c41f38e997320fc7"
+        }
+      ],
+      "difficulties": {
+        "easy": {
+          "path": "bestdori/522/easy.json",
+          "level": 7,
+          "expected_notes": 138,
+          "source_url": "https://bestdori.com/api/charts/522/easy.json",
+          "raw_sha256": "a34c90cbd39bc481161325f57fbe7a780055c05894969f858fb77f8555ef263d",
+          "chart_sha256": "efdbbeb8d735104dbaf1fd88ffa5bba97be6aab9e5051724560e566dfc55944d"
+        },
+        "normal": {
+          "path": "bestdori/522/normal.json",
+          "level": 14,
+          "expected_notes": 283,
+          "source_url": "https://bestdori.com/api/charts/522/normal.json",
+          "raw_sha256": "807af03c91da6ea73709c5e51701885ee21ddccecc5d059b68ca9c1a82b76169",
+          "chart_sha256": "7cfe3f26a84305abf07c61fcddd36b01897994292762fad645f9a71b39480d54"
+        },
+        "hard": {
+          "path": "bestdori/522/hard.json",
+          "level": 20,
+          "expected_notes": 507,
+          "source_url": "https://bestdori.com/api/charts/522/hard.json",
+          "raw_sha256": "e15a5ecf82a121e07d2939fd118f77eb7bd0041a49766d78f68b531d06677c28",
+          "chart_sha256": "b96f99e96c82ec39cc4db354dd1d30460d374e1a25acd328a44140fab2a06b69"
+        },
+        "expert": {
+          "path": "bestdori/522/expert.json",
+          "level": 26,
+          "expected_notes": 829,
+          "source_url": "https://bestdori.com/api/charts/522/expert.json",
+          "raw_sha256": "f9b49a1994585da63e5fa0764c2f1629e91c323de148950b6247b004aa27aa94",
+          "chart_sha256": "a7e1dd78c7243df74ff4917e4bbd971d0ef74f058adbb9e81ac8fa85980383e3"
+        },
+        "special": {
+          "path": "bestdori/522/special.json",
+          "level": 28,
+          "expected_notes": 1027,
+          "source_url": "https://bestdori.com/api/charts/522/special.json",
+          "raw_sha256": "9f054716a7da9d67890787f577fbdbb05a46e94bd64f93588866a760e074798d",
+          "chart_sha256": "03d0656bb40049b2c60c88f727869711aec9a5063f4bcffb817cdc5c29fcae29"
+        }
+      }
+    },
+    {
+      "bestdori_song_id": 532,
+      "display_title": "祝福",
+      "category": "cover",
+      "titles": [
+        "祝福",
+        "The Blessing",
+        "祝福",
+        "祝福"
+      ],
+      "fingerprints": [
+        "song-jacket-phash-v2-97ce698a6552f1b2"
+      ],
+      "jackets": [
+        {
+          "name": "532_syukuhuku",
+          "source_url": "https://bestdori.com/assets/jp/musicjacket/musicjacket540_rip/assets-star-forassetbundle-startapp-musicjacket-musicjacket540-532_syukuhuku-jacket.png",
+          "raw_sha256": "82efb7166817c27164c4e76a2374486452219582d1cca47e68dfa711d4e4f728",
+          "fingerprint": "song-jacket-phash-v2-97ce698a6552f1b2"
+        }
+      ],
+      "difficulties": {
+        "easy": {
+          "path": "bestdori/532/easy.json",
+          "level": 8,
+          "expected_notes": 115,
+          "source_url": "https://bestdori.com/api/charts/532/easy.json",
+          "raw_sha256": "81db12c00ea552af26286dd15142bcf0171ef7b3407719cc4a00f89732638b92",
+          "chart_sha256": "b737089f17bd9041b8acd9729709c8b34cbc0c66c4f26336f561d4121e1e691d"
+        },
+        "normal": {
+          "path": "bestdori/532/normal.json",
+          "level": 14,
+          "expected_notes": 226,
+          "source_url": "https://bestdori.com/api/charts/532/normal.json",
+          "raw_sha256": "3da2148782dae6031a62728eb32735b2504ec2081e82e3ac756b2d931779719e",
+          "chart_sha256": "e522dcf5687e141e6498e8216347e5bdfbe0ce84ffe744f373a5859cbd22ed72"
+        },
+        "hard": {
+          "path": "bestdori/532/hard.json",
+          "level": 22,
+          "expected_notes": 449,
+          "source_url": "https://bestdori.com/api/charts/532/hard.json",
+          "raw_sha256": "97afa0a8e07568f1b164b433ae10e4f3d51cf8917e7af06f3faf22dfe2f99dd7",
+          "chart_sha256": "eb744c0d3022aae7cc523c633c78b86dae4edd51c8febe269bcf227d81ed6729"
+        },
+        "expert": {
+          "path": "bestdori/532/expert.json",
+          "level": 26,
+          "expected_notes": 623,
+          "source_url": "https://bestdori.com/api/charts/532/expert.json",
+          "raw_sha256": "c76ac2e12d30591aecd83e636f0de6e5f82194c38d654c393eadab8700b92b87",
+          "chart_sha256": "a89f40ac58248a2c7c76ae543937e5e0fb8c9e5be868ca24929ceb6f3ac90dc7"
+        }
+      }
+    },
+    {
+      "bestdori_song_id": 540,
+      "display_title": "影色舞",
+      "category": "original",
+      "titles": [
+        "影色舞",
+        "Silhouette Dance",
+        "影色舞",
+        "影色舞"
+      ],
+      "fingerprints": [
+        "song-jacket-phash-v2-cb069fd8528665b7"
+      ],
+      "jackets": [
+        {
+          "name": "540_silhouette_dance",
+          "source_url": "https://bestdori.com/assets/jp/musicjacket/musicjacket540_rip/assets-star-forassetbundle-startapp-musicjacket-musicjacket540-540_silhouette_dance-jacket.png",
+          "raw_sha256": "2464dcb3be26c0203d4985aa6f4fe2d0de7b7b9d2702b42ad3ad7d94e80ca7a2",
+          "fingerprint": "song-jacket-phash-v2-cb069fd8528665b7"
+        }
+      ],
+      "difficulties": {
+        "easy": {
+          "path": "bestdori/540/easy.json",
+          "level": 7,
+          "expected_notes": 102,
+          "source_url": "https://bestdori.com/api/charts/540/easy.json",
+          "raw_sha256": "f2bc79f9aa1c8c4654aeabf9ec5b3aab58f7a2fc4cd2769ec2dc8f83217a008f",
+          "chart_sha256": "66913aca2f9f09d4c01f440623ef8f0e74a9696c776b425a8a6a48ab7c5b7220"
+        },
+        "normal": {
+          "path": "bestdori/540/normal.json",
+          "level": 13,
+          "expected_notes": 199,
+          "source_url": "https://bestdori.com/api/charts/540/normal.json",
+          "raw_sha256": "a9b50618ce22ac12d6d191da6b5c5c321bb6e4e95406142f0155997899222f43",
+          "chart_sha256": "365848737774e443c3fd7f2ba106c13a033a54737e28014e17c0b82bc0d766d9"
+        },
+        "hard": {
+          "path": "bestdori/540/hard.json",
+          "level": 22,
+          "expected_notes": 433,
+          "source_url": "https://bestdori.com/api/charts/540/hard.json",
+          "raw_sha256": "63217cf4b6ca209dfc7e26ab888292f4c98272570095346e7a82844e99f65030",
+          "chart_sha256": "6ac33430fa970a781cf917b4edadb041227da6aafc6932c7400e06ce18557459"
+        },
+        "expert": {
+          "path": "bestdori/540/expert.json",
+          "level": 26,
+          "expected_notes": 697,
+          "source_url": "https://bestdori.com/api/charts/540/expert.json",
+          "raw_sha256": "be7969eaf47e2c06c3b616a5052c64a06d92adf676cd97a5b3e46be57cf5c9d3",
+          "chart_sha256": "d8bb15e37e916550f2f168a032b286789e6cf423daf1e6f96c95484ae677c0d7"
+        }
+      }
+    },
+    {
+      "bestdori_song_id": 595,
+      "display_title": "「僕は…」",
+      "category": "cover",
+      "titles": [
+        "「僕は...」",
+        "I am...",
+        "「僕は...」",
+        "「僕は...」"
+      ],
+      "fingerprints": [
+        "song-jacket-phash-v2-eec1b1add13642d6"
+      ],
+      "jackets": [
+        {
+          "name": "595_bokuha",
+          "source_url": "https://bestdori.com/assets/jp/musicjacket/musicjacket600_rip/assets-star-forassetbundle-startapp-musicjacket-musicjacket600-595_bokuha-jacket.png",
+          "raw_sha256": "5beab429d90002ec36f45451910f4496229adbae954e351e66233a0a5f67a16d",
+          "fingerprint": "song-jacket-phash-v2-eec1b1add13642d6"
+        }
+      ],
+      "difficulties": {
+        "easy": {
+          "path": "bestdori/595/easy.json",
+          "level": 6,
+          "expected_notes": 77,
+          "source_url": "https://bestdori.com/api/charts/595/easy.json",
+          "raw_sha256": "b331823b15908f5a472b71a1453258354e933cf5302c98691965e3931b83517a",
+          "chart_sha256": "e5bb1241eb87cd0575c55780e0f6e2f1ab75361e2fb51ffc86f558b2a34033ce"
+        },
+        "normal": {
+          "path": "bestdori/595/normal.json",
+          "level": 13,
+          "expected_notes": 183,
+          "source_url": "https://bestdori.com/api/charts/595/normal.json",
+          "raw_sha256": "859188da26fd012001f1f53341c7936f05b7746c0252f1590014aa9a0dbba2a5",
+          "chart_sha256": "429ed9d36cdb991bff8dd47dcc478adc3f34330daa2fce2608132c9adb1efc30"
+        },
+        "hard": {
+          "path": "bestdori/595/hard.json",
+          "level": 19,
+          "expected_notes": 334,
+          "source_url": "https://bestdori.com/api/charts/595/hard.json",
+          "raw_sha256": "b2176c648d0c06489424d8caa2b43ffbea3297b9337e94981945eb947053acaa",
+          "chart_sha256": "2b48f4fb55deddfd1893da402127311977a3c04d0455a5959fdbadb9962242d7"
+        },
+        "expert": {
+          "path": "bestdori/595/expert.json",
+          "level": 25,
+          "expected_notes": 483,
+          "source_url": "https://bestdori.com/api/charts/595/expert.json",
+          "raw_sha256": "cf285e46e31c2dae1e25452285ec54d9cf3284c36a91f73590ebe238bf11fcae",
+          "chart_sha256": "d0393481510c8329528fbd24a6b64ab41ca61de340eda2de11679c6d1bbefd32"
+        }
+      }
+    },
+    {
+      "bestdori_song_id": 697,
+      "display_title": "最高到達点",
+      "category": "cover",
+      "titles": [
+        "最高到達点",
+        "The Peak",
+        "最高到達点",
+        "最高到達点"
+      ],
+      "fingerprints": [
+        "song-jacket-phash-v2-b7412e48cb9b33ba"
+      ],
+      "jackets": [
+        {
+          "name": "697_saiko_totatsu",
+          "source_url": "https://bestdori.com/assets/jp/musicjacket/musicjacket700_rip/assets-star-forassetbundle-startapp-musicjacket-musicjacket700-697_saiko_totatsu-jacket.png",
+          "raw_sha256": "97fdae4228b9e23c2470d33856a4cf62c91b880c03380769cc7436e221e887d4",
+          "fingerprint": "song-jacket-phash-v2-b7412e48cb9b33ba"
+        }
+      ],
+      "difficulties": {
+        "easy": {
+          "path": "bestdori/697/easy.json",
+          "level": 7,
+          "expected_notes": 72,
+          "source_url": "https://bestdori.com/api/charts/697/easy.json",
+          "raw_sha256": "8315560e0168d532f8e4132627c4fd6415e58ffa51f75f40f53c891df383fe3e",
+          "chart_sha256": "a7ef6197166c4d77374af3e9cf3612a585c5fdc9b164b0a91f6ac529b2099692"
+        },
+        "normal": {
+          "path": "bestdori/697/normal.json",
+          "level": 12,
+          "expected_notes": 114,
+          "source_url": "https://bestdori.com/api/charts/697/normal.json",
+          "raw_sha256": "5d697d4650a961f18fa7fd75cf4c3d52fd29248854ac6a4c5a987f9e7d2cfdc4",
+          "chart_sha256": "662f32b65466f57c6ab45754c62b2fc06a666c5c887b31424556e23c103420aa"
+        },
+        "hard": {
+          "path": "bestdori/697/hard.json",
+          "level": 19,
+          "expected_notes": 345,
+          "source_url": "https://bestdori.com/api/charts/697/hard.json",
+          "raw_sha256": "b15221b058f6c3491e72e7b2f90934c0b05d803ebf92b7b04248d11872eedf71",
+          "chart_sha256": "ca91b1b3a522d1224b10242262d71221555ce3f29aac269165f7dde8665fdb00"
+        },
+        "expert": {
+          "path": "bestdori/697/expert.json",
+          "level": 24,
+          "expected_notes": 490,
+          "source_url": "https://bestdori.com/api/charts/697/expert.json",
+          "raw_sha256": "d94259a42d2927cc771df10ffef0d527668c9ead0ba844f2fd00e1ecd1db0d7d",
+          "chart_sha256": "1278d7cb1591e712455c083900e005821a1e29676b1f84f140b6fda1e238c452"
+        }
+      }
+    }
+  ]
+}

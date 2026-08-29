@@ -27,7 +27,9 @@ def _recorded_actions(path: Path) -> list[dict[str, object]]:
     with path.open(encoding="utf-8") as stream:
         for line in stream:
             if line.strip():
-                actions.extend(json.loads(line).get("actions", []))
+                for action in json.loads(line).get("actions", []):
+                    action.setdefault("flick_direction", None)
+                    actions.append(action)
     return actions
 
 

@@ -340,6 +340,56 @@ def test_login_mode_clicks_start_before_using_back(monkeypatch):
     assert context.tasker.controller.keys == [4]
 
 
+def test_resource_download_clicks_once_waits_and_resumes_login(monkeypatch):
+    context = Context({
+        "HomeMarker": [False, False, False, True],
+        "ResourceDownloadConfirm": [True],
+        "ResourceDownloadPageMarker": [True, False],
+        "LoginScreenMarker": [True],
+    })
+    ticks = iter(value / 1000 for value in range(2000))
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(common_recover.time, "sleep", lambda _seconds: None)
+
+    assert common_recover.CommonRecover().run(
+        context,
+        argv(
+            escape_interval_ms=0,
+            escape_timeout_ms=100,
+            login_start_node="LoginScreenMarker",
+            login_start_target=[640, 635],
+            escape_after_login_start=True,
+        ),
+    )
+    assert context.tasker.controller.clicks == [(25, 40), (640, 635)]
+    assert context.tasker.controller.keys == []
+
+
+def test_resource_download_progress_page_waits_without_escape(monkeypatch):
+    context = Context({
+        "HomeMarker": [False, False, True],
+        "ResourceDownloadConfirm": [False, False],
+        "ResourceDownloadPageMarker": [False, False],
+        "ResourceDownloadProgressMarker": [True, False],
+        "LoginScreenMarker": [True],
+    })
+    ticks = iter(value / 1000 for value in range(2000))
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(common_recover.time, "sleep", lambda _seconds: None)
+
+    assert common_recover.CommonRecover().run(
+        context,
+        argv(
+            escape_interval_ms=0,
+            escape_timeout_ms=100,
+            login_start_node="LoginScreenMarker",
+            login_start_target=[640, 635],
+            escape_after_login_start=True,
+        ),
+    )
+    assert context.tasker.controller.keys == []
+
+
 def test_login_menu_marker_gets_multiple_attempts_before_tap_to_start(
     monkeypatch,
 ):

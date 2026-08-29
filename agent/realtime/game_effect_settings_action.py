@@ -645,15 +645,28 @@ class RealtimeGameEffectSettingsGate(CustomAction):
             PROJECT_ROOT / "profiles"
         ).runtime_options()
         apply_changes = bool(options["game_effect_settings_enabled"])
-        if not apply_changes:
-            print(
-                "RealtimeGameEffectSettingsGate enabled=false readback_only=true",
-                flush=True,
-            )
-
         expected_assist = bool(options["judgement_assist_effect"])
         expected_note_skin = int(options["note_skin_type"])
         expected_tap = int(options["tap_effect"])
+        if not apply_changes:
+            # Disabling the MFA option means no game-page interaction at all.
+            # Downstream profile matching still needs a complete environment
+            # signature, so trust the operator-declared values for this task.
+            _publish_verified_game_visual_settings(
+                note_skin_type=expected_note_skin,
+                tap_effect=expected_tap,
+                judgement_assist_effect=expected_assist,
+            )
+            print(
+                "RealtimeGameEffectSettingsGate enabled=false skipped=true "
+                "source=configured-values "
+                f"judgement_assist={expected_assist} "
+                f"note_skin_type={expected_note_skin} "
+                f"tap_effect={expected_tap}",
+                flush=True,
+            )
+            return True
+
         coordinates = dict(DEFAULT_COORDINATES)
         coordinates.update(params.get("coordinates", {}))
         coordinates = {

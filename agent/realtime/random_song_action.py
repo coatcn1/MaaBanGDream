@@ -82,6 +82,10 @@ class RandomSongSelect(CustomAction):
     def _run(self, context: Context, argv: CustomAction.RunArg) -> bool:
         params = json.loads(argv.custom_action_param or "{}")
         max_attempts = max(1, int(params.get("max_attempts", 3)))
+        preserve_filter = bool(params.get("preserve_filter", False))
+        excluded_song_ids = [
+            str(item) for item in params.get("excluded_song_ids", [])
+        ]
         verify_delay = float(
             params.get("verify_delay_seconds", RANDOM_VERIFY_DELAY_SECONDS)
         )
@@ -113,23 +117,35 @@ class RandomSongSelect(CustomAction):
                 and after_id != before_id
                 and not same_song(before_id, after_id)
             )
+            excluded = any(
+                after_id == item or same_song(after_id, item)
+                for item in excluded_song_ids
+            ) if after_id != UNKNOWN_SONG_ID else False
             print(
                 f"RandomSongSelect attempt={attempt}/{max_attempts} "
-                f"before={before_id} after={after_id} changed={changed}",
+                f"before={before_id} after={after_id} changed={changed} "
+                f"excluded={excluded}",
                 flush=True,
             )
-            if changed:
+            if changed and not excluded:
                 return True
             if attempt < max_attempts:
-                print(
-                    "RandomSongSelect resetting song filter before retry",
-                    flush=True,
-                )
-                clear_song_filter(controller, params)
+                if preserve_filter:
+                    # Calibration random mode must keep the user's current
+                    # 收藏/分类 filter.  Continue drawing inside that range.
+                    if after_id != UNKNOWN_SONG_ID:
+                        before_id = after_id
+                else:
+                    print(
+                        "RandomSongSelect resetting song filter before retry",
+                        flush=True,
+                    )
+                    clear_song_filter(controller, params)
 
         print(
             "RandomSongSelect failed: 点击随机选曲后歌曲未变化，"
-            "重置歌曲筛选后仍得到同一首歌；请检查选歌界面筛选或手动换歌",
+            "在允许的尝试次数内未找到新的未使用歌曲；"
+            "当前筛选保持不变，校准草稿已保留",
             flush=True,
         )
         return False

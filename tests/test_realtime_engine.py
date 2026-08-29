@@ -214,6 +214,46 @@ def test_engine_uses_nonblocking_emergency_release_on_severe_life_drop():
     assert stats.touch_resets == 1
 
 
+def test_engine_resets_touch_before_rapid_life_loss_reaches_safety_threshold():
+    clock = Clock()
+    planner = Planner()
+    touch = ResetTrackingTouch()
+    engine = RealtimeEngine(Detector(), planner, touch, clock)
+
+    class RapidlyFallingLife:
+        def __init__(self):
+            self.frames = 0
+
+        def detect(self, image):
+            self.frames += 1
+            if self.frames <= 3:
+                value = 1000
+            elif self.frames <= 13:
+                value = 920
+            elif self.frames <= 23:
+                value = 821
+            else:
+                value = 722
+            return LifeReading(True, value)
+
+    engine.life_detector = RapidlyFallingLife()
+    engine.life_guard = LifeGuard(confirm_frames=3)
+
+    def capture():
+        clock.value += 0.02
+        return np.zeros((720, 1280, 3), dtype=np.uint8)
+
+    stats = engine.run(
+        capture,
+        lambda: False,
+        duration_seconds=1,
+        target_fps=60,
+    )
+
+    assert touch.emergency_release_calls == 1
+    assert stats.touch_resets == 1
+
+
 @pytest.mark.parametrize("failure_stage", ["capture", "detector", "planner", "dispatch"])
 def test_engine_stage_error_keeps_metrics_from_completed_frames(failure_stage):
     clock = Clock()
@@ -284,9 +324,11 @@ def test_engine_records_each_processed_frame_and_closes_debug_recorder():
 
         def record(
             self, image, timestamp, notes, actions, life_status,
-            diagnostics, timing_state,
+            diagnostics, timing_state, life_value=None, touch_state=None,
         ):
-            self.records.append((timestamp, notes, actions, life_status))
+            self.records.append((
+                timestamp, notes, actions, life_status, life_value, touch_state,
+            ))
 
         def close(self):
             self.closed += 1
@@ -302,6 +344,125 @@ def test_engine_records_each_processed_frame_and_closes_debug_recorder():
     assert recorder.closed == 1
 
 
+def test_engine_records_numeric_life_and_post_dispatch_touch_state():
+    clock = Clock()
+    planner = Planner()
+
+    class ObservableTouch(Touch):
+        def __init__(self):
+            super().__init__()
+            self.active_contacts = set()
+
+        def dispatch(self, actions):
+            super().dispatch(actions)
+            self.active_contacts.add(8)
+
+        def trace_state(self):
+            return {
+                "active_contacts": sorted(self.active_contacts),
+                "contact_aliases": {"1": 8},
+            }
+
+    class Life:
+        def detect(self, image):
+            return LifeReading(True, 742)
+
+    class Recorder:
+        def __init__(self):
+            self.records = []
+
+        def record(
+            self, image, timestamp, notes, actions, life_status,
+            diagnostics, timing_state, life_value=None, touch_state=None,
+        ):
+            self.records.append((life_value, touch_state))
+
+        def close(self):
+            pass
+
+    touch = ObservableTouch()
+    recorder = Recorder()
+    engine = RealtimeEngine(
+        Detector(), planner, touch, clock,
+        life_detector=Life(), life_guard=LifeGuard(confirm_frames=3),
+        debug_recorder=recorder,
+    )
+
+    def capture():
+        clock.value += .02
+        return np.zeros((720, 1280, 3), dtype=np.uint8)
+
+    engine.run(
+        capture,
+        lambda: planner.updates == 1,
+        duration_seconds=1,
+        target_fps=60,
+    )
+
+    assert recorder.records == [(742, {
+        "active_contacts": [8],
+        "contact_aliases": {"1": 8},
+    })]
+
+
+def test_engine_records_terminal_life_value_before_safety_abort():
+    clock = Clock()
+    planner = Planner()
+    touch = ResetTrackingTouch()
+
+    class Life:
+        def __init__(self):
+            self.values = iter([800, 800, 800, 0, 0, 0])
+
+        def detect(self, image):
+            return LifeReading(True, next(self.values))
+
+    class Recorder:
+        def __init__(self):
+            self.records = []
+
+        def record(
+            self, image, timestamp, notes, actions, life_status,
+            diagnostics, timing_state, life_value=None, touch_state=None,
+        ):
+            self.records.append({
+                "notes": notes,
+                "actions": actions,
+                "life_value": life_value,
+                "diagnostics": diagnostics,
+            })
+
+        def close(self):
+            pass
+
+    recorder = Recorder()
+    engine = RealtimeEngine(
+        Detector(), planner, touch, clock,
+        life_detector=Life(), life_guard=LifeGuard(confirm_frames=3),
+        debug_recorder=recorder,
+    )
+
+    def capture():
+        clock.value += .02
+        return np.zeros((720, 1280, 3), dtype=np.uint8)
+
+    stats = engine.run(
+        capture,
+        lambda: False,
+        duration_seconds=1,
+        target_fps=60,
+    )
+
+    assert stats.aborted_for_life
+    assert recorder.records[-1]["life_value"] == 0
+    assert recorder.records[-1]["notes"] == []
+    assert recorder.records[-1]["actions"] == []
+    assert recorder.records[-1]["diagnostics"] == [{
+        "event": "life_terminal",
+        "timestamp": pytest.approx(.12),
+        "reason": "life-dead",
+        "life_value": 0,
+    }]
 def test_debug_recorder_close_failure_is_reported_without_losing_stats():
     engine, _, _, _, capture = build()
 

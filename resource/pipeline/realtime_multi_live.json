@@ -121,7 +121,7 @@
     ],
     "focus": {
       "Node.Action.Starting": {
-        "content": "正在设置并验证游戏内判定辅助效果和 TAP EFFECT",
+        "content": "正在应用演出特效设置策略",
         "display": [
           "log"
         ]
@@ -134,7 +134,7 @@
         ]
       },
       "Node.Action.Succeeded": {
-        "content": "已验证游戏内演出特效设置",
+        "content": "演出特效设置策略已完成（按设置验证或跳过）",
         "display": [
           "log"
         ]
@@ -703,6 +703,11 @@
     "threshold": 0.88,
     "action": "Custom",
     "custom_action": "ForegroundClick",
+    "custom_action_param": {
+      "confirm_absent_node": "RealtimeLiveFormalStart",
+      "confirm_attempts": 3,
+      "confirm_interval_ms": 750
+    },
     "target": true,
     "next": [
       "RealtimeLivePlay"
@@ -721,7 +726,8 @@
     "action": "Custom",
     "custom_action": "RealtimeRuntimeOptions",
     "custom_action_param": {
-      "debug_recording": false
+      "debug_recording": false,
+      "diagnostic_trace": true
     },
     "next": [
       "RealtimeLiveHomeLive"
@@ -849,6 +855,11 @@
     "threshold": 0.88,
     "action": "Custom",
     "custom_action": "ForegroundClick",
+    "custom_action_param": {
+      "confirm_absent_node": "RealtimeLiveRehearsalStart",
+      "confirm_attempts": 3,
+      "confirm_interval_ms": 750
+    },
     "target": true,
     "next": [
       "RealtimeLivePlay"

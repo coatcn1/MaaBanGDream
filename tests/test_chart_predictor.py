@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 from agent.realtime.chart_predictor import ChartPredictor
-from agent.realtime.chart_timeline import ChartJudgement, ChartTimeline
+from agent.realtime.chart_timeline import (
+    ChartHoldPath,
+    ChartJudgement,
+    ChartPathPoint,
+    ChartTimeline,
+)
 from agent.realtime.note_detector import NoteKind, ObservedNote
+from agent.realtime.note_tracker import TrackedNote
 from agent.realtime.touch_planner import ActionKind, RealtimePlanner, TouchAction
 
 
@@ -59,6 +65,117 @@ def test_calibration_fails_closed_on_unrelated_actions():
         ))
     predictor._feed_calibration(actions)
     assert predictor.calibration_failed
+    assert not predictor.calibrated
+
+
+def _phase_track(track_id, lane, now, *, crossing_in=0.5):
+    note = ObservedNote(
+        NoteKind.TAP, lane, 300 + lane * 100,
+        565 - crossing_in * 200, 20, 10, now,
+    )
+    return TrackedNote(
+        track_id, note, note.y - 10, note.x, 200.0, 4, False,
+        note.y - 30, note.y - 30, 4, 3, None, now,
+    )
+
+
+def test_upstream_tracks_lock_phase_with_six_samples_two_lanes_and_low_mad():
+    judgements = [
+        ChartJudgement(time_s, lane, "tap", index)
+        for index, (time_s, lane) in enumerate([
+            (2.0, 0), (2.37, 3), (2.91, 1),
+            (3.58, 5), (4.04, 2), (4.77, 6),
+        ])
+    ]
+    predictor = ChartPredictor(
+        ChartTimeline(judgements, bpm=120.0), min_calibration_samples=6,
+    )
+    predictor._anchor_time = 100.0
+    for index, judgement in enumerate(judgements, 1):
+        # song = engine-relative - 3.0; track predicts crossing in 0.5 s.
+        now = 100.0 + judgement.time_s + 3.0 - 0.5
+        predictor.observe_tracks([
+            _phase_track(index, judgement.lane, now),
+        ], now)
+
+    assert predictor.calibrated
+    assert abs(predictor.song_offset_s + 3.0) <= 0.020
+
+
+def test_upstream_tracks_on_only_one_lane_do_not_take_chart_control():
+    chart = ChartTimeline([
+        ChartJudgement(2.0 + index * 0.5, 0, "tap", index)
+        for index in range(6)
+    ], bpm=120.0)
+    predictor = ChartPredictor(chart, min_calibration_samples=6)
+    predictor._anchor_time = 100.0
+    for index, judgement in enumerate(chart.judgements, 1):
+        now = 100.0 + judgement.time_s + 3.0 - 0.5
+        predictor.observe_tracks([_phase_track(index, 0, now)], now)
+
+    assert not predictor.calibrated
+
+
+def test_prelock_phase_evidence_rescues_matching_below_line_fragment():
+    """Exact-chart evidence may confirm a fragment without taking control.
+
+    The 最高到达点 Expert trace had collected six projected trajectories,
+    but their early velocity noise was still too wide for the strict 20 ms
+    chart-lock gate.  Its lane-4 note then first appeared at y=576 and was
+    discarded as residue, producing the run's only Miss.  Four ordered,
+    distinct chart notes around one provisional phase are enough to confirm
+    that already-visible fragment, but are not enough to enable chart-owned
+    presses.
+    """
+    judgements = [
+        ChartJudgement(5.455, 0, "tap", 0),
+        ChartJudgement(5.682, 2, "tap", 1),
+        ChartJudgement(5.909, 4, "tap", 2),
+        ChartJudgement(6.136, 6, "tap", 3),
+    ]
+    planner = RealtimePlanner(
+        judgement_y=565,
+        timing_offset_ms=29,
+        rescue_first_visible=True,
+        chart_timeline=ChartTimeline(judgements, bpm=132.0),
+        chart_prediction=True,
+        chart_predict_presses=True,
+    )
+    predictor = planner._chart_predictor
+    assert predictor is not None
+    predictor._anchor_time = 100.0
+    evidence = [
+        (1, 0, 8.429),
+        (2, 2, 8.540),
+        (3, 2, 8.553),
+        (4, 2, 8.708),
+        (5, 4, 8.827),
+        (6, 6, 8.962),
+    ]
+    for track_id, lane, crossing_relative in evidence:
+        now = 100.0 + crossing_relative - 0.5
+        predictor.observe_tracks([
+            _phase_track(track_id, lane, now, crossing_in=0.5),
+        ], now)
+
+    assert not predictor.calibrated
+    unrelated = planner.update([
+        ObservedNote(
+            NoteKind.TAP, 3, 640, 576.4, 64, 8, 108.75,
+        ),
+    ], now=108.75)
+    rescued = planner.update([
+        # Detector classified the real normal note's bottom fragment as FLICK;
+        # the exact chart should restore TAP semantics for the dispatched input.
+        ObservedNote(
+            NoteKind.FLICK, 4, 790, 576.46, 64, 8, 108.797,
+        ),
+    ], now=108.797)
+
+    assert unrelated == []
+    assert [(action.kind, action.lane, action.reason) for action in rescued] == [
+        (ActionKind.TAP, 4, "chart-provisional-rescue")
+    ]
     assert not predictor.calibrated
 
 
@@ -236,6 +353,150 @@ def test_chart_press_rescues_tap_only_after_due_time():
     assert not [a for a in again if a.reason == "chart-predicted"]
 
 
+def test_chart_press_uses_positive_timing_offset_as_earlier_input():
+    chart = ChartTimeline([
+        ChartJudgement(2.0, 1, "tap", 0),
+    ], bpm=120.0)
+    planner = RealtimePlanner(
+        judgement_y=565,
+        timing_offset_ms=20,
+        rescue_first_visible=True,
+        enable_slide=True,
+        chart_timeline=chart,
+        chart_prediction=True,
+        chart_predict_presses=True,
+    )
+    predictor = planner._chart_predictor
+    assert predictor is not None
+    predictor.calibrated = True
+    predictor.song_offset_s = -3.0
+    predictor._anchor_time = 100.0
+
+    # Positive visual timing offsets move the trigger above the judgement line,
+    # i.e. earlier.  Chart ownership must use the same sign convention.
+    actions = planner.update([], 104.975)
+
+    assert [action.reason for action in actions] == ["chart-predicted"]
+
+
+def test_live_timing_adjustment_updates_chart_press_bias():
+    chart = ChartTimeline([
+        ChartJudgement(2.0, 1, "tap", 0),
+    ], bpm=120.0)
+    planner, predictor = _planner_with_press_rescue(chart)
+    predictor._anchor_time = 100.0
+
+    planner.set_timing_offset_ms(30)
+    actions = planner.update([], 104.975)
+
+    assert [action.reason for action in actions] == ["chart-predicted"]
+
+
+def test_positive_timing_offset_releases_chart_hold_earlier():
+    chart = ChartTimeline([
+        ChartJudgement(2.0, 1, "hold-head", 0),
+        ChartJudgement(2.5, 1, "hold-tail", 0),
+    ], bpm=120.0)
+    planner = RealtimePlanner(
+        judgement_y=565,
+        timing_offset_ms=30,
+        chart_timeline=chart,
+        chart_prediction=True,
+        chart_predict_presses=True,
+    )
+    predictor = planner._chart_predictor
+    assert predictor is not None
+    predictor.calibrated = True
+    predictor.song_offset_s = -3.0
+    predictor._anchor_time = 100.0
+    planner._state._active_hold_tail[1] = 400
+    planner._state._active_hold_lane[1] = 1
+    planner._state._hold_started[1] = 105.0
+    predictor.expected_hold_tail[1] = (2.5, 1)
+
+    actions = planner.update([], 105.48)
+
+    assert [(action.kind, action.reason) for action in actions] == [
+        (ActionKind.UP, "chart-tail"),
+    ]
+
+
+def test_suppressed_visual_rescue_does_not_consume_chart_press():
+    """A visual action removed by chart ownership was never dispatched."""
+    chart = ChartTimeline([
+        ChartJudgement(2.0, 1, "tap", 0),
+    ], bpm=120.0)
+    planner, predictor = _planner_with_press_rescue(chart)
+    anchor = 100.0
+    predictor._anchor_time = anchor
+
+    # A first-visible fragment at the line creates a visual rescue in the
+    # ordinary pipeline.  The chart owner must remove that rescue *before*
+    # deduplication commits it as a dispatched input, then send the real
+    # chart-timed press.  The old ordering removed the rescue afterwards and
+    # incorrectly consumed the chart judgement without returning any action.
+    now = anchor + 5.03
+    actions = planner.update([
+        ObservedNote(NoteKind.TAP, 1, 340, 560, 20, 10, now),
+    ], now)
+
+    assert [
+        (action.kind, action.lane, action.reason)
+        for action in actions
+    ] == [(ActionKind.TAP, 1, "chart-predicted")]
+
+
+def test_chart_press_preserves_directional_flick():
+    chart = ChartTimeline([
+        ChartJudgement(
+            2.0, 3, "tap", 0, flick=True, direction="Right"
+        ),
+    ], bpm=120.0)
+    planner, predictor = _planner_with_press_rescue(chart)
+    anchor = 100.0
+    predictor._anchor_time = anchor
+
+    actions = planner.update([], anchor + 5.05)
+    predicted = [a for a in actions if a.reason == "chart-predicted"]
+
+    assert len(predicted) == 1
+    assert predicted[0].kind == ActionKind.FLICK
+    assert predicted[0].flick_direction == "Right"
+
+
+def test_matching_chart_upgrades_visual_tap_to_directional_flick():
+    chart = ChartTimeline([
+        ChartJudgement(
+            2.0, 3, "tap", 0, flick=True, direction="Left"
+        ),
+    ], bpm=120.0)
+    planner, predictor = _planner_with_press_rescue(chart)
+    predictor._anchor_time = 0.0
+    predictor.song_offset_s = 0.0
+    visual = TouchAction(ActionKind.TAP, 3, 2.0, reason="crossing")
+
+    actions = predictor.apply_chart_flick_semantics([visual], planner._state)
+
+    assert actions[0].kind == ActionKind.FLICK
+    assert actions[0].flick_direction == "Left"
+    assert planner._state._last_trigger_action_kind[3] == ActionKind.FLICK
+
+
+def test_matching_chart_downgrades_false_visual_flick_on_ordinary_tap():
+    chart = ChartTimeline([
+        ChartJudgement(2.0, 3, "tap", 0),
+    ], bpm=120.0)
+    planner, predictor = _planner_with_press_rescue(chart)
+    predictor._anchor_time = 0.0
+    predictor.song_offset_s = 0.0
+    visual = TouchAction(ActionKind.FLICK, 3, 2.0, reason="crossing")
+
+    actions = predictor.apply_chart_flick_semantics([visual], planner._state)
+
+    assert actions[0].kind == ActionKind.TAP
+    assert actions[0].flick_direction is None
+
+
 def test_chart_press_does_not_rescue_when_crossing_covered_the_note():
     chart = _synthetic_chart()
     planner, predictor = _planner_with_press_rescue(chart)
@@ -249,6 +510,33 @@ def test_chart_press_does_not_rescue_when_crossing_covered_the_note():
     planner._state._last_trigger_action_kind[1] = ActionKind.TAP
     after = planner.update([], anchor + 5.08)
     assert not [a for a in after if a.reason == "chart-predicted"]
+
+
+def test_chart_press_dispatches_same_lane_notes_118ms_apart():
+    """A chart-owned press may cover only its own judgement identity.
+
+    Happy Synthesizer Expert contains repeated same-lane notes 0.118 s apart.
+    The old +/-120 ms generic coverage window consumed every affected second
+    judgement without dispatching it, producing exactly seven MISS results.
+    """
+    chart = ChartTimeline([
+        ChartJudgement(2.000, 4, "tap", 0),
+        ChartJudgement(2.118, 4, "tap", 1),
+    ], bpm=120.0)
+    planner, predictor = _planner_with_press_rescue(chart)
+    anchor = 100.0
+    predictor._anchor_time = anchor
+
+    first = planner.update([], anchor + 5.000)
+    second = planner.update([], anchor + 5.118)
+
+    assert [action.reason for action in first] == ["chart-predicted"]
+    assert [action.reason for action in second] == ["chart-predicted"]
+    assert predictor.predicted_presses == 2
+    assert predictor._consumed_judgements == {
+        (0, "tap"),
+        (1, "tap"),
+    }
 
 
 def test_chart_press_suppresses_duplicate_crossing_on_same_lane():
@@ -325,6 +613,462 @@ def test_chart_blind_presses_slide_and_follows_chart_path():
     end = planner.update([], anchor + 5.53)
     releases = [a for a in end if a.reason == "chart-tail"]
     assert len(releases) == 1 and releases[0].lane == 3
+
+
+def test_chart_blind_slide_follows_each_connection_segment():
+    judgements = [
+        ChartJudgement(2.0, 0, "hold-head", 0),
+        ChartJudgement(2.6, 4, "hold-tail", 0),
+    ]
+    path = ChartHoldPath(
+        note_index=0,
+        note_type="Slide",
+        points=(
+            ChartPathPoint(4.0, 2.0, 0),
+            ChartPathPoint(4.4, 2.2, 6),
+            ChartPathPoint(4.8, 2.4, 1),
+            ChartPathPoint(5.2, 2.6, 4),
+        ),
+    )
+    chart = ChartTimeline(judgements, bpm=120.0, hold_paths=[path])
+    planner, predictor = _planner_with_press_rescue(chart)
+    anchor = 100.0
+    predictor._anchor_time = anchor
+
+    pressed = planner.update([], anchor + 5.05)
+    assert [a.kind for a in pressed if a.reason == "chart-predicted"] == [
+        ActionKind.DOWN,
+    ]
+
+    first_curve = planner.update([], anchor + 5.25)
+    moves = [a for a in first_curve if a.reason == "chart-slide-move"]
+    assert len(moves) == 1 and moves[0].lane == 5
+
+    second_curve = planner.update([], anchor + 5.45)
+    moves = [a for a in second_curve if a.reason == "chart-slide-move"]
+    assert len(moves) == 1 and moves[0].lane == 2
+
+
+def test_chart_protects_visual_slide_and_corrects_each_connection_lane():
+    """A matched visual slide must not release or wander between chart nodes.
+
+    The Expert representative trace repeatedly lost 18-24 of its 60 counted
+    connection points.  Its worst mirrored slides released early or followed
+    a segmented green body onto the wrong lane even though the exact chart
+    head had already been matched.
+    """
+    chart = ChartTimeline(
+        [
+            ChartJudgement(2.0, 6, "hold-head", 0),
+            ChartJudgement(3.2, 6, "hold-tail", 0),
+        ],
+        bpm=192.0,
+        hold_paths=[ChartHoldPath(
+            note_index=0,
+            note_type="Slide",
+            points=(
+                ChartPathPoint(4.0, 2.0, 6),
+                ChartPathPoint(4.8, 2.4, 3),
+                ChartPathPoint(5.6, 2.8, 5),
+                ChartPathPoint(6.4, 3.2, 6),
+            ),
+        )],
+    )
+    planner, predictor = _planner_with_press_rescue(chart)
+    anchor = 100.0
+    predictor._anchor_time = anchor
+
+    started = planner.update([
+        ObservedNote(NoteKind.HOLD, 6, 1090, 500, 180, 150, anchor + 5.0),
+    ], now=anchor + 5.0)
+    assert [action.kind for action in started] == [ActionKind.DOWN]
+
+    # A false tail ring on the head/tail lane appears a full segment early.
+    # The chart identity must keep the contact alive.
+    early_ring = planner.update([
+        ObservedNote(NoteKind.HOLD, 6, 1090, 570, 100, 20, anchor + 5.30),
+    ], now=anchor + 5.30)
+    assert not [action for action in early_ring if action.kind == ActionKind.UP]
+
+    # Near the first connection, the fragmented visual body still says lane
+    # 6.  The chart correction is appended after visual following and wins.
+    first_connection = planner.update([
+        ObservedNote(NoteKind.HOLD, 6, 1090, 520, 180, 150, anchor + 5.37),
+    ], now=anchor + 5.37)
+    corrections = [
+        action for action in first_connection
+        if action.reason == "chart-slide-move"
+    ]
+    assert corrections and corrections[-1].lane == 3
+
+    # The same correction is restored on the next frame if vision wanders
+    # away again inside the connection judgement window.
+    planner._state._active_hold_lane[6] = 6
+    planner._state._active_hold_x[6] = 1090
+    repeated = planner.update([], now=anchor + 5.41)
+    corrections = [
+        action for action in repeated if action.reason == "chart-slide-move"
+    ]
+    assert corrections and corrections[-1].lane == 3
+
+    before_tail = planner.update([
+        ObservedNote(NoteKind.HOLD, 6, 1090, 570, 100, 20, anchor + 5.90),
+    ], now=anchor + 5.90)
+    assert not [action for action in before_tail if action.kind == ActionKind.UP]
+
+    at_tail = planner.update([], now=anchor + 6.19)
+    assert [action.lane for action in at_tail if action.reason == "chart-tail"] == [6]
+
+
+def test_chart_starts_overlapping_slide_on_an_original_or_crossed_lane():
+    """A second slide may start on another active slide's lane.
+
+    Expert paths 383/384 and 399/400 overlap this way.  The first finger has
+    already moved from its origin; two other short holds begin on a lane that
+    a previous slide is physically crossing.  Both cases need another contact
+    instead of dropping the new head and its counted connection points.
+    """
+    chart = ChartTimeline(
+        [
+            ChartJudgement(2.0, 3, "hold-head", 0),
+            ChartJudgement(2.4, 3, "hold-head", 1),
+            ChartJudgement(2.6, 1, "hold-tail", 0),
+            ChartJudgement(3.0, 5, "hold-tail", 1),
+        ],
+        bpm=192.0,
+        hold_paths=[
+            ChartHoldPath(
+                0,
+                "Slide",
+                (
+                    ChartPathPoint(4.0, 2.0, 3),
+                    ChartPathPoint(4.8, 2.2, 2),
+                    ChartPathPoint(5.6, 2.6, 1),
+                ),
+            ),
+            ChartHoldPath(
+                1,
+                "Slide",
+                (
+                    ChartPathPoint(4.8, 2.4, 3),
+                    ChartPathPoint(5.6, 2.6, 4),
+                    ChartPathPoint(6.4, 3.0, 5),
+                ),
+            ),
+        ],
+    )
+    for occupied_lane in (2, 3):
+        planner, predictor = _planner_with_press_rescue(chart)
+        anchor = 100.0
+        predictor._anchor_time = anchor
+
+        first = planner.update([
+            ObservedNote(
+                NoteKind.HOLD, 3, 640, 500, 180, 150, anchor + 5.0,
+            ),
+        ], now=anchor + 5.0)
+        assert [
+            (action.lane, action.contact)
+            for action in first if action.kind == ActionKind.DOWN
+        ] == [(3, 3)]
+
+        planner._state._active_hold_lane[3] = occupied_lane
+        planner._state._active_hold_x[3] = 500 if occupied_lane == 2 else 640
+        second = planner.update([], now=anchor + 5.47)
+        second_downs = [
+            action for action in second if action.kind == ActionKind.DOWN
+        ]
+
+        assert len(second_downs) == 1
+        assert second_downs[0].lane == 3
+        assert second_downs[0].contact != 3
+        assert len(planner._state._active_hold_tail) == 2
+        assert not [
+            action for action in planner.update([], now=anchor + 5.50)
+            if action.kind == ActionKind.DOWN
+        ]
+
+
+def test_chart_suppresses_early_visual_hold_and_presses_exact_head():
+    """An outlier visual DOWN must not occupy the exact chart head."""
+    chart = ChartTimeline([
+        ChartJudgement(2.0, 1, "hold-head", 0),
+        ChartJudgement(2.5, 1, "hold-tail", 0),
+    ], bpm=192.0)
+    planner, predictor = _planner_with_press_rescue(chart)
+    anchor = 100.0
+    predictor._anchor_time = anchor
+
+    early = planner.update([
+        ObservedNote(NoteKind.HOLD, 1, 340, 500, 180, 150, anchor + 4.65),
+    ], now=anchor + 4.65)
+    assert not [action for action in early if action.kind == ActionKind.DOWN]
+    assert not planner.has_active_holds
+
+    # The chart rescue window allows up to 120 ms lateness; querying only
+    # 80 ms into the past used to forget short Expert heads before dispatch.
+    due = planner.update([], now=anchor + 5.10)
+    predicted = [
+        action for action in due
+        if action.kind == ActionKind.DOWN and action.reason == "chart-predicted"
+    ]
+    assert len(predicted) == 1
+    assert predicted[0].lane == 1
+    assert predicted[0].contact == 1
+
+
+def test_exact_chart_head_overrides_recent_visual_hold_release():
+    """Residue cooldown cannot suppress an unclaimed exact chart head."""
+    chart = ChartTimeline([
+        ChartJudgement(2.0, 1, "hold-head", 0),
+        ChartJudgement(2.2, 1, "hold-tail", 0),
+    ], bpm=192.0)
+    planner, predictor = _planner_with_press_rescue(chart)
+    anchor = 100.0
+    predictor._anchor_time = anchor
+    planner._state._hold_released_at[1] = anchor + 5.04
+
+    actions = planner.update([], now=anchor + 5.07)
+
+    assert [
+        (action.kind, action.lane, action.reason)
+        for action in actions if action.kind == ActionKind.DOWN
+    ] == [(ActionKind.DOWN, 1, "chart-predicted")]
+
+
+def test_chart_slide_release_suppresses_head_lane_residue_repress():
+    """The released chart path owns residue on both its head and tail lanes.
+
+    The failed 最高到達点 Expert trace released simultaneous slides from
+    lanes 1/5 onto lanes 0/6, then 94 ms later re-opened visual holds on the
+    original head lanes.  Those phantom contacts overlapped the next chart
+    taps on the same lanes and preceded the fatal life drop.
+    """
+    chart = ChartTimeline(
+        [
+            ChartJudgement(2.0, 1, "hold-head", 0),
+            ChartJudgement(2.228, 0, "hold-tail", 0),
+            ChartJudgement(2.5, 1, "tap", 1),
+        ],
+        bpm=132.0,
+        hold_paths=[
+            ChartHoldPath(
+                0,
+                "Slide",
+                (
+                    ChartPathPoint(4.4, 2.0, 1),
+                    ChartPathPoint(4.9, 2.228, 0),
+                ),
+            ),
+        ],
+    )
+    planner, predictor = _planner_with_press_rescue(chart)
+    anchor = 100.0
+    predictor._anchor_time = anchor
+
+    head = planner.update([], now=anchor + 5.02)
+    assert [
+        (action.kind, action.lane, action.reason)
+        for action in head
+    ] == [(ActionKind.DOWN, 1, "chart-predicted")]
+
+    tail = planner.update([], now=anchor + 5.24)
+    assert [
+        (action.kind, action.lane, action.reason)
+        for action in tail
+    ] == [
+        (ActionKind.MOVE, 0, "chart-slide-move"),
+        (ActionKind.UP, 0, "chart-tail"),
+    ]
+
+    residue_lead_time = anchor + 5.30
+    assert planner.update(
+        [
+            ObservedNote(
+                NoteKind.HOLD,
+                1,
+                340,
+                500,
+                180,
+                80,
+                residue_lead_time,
+            ),
+        ],
+        now=residue_lead_time,
+    ) == []
+
+    residue_time = anchor + 5.334
+    residue = planner.update(
+        [
+            ObservedNote(
+                NoteKind.HOLD,
+                1,
+                340,
+                530,
+                180,
+                80,
+                residue_time,
+            ),
+        ],
+        now=residue_time,
+    )
+
+    assert not [action for action in residue if action.kind == ActionKind.DOWN]
+
+
+def test_chart_clock_discards_visual_hold_without_matching_chart_head():
+    """A tail-ring fragment cannot become a new hold after cooldown expires."""
+    chart = ChartTimeline([
+        ChartJudgement(2.0, 1, "tap", 0),
+        ChartJudgement(2.25, 6, "tap", 1),
+    ], bpm=132.0)
+    planner, predictor = _planner_with_press_rescue(chart)
+    anchor = 100.0
+    predictor._anchor_time = anchor
+
+    lead_time = anchor + 5.15
+    planner.update([
+        ObservedNote(
+            NoteKind.HOLD, 0, 190, 500, 180, 80, lead_time,
+        ),
+    ], now=lead_time)
+    actions = planner.update([
+        ObservedNote(
+            NoteKind.HOLD, 0, 190, 530, 180, 80, anchor + 5.20,
+        ),
+    ], now=anchor + 5.20)
+
+    assert not [action for action in actions if action.kind == ActionKind.DOWN]
+    assert not planner.has_active_holds
+    diagnostics = planner.drain_diagnostics()
+    assert any(
+        diagnostic["event"] == "chart_unmatched_hold_suppressed"
+        for diagnostic in diagnostics
+    )
+    assert not [
+        diagnostic for diagnostic in diagnostics
+        if diagnostic["event"] == "hold_release"
+        and diagnostic.get("release_method") == "chart-unmatched-visual"
+    ]
+
+
+def test_visual_matches_correct_small_phase_drift():
+    chart = ChartTimeline([
+        ChartJudgement(float(index), 0, "tap", index)
+        for index in range(1, 6)
+    ], bpm=120.0)
+    predictor = ChartPredictor(chart)
+    predictor.calibrated = True
+    predictor._anchor_time = 0.0
+
+    for index in range(1, 5):
+        now = float(index) - 0.54
+        predictor.observe_tracks([
+            _phase_track(index, 0, now),
+        ], now)
+
+    assert predictor.song_offset_s == 0.002
+
+
+def test_result_transition_residue_after_chart_end_is_ignored():
+    chart = ChartTimeline([
+        ChartJudgement(2.0, 0, "tap", 0),
+    ], bpm=120.0)
+    predictor = ChartPredictor(chart)
+    predictor.calibrated = True
+    predictor._anchor_time = 0.0
+
+    predictor.observe_visual_actions([
+        TouchAction(ActionKind.TAP, 6, 10.0 + index, reason="crossing")
+        for index in range(20)
+    ])
+
+    assert not predictor.disabled_for_run
+    assert predictor._mismatch_streak == 0
+
+
+def test_post_chart_visual_hold_artifact_cannot_touch_result_screen():
+    """Once the exact chart is over, result UI pixels must never create DOWN."""
+    chart = ChartTimeline([
+        ChartJudgement(2.0, 1, "tap", 0),
+    ], bpm=120.0)
+    planner, predictor = _planner_with_press_rescue(chart)
+    anchor = 100.0
+    predictor._anchor_time = anchor
+
+    # The failed formal run produced DOWN/MOVE/FLICK 4.8 seconds after the
+    # chart's final judgement, while the result UI was replacing the field.
+    # A green/pink result fragment happened to look like a hold body.
+    now = anchor + 3.0 + chart.end_time_s + 4.8
+    actions = planner.update([
+        ObservedNote(NoteKind.HOLD, 5, 960, 500, 180, 150, now),
+    ], now)
+
+    assert actions == []
+    assert not planner.has_active_holds
+
+
+def test_dense_visual_artifact_burst_does_not_disable_matching_chart():
+    chart = ChartTimeline([
+        ChartJudgement(20.0, 0, "tap", 0),
+        ChartJudgement(100.0, 0, "tap", 1),
+    ], bpm=120.0)
+    predictor = ChartPredictor(chart)
+    predictor.calibrated = True
+    predictor._anchor_time = 0.0
+
+    predictor.observe_visual_actions([
+        TouchAction(ActionKind.TAP, 6, 10.0 + index * .2, reason="crossing")
+        for index in range(9)
+    ])
+
+    assert not predictor.disabled_for_run
+    predictor.observe_visual_actions([
+        TouchAction(ActionKind.TAP, 0, 20.0, reason="crossing")
+    ])
+    assert predictor._mismatch_streak == 0
+
+
+def test_repeated_mismatch_disables_chart_and_releases_blind_hold():
+    chart = ChartTimeline([
+        *[
+            ChartJudgement(10.0 + index, 6, "tap", index)
+            for index in range(8)
+        ],
+        ChartJudgement(100.0, 0, "hold-tail", 20),
+    ], bpm=120.0)
+    planner, predictor = _planner_with_press_rescue(chart)
+    predictor._anchor_time = 0.0
+
+    predictor.observe_visual_actions([
+        # Action timestamps are not phase samples after chart lock.
+    ])
+    for index in range(8):
+        now = 13.1 + index - 0.5
+        predictor.observe_tracks([
+            _phase_track(index + 1, 6, now),
+        ], now)
+    assert predictor.disabled_for_run
+
+    state = planner._state
+    state._active_hold_tail[0] = 400.0
+    state._active_hold_lane[0] = 0
+    state._hold_started[0] = 10.0
+    state._blind_hold_contacts.add(0)
+    predictor.expected_hold_tail[0] = (30.0, 0)
+    visual = TouchAction(ActionKind.TAP, 2, 20.0, reason="crossing")
+
+    actions = predictor.update(
+        [], [], 20.0, [visual], state, planner._holds, visual_observed=True
+    )
+
+    assert actions[0] is visual
+    assert [(a.kind, a.reason) for a in actions[1:]] == [
+        (ActionKind.UP, "chart-disabled"),
+    ]
+    assert predictor.expected_hold_tail == {}
+    assert state._blind_hold_contacts == set()
+    assert state.drain_diagnostics()[-1]["event"] == "chart_disabled_for_run"
 
 
 def test_chart_blind_press_handles_recent_tap_on_lane():

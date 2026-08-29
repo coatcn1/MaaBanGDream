@@ -10,12 +10,15 @@ timeline the planner can:
    (the detector missed it);
 3. release active holds exactly at the chart tail time.
 
-Prediction is only active for Hard+ runs with a matching chart.  Calibration
+Prediction is only active for an exact song+difficulty match.  Calibration
 fails closed: if the first actions do not line up with the chart, prediction
 stays disabled for the whole run (a different song is being played).
 """
 
 from __future__ import annotations
+
+import statistics
+from dataclasses import replace
 
 from .chart_timeline import ChartJudgement, ChartTimeline
 from .note_detector import NoteKind, ObservedNote
@@ -34,6 +37,20 @@ TRUSTED_CALIBRATION_REASONS = {
     "predicted-dropout-rescue",
 }
 
+# Dense slide sections can emit a short burst of visual hold-body and tail
+# artifacts even while the already-calibrated official chart remains aligned.
+# Requiring a full calibration-window-sized disagreement preserves fail-closed
+# behaviour for a genuinely wrong chart without abandoning a correct chart on
+# the nine-action burst observed in the Hard representative trace.
+MAX_CONSECUTIVE_VISUAL_CHART_MISMATCHES = 8
+HOLD_HEAD_CLAIM_WINDOW_S = 0.25
+POST_CHART_INPUT_GRACE_S = 0.75
+MIN_PROVISIONAL_RESCUE_TRACKS = 6
+MIN_PROVISIONAL_RESCUE_JUDGEMENTS = 4
+PROVISIONAL_OFFSET_WINDOW_S = 0.12
+PROVISIONAL_MAD_LIMIT_S = 0.08
+PROVISIONAL_CROSSING_WINDOW_S = 0.06
+
 
 class ChartPredictor:
     """Optional chart-timeline safety net for Hard+ realtime play."""
@@ -43,7 +60,7 @@ class ChartPredictor:
         chart: ChartTimeline,
         *,
         judgement_y: float = 565,
-        min_calibration_samples: int = 16,
+        min_calibration_samples: int = 6,
         predict_presses: bool = False,
         press_bias_ms: int = 0,
     ) -> None:
@@ -51,7 +68,8 @@ class ChartPredictor:
         self.judgement_y = float(judgement_y)
         self.min_calibration_samples = int(min_calibration_samples)
         self.predict_presses = bool(predict_presses)
-        self.press_bias_s = int(press_bias_ms) / 1000.0
+        self.press_bias_s = 0.0
+        self.set_press_bias_ms(press_bias_ms)
         self.calibrated = False
         self.song_offset_s = 0.0
         self.calibration_samples: list[tuple[float, int, str, float]] = []
@@ -60,10 +78,25 @@ class ChartPredictor:
         self.predicted_releases = 0
         self.calibration_failed = False
         self._last_predicted: dict[int, float] = {}
+        self._last_predicted_judgement: dict[
+            int, tuple[int, str, float]
+        ] = {}
         self._calibration_diagnosed = False
         self._calibration_failed_diagnosed = False
         self._anchor_time: float | None = None
         self._mistimed_lanes: dict[int, tuple[float, float]] = {}
+        self.disabled_for_run = False
+        self.disable_reason: str | None = None
+        self._phase_residuals: list[float] = []
+        self._mismatch_streak = 0
+        self._disabled_diagnosed = False
+        self._claimed_hold_note_indices: set[int] = set()
+        self._track_phase_candidates: dict[
+            int, list[tuple[float, int, int, float, float]]
+        ] = {}
+        self._sampled_track_ids: set[int] = set()
+        self._consumed_judgements: set[tuple[int, str]] = set()
+        self._phase_validation_track_ids: set[int] = set()
 
     def reset(self) -> None:
         self.calibrated = False
@@ -74,16 +107,49 @@ class ChartPredictor:
         self.predicted_releases = 0
         self.calibration_failed = False
         self._last_predicted = {}
+        self._last_predicted_judgement = {}
         self._calibration_diagnosed = False
         self._calibration_failed_diagnosed = False
         self._anchor_time = None
         self._mistimed_lanes = {}
+        self.disabled_for_run = False
+        self.disable_reason = None
+        self._phase_residuals = []
+        self._mismatch_streak = 0
+        self._disabled_diagnosed = False
+        self._claimed_hold_note_indices = set()
+        self._track_phase_candidates = {}
+        self._sampled_track_ids = set()
+        self._consumed_judgements = set()
+        self._phase_validation_track_ids = set()
 
     def _relative(self, engine_time: float) -> float:
         """Convert an absolute monotonic engine time to song-relative time."""
         if self._anchor_time is None:
             self._anchor_time = engine_time
         return engine_time - self._anchor_time
+
+    def input_window_finished(self, engine_time: float) -> bool:
+        """Return whether an exact, locked chart can no longer need input."""
+        if (
+            self.disabled_for_run
+            or not self.calibrated
+            or self._anchor_time is None
+        ):
+            return False
+        song_now = self._relative(engine_time) + self.song_offset_s
+        return song_now > self.chart.end_time_s + POST_CHART_INPUT_GRACE_S
+
+    def song_time(self, engine_time: float) -> float:
+        return self._relative(engine_time) + self.song_offset_s
+
+    def input_song_time(self, engine_time: float) -> float:
+        """Song clock advanced by the calibrated device-input latency."""
+        return self.song_time(engine_time) - self.press_bias_s
+
+    def set_press_bias_ms(self, value: int) -> None:
+        """Apply the planner offset using its positive-means-earlier sign."""
+        self.press_bias_s = -int(value) / 1000.0
 
     def validate_crossing(self, lane: int, engine_time: float) -> bool:
         """Return True when a crossing on ``lane`` matches the chart timing.
@@ -93,7 +159,11 @@ class ChartPredictor:
         by a chart-timed press, so the game receives one correctly-timed
         input instead of an early/late miss.
         """
-        if not self.calibrated or not self.predict_presses:
+        if (
+            self.disabled_for_run
+            or not self.calibrated
+            or not self.predict_presses
+        ):
             return True
         last_pred = self._last_predicted.get(lane, float("-inf"))
         if engine_time - last_pred <= 0.15:
@@ -102,21 +172,456 @@ class ChartPredictor:
             # fragment and must not dispatch a duplicate input.
             return False
         song_now = self._relative(engine_time) + self.song_offset_s
-        judgement = self.chart.judgement_near(
-            lane,
-            song_now,
-            window_s=0.12,
-        )
-        if (
-            judgement is not None
-            and judgement.kind == "tap"
-            and abs(judgement.time_s - song_now) <= 0.12
-        ):
-            return True
+        # Once locked, the chart is the tap/flick clock.  A visual crossing is
+        # phase evidence only; dispatching it here would race the chart and
+        # reintroduce capture jitter.
         next_judgement = self.chart.next_judgement(lane, song_now - 0.05)
         if next_judgement is not None and next_judgement.kind == "tap":
             self._mistimed_lanes[lane] = (engine_time, next_judgement.time_s)
         return False
+
+    def observe_visual_actions(self, actions: list[TouchAction]) -> None:
+        """Use trusted visual actions for initial lock and ongoing phase lock.
+
+        After calibration, repeated visual/chart disagreement disables chart
+        input for the rest of the song.  Small matched residuals adjust the
+        offset gradually, keeping device/capture drift in a closed loop.
+        """
+        if self.disabled_for_run:
+            return
+        # Action timestamps are deliberately ignored for both initial and
+        # ongoing phase.  The detector triggers above the judgement line, so
+        # treating TAP/DOWN as an over-line timestamp creates a stable
+        # 80-150 ms bias.  Only projected crossings in ``observe_tracks`` may
+        # establish or adjust song phase.
+
+    def _record_phase_residual(self, residual: float, lane: int) -> None:
+        if abs(residual) > 0.08:
+            self._mismatch_streak += 1
+            if self._mismatch_streak >= MAX_CONSECUTIVE_VISUAL_CHART_MISMATCHES:
+                self.disabled_for_run = True
+                self.disable_reason = (
+                    f"{MAX_CONSECUTIVE_VISUAL_CHART_MISMATCHES} credible "
+                    f"phase residuals exceeded 80ms (lane={lane}, "
+                    f"residual_ms={residual * 1000:.1f})"
+                )
+            return
+        self._mismatch_streak = 0
+        self._phase_residuals.append(residual)
+        self._phase_residuals = self._phase_residuals[-9:]
+        if len(self._phase_residuals) >= 4:
+            median = statistics.median(self._phase_residuals)
+            adjustment = max(-0.002, min(0.002, median * 0.25))
+            self.song_offset_s += adjustment
+
+    def observe_tracks(
+        self,
+        tracked_notes: list[TrackedNote],
+        now: float,
+    ) -> None:
+        """Acquire initial phase from predicted visual line-crossing times.
+
+        Each track contributes candidates against same-lane chart taps.  A
+        lock needs six unique tracks on at least two lanes and a <=20 ms MAD.
+        No touch action is needed, so the first chart-owned input can occur as
+        soon as the falling trajectories provide enough evidence.
+        """
+        if self.disabled_for_run:
+            return
+        relative_now = self._relative(now)
+        if self.calibrated:
+            for tracked in tracked_notes:
+                if tracked.track_id in self._phase_validation_track_ids:
+                    continue
+                if (
+                    tracked.note.kind not in {
+                        NoteKind.TAP, NoteKind.FLICK, NoteKind.SKILL,
+                    }
+                    or tracked.velocity_y < 100
+                    or tracked.sample_count < 4
+                    or tracked.motion_samples < 4
+                    or tracked.downward_motion_frames < 3
+                ):
+                    continue
+                remaining = self.judgement_y - tracked.note.y
+                if not 0 < remaining <= 140:
+                    continue
+                self._phase_validation_track_ids.add(tracked.track_id)
+                crossing_song_time = (
+                    relative_now + remaining / tracked.velocity_y
+                    + self.song_offset_s
+                )
+                judgement = self.chart.judgement_near(
+                    tracked.note.lane,
+                    crossing_song_time,
+                    window_s=0.35,
+                )
+                if judgement is None or judgement.kind != "tap":
+                    continue
+                self._record_phase_residual(
+                    judgement.time_s - crossing_song_time,
+                    tracked.note.lane,
+                )
+                if self.disabled_for_run:
+                    return
+            return
+        if self.calibration_failed:
+            return
+        for tracked in tracked_notes:
+            if tracked.track_id in self._sampled_track_ids:
+                continue
+            if (
+                tracked.note.kind not in {NoteKind.TAP, NoteKind.FLICK, NoteKind.SKILL}
+                or tracked.velocity_y < 100
+                or tracked.sample_count < 4
+                or tracked.motion_samples < 4
+                or tracked.downward_motion_frames < 3
+            ):
+                continue
+            remaining = self.judgement_y - tracked.note.y
+            if not 0 < remaining <= 140:
+                continue
+            crossing_relative = relative_now + remaining / tracked.velocity_y
+            candidates = [
+                (
+                    judgement.time_s - crossing_relative,
+                    tracked.note.lane,
+                    judgement.note_index,
+                    judgement.time_s,
+                    crossing_relative,
+                )
+                for judgement in self.chart.judgements
+                if judgement.lane == tracked.note.lane
+                and judgement.kind == "tap"
+                and -12.0 <= judgement.time_s - crossing_relative <= 3.0
+            ]
+            if candidates:
+                self._sampled_track_ids.add(tracked.track_id)
+                self._track_phase_candidates[tracked.track_id] = candidates
+        if len(self._track_phase_candidates) < self.min_calibration_samples:
+            return
+
+        best: list[tuple[float, int, int, float, float]] = []
+        best_error = float("inf")
+        solutions: list[
+            tuple[list[tuple[float, int, int, float, float]], float, float]
+        ] = []
+        centers = [
+            offset
+            for candidates in self._track_phase_candidates.values()
+            for offset, _lane, _note_index, _chart_time, _crossing in candidates
+        ]
+        for center in centers:
+            cluster: list[tuple[float, int, int, float, float]] = []
+            used_notes: set[int] = set()
+            previous_chart_time = float("-inf")
+            ordered_candidates = sorted(
+                self._track_phase_candidates.values(),
+                key=lambda items: items[0][4],
+            )
+            for candidates in ordered_candidates:
+                eligible = [
+                    item for item in candidates
+                    if abs(item[0] - center) <= 0.04
+                    and item[2] not in used_notes
+                    and item[3] >= previous_chart_time - 0.05
+                ]
+                if not eligible:
+                    continue
+                nearest = min(eligible, key=lambda item: abs(item[0] - center))
+                cluster.append(nearest)
+                used_notes.add(nearest[2])
+                previous_chart_time = nearest[3]
+            error = sum(abs(item[0] - center) for item in cluster)
+            if cluster:
+                solutions.append((
+                    cluster,
+                    error,
+                    float(statistics.median(item[0] for item in cluster)),
+                ))
+            if len(cluster) > len(best) or (
+                len(cluster) == len(best) and error < best_error
+            ):
+                best = cluster
+                best_error = error
+        if len(best) < self.min_calibration_samples:
+            return
+        ranked: list[
+            tuple[list[tuple[float, int, int, float, float]], float, float]
+        ] = []
+        for solution in sorted(
+            solutions, key=lambda item: (-len(item[0]), item[1]),
+        ):
+            if any(abs(solution[2] - known[2]) < 0.08 for known in ranked):
+                continue
+            ranked.append(solution)
+        if len(ranked) > 1 and len(ranked[1][0]) >= len(ranked[0][0]) - 1:
+            # Periodic lane patterns can yield several low-MAD offsets.  Keep
+            # collecting trajectories until one one-to-one ordered alignment
+            # is clearly stronger; never take control on an ambiguous phase.
+            return
+        best, best_error, _best_center = ranked[0]
+        offsets = [item[0] for item in best]
+        median = statistics.median(offsets)
+        mad = statistics.median(abs(item - median) for item in offsets)
+        if len({item[1] for item in best}) < 2 or mad > 0.020:
+            return
+        self.song_offset_s = float(median)
+        self.calibrated = True
+        self.calibration_samples = [
+            (crossing, lane, "track-crossing", offset)
+            for offset, lane, _note_index, _chart_time, crossing in best
+        ]
+
+    def provisional_residue_judgement(
+        self,
+        lane: int,
+        engine_time: float,
+    ) -> ChartJudgement | None:
+        """Confirm one visible late fragment before strict chart lock.
+
+        This does not enable chart scheduling or mutate the phase.  It only
+        answers when an exact local chart, six projected visual trajectories,
+        and four ordered distinct judgements agree that a fragment already
+        visible on ``lane`` is crossing now.  The wider early-velocity limit
+        is safe here because no blind input is created: visual evidence is
+        still mandatory.
+        """
+        if (
+            self.disabled_for_run
+            or self.calibrated
+            or self.calibration_failed
+            or not self.predict_presses
+            or self._anchor_time is None
+            or len(self._track_phase_candidates)
+            < max(MIN_PROVISIONAL_RESCUE_TRACKS, self.min_calibration_samples)
+        ):
+            return None
+        relative_now = engine_time - self._anchor_time
+        candidates = [
+            item
+            for items in self._track_phase_candidates.values()
+            for item in items
+            if item[1] == lane
+            and abs(item[4] - relative_now) <= PROVISIONAL_CROSSING_WINDOW_S
+        ]
+        ranked: list[tuple[int, int, float, float, ChartJudgement]] = []
+        ordered_tracks = sorted(
+            self._track_phase_candidates.values(),
+            key=lambda items: items[0][4],
+        )
+        for candidate in candidates:
+            candidate_offset = candidate[0]
+            support: list[tuple[float, int, int, float, float]] = []
+            used_notes: set[int] = set()
+            previous_chart_time = float("-inf")
+            for track_candidates in ordered_tracks:
+                eligible = [
+                    item
+                    for item in track_candidates
+                    if abs(item[0] - candidate_offset)
+                    <= PROVISIONAL_OFFSET_WINDOW_S
+                    and item[2] not in used_notes
+                    and item[3] >= previous_chart_time - 0.05
+                ]
+                if not eligible:
+                    continue
+                nearest = min(
+                    eligible,
+                    key=lambda item: abs(item[0] - candidate_offset),
+                )
+                support.append(nearest)
+                used_notes.add(nearest[2])
+                previous_chart_time = nearest[3]
+            if len(support) < MIN_PROVISIONAL_RESCUE_JUDGEMENTS:
+                continue
+            lanes = {item[1] for item in support}
+            if len(lanes) < 2:
+                continue
+            offsets = [item[0] for item in support]
+            median = statistics.median(offsets)
+            mad = statistics.median(abs(item - median) for item in offsets)
+            if (
+                mad > PROVISIONAL_MAD_LIMIT_S
+                or abs(candidate_offset - median) > PROVISIONAL_MAD_LIMIT_S
+            ):
+                continue
+            judgement = next((
+                item
+                for item in self.chart.judgements
+                if item.note_index == candidate[2] and item.kind == "tap"
+            ), None)
+            if judgement is None:
+                continue
+            ranked.append((
+                len(support),
+                len(lanes),
+                -mad,
+                -abs(candidate[4] - relative_now),
+                judgement,
+            ))
+        if not ranked:
+            return None
+        return max(ranked, key=lambda item: item[:4])[4]
+
+    def apply_chart_flick_semantics(
+        self,
+        actions: list[TouchAction],
+        state: PlannerState,
+    ) -> list[TouchAction]:
+        """Apply explicit chart flick kind/direction to matched visual taps."""
+        if self.disabled_for_run or not self.calibrated:
+            return actions
+        enriched: list[TouchAction] = []
+        for action in actions:
+            if (
+                action.kind not in {ActionKind.TAP, ActionKind.FLICK}
+                or action.contact is not None
+            ):
+                enriched.append(action)
+                continue
+            song_time = self._relative(action.timestamp) + self.song_offset_s
+            judgement = self.chart.judgement_near(
+                action.lane,
+                song_time,
+                window_s=0.18,
+            )
+            if judgement is None or judgement.kind != "tap":
+                enriched.append(action)
+                continue
+            expected_kind = (
+                ActionKind.FLICK if judgement.flick else ActionKind.TAP
+            )
+            expected_direction = (
+                judgement.direction if judgement.flick else None
+            )
+            if (
+                action.kind == expected_kind
+                and action.flick_direction == expected_direction
+            ):
+                enriched.append(action)
+                continue
+            updated = replace(
+                action,
+                kind=expected_kind,
+                flick_direction=expected_direction,
+            )
+            enriched.append(updated)
+            state._last_trigger_action_kind[action.lane] = expected_kind
+            state.record_diagnostic(
+                "chart_flick_semantics",
+                action.timestamp,
+                lane=action.lane,
+                visual_kind=action.kind.value,
+                chart_kind=expected_kind.value,
+                direction=expected_direction,
+            )
+        return enriched
+
+    def filter_chart_owned_holds(
+        self,
+        actions: list[TouchAction],
+        now: float,
+        state: PlannerState,
+        holds: HoldPipeline,
+    ) -> list[TouchAction]:
+        """Discard visual hold starts that do not match an exact chart head.
+
+        Once press prediction owns the clock, a green tail ring or judgement
+        effect must not create a persistent contact merely because it survived
+        the ordinary hold detector.  Matching visual heads remain useful for
+        geometry; unmatched heads are rolled back before dispatch.
+        """
+        if self.disabled_for_run or not self.calibrated or not self.predict_presses:
+            return actions
+        suppressed_contacts: set[int] = set()
+        for action in actions:
+            if action.kind != ActionKind.DOWN:
+                continue
+            song_time = self.song_time(action.timestamp)
+            head = min(
+                (
+                    judgement
+                    for judgement in self.chart._by_lane[action.lane]
+                    if judgement.kind == "hold-head"
+                ),
+                key=lambda judgement: abs(judgement.time_s - song_time),
+                default=None,
+            )
+            if (
+                head is not None
+                and abs(head.time_s - song_time) <= HOLD_HEAD_CLAIM_WINDOW_S
+            ):
+                continue
+            contact = action.lane if action.contact is None else action.contact
+            suppressed_contacts.add(contact)
+            partner = state._hold_chord_partner.pop(contact, None)
+            if partner is not None:
+                state._hold_chord_partner.pop(partner, None)
+            if contact in state._active_hold_tail:
+                holds._discard_undispatched_hold(contact)
+            state.record_diagnostic(
+                "chart_unmatched_hold_suppressed",
+                now,
+                lane=action.lane,
+                contact=contact,
+                reason=action.reason,
+                song_time_s=round(song_time, 3),
+            )
+        if not suppressed_contacts:
+            return actions
+        return [
+            action
+            for action in actions
+            if not (
+                (
+                    action.lane if action.contact is None else action.contact
+                ) in suppressed_contacts
+                and (
+                    action.kind in {
+                        ActionKind.DOWN,
+                        ActionKind.MOVE,
+                        ActionKind.UP,
+                    }
+                    or (
+                        action.kind == ActionKind.FLICK
+                        and action.contact is not None
+                    )
+                )
+            )
+        ]
+
+    def _fall_back_to_visual(
+        self,
+        now: float,
+        actions: list[TouchAction],
+        state: PlannerState,
+        holds: HoldPipeline,
+    ) -> None:
+        """Remove chart-only state when the closed loop loses confidence."""
+        for contact in list(state._blind_hold_contacts):
+            if contact not in state._active_hold_tail:
+                continue
+            lane = state._active_hold_lane.get(contact, contact)
+            partner = state._hold_chord_partner.pop(contact, None)
+            if partner is not None:
+                state._hold_chord_partner.pop(partner, None)
+            state._hold_tail_flick.discard(contact)
+            state._hold_tail_flick_direction.pop(contact, None)
+            holds._release_hold(
+                contact,
+                lane,
+                now,
+                "chart-disabled",
+                actions,
+            )
+        self.expected_hold_tail.clear()
+        state._blind_hold_contacts.clear()
+        state._chart_tail_lane.clear()
+        state._chart_hold_lanes.clear()
+        state._chart_slide_path.clear()
+        state._chart_slide_next_index.clear()
+        state._chart_hold_release_at.clear()
 
     def _feed_calibration(
         self,
@@ -185,7 +690,25 @@ class ChartPredictor:
             offset += 0.005
         best_offset = refined_offset
         required_matches = max(6, int(self.min_calibration_samples * 0.6))
-        if best_count < required_matches:
+        matched = []
+        for engine_time, lane, kind, _ in self.calibration_samples:
+            judgement = self.chart.judgement_near(
+                lane, engine_time + best_offset, window_s=0.12,
+            )
+            if judgement is not None and judgement.kind == kind:
+                matched.append((judgement.time_s - engine_time, lane))
+        residual_mad = (
+            statistics.median(
+                abs(offset - statistics.median(item[0] for item in matched))
+                for offset, _lane in matched
+            )
+            if matched else float("inf")
+        )
+        if (
+            best_count < required_matches
+            or len({lane for _offset, lane in matched}) < 2
+            or residual_mad > 0.020
+        ):
             self.calibration_failed = True
             return
         self.song_offset_s = best_offset
@@ -253,26 +776,23 @@ class ChartPredictor:
         state: PlannerState,
         holds: HoldPipeline,
     ) -> None:
-        """Rescue taps whose chart judgement time has already passed.
-
-        The detector is the primary trigger for ordinary taps.  A note can
-        still be stuck on a residue, swallowed by a drifted hold body, or
-        first visible only after the line, leaving the lane with no action.
-        The chart then presses the tap shortly AFTER the judgement time so
-        the input matches the game's judgement instead of preempting the
-        detector with an early press.
-        """
+        """Dispatch every due chart judgement once, in lane/chord batches."""
         song_now = self._relative(now) + self.song_offset_s
         occupied_lanes = set(state._active_hold_lane.values())
         for lane in range(self.chart.LANE_COUNT):
-            next_judgement = self.chart.next_judgement(
-                lane, song_now - 0.08
-            )
+            next_judgement = next((
+                judgement
+                for judgement in self.chart._by_lane[lane]
+                if judgement.time_s >= song_now - 0.12
+                and judgement.kind in {"tap", "hold-head"}
+                and (judgement.note_index, judgement.kind)
+                not in self._consumed_judgements
+            ), None)
             if next_judgement is None:
                 continue
             target = next_judgement.time_s + self.press_bias_s
             lead = target - song_now
-            if not -0.12 <= lead <= -0.03:
+            if not -0.12 <= lead <= 0.018:
                 continue
             # Only skip when a recent press on this lane already covered the
             # chart note.  Junk presses far from the chart time (or from a
@@ -280,54 +800,97 @@ class ChartPredictor:
             expected_kind = (
                 ActionKind.DOWN
                 if next_judgement.kind == "hold-head"
-                else ActionKind.TAP
-            )
-            last_kind = state._last_trigger_action_kind.get(lane)
-            covered = any(
-                timestamp is not None
-                and kind == expected_kind
-                and abs(
-                    (self._relative(timestamp) + self.song_offset_s)
-                    - target
-                ) <= 0.12
-                for timestamp, kind in (
-                    (state._last_trigger.get(lane), last_kind),
+                else (
+                    ActionKind.FLICK
+                    if next_judgement.flick else ActionKind.TAP
                 )
             )
+            judgement_key = (
+                next_judgement.note_index,
+                next_judgement.kind,
+            )
+            last_timestamp = state._last_trigger.get(lane)
+            last_kind = state._last_trigger_action_kind.get(lane)
+            last_chart_judgement = self._last_predicted_judgement.get(lane)
+            last_trigger_is_chart_owned = (
+                last_timestamp is not None
+                and last_chart_judgement is not None
+                and last_timestamp == last_chart_judgement[2]
+            )
+            # A chart-owned press has already consumed its exact judgement.
+            # Never let its broad visual-coverage window consume the next
+            # same-lane judgement (Happy Synthesizer has 118 ms repeats).
+            covered_by_last_trigger = (
+                last_timestamp is not None
+                and last_kind == expected_kind
+                and (
+                    not last_trigger_is_chart_owned
+                    or last_chart_judgement[:2] == judgement_key
+                )
+                and abs(
+                    (self._relative(last_timestamp) + self.song_offset_s)
+                    - target
+                ) <= 0.12
+            )
+            covered_by_current_action = any(
+                action.kind == expected_kind
+                and action.lane == lane
+                and abs(
+                    (self._relative(action.timestamp) + self.song_offset_s)
+                    - target
+                ) <= 0.12
+                for action in actions
+            )
+            covered = covered_by_last_trigger or covered_by_current_action
             if covered:
+                self._consumed_judgements.add(judgement_key)
+                state.record_diagnostic(
+                    "chart_visual_press_covered",
+                    now,
+                    lane=lane,
+                    chart_time_s=round(next_judgement.time_s, 3),
+                    source=(
+                        "current-action"
+                        if covered_by_current_action else "last-trigger"
+                    ),
+                )
                 continue
             if next_judgement.kind == "tap":
                 if lane in occupied_lanes:
                     continue
-                mistimed_at, _ = self._mistimed_lanes.get(
-                    lane, (float("-inf"), 0.0)
+                action_kind = (
+                    ActionKind.FLICK
+                    if next_judgement.flick else ActionKind.TAP
                 )
-                if self._track_will_judge(
-                    tracked_notes,
-                    lane,
-                    chart_time_s=next_judgement.time_s,
-                    now=now,
-                ) and now - mistimed_at > 0.6:
-                    continue
                 actions.append(TouchAction(
-                    ActionKind.TAP,
+                    action_kind,
                     lane,
                     now,
                     reason="chart-predicted",
+                    flick_direction=next_judgement.direction,
                 ))
                 self.predicted_presses += 1
                 self._last_predicted[lane] = now
+                self._last_predicted_judgement[lane] = (
+                    next_judgement.note_index,
+                    next_judgement.kind,
+                    now,
+                )
                 state._last_trigger[lane] = now
-                state._last_trigger_action_kind[lane] = ActionKind.TAP
+                state._last_trigger_action_kind[lane] = action_kind
                 state.record_diagnostic(
                     "chart_predicted_press",
                     now,
                     lane=lane,
                     chart_time_s=round(next_judgement.time_s, 3),
                     lead_ms=round(lead * 1000, 1),
+                    flick=next_judgement.flick,
                     rescue=True,
                 )
                 self._mistimed_lanes.pop(lane, None)
+                self._consumed_judgements.add((
+                    next_judgement.note_index, next_judgement.kind,
+                ))
             elif next_judgement.kind == "hold-head":
                 self._predict_hold_head(
                     notes,
@@ -339,6 +902,10 @@ class ChartPredictor:
                     holds,
                     song_now,
                 )
+                if next_judgement.note_index in self._claimed_hold_note_indices:
+                    self._consumed_judgements.add((
+                        next_judgement.note_index, next_judgement.kind,
+                    ))
 
     def _predict_hold_head(
         self,
@@ -361,59 +928,14 @@ class ChartPredictor:
         passed is force-released first.  For straight holds whose green body
         is fully occluded, the fixed chart is authoritative: the head is
         pressed without a sighting and released on the same lane at the tail
-        time.  Slides never get a blind press because the finger must follow
-        the visible body across lanes.
+        time.  A slide without a visible body follows its exact bundled path.
         """
-        if (
-            lane in set(state._active_hold_lane.values())
-            or lane in state._active_hold_tail
-        ):
-            # The lane is occupied either by a hold whose finger is on it or
-            # by the hold that started on it (the finger may have followed a
-            # slide elsewhere).  Never start a second hold on the same lane.
-            if lane in state._active_hold_tail:
-                contact = lane
-                active_lane = state._active_hold_lane.get(contact, contact)
-                expected = self.expected_hold_tail.get(contact)
-                if (
-                    expected is not None
-                    and song_now >= expected[0] - 0.05
-                ):
-                    holds._release_hold(
-                        contact,
-                        active_lane,
-                        now,
-                        "chart-lane-free",
-                        actions,
-                    )
-                    state._previous.pop((NoteKind.HOLD, active_lane), None)
-                    state._hold_released_at.pop(active_lane, None)
-                    self.expected_hold_tail.pop(contact, None)
-                    state._blind_hold_contacts.discard(contact)
-                    state._chart_tail_lane.pop(contact, None)
-                    state._blind_slide_path.pop(contact, None)
-                    state._blind_slide_last_lane.pop(contact, None)
-                elif expected is None:
-                    # A hold without any chart pair is a phantom (drifted
-                    # body).  Real holds in this chart last at most ~1.6 s;
-                    # an occupant older than 2 s must be stuck and is
-                    # blocking the real head that is due now.
-                    started = state._hold_started.get(contact, now)
-                    if now - started >= 2.0:
-                        holds._release_hold(
-                            contact,
-                            active_lane,
-                            now,
-                            "chart-lane-free",
-                            actions,
-                        )
-                        state._previous.pop((NoteKind.HOLD, active_lane), None)
-                        state._hold_released_at.pop(active_lane, None)
-                        state._blind_hold_contacts.discard(contact)
-                        state._chart_tail_lane.pop(contact, None)
-                        state._blind_slide_path.pop(contact, None)
-                        state._blind_slide_last_lane.pop(contact, None)
+        if judgement.note_index in self._claimed_hold_note_indices:
             return
+        # A due chart head may overlap another slide's original contact id or
+        # even a connection lane that its finger is crossing.  Multi-touch
+        # permits both contacts at that coordinate; only contact-id reuse is
+        # forbidden, and the allocator below handles that case.
         body = next(
             (
                 note for note in notes
@@ -429,17 +951,10 @@ class ChartPredictor:
             tail = self.chart.hold_tail_for_head(judgement)
             if tail is None:
                 return
-            recent_release = state._hold_released_at.get(
-                lane, float("-inf")
-            )
-            if now - recent_release < 0.35:
-                # The previous hold's tail ring can linger on the lane and
-                # would otherwise start a phantom head.
-                return
             last_tap = state._last_trigger.get(lane, float("-inf"))
             if now - last_tap < 0.06:
-                # A tap dispatched within the same instant is the same note
-                # (or a same-frame chord) and must not be double-pressed.
+                # A same-instant transient already covered this judgement;
+                # do not turn it into an overlapping persistent contact.
                 return
             head_lane = judgement.lane
             body = ObservedNote(
@@ -452,28 +967,48 @@ class ChartPredictor:
                 now,
             )
         blind = body.width == 1 and body.height == 1
+        tail = self.chart.hold_tail_for_head(judgement)
+        path = self.chart.hold_path_for_head(judgement)
         contact = lane
+        if contact in state._active_hold_tail:
+            # High-density charts can start a second slide on the same lane
+            # after the earlier slide's finger has moved away.  Its original
+            # planned contact id remains lane-keyed, so allocate another free
+            # persistent id instead of dropping the new head.
+            contact = next(
+                (
+                    candidate
+                    for candidate in (*range(7, 10), *range(7))
+                    if candidate not in state._active_hold_tail
+                ),
+                -1,
+            )
+            if contact < 0:
+                return
         state._active_hold_tail[contact] = body.y - body.height / 2
         state._hold_started[contact] = now
         state._hold_confirmed.add(contact)
-        state._active_hold_lane[contact] = contact
+        state._active_hold_lane[contact] = lane
         state._active_hold_x[contact] = float(body.x)
+        chart_hold_lanes = {lane}
+        if tail is not None:
+            chart_hold_lanes.add(tail.lane)
+        if path is not None:
+            chart_hold_lanes.update(point.lane for point in path.points)
+        state._chart_hold_lanes[contact] = frozenset(chart_hold_lanes)
         if blind:
             state._blind_hold_contacts.add(contact)
-            tail = self.chart.hold_tail_for_head(judgement)
-            if tail is not None and tail.lane != contact:
-                # Slide pressed without a visible body: the finger follows a
-                # linear lane interpolation to the chart tail lane, then the
-                # chart releases it at the tail time.
-                state._blind_slide_path[contact] = (
-                    contact,
-                    tail.lane,
-                    judgement.time_s,
-                    tail.time_s,
+            if path is not None and any(
+                point.lane != lane for point in path.points
+            ):
+                state._chart_slide_path[contact] = tuple(
+                    (point.time_s, point.lane) for point in path.points
                 )
-        tail = self.chart.hold_tail_for_head(judgement)
+                state._chart_slide_next_index[contact] = 1
         if tail is not None and tail.tail_flick:
             state._hold_tail_flick.add(contact)
+            if tail.direction is not None:
+                state._hold_tail_flick_direction[contact] = tail.direction
         actions.append(TouchAction(
             ActionKind.DOWN,
             lane,
@@ -484,6 +1019,11 @@ class ChartPredictor:
         ))
         self.predicted_presses += 1
         self._last_predicted[lane] = now
+        self._last_predicted_judgement[lane] = (
+            judgement.note_index,
+            judgement.kind,
+            now,
+        )
         state._last_trigger[lane] = now
         state._last_trigger_action_kind[lane] = ActionKind.DOWN
         state.record_diagnostic(
@@ -558,22 +1098,53 @@ class ChartPredictor:
             head = self.chart.judgement_near(
                 action.lane,
                 self._relative(action.timestamp) + self.song_offset_s,
-                window_s=0.35,
+                window_s=HOLD_HEAD_CLAIM_WINDOW_S,
             )
             if head is None or head.kind != "hold-head":
                 continue
+            self._claimed_hold_note_indices.add(head.note_index)
+            head_song_time = (
+                self._relative(action.timestamp) + self.song_offset_s
+            )
+            state.record_diagnostic(
+                "chart_hold_claimed",
+                action.timestamp,
+                contact=action.contact,
+                lane=action.lane,
+                note_index=head.note_index,
+                residual_ms=round(
+                    (head_song_time - head.time_s) * 1000.0,
+                ),
+            )
             tail = self.chart.hold_tail_for_head(head)
             if tail is not None:
+                path = self.chart.hold_path_for_head(head)
+                chart_hold_lanes = {head.lane, tail.lane}
+                if path is not None:
+                    chart_hold_lanes.update(point.lane for point in path.points)
+                state._chart_hold_lanes[action.contact] = frozenset(
+                    chart_hold_lanes
+                )
                 self.expected_hold_tail[action.contact] = (
                     tail.time_s,
                     tail.lane,
                 )
                 state._chart_tail_lane[action.contact] = tail.lane
+                state._chart_hold_release_at[action.contact] = (
+                    action.timestamp + tail.time_s - head_song_time
+                )
+                if path is not None and len(path.points) > 2:
+                    state._chart_slide_path[action.contact] = tuple(
+                        (point.time_s, point.lane) for point in path.points
+                    )
+                    state._chart_slide_next_index[action.contact] = 1
                 if tail.tail_flick:
                     # Slide tails must end with a swipe.  The fixed chart is
                     # authoritative, so do not depend on the detector
                     # spotting the pink arrow on the tail ring.
                     state._hold_tail_flick.add(action.contact)
+                    if tail.direction is not None:
+                        state._hold_tail_flick_direction[action.contact] = tail.direction
 
     def _release_due_holds(
         self,
@@ -582,7 +1153,7 @@ class ChartPredictor:
         state: PlannerState,
         holds: HoldPipeline,
     ) -> None:
-        song_now = self._relative(now) + self.song_offset_s
+        song_now = self.input_song_time(now)
         for contact, (tail_time, tail_lane) in list(
             self.expected_hold_tail.items()
         ):
@@ -590,8 +1161,10 @@ class ChartPredictor:
                 self.expected_hold_tail.pop(contact, None)
                 state._blind_hold_contacts.discard(contact)
                 state._chart_tail_lane.pop(contact, None)
-                state._blind_slide_path.pop(contact, None)
-                state._blind_slide_last_lane.pop(contact, None)
+                state._chart_hold_lanes.pop(contact, None)
+                state._chart_slide_path.pop(contact, None)
+                state._chart_slide_next_index.pop(contact, None)
+                state._chart_hold_release_at.pop(contact, None)
                 continue
             if song_now < tail_time - 0.015:
                 continue
@@ -651,8 +1224,9 @@ class ChartPredictor:
             self.expected_hold_tail.pop(contact, None)
             state._blind_hold_contacts.discard(contact)
             state._chart_tail_lane.pop(contact, None)
-            state._blind_slide_path.pop(contact, None)
-            state._blind_slide_last_lane.pop(contact, None)
+            state._chart_slide_path.pop(contact, None)
+            state._chart_slide_next_index.pop(contact, None)
+            state._chart_hold_release_at.pop(contact, None)
             state.record_diagnostic(
                 "chart_predicted_release",
                 now,
@@ -661,47 +1235,92 @@ class ChartPredictor:
                 chart_time_s=round(tail_time, 3),
             )
 
-    def _drive_blind_slides(
+    def _drive_chart_slides(
         self,
         now: float,
         actions: list[TouchAction],
         state: PlannerState,
     ) -> None:
-        """Move blind-pressed slide contacts along the chart's lane path.
+        """Keep matched holds on each counted chart connection lane.
 
-        A slide pressed without a visible body has no detector track to
-        follow.  The fixed chart knows the head/tail lanes, so the finger is
-        moved along a linear lane interpolation; the tail release is handled
-        by ``_release_due_holds`` at the chart tail time.
+        Visual green-body segmentation remains useful between nodes, but it
+        is not authoritative at the connection itself.  In a small window
+        around each counted point the exact chart lane is restored after the
+        visual hold pipeline has run.  This also drives fully blind slides.
         """
-        if not state._blind_slide_path:
+        if not state._chart_slide_path:
             return
-        song_now = self._relative(now) + self.song_offset_s
-        for contact, (
-            head_lane,
-            tail_lane,
-            head_time,
-            tail_time,
-        ) in list(state._blind_slide_path.items()):
+        song_now = self.input_song_time(now)
+        for contact, path in list(state._chart_slide_path.items()):
             if contact not in state._active_hold_tail:
-                state._blind_slide_path.pop(contact, None)
-                state._blind_slide_last_lane.pop(contact, None)
+                state._chart_slide_path.pop(contact, None)
+                state._chart_slide_next_index.pop(contact, None)
                 continue
-            if tail_time <= head_time:
+            if len(path) < 2 or path[-1][0] <= path[0][0]:
                 continue
-            progress = min(
-                1.0,
-                max(0.0, (song_now - head_time) / (tail_time - head_time)),
-            )
-            target_lane = round(
-                head_lane + (tail_lane - head_lane) * progress
-            )
-            previous_lane = state._blind_slide_last_lane.get(
-                contact, head_lane
-            )
-            if target_lane == previous_lane:
+            if contact in state._blind_hold_contacts:
+                # A fully blind slide has no visual body between counted
+                # nodes, so retain continuous segment interpolation for it.
+                segment_index = len(path) - 2
+                for index in range(len(path) - 1):
+                    if song_now <= path[index + 1][0]:
+                        segment_index = index
+                        break
+                start_time, start_lane = path[segment_index]
+                end_time, end_lane = path[segment_index + 1]
+                duration = max(0.000001, end_time - start_time)
+                progress = min(
+                    1.0,
+                    max(0.0, (song_now - start_time) / duration),
+                )
+                target_lane = round(
+                    start_lane + (end_lane - start_lane) * progress
+                )
+                previous_lane = state._active_hold_lane.get(contact, contact)
+                if target_lane == previous_lane:
+                    continue
+                target_x = lane_center_x(target_lane, self.judgement_y)
+                actions.append(TouchAction(
+                    ActionKind.MOVE,
+                    target_lane,
+                    now,
+                    contact,
+                    "chart-slide-move",
+                    target_x=round(target_x),
+                ))
+                state._active_hold_lane[contact] = target_lane
+                state._active_hold_x[contact] = float(target_x)
+                state.record_diagnostic(
+                    "chart_slide_move",
+                    now,
+                    contact=contact,
+                    previous_lane=previous_lane,
+                    target_lane=target_lane,
+                    segment_index=segment_index,
+                    progress=round(progress, 3),
+                )
                 continue
+            point_index = state._chart_slide_next_index.get(contact, 1)
+            while (
+                point_index < len(path) - 1
+                and song_now > path[point_index][0] + 0.03
+            ):
+                point_index += 1
+            state._chart_slide_next_index[contact] = point_index
+            if point_index >= len(path):
+                continue
+            point_time, point_lane = path[point_index]
+            if not point_time - 0.04 <= song_now <= point_time + 0.03:
+                continue
+            target_lane = round(point_lane)
             target_x = lane_center_x(target_lane, self.judgement_y)
+            previous_lane = state._active_hold_lane.get(contact, contact)
+            previous_x = state._active_hold_x.get(contact, target_x)
+            if (
+                previous_lane == target_lane
+                and abs(previous_x - target_x) < 18
+            ):
+                continue
             actions.append(TouchAction(
                 ActionKind.MOVE,
                 target_lane,
@@ -712,14 +1331,14 @@ class ChartPredictor:
             ))
             state._active_hold_lane[contact] = target_lane
             state._active_hold_x[contact] = float(target_x)
-            state._blind_slide_last_lane[contact] = target_lane
             state.record_diagnostic(
                 "chart_slide_move",
                 now,
                 contact=contact,
                 previous_lane=previous_lane,
                 target_lane=target_lane,
-                progress=round(progress, 3),
+                point_index=point_index,
+                chart_time_s=round(point_time, 3),
             )
 
     def update(
@@ -730,10 +1349,24 @@ class ChartPredictor:
         actions: list[TouchAction],
         state: PlannerState,
         holds: HoldPipeline,
+        *,
+        visual_observed: bool = False,
     ) -> list[TouchAction]:
         """Return ``actions`` plus any chart-predicted inputs."""
         self._relative(now)
-        self._feed_calibration(actions)
+        self.observe_tracks(tracked_notes, now)
+        if not visual_observed:
+            self.observe_visual_actions(actions)
+        if self.disabled_for_run:
+            self._fall_back_to_visual(now, actions, state, holds)
+            if not self._disabled_diagnosed:
+                state.record_diagnostic(
+                    "chart_disabled_for_run",
+                    now,
+                    reason=self.disable_reason or "unknown mismatch",
+                )
+                self._disabled_diagnosed = True
+            return actions
         if not self.calibrated:
             if self.calibration_failed and not self._calibration_failed_diagnosed:
                 state.record_diagnostic(
@@ -753,7 +1386,7 @@ class ChartPredictor:
             self._calibration_diagnosed = True
         # Free lanes for due hold heads regardless of press prediction: the
         # normal hold pipeline can then start the real head next frame.
-        song_now = self._relative(now) + self.song_offset_s
+        song_now = self.input_song_time(now)
         for lane in range(self.chart.LANE_COUNT):
             next_judgement = self.chart.next_judgement(
                 lane, song_now - 0.05
@@ -779,6 +1412,6 @@ class ChartPredictor:
                 notes, tracked_notes, now, actions, state, holds
             )
         self._schedule_hold_tails(actions, state)
-        self._drive_blind_slides(now, actions, state)
+        self._drive_chart_slides(now, actions, state)
         self._release_due_holds(now, actions, state, holds)
         return actions

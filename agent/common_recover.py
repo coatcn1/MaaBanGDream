@@ -183,6 +183,29 @@ class CommonRecover(CustomAction):
         adb_serial = str(params.get("adb_serial", "emulator-7554"))
         startup_grace = int(params.get("startup_grace_ms", 0)) / 1000
         click_nodes = [str(node) for node in params.get("click_nodes", [])]
+        resource_download_click_node = str(
+            params.get("resource_download_click_node", "ResourceDownloadConfirm")
+        )
+        configured_download_page_nodes = params.get(
+            "resource_download_page_nodes"
+        )
+        if configured_download_page_nodes is None:
+            configured_download_page_nodes = [
+                params.get(
+                    "resource_download_page_node",
+                    "ResourceDownloadPageMarker",
+                ),
+                "ResourceDownloadProgressMarker",
+            ]
+        resource_download_page_nodes = [
+            str(node)
+            for node in configured_download_page_nodes
+            if str(node).strip()
+        ]
+        resource_download_timeout = max(
+            timeout,
+            int(params.get("resource_download_timeout_ms", 1_200_000)) / 1000,
+        )
         modal_cancel_nodes = [
             str(node) for node in params.get("modal_cancel_nodes", [])
         ]
@@ -230,6 +253,9 @@ class CommonRecover(CustomAction):
             login_tap_attempted = False
             login_recovery_active = False
             login_marker_attempts = 0
+            resource_download_clicked = False
+            resource_download_visible = False
+            resource_download_deadline: float | None = None
             iteration_grace = max(startup_grace, 30.0) if app_started else startup_grace
             grace_deadline = time.monotonic() + iteration_grace
             deadline = time.monotonic() + timeout
@@ -287,6 +313,89 @@ class CommonRecover(CustomAction):
                         f"已识别主页，状态：{login_status}",
                     )
                     return True
+
+                # Resource updates are a recognised login phase, not an
+                # unknown page. Click Download once, then keep the recovery
+                # loop passive while the stable page title remains visible.
+                # This must run before the ESC-only login recovery branch or
+                # BACK can cancel/interfere with an in-progress download.
+                if resource_download_click_node and not resource_download_clicked:
+                    result = context.run_recognition(
+                        resource_download_click_node,
+                        image,
+                    )
+                    if result and result.hit and result.box:
+                        if context.tasker.stopping:
+                            return True
+                        box = result.box
+                        controller.post_click(
+                            box.x + box.w // 2,
+                            box.y + box.h // 2,
+                        ).wait()
+                        now = time.monotonic()
+                        resource_download_clicked = True
+                        resource_download_visible = True
+                        resource_download_deadline = now + resource_download_timeout
+                        login_started = True
+                        login_seen = True
+                        login_recovery_active = True
+                        deadline = now + timeout
+                        log_task(
+                            "游戏启动",
+                            "资源下载",
+                            "INFO",
+                            "识别到数据下载页面，已点击“下载”并等待完成",
+                        )
+                        if not _wait_unless_stopping(context, interval):
+                            return True
+                        continue
+
+                download_page_visible = False
+                for resource_download_page_node in resource_download_page_nodes:
+                    result = context.run_recognition(
+                        resource_download_page_node,
+                        image,
+                    )
+                    if result and result.hit:
+                        download_page_visible = True
+                        break
+                if download_page_visible:
+                    now = time.monotonic()
+                    if resource_download_deadline is None:
+                        resource_download_deadline = now + resource_download_timeout
+                    if now >= resource_download_deadline:
+                        log_task(
+                            "游戏启动",
+                            "资源下载",
+                            "ERROR",
+                            "数据下载页面持续超过 20 分钟，停止自动等待",
+                        )
+                        return False
+                    resource_download_visible = True
+                    login_started = True
+                    login_seen = True
+                    login_recovery_active = True
+                    # Keep the ordinary 60-second recovery deadline alive,
+                    # while the independent 20-minute bound remains fixed.
+                    deadline = min(
+                        resource_download_deadline,
+                        now + timeout,
+                    )
+                    if not _wait_unless_stopping(context, interval):
+                        return True
+                    continue
+                if resource_download_visible:
+                    # The known download page disappeared. Re-enter the
+                    # normal title/login state machine instead of carrying
+                    # ESC-only recovery state across the transition.
+                    resource_download_visible = False
+                    login_recovery_active = False
+                    login_started = not login_mode
+                    login_marker_attempts = 0
+                    now = time.monotonic()
+                    deadline = now + timeout
+                    grace_deadline = now + startup_grace
+
                 if back_only and restart_round == 0:
                     safe_story_clicked = False
                     for node in back_only_click_nodes:

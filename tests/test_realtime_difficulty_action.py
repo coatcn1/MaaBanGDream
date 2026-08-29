@@ -17,7 +17,11 @@ from agent.realtime.live_session import (
     reset_live_run,
     update_live_run,
 )
-from agent.realtime.song_identity import SONG_ID_METHOD, UNKNOWN_SONG_ID
+from agent.realtime.song_identity import (
+    SONG_ID_METHOD,
+    SONG_ID_ROI,
+    UNKNOWN_SONG_ID,
+)
 
 
 def difficulty_frame(selected: str | None):
@@ -72,8 +76,9 @@ class DifficultyController:
 
 def test_successful_difficulty_verification_resets_and_identifies_the_round(monkeypatch):
     image = difficulty_frame("Expert")
-    image[110:500, 40:450] = np.random.default_rng(7).integers(
-        0, 256, size=(390, 410, 3), dtype=np.uint8,
+    x, y, width, height = SONG_ID_ROI
+    image[y:y + height, x:x + width] = np.random.default_rng(7).integers(
+        0, 256, size=(height, width, 3), dtype=np.uint8,
     )
     controller = DifficultyController(image)
     context = SimpleNamespace(

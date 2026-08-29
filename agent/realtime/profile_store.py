@@ -110,8 +110,8 @@ class RealtimeProfileStore:
         "note_skin_type": 1,
         "judgement_assist_effect": True,
         "tap_effect": 1,
-        "chart_prediction_enabled": False,
-        "chart_predict_presses": False,
+        "chart_prediction_enabled": True,
+        "chart_predict_presses": True,
         "calibration_note_speeds": {
             "Easy": 2.0,
             "Normal": 2.0,
@@ -241,10 +241,10 @@ class RealtimeProfileStore:
             raise ValueError("tap_effect 必须是 1..5 的整数") from exc
         if tap_effect_raw != tap_effect or not 1 <= tap_effect <= 5:
             raise ValueError("tap_effect 必须是 1..5 的整数")
-        chart_prediction_enabled = options.get("chart_prediction_enabled", False)
+        chart_prediction_enabled = options.get("chart_prediction_enabled", True)
         if not isinstance(chart_prediction_enabled, bool):
             raise ValueError("chart_prediction_enabled 必须是布尔值")
-        chart_predict_presses = options.get("chart_predict_presses", False)
+        chart_predict_presses = options.get("chart_predict_presses", True)
         if not isinstance(chart_predict_presses, bool):
             raise ValueError("chart_predict_presses 必须是布尔值")
         try:
@@ -618,6 +618,17 @@ class RealtimeProfileStore:
         temporary = path.with_suffix(".json.tmp")
         temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         os.replace(temporary, path)
+
+    def replace(self, value: str | Path, payload: dict[str, Any]) -> Path:
+        """Atomically replace one existing Profile without changing its name."""
+        path = self._path(value)
+        if not path.exists():
+            raise ValueError(f"Profile 不存在: {path.name}")
+        difficulty = str(payload.get("difficulty", ""))
+        self.compatible_difficulties(difficulty)
+        clean = {key: item for key, item in payload.items() if key != "_path"}
+        self._atomic_write(path, {"schema_version": self.SCHEMA_VERSION, **clean})
+        return path
 
     def write(self, payload: dict[str, Any]) -> Path:
         difficulty = str(payload.get("difficulty", ""))

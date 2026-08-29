@@ -21,8 +21,8 @@ _HOT_PATH_STAGES = (
     "detector",
     "planner",
     "timing_feedback",
-    "recorder_enqueue",
     "dispatch",
+    "recorder_enqueue",
 )
 _STAGE_SAMPLE_CAPACITY = 120 * 600
 _FRAME_INTERVAL_SAMPLE_CAPACITY = 120 * 600
@@ -31,7 +31,7 @@ _FRAME_INTERVAL_SAMPLE_CAPACITY = 120 * 600
 class DebugRecorder:
     def record(
         self, image, timestamp, notes, actions, life_status,
-        diagnostics=None, timing_state=None,
+        diagnostics=None, timing_state=None, life_value=None, touch_state=None,
     ): ...
     def close(self): ...
 
@@ -113,6 +113,8 @@ class RealtimeEngine:
         touch_reset_life_threshold: int = 300,
         touch_reset_cooldown_seconds: float = 5.0,
         touch_reset_recent_action_seconds: float = 0.35,
+        touch_reset_drop_threshold: int = 180,
+        touch_reset_drop_window_seconds: float = 2.0,
     ) -> EngineStats:
         if duration_seconds is not None and not 1 <= duration_seconds <= 600:
             raise ValueError("duration_seconds 必须在 1..600 之间")
@@ -134,6 +136,7 @@ class RealtimeEngine:
         below_threshold_streak = 0
         touch_resets = 0
         last_touch_reset_at = float("-inf")
+        touch_reset_life_samples: deque[tuple[float, int]] = deque()
         reading = None
         safety_reading = None
         base_stats: EngineStats | None = None
@@ -168,6 +171,50 @@ class RealtimeEngine:
             stage_samples_ms[stage].append(elapsed_ms)
             stage_sample_counts[stage] += 1
             stage_max_ms[stage] = max(stage_max_ms[stage], elapsed_ms)
+
+        def record_terminal_life_frame(
+            image: np.ndarray,
+            now: float,
+            *,
+            life_status: str,
+            life_value: int,
+            reason: str,
+        ) -> None:
+            """Persist the fatal reading before the life guard exits the loop."""
+            if self.debug_recorder is None:
+                return
+            trace_state = getattr(self.touch, "trace_state", None)
+            touch_state = trace_state() if trace_state is not None else {
+                "active_contacts": sorted(
+                    getattr(self.touch, "active_contacts", ())
+                ),
+            }
+            timing_state = (
+                {
+                    "initial_offset_ms": initial_timing_offset_ms,
+                    "current_offset_ms": self.timing_controller.current_offset_ms,
+                    "valid_samples": self.timing_controller.valid_samples,
+                    "ignored_samples": self.timing_controller.ignored_samples,
+                    "ignored_reasons": self.timing_controller.ignored_reasons,
+                }
+                if self.timing_controller is not None else {}
+            )
+            self.debug_recorder.record(
+                image,
+                now,
+                [],
+                [],
+                life_status,
+                [{
+                    "event": "life_terminal",
+                    "timestamp": now,
+                    "reason": reason,
+                    "life_value": life_value,
+                }],
+                timing_state,
+                life_value,
+                touch_state,
+            )
 
         def snapshot_stats(terminal_reason: str) -> EngineStats:
             measured_seconds = (
@@ -340,6 +387,13 @@ class RealtimeEngine:
                                 )
                                 aborted_for_life = True
                                 safety_reading = reading
+                                record_terminal_life_frame(
+                                    image,
+                                    now,
+                                    life_status=status.value,
+                                    life_value=reading.value,
+                                    reason="life-exit-threshold",
+                                )
                                 break
                         elif not reading.visible:
                             # Invisible readings default to zero. Song-end fades
@@ -349,7 +403,22 @@ class RealtimeEngine:
                             life_depleted = True
                             if not continue_after_life_depleted:
                                 aborted_for_life = True
+                                record_terminal_life_frame(
+                                    image,
+                                    now,
+                                    life_status=status.value,
+                                    life_value=reading.value,
+                                    reason="life-dead",
+                                )
                                 break
+                        if reading.visible and self.life_guard.alive_confirmed:
+                            touch_reset_life_samples.append((now, reading.value))
+                            while (
+                                touch_reset_life_samples
+                                and now - touch_reset_life_samples[0][0]
+                                > touch_reset_drop_window_seconds
+                            ):
+                                touch_reset_life_samples.popleft()
                         # Never interpret transition pixels as notes until a
                         # non-zero life bar has been confirmed.
                         if not self.life_guard.alive_confirmed:
@@ -393,6 +462,67 @@ class RealtimeEngine:
                     hold_feedback_block_until = max(
                         hold_feedback_block_until, now + .4
                     )
+                reset_touch = getattr(
+                    self.touch, "emergency_release_all", None
+                )
+                if reset_touch is not None:
+                    recent_peak_life = max(
+                        (
+                            value
+                            for _sample_at, value in touch_reset_life_samples
+                        ),
+                        default=(reading.value if reading is not None else 0),
+                    )
+                    rapid_life_drop = (
+                        reading is not None
+                        and reading.visible
+                        and recent_peak_life - reading.value
+                        >= touch_reset_drop_threshold
+                    )
+                    low_life = (
+                        reading is not None
+                        and reading.visible
+                        and reading.value <= touch_reset_life_threshold
+                    )
+                    life_drop_reset = (
+                        self.life_guard is not None
+                        and self.life_guard.alive_confirmed
+                        and reading is not None
+                        and (low_life or rapid_life_drop)
+                        and now - last_transient_action_at
+                        <= touch_reset_recent_action_seconds
+                        and now - last_touch_reset_at
+                        >= touch_reset_cooldown_seconds
+                    )
+                    if life_drop_reset:
+                        # Clear the stale device-side gesture before this
+                        # frame's planned actions are submitted.  Resetting
+                        # after dispatch cancels the very TAP/HOLD that should
+                        # recover the song and only notices the failure once
+                        # life is already near zero.
+                        reset_touch()
+                        touch_resets += 1
+                        last_touch_reset_at = now
+                        reset_reason = (
+                            "low-life" if low_life else "rapid-life-drop"
+                        )
+                        diagnostics.append({
+                            "event": "touch_reset",
+                            "timestamp": now,
+                            "reason": reset_reason,
+                            "life_value": reading.value,
+                            "recent_peak_life": recent_peak_life,
+                            "life_drop": recent_peak_life - reading.value,
+                        })
+                        touch_reset_life_samples.clear()
+                        touch_reset_life_samples.append((now, reading.value))
+                        print(
+                            "RealtimeTouchReset"
+                            + f" reason={reset_reason}"
+                            + f" life_value={reading.value}"
+                            + f" recent_peak={recent_peak_life}",
+                            flush=True,
+                        )
                 stage_started = self.clock()
                 if (
                     self.timing_feedback_detector is not None
@@ -423,6 +553,16 @@ class RealtimeEngine:
                     "timing_feedback", (self.clock() - stage_started) * 1000
                 )
                 stage_started = self.clock()
+                if actions:
+                    self.touch.dispatch(actions)
+                    actions_count += len(actions)
+                    for action in actions:
+                        kind = action.kind.value
+                        action_counts[kind] = action_counts.get(kind, 0) + 1
+                record_stage_sample(
+                    "dispatch", (self.clock() - stage_started) * 1000
+                )
+                stage_started = self.clock()
                 if self.debug_recorder is not None:
                     timing_state = (
                         {
@@ -434,49 +574,27 @@ class RealtimeEngine:
                         }
                         if self.timing_controller is not None else {}
                     )
+                    trace_state = getattr(self.touch, "trace_state", None)
+                    touch_state = trace_state() if trace_state is not None else {
+                        "active_contacts": sorted(
+                            getattr(self.touch, "active_contacts", ())
+                        ),
+                    }
+                    life_value = (
+                        reading.value
+                        if reading is not None and reading.visible
+                        else None
+                    )
                     self.debug_recorder.record(
                         image, now, notes, actions, life_status,
-                        diagnostics, timing_state,
+                        diagnostics, timing_state, life_value, touch_state,
                     )
                 record_stage_sample(
                     "recorder_enqueue", (self.clock() - stage_started) * 1000
                 )
-                stage_started = self.clock()
-                if actions:
-                    self.touch.dispatch(actions)
-                    actions_count += len(actions)
-                    for action in actions:
-                        kind = action.kind.value
-                        action_counts[kind] = action_counts.get(kind, 0) + 1
-                record_stage_sample(
-                    "dispatch", (self.clock() - stage_started) * 1000
-                )
                 active_contacts = len(
                     getattr(self.touch, "active_contacts", ())
                 )
-                reset_touch = getattr(
-                    self.touch, "emergency_release_all", None
-                )
-                if reset_touch is not None:
-                    life_drop_reset = (
-                        self.life_guard is not None
-                        and self.life_guard.alive_confirmed
-                        and reading is not None
-                        and reading.value <= touch_reset_life_threshold
-                        and now - last_transient_action_at
-                        <= touch_reset_recent_action_seconds
-                        and now - last_touch_reset_at
-                        >= touch_reset_cooldown_seconds
-                    )
-                    if life_drop_reset:
-                        reset_touch()
-                        touch_resets += 1
-                        last_touch_reset_at = now
-                        print(
-                            "RealtimeTouchReset reason=life-drop"
-                            + f" life_value={reading.value if reading is not None else -1}",
-                            flush=True,
-                        )
                 current_frame_context = {
                     "frame": frames,
                     "notes": len(notes),

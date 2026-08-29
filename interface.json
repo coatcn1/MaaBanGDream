@@ -3,7 +3,7 @@
   "interface_version": 2,
   "name": "MaaBanGDream",
   "label": "BanG Dream! 自动化（MaaFramework）",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "支持自动演出、机器人实时演奏、智能校准和挑战演出。",
   "license": "GPL-3.0-only",
   "controller": [
@@ -74,6 +74,8 @@
       "entry": "RealtimeCalibration",
       "option": [
         "CalibrationDifficulty",
+        "CalibrationSongMode",
+        "CalibrationResumeMode",
         "CalibrationDebug"
       ]
     },
@@ -768,20 +770,41 @@
     },
     "RealtimeLiveDebug": {
       "type": "select",
-      "label": "调试记录",
-      "default_case": "Off",
+      "label": "诊断记录",
+      "default_case": "Light",
       "cases": [
         {
-          "name": "Off",
-          "label": "关闭"
-        },
-        {
-          "name": "On",
-          "label": "开启",
+          "name": "Light",
+          "label": "轻量 Trace（推荐）",
           "pipeline_override": {
             "RealtimeLiveDebugGate": {
               "custom_action_param": {
-                "debug_recording": true
+                "debug_recording": false,
+                "diagnostic_trace": true
+              }
+            }
+          }
+        },
+        {
+          "name": "Off",
+          "label": "完全关闭（只保存结果）",
+          "pipeline_override": {
+            "RealtimeLiveDebugGate": {
+              "custom_action_param": {
+                "debug_recording": false,
+                "diagnostic_trace": false
+              }
+            }
+          }
+        },
+        {
+          "name": "Full",
+          "label": "完整录像（MKV + Trace，大文件）",
+          "pipeline_override": {
+            "RealtimeLiveDebugGate": {
+              "custom_action_param": {
+                "debug_recording": true,
+                "diagnostic_trace": true
               }
             }
           }
@@ -872,20 +895,85 @@
     },
     "ContinuousRealtimeDebug": {
       "type": "select",
-      "label": "调试记录",
-      "default_case": "Off",
+      "label": "诊断记录",
+      "default_case": "Light",
       "cases": [
         {
-          "name": "Off",
-          "label": "关闭"
-        },
-        {
-          "name": "On",
-          "label": "开启",
+          "name": "Light",
+          "label": "轻量 Trace（推荐）",
           "pipeline_override": {
             "ContinuousRealtimeWatcher": {
               "custom_action_param": {
-                "debug_recording": true
+                "debug_recording": false,
+                "diagnostic_trace": true
+              }
+            }
+          }
+        },
+        {
+          "name": "Off",
+          "label": "完全关闭",
+          "pipeline_override": {
+            "ContinuousRealtimeWatcher": {
+              "custom_action_param": {
+                "debug_recording": false,
+                "diagnostic_trace": false
+              }
+            }
+          }
+        },
+        {
+          "name": "Full",
+          "label": "完整录像（MKV + Trace，大文件）",
+          "pipeline_override": {
+            "ContinuousRealtimeWatcher": {
+              "custom_action_param": {
+                "debug_recording": true,
+                "diagnostic_trace": true
+              }
+            }
+          }
+        }
+      ]
+    },
+    "CalibrationSongMode": {
+      "type": "select",
+      "label": "歌曲选择",
+      "default_case": "Current",
+      "cases": [
+        {
+          "name": "Current",
+          "label": "当前曲目"
+        },
+        {
+          "name": "Random",
+          "label": "每轮随机",
+          "pipeline_override": {
+            "CalibrationSongModeSetting": {
+              "custom_action_param": {
+                "calibration_song_mode": "random"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "CalibrationResumeMode": {
+      "type": "select",
+      "label": "校准进度",
+      "default_case": "Auto",
+      "cases": [
+        {
+          "name": "Auto",
+          "label": "自动续跑"
+        },
+        {
+          "name": "Restart",
+          "label": "重新开始",
+          "pipeline_override": {
+            "CalibrationResumeModeSetting": {
+              "custom_action_param": {
+                "calibration_resume_mode": "restart"
               }
             }
           }
@@ -956,20 +1044,41 @@
     },
     "CalibrationDebug": {
       "type": "select",
-      "label": "调试记录",
-      "default_case": "Off",
+      "label": "诊断记录",
+      "default_case": "Light",
       "cases": [
         {
-          "name": "Off",
-          "label": "关闭"
-        },
-        {
-          "name": "On",
-          "label": "开启",
+          "name": "Light",
+          "label": "轻量 Trace（推荐）",
           "pipeline_override": {
             "CalibrationDebugSetting": {
               "custom_action_param": {
-                "debug_recording": true
+                "debug_recording": false,
+                "diagnostic_trace": true
+              }
+            }
+          }
+        },
+        {
+          "name": "Off",
+          "label": "完全关闭（只保存结果）",
+          "pipeline_override": {
+            "CalibrationDebugSetting": {
+              "custom_action_param": {
+                "debug_recording": false,
+                "diagnostic_trace": false
+              }
+            }
+          }
+        },
+        {
+          "name": "Full",
+          "label": "完整录像（MKV + Trace，大文件）",
+          "pipeline_override": {
+            "CalibrationDebugSetting": {
+              "custom_action_param": {
+                "debug_recording": true,
+                "diagnostic_trace": true
               }
             }
           }
@@ -1255,20 +1364,41 @@
     },
     "ChallengeDebug": {
       "type": "select",
-      "label": "调试记录",
-      "default_case": "Off",
+      "label": "诊断记录",
+      "default_case": "Light",
       "cases": [
         {
-          "name": "Off",
-          "label": "关闭"
-        },
-        {
-          "name": "On",
-          "label": "开启",
+          "name": "Light",
+          "label": "轻量 Trace（推荐）",
           "pipeline_override": {
             "ChallengeDebugGate": {
               "custom_action_param": {
-                "debug_recording": true
+                "debug_recording": false,
+                "diagnostic_trace": true
+              }
+            }
+          }
+        },
+        {
+          "name": "Off",
+          "label": "完全关闭（只保存结果）",
+          "pipeline_override": {
+            "ChallengeDebugGate": {
+              "custom_action_param": {
+                "debug_recording": false,
+                "diagnostic_trace": false
+              }
+            }
+          }
+        },
+        {
+          "name": "Full",
+          "label": "完整录像（MKV + Trace，大文件）",
+          "pipeline_override": {
+            "ChallengeDebugGate": {
+              "custom_action_param": {
+                "debug_recording": true,
+                "diagnostic_trace": true
               }
             }
           }

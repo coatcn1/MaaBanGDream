@@ -25,3 +25,4 @@ class TouchAction:
     reason: str = ""
     track_id: int | None = None
     target_x: int | None = None
+    flick_direction: str | None = None

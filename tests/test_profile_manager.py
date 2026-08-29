@@ -140,8 +140,8 @@ def test_selection_state_is_written_atomically(tmp_path):
             "note_skin_type": 1,
             "judgement_assist_effect": True,
             "tap_effect": 1,
-            "chart_prediction_enabled": False,
-            "chart_predict_presses": False,
+            "chart_prediction_enabled": True,
+            "chart_predict_presses": True,
             "calibration_note_speeds": {
                 "Easy": 2.0,
                 "Normal": 2.0,
@@ -171,8 +171,8 @@ def test_runtime_options_default_and_atomic_update_do_not_invalidate_profile(tmp
         "note_skin_type": 1,
         "judgement_assist_effect": True,
         "tap_effect": 1,
-        "chart_prediction_enabled": False,
-        "chart_predict_presses": False,
+        "chart_prediction_enabled": True,
+        "chart_predict_presses": True,
         "calibration_note_speeds": {
             "Easy": 2.0,
             "Normal": 2.0,

@@ -140,7 +140,8 @@
     "action": "Custom",
     "custom_action": "RealtimeRuntimeOptions",
     "custom_action_param": {
-      "debug_recording": false
+      "debug_recording": false,
+      "diagnostic_trace": true
     },
     "next": [
       "ChallengeProfileCheck"

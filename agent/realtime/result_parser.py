@@ -16,6 +16,18 @@ from .result_samples_v3 import (
     PERFECT_377_CROP_ZLIB_BASE64,
     PERFECT_377_LABELS,
 )
+from .result_samples_v4 import (
+    RESULT_CROPS_V4_LABELS,
+    RESULT_CROPS_V4_ZLIB_BASE64,
+)
+from .result_samples_v5 import (
+    RESULT_CROPS_V5_LABELS,
+    RESULT_CROPS_V5_ZLIB_BASE64,
+)
+from .result_samples_v6 import (
+    RESULT_CROPS_V6_ZLIB_BASE64,
+    RESULT_CROPS_V7_ZLIB_BASE64,
+)
 
 
 @dataclass(frozen=True)
@@ -128,11 +140,23 @@ class ResultParser:
             axis=(1, 2),
         )
         best_index = int(np.argmin(distances))
-        digit = int(ResultParser._labels[best_index])
-        other = distances[ResultParser._labels != digit]
-        second = float(np.min(other)) if len(other) else float(distances[best_index] + 1)
-        confidence = max(0.0, 1.0 - float(distances[best_index]) / max(second, 1.0))
-        return digit, confidence
+        if float(distances[best_index]) < 1.0:
+            return int(ResultParser._labels[best_index]), 1.0
+
+        # One antialiased segment can make a soft ``8`` fractionally nearer
+        # to a single ``6`` sample.  A small inverse-distance neighbourhood
+        # preserves the consensus of the other real renderings while exact
+        # captured samples still take the fast path above.
+        nearest = np.argsort(distances)[:5]
+        votes: dict[int, float] = {}
+        for index in nearest:
+            label = int(ResultParser._labels[index])
+            votes[label] = votes.get(label, 0.0) + 1.0 / max(
+                float(distances[index]), 1.0
+            )
+        digit = max(votes, key=votes.get)
+        confidence = votes[digit] / sum(votes.values())
+        return digit, float(confidence)
 
     @staticmethod
     def _normalise_glyph(glyph: np.ndarray) -> np.ndarray:
@@ -212,6 +236,94 @@ def _install_result_samples_v3() -> None:
 
 
 _install_result_samples_v3()
+
+
+def _install_result_samples_v4() -> None:
+    crops = np.frombuffer(
+        zlib.decompress(base64.b64decode(RESULT_CROPS_V4_ZLIB_BASE64)),
+        dtype=np.uint8,
+    ).reshape(7, 32, 60)
+    samples: list[np.ndarray] = []
+    labels: list[int] = []
+    for crop, field, field_labels in zip(
+        crops, ResultParser.FIELDS.values(), RESULT_CROPS_V4_LABELS
+    ):
+        width = field[2] - field[0]
+        for index, label in enumerate(field_labels):
+            left = round(index * width / 4)
+            right = round((index + 1) * width / 4)
+            samples.append(ResultParser._normalise_glyph(crop[:, left:right]))
+            labels.append(label)
+    ResultParser._samples = np.concatenate(
+        (ResultParser._samples, np.asarray(samples, dtype=np.float32)), axis=0
+    )
+    ResultParser._labels = np.concatenate(
+        (ResultParser._labels, np.asarray(labels, dtype=np.uint8)), axis=0
+    )
+
+
+_install_result_samples_v4()
+
+
+def _install_result_samples_v5() -> None:
+    crops = np.frombuffer(
+        zlib.decompress(base64.b64decode(RESULT_CROPS_V5_ZLIB_BASE64)),
+        dtype=np.uint8,
+    ).reshape(7, 32, 60)
+    samples: list[np.ndarray] = []
+    labels: list[int] = []
+    for crop, field, field_labels in zip(
+        crops, ResultParser.FIELDS.values(), RESULT_CROPS_V5_LABELS
+    ):
+        width = field[2] - field[0]
+        for index, label in enumerate(field_labels):
+            left = round(index * width / 4)
+            right = round((index + 1) * width / 4)
+            samples.append(ResultParser._normalise_glyph(crop[:, left:right]))
+            labels.append(label)
+    ResultParser._samples = np.concatenate(
+        (ResultParser._samples, np.asarray(samples, dtype=np.float32)), axis=0
+    )
+    ResultParser._labels = np.concatenate(
+        (ResultParser._labels, np.asarray(labels, dtype=np.uint8)), axis=0
+    )
+
+
+_install_result_samples_v5()
+
+
+def _install_result_samples_v6() -> None:
+    # Only add glyphs that the preceding sample set actually misclassified.
+    # Installing every zero and already-correct digit from each screenshot
+    # gives nearest-neighbour classification too many near-duplicates and can
+    # make an older soft ``8`` look more like a newly captured ``6``.
+    for payload, sample_cells in (
+        (RESULT_CROPS_V6_ZLIB_BASE64, ((0, 1, 5), (4, 2, 4), (5, 2, 6))),
+        (RESULT_CROPS_V7_ZLIB_BASE64, ((0, 1, 5), (0, 2, 6))),
+    ):
+        crops = np.frombuffer(
+            zlib.decompress(base64.b64decode(payload)), dtype=np.uint8,
+        ).reshape(7, 32, 60)
+        samples: list[np.ndarray] = []
+        labels: list[int] = []
+        fields = tuple(ResultParser.FIELDS.values())
+        for field_index, digit_index, label in sample_cells:
+            crop = crops[field_index]
+            field = fields[field_index]
+            width = field[2] - field[0]
+            left = round(digit_index * width / 4)
+            right = round((digit_index + 1) * width / 4)
+            samples.append(ResultParser._normalise_glyph(crop[:, left:right]))
+            labels.append(label)
+        ResultParser._samples = np.concatenate(
+            (ResultParser._samples, np.asarray(samples, dtype=np.float32)), axis=0
+        )
+        ResultParser._labels = np.concatenate(
+            (ResultParser._labels, np.asarray(labels, dtype=np.uint8)), axis=0
+        )
+
+
+_install_result_samples_v6()
 
 
 def adjusted_timing_offset(current: int, result: LiveResult) -> int:

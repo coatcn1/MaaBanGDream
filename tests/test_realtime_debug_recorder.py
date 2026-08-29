@@ -45,7 +45,7 @@ def test_debug_recorder_writes_lossless_trace_and_replay_summary(tmp_path):
     trace = [json.loads(line) for line in
              (recorder.output_dir / "trace.jsonl").read_text(encoding="utf-8").splitlines()]
     summary = json.loads((recorder.output_dir / "summary.json").read_text(encoding="utf-8"))
-    assert summary["schema_version"] == 1
+    assert summary["schema_version"] == 2
     assert len(trace) == 2
     assert trace[0]["notes"][0]["kind"] == "hold"
     assert trace[0]["actions"][0]["kind"] == "down"
@@ -58,7 +58,68 @@ def test_debug_recorder_writes_lossless_trace_and_replay_summary(tmp_path):
     assert summary["recorder_error"] is None
     assert summary["diagnostic_counts"] == {"hold_start": 1}
     assert summary["timing_feedback"]["current_offset_ms"] == 1
-    assert (recorder.output_dir / "playfield.avi").stat().st_size > 0
+    assert (recorder.output_dir / "playfield.mkv").stat().st_size > 0
+    assert not (recorder.output_dir / "playfield.partial.mkv").exists()
+    assert summary["video_container"] == "matroska"
+    assert summary["video_codec"] == "MJPG"
+    assert summary["video_seek_verified"] is True
+    mapping = [
+        json.loads(line)
+        for line in (recorder.output_dir / "video_frames.jsonl")
+        .read_text(encoding="utf-8").splitlines()
+    ]
+    assert mapping == [{
+        "encoded_frame": 0,
+        "trace_frame": 0,
+        "monotonic_timestamp": 1.25,
+        "elapsed_ms": 0.0,
+    }]
+
+
+def test_trace_only_recorder_keeps_replay_evidence_without_video(tmp_path):
+    recorder = RealtimeDebugRecorder(tmp_path, video_enabled=False)
+    frame = np.zeros((72, 128, 3), dtype=np.uint8)
+    note = ObservedNote(NoteKind.TAP, 3, 640, 520, 44, 20, 2.0)
+    action = TouchAction(ActionKind.TAP, 3, 2.0, reason="chart-predict")
+
+    recorder.record(
+        frame,
+        2.0,
+        [note],
+        [action],
+        "alive",
+        [{"event": "chart_prediction_press", "lane": 3}],
+        life_value=742,
+        touch_state={
+            "active_contacts": [8],
+            "active_positions": {"8": 640},
+            "contact_aliases": {"3": 8},
+            "pending_taps": [8],
+            "pending_flicks": [],
+        },
+    )
+    recorder.close()
+
+    trace = [
+        json.loads(line)
+        for line in (recorder.output_dir / "trace.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    summary = json.loads(
+        (recorder.output_dir / "summary.json").read_text(encoding="utf-8")
+    )
+    assert trace[0]["actions"][0]["reason"] == "chart-predict"
+    assert trace[0]["life_value"] == 742
+    assert trace[0]["touch_state"]["contact_aliases"] == {"3": 8}
+    assert summary["recording_mode"] == "trace-only"
+    assert summary["video_enabled"] is False
+    assert summary["video_frames"] == 0
+    assert summary["video_finalize_status"] == "disabled"
+    assert summary["complete_frame_evidence"] is True
+    assert not (recorder.output_dir / "playfield.mkv").exists()
+    assert not (recorder.output_dir / "playfield.partial.mkv").exists()
+    assert not (recorder.output_dir / "video_frames.jsonl").exists()
 
 
 def test_debug_recorder_persists_one_session_and_relative_elapsed_time(tmp_path):
@@ -145,6 +206,38 @@ def test_debug_video_is_sampled_at_thirty_fps_without_losing_trace(tmp_path):
     assert summary["video_frames"] == 3
     assert summary["dropped_video_frames"] == 0
     assert summary["video_fps"] == 30
+
+
+def test_default_debug_video_is_sixty_fps_mjpg_mkv_and_random_seekable(tmp_path):
+    recorder = RealtimeDebugRecorder(tmp_path)
+    frame = np.zeros((72, 128, 3), dtype=np.uint8)
+    for index in range(12):
+        frame[:] = index * 10
+        recorder.record(frame.copy(), 10.0 + index / 60, [], [], "alive")
+        time.sleep(.002)
+    recorder.close()
+
+    summary = json.loads(
+        (recorder.output_dir / "summary.json").read_text(encoding="utf-8")
+    )
+    assert summary["video_fps"] == 60
+    assert abs(summary["video_actual_fps"] - 60) < 0.1
+    assert summary["video_container"] == "matroska"
+    assert summary["video_codec"] == "MJPG"
+    assert summary["video_seek_verified"] is True
+    assert summary["video_finalize_status"] == "verified"
+    assert summary["dropped_video_frames"] == 0
+
+    capture = __import__("cv2").VideoCapture(
+        str(recorder.output_dir / "playfield.mkv")
+    )
+    try:
+        for index in (0, summary["video_frames"] // 2, summary["video_frames"] - 1):
+            assert capture.set(__import__("cv2").CAP_PROP_POS_FRAMES, index)
+            ok, image = capture.read()
+            assert ok and image is not None
+    finally:
+        capture.release()
 
 
 def test_record_returns_while_background_worker_is_still_processing(

@@ -12,13 +12,15 @@ from agent.realtime.random_song_action import (
     SONG_FILTER_RESET_BUTTON,
     RandomSongSelect,
 )
+from agent.realtime.song_identity import SONG_ID_ROI, identify_song
 
 
 def song_frame(seed: int):
     image = np.zeros((720, 1280, 3), dtype=np.uint8)
     rng = np.random.default_rng(seed)
-    image[110:600, 40:450] = rng.integers(
-        0, 256, size=(490, 410, 3), dtype=np.uint8,
+    x, y, width, height = SONG_ID_ROI
+    image[y:y + height, x:x + width] = rng.integers(
+        0, 256, size=(height, width, 3), dtype=np.uint8,
     )
     return image
 
@@ -124,6 +126,21 @@ def test_random_song_select_cannot_verify_unknown_identity(monkeypatch):
     controller = Controller([blank, song_frame(2), song_frame(3)])
 
     assert run(monkeypatch, controller, {"max_attempts": 2}) is False
+
+
+def test_calibration_random_preserves_filter_and_skips_used_song(monkeypatch):
+    before = song_frame(1)
+    used = song_frame(2)
+    fresh = song_frame(3)
+    used_id = identify_song(used).song_id
+    controller = Controller([before, used, fresh])
+
+    assert run(monkeypatch, controller, {
+        "max_attempts": 2,
+        "preserve_filter": True,
+        "excluded_song_ids": [used_id],
+    }) is True
+    assert controller.clicks == [(687, 642), (687, 642)]
 
 
 def test_random_song_select_callback_reports_failure_instead_of_leaking(monkeypatch):

@@ -13,6 +13,7 @@ from agent.realtime.performance_settings_action import (
     RealtimePerformanceSettingsGate,
     _digit_templates,
     _expected_speed,
+    _close_settings_dialog,
     _read_speed,
     _speed_click_plan,
     clear_verified_settings,
@@ -216,7 +217,44 @@ def test_gate_never_blindly_decrements_across_wrapping_minimum(monkeypatch):
     assert clicks.count((207, 312)) == 0
     assert clicks.count((268, 312)) == 0
     assert clicks.count((330, 312)) == 0
+    assert clicks.count(DEFAULT_COORDINATES["close"]) == 2
     assert verified_settings("Easy").actual_note_speed == 1.0
+
+
+def test_settings_close_retries_until_speed_display_disappears(monkeypatch):
+    clicks = []
+    readings = iter([5.0, RuntimeError("speed display absent")])
+    monkeypatch.setattr(
+        "agent.realtime.performance_settings_action._click",
+        lambda controller, point: clicks.append(point),
+    )
+    monkeypatch.setattr(
+        "agent.realtime.performance_settings_action._read_speed",
+        lambda image, roi: (
+            (_ for _ in ()).throw(value) if isinstance(value := next(readings), Exception)
+            else value
+        ),
+    )
+    monkeypatch.setattr(
+        "agent.realtime.performance_settings_action.time.sleep",
+        lambda seconds: None,
+    )
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=_Controller()),
+    )
+
+    _close_settings_dialog(
+        context,
+        context.tasker.controller,
+        DEFAULT_COORDINATES,
+        attempts=3,
+        delay_seconds=0,
+    )
+
+    assert clicks == [
+        DEFAULT_COORDINATES["close"],
+        DEFAULT_COORDINATES["close"],
+    ]
 
 
 def _patch_gate_io(monkeypatch, readings, clicks, expected=2.0):

@@ -51,13 +51,18 @@ class PlannerState:
         self._hold_chord_partner: dict[int, int] = {}
         self._hold_confirmed: set[int] = set()
         self._hold_tail_flick: set[int] = set()
+        self._hold_tail_flick_direction: dict[int, str] = {}
         self._last_hold_rejection: dict[int, float] = {}
         self._active_hold_lane: dict[int, int] = {}
         self._active_hold_x: dict[int, float] = {}
         self._blind_hold_contacts: set[int] = set()
         self._chart_tail_lane: dict[int, int] = {}
-        self._blind_slide_path: dict[int, tuple[int, int, float, float]] = {}
-        self._blind_slide_last_lane: dict[int, int] = {}
+        self._chart_hold_release_at: dict[int, float] = {}
+        self._chart_hold_lanes: dict[int, frozenset[int]] = {}
+        self._chart_slide_path: dict[
+            int, tuple[tuple[float, float], ...]
+        ] = {}
+        self._chart_slide_next_index: dict[int, int] = {}
         self._hold_last_moved_at: dict[int, float] = {}
         self._diagnostics: list[dict[str, object]] = []
         self.filtered_adjacent_artifacts = 0
@@ -86,10 +91,13 @@ class PlannerState:
         self._active_hold_x.clear()
         self._blind_hold_contacts.clear()
         self._chart_tail_lane.clear()
-        self._blind_slide_path.clear()
-        self._blind_slide_last_lane.clear()
+        self._chart_hold_release_at.clear()
+        self._chart_hold_lanes.clear()
+        self._chart_slide_path.clear()
+        self._chart_slide_next_index.clear()
         self._hold_last_moved_at.clear()
         self._hold_tail_flick.clear()
+        self._hold_tail_flick_direction.clear()
         self._previous.clear()
         self._recent_ordinary.clear()
         self._last_trigger_note.clear()

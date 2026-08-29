@@ -647,6 +647,35 @@ def test_paired_hold_with_a_distant_tail_releases_on_its_own():
     ]
 
 
+def test_restarting_slide_head_can_release_a_later_chord_contact_safely():
+    """A paired release may remove a contact from the frame's key snapshot.
+
+    Expert live crash realtime-20260825-033731 raised ``KeyError: 6`` after
+    contact 1 found a new head on its original lane and released both sides
+    of the chord.  Contact 6 was still present in the sorted key snapshot but
+    had already been removed from the active-hold dictionaries.
+    """
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+    planner.update([
+        ObservedNote(NoteKind.HOLD, 1, 340, 510, 70, 105, 1.0),
+        ObservedNote(NoteKind.HOLD, 6, 1090, 530, 70, 110, 1.0),
+    ], now=1.0)
+    planner._active_hold_lane[1] = 2
+    planner._active_hold_tail[6] = 530
+
+    actions = planner.update([
+        ObservedNote(NoteKind.HOLD, 1, 340, 520, 180, 100, 1.7),
+    ], now=1.7)
+
+    assert [(a.kind, a.contact, a.reason) for a in actions] == [
+        (ActionKind.UP, 1, "new-hold-head"),
+        (ActionKind.UP, 6, "new-hold-head-paired"),
+        (ActionKind.DOWN, 1, "rescue"),
+    ]
+
+
 def test_tail_flick_releases_survive_a_same_frame_validated_rescue():
     # Live crash realtime-20260727-235942 frame 3516: two chord holds ended
     # as tail-flick swipes in the same frame as a validated rescue TAP on the

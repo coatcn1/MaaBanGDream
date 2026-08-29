@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from scripts.align_trace_to_chart import (
     load_chart_judgements,
     load_trace_actions,
@@ -85,6 +87,28 @@ def test_chart_judgements_and_trace_alignment(tmp_path):
     assert report["missed"] == 2  # the hold tail and the slide head were
     # intentionally not pressed in this trace.
     assert report["spurious"] == 0
+
+
+def test_schema_v1_chart_uses_its_bpm_map(tmp_path):
+    chart_path = tmp_path / "chart.json"
+    chart_path.write_text(json.dumps({
+        "schema_version": 1,
+        "source": {"provider": "bestdori"},
+        "song": {"bestdori_id": 125},
+        "difficulty": {"name": "hard"},
+        "chart": [
+            {"type": "BPM", "bpm": 153, "beat": 0},
+            {"type": "Single", "lane": 2, "beat": 8},
+        ],
+    }), encoding="utf-8")
+
+    judgements = load_chart_judgements(chart_path)
+
+    assert judgements == [{
+        "time_s": pytest.approx(8 * 60 / 153),
+        "lane": 2,
+        "type": "tap",
+    }]
 
 
 def test_estimate_offset_recovers_engine_to_song_shift(tmp_path):

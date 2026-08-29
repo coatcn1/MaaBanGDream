@@ -63,6 +63,11 @@ def test_launcher_patches_mfa_user_stop_status_race():
     assert "git clone" not in patcher
     assert ".maabangdream-backup" in patcher
     assert "MFAAvalonia.Core.dll" in patcher
+    assert "git -c core.quotePath=false -C $SourceRoot ls-files" in patcher
+    assert "SHA256]::Create()" in patcher
+    assert "ComputeHash($fingerprintBytes)" in patcher
+    assert "SHA256]::HashData" not in patcher
+    assert "Convert]::ToHexString" not in patcher
     assert "when (token.IsCancellationRequested)" in patch
 
 

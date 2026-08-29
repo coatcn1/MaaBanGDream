@@ -94,6 +94,28 @@
       "difficulty": "Easy"
     },
     "next": [
+      "CalibrationSongModeSetting"
+    ]
+  },
+  "CalibrationSongModeSetting": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "RealtimeRuntimeOptions",
+    "custom_action_param": {
+      "calibration_song_mode": "current"
+    },
+    "next": [
+      "CalibrationResumeModeSetting"
+    ]
+  },
+  "CalibrationResumeModeSetting": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "RealtimeRuntimeOptions",
+    "custom_action_param": {
+      "calibration_resume_mode": "auto"
+    },
+    "next": [
       "CalibrationDebugSetting"
     ]
   },
@@ -102,7 +124,8 @@
     "action": "Custom",
     "custom_action": "RealtimeRuntimeOptions",
     "custom_action_param": {
-      "debug_recording": false
+      "debug_recording": false,
+      "diagnostic_trace": true
     },
     "next": [
       "RealtimeCalibrationRun"
@@ -190,7 +213,8 @@
       "task_name": "RealtimeCalibration",
       "label": "实时演奏校准",
       "status": "failure",
-      "reason": "实时演奏校准失败：校准流程未完成"
+      "reason": "实时演奏校准失败：校准流程未完成",
+      "reason_source": "latest"
     },
     "focus": {
       "Node.Action.Failed": {

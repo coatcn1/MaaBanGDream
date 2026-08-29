@@ -23,6 +23,8 @@ class _Controller(Protocol):
 class _PendingFlick:
     lane: int
     started_at: float
+    start_x: int
+    direction: str | None = None
     next_phase: int = 0
 
 
@@ -65,9 +67,30 @@ class ControllerTouchDispatcher:
         self._flick_release_after = .048
         self._tap_release_after = .024
 
+    def trace_state(self) -> dict[str, object]:
+        """Return a cheap immutable snapshot of submitted physical contacts.
+
+        Planner actions use stable logical contact ids, while MTouch may receive
+        rotated physical ids.  Persisting both views lets trace-only sessions
+        reveal an alias collision or a contact that remained active after UP.
+        """
+        return {
+            "active_contacts": sorted(self.active_contacts),
+            "active_positions": {
+                str(contact): x
+                for contact, x in sorted(self.active_positions.items())
+            },
+            "contact_aliases": {
+                str(planned): actual
+                for planned, actual in sorted(self._contact_alias.items())
+            },
+            "pending_taps": sorted(self._pending_taps),
+            "pending_flicks": sorted(self._pending_flicks),
+        }
+
     def _ensure_running(self) -> None:
         if self.stopping():
-            self.reset()
+            self.emergency_release_all()
             raise InterruptedError("任务正在停止，已释放全部触点")
 
     def _x(self, action: TouchAction) -> int:
@@ -78,27 +101,71 @@ class ControllerTouchDispatcher:
     def _actual(self, planned: int) -> int:
         return self._contact_alias.get(planned, planned)
 
-    def _pick_fallback_contact(self, planned: int) -> int:
+    def _physical_contact_owned_by_other(
+        self,
+        actual: int,
+        planned: int,
+    ) -> bool:
+        """Return whether ``actual`` belongs to a different live gesture.
+
+        Logical hold ids and physical MTouch ids share the same 0-9 range.
+        Once a hold rotates, another logical id can numerically equal that
+        physical id.  Treating the number alone as ownership releases the
+        first hold and leaves its alias pointing at an inactive contact.
+        """
+        if any(
+            owner != planned and physical == actual
+            for owner, physical in self._contact_alias.items()
+        ):
+            return True
+        # Transient aliases are removed after DOWN; their physical ownership
+        # is represented by the pending gesture maps until advance() lifts it.
+        return actual in self._pending_taps or actual in self._pending_flicks
+
+    def _pick_fallback_contact(
+        self,
+        planned: int,
+        *,
+        reserved_contacts: set[int] | None = None,
+    ) -> int:
+        reserved_contacts = reserved_contacts or set()
         alias_targets = set(self._contact_alias.values())
         for contact in range(7, 10):
-            if contact not in self.active_contacts and contact not in alias_targets:
+            if (
+                contact not in self.active_contacts
+                and contact not in alias_targets
+                and contact not in reserved_contacts
+            ):
                 return contact
         for contact in range(10):
             if (
                 contact not in self.active_contacts
                 and contact not in alias_targets
+                and contact not in reserved_contacts
                 and contact != planned
             ):
                 return contact
-        return planned
+        if (
+            planned not in self.active_contacts
+            and planned not in alias_targets
+            and planned not in reserved_contacts
+        ):
+            return planned
+        raise RuntimeError("MaaFramework 可用触点不足")
 
-    def _pick_hold_contact(self, planned: int) -> int:
+    def _pick_hold_contact(
+        self,
+        planned: int,
+        *,
+        reserved_contacts: set[int] | None = None,
+    ) -> int:
         """Allocate a touch id for a hold, preferring one not recently used.
 
         Reusing a hold contact shortly after its release lets the backend's
         stale "active" state swallow the press.  Rotate through 0-9, skipping
         active contacts, alias targets and contacts released in the last 2 s.
         """
+        reserved_contacts = reserved_contacts or set()
         now = time.monotonic()
         recent = {
             contact
@@ -115,29 +182,47 @@ class ControllerTouchDispatcher:
             if (
                 contact not in self.active_contacts
                 and contact not in alias_targets
+                and contact not in reserved_contacts
                 and contact not in recent
             ):
                 return contact
         # Fall back to the least recently released free contact.
-        best = planned
-        best_released = float("-inf")
+        best: int | None = None
+        best_released = float("inf")
         for contact in range(10):
-            if contact in self.active_contacts or contact in alias_targets:
+            if (
+                contact in self.active_contacts
+                or contact in alias_targets
+                or contact in reserved_contacts
+            ):
                 continue
             released_at = self._last_released.get(contact, float("-inf"))
-            if released_at > best_released:
+            if released_at < best_released:
                 best = contact
                 best_released = released_at
+        if best is None:
+            raise RuntimeError("MaaFramework 可用触点不足")
         return best
 
-    def _release(self, planned: int) -> None:
-        actual = self._contact_alias.pop(planned, planned)
-        self._wait(self.controller.post_touch_up(actual))
+    def _release(self, planned: int, *, wait_for_job: bool = True) -> None:
+        aliased_actual = self._contact_alias.pop(planned, None)
+        actual = planned if aliased_actual is None else aliased_actual
+        if self._physical_contact_owned_by_other(actual, planned):
+            # A stale logical UP must never lift another hold merely because
+            # its id equals that hold's rotated physical contact.
+            return
+        job = self.controller.post_touch_up(actual)
+        if wait_for_job:
+            self._wait(job)
         self.active_contacts.discard(actual)
         self.active_positions.pop(actual, None)
         self._pending_taps.pop(actual, None)
         self._pending_flicks.pop(actual, None)
-        self._last_released[planned] = time.monotonic()
+        # Cool down the physical id that MTouch actually received.  When a
+        # planned lane id was aliased, cooling the planned id allowed the
+        # just-released physical id to be reused immediately while its UP was
+        # still queued, intermittently swallowing a dense-chart DOWN.
+        self._last_released[actual] = time.monotonic()
 
     @staticmethod
     def _is_active_contact_error(exc: BaseException) -> bool:
@@ -150,11 +235,19 @@ class ControllerTouchDispatcher:
         planned: int,
         *,
         wait_for_job: bool = True,
+        reserved_contacts: set[int] | None = None,
     ) -> None:
         self._ensure_running()
-        stale_actual = self._contact_alias.get(planned, planned)
-        if stale_actual in self.active_contacts:
-            self._release(planned)
+        owned_actual = self._contact_alias.get(planned)
+        stale_actual = planned if owned_actual is None else owned_actual
+        if (
+            stale_actual in self.active_contacts
+            and not self._physical_contact_owned_by_other(
+                stale_actual,
+                planned,
+            )
+        ):
+            self._release(planned, wait_for_job=wait_for_job)
             self.recovered_contacts += 1
             self.down_recoveries += 1
             # The game's input thread may not have consumed the UP yet; a
@@ -162,8 +255,12 @@ class ControllerTouchDispatcher:
             # the contact stuck again.  Yield briefly so the UP lands before
             # the DOWN.  This is the exceptional desync-recovery path, not
             # the normal hot path.
-            self.sleeper(0.015)
-        actual = self._pick_hold_contact(planned)
+            if wait_for_job:
+                self.sleeper(0.015)
+        actual = self._pick_hold_contact(
+            planned,
+            reserved_contacts=reserved_contacts,
+        )
         self._contact_alias[planned] = actual
         if (
             actual in self._last_released
@@ -172,7 +269,9 @@ class ControllerTouchDispatcher:
         ):
             # Fallback allocation had to reuse a recently released contact;
             # proactively clear the backend state before the DOWN.
-            self._wait(self.controller.post_touch_up(actual))
+            clear_job = self.controller.post_touch_up(actual)
+            if wait_for_job:
+                self._wait(clear_job)
         x = self._x(action)
         try:
             job = self.controller.post_touch_down(x, 590, actual, 1)
@@ -181,12 +280,17 @@ class ControllerTouchDispatcher:
         except Exception as exc:
             if not self._is_active_contact_error(exc):
                 raise
-            self._release(planned)
+            self._release(planned, wait_for_job=wait_for_job)
             self.recovered_contacts += 1
             self.down_recoveries += 1
-            actual = self._pick_fallback_contact(planned)
+            actual = self._pick_fallback_contact(
+                planned,
+                reserved_contacts=reserved_contacts,
+            )
             self._contact_alias[planned] = actual
-            self._wait(self.controller.post_touch_down(x, 590, actual, 1))
+            retry_job = self.controller.post_touch_down(x, 590, actual, 1)
+            if wait_for_job:
+                self._wait(retry_job)
         self.active_contacts.add(actual)
         self.active_positions[actual] = x
         self._last_used[planned] = float(action.timestamp)
@@ -288,14 +392,22 @@ class ControllerTouchDispatcher:
                 pending.next_phase < len(self._flick_phases)
                 and elapsed >= self._flick_phases[pending.next_phase][0]
             ):
-                _, y = self._flick_phases[pending.next_phase]
+                _phase_time, y = self._flick_phases[pending.next_phase]
                 # MaaFramework preserves the post order.  Waiting here can
                 # block capture for 150-250 ms when the emulator input thread
                 # hiccups, which skips an entire dense phrase.  Hold MOVE is
                 # already queued the same way in dispatch().
+                if pending.direction in {"Left", "Right"}:
+                    sign = -1 if pending.direction == "Left" else 1
+                    distance = (55, 105, 150)[pending.next_phase]
+                    x = max(120, min(1160, pending.start_x + sign * distance))
+                    move_y = 590
+                else:
+                    x = pending.start_x
+                    move_y = y
                 self.controller.post_touch_move(
-                    self.LANE_CENTERS[pending.lane],
-                    y,
+                    x,
+                    move_y,
                     contact,
                     1,
                 )
@@ -373,22 +485,49 @@ class ControllerTouchDispatcher:
         if len(transients) > len(available):
             raise RuntimeError("MaaFramework 可用触点不足")
         transient_contacts = list(zip(transients, available))
+        # Reserve every logical contact in this frame before dispatching any
+        # DOWN.  Contact rotation observes the cooldown map and may otherwise
+        # steal an id that a later chord member is about to use.  That later
+        # DOWN then interprets the stolen id as its own stale contact, posts an
+        # UP, and silently removes the first chord member from the game while
+        # leaving it in ``pending_taps``.
+        batch_contacts = [
+            *(0 if action.contact is None else action.contact for action in persistent),
+            *(contact for _action, contact in transient_contacts),
+        ]
         try:
             for action in pre_releases:
                 self._ensure_running()
                 contact = 0 if action.contact is None else action.contact
                 actual = self._actual(contact)
                 if actual in self.active_contacts:
-                    self._release(contact)
+                    self._release(contact, wait_for_job=False)
             for action in persistent:
-                self._down(action, 0 if action.contact is None else action.contact)
+                planned = 0 if action.contact is None else action.contact
+                self._down(
+                    action,
+                    planned,
+                    wait_for_job=False,
+                    reserved_contacts={
+                        contact for contact in batch_contacts if contact != planned
+                    },
+                )
             for action, contact in transient_contacts:
                 # A transient is deliberately held across frames.  Posting
                 # DOWN and immediately waiting for UP produced sub-millisecond
                 # pulses that LDPlayer/BanG Dream intermittently discarded.
                 # MaaFramework preserves command order, so keep the hot path
                 # nonblocking and let advance() release the contact later.
-                self._down(action, contact, wait_for_job=False)
+                self._down(
+                    action,
+                    contact,
+                    wait_for_job=False,
+                    reserved_contacts={
+                        candidate
+                        for candidate in batch_contacts
+                        if candidate != contact
+                    },
+                )
             for action in moves:
                 self._ensure_running()
                 contact = 0 if action.contact is None else action.contact
@@ -421,7 +560,7 @@ class ControllerTouchDispatcher:
             for action in deferred_releases:
                 self._ensure_running()
                 contact = 0 if action.contact is None else action.contact
-                self._release(contact)
+                self._release(contact, wait_for_job=False)
             for action, contact in transient_contacts:
                 self._ensure_running()
                 actual = self._contact_alias.pop(contact, contact)
@@ -429,6 +568,8 @@ class ControllerTouchDispatcher:
                     self._pending_flicks[actual] = _PendingFlick(
                         action.lane,
                         float(action.timestamp),
+                        self.active_positions.get(actual, self._x(action)),
+                        action.flick_direction,
                     )
                     continue
                 self._pending_taps[actual] = _PendingTap(
@@ -438,9 +579,13 @@ class ControllerTouchDispatcher:
                 self._pending_flicks[self._actual(action.contact)] = _PendingFlick(
                     action.lane,
                     float(action.timestamp),
+                    self.active_positions.get(
+                        self._actual(action.contact), self._x(action)
+                    ),
+                    action.flick_direction,
                 )
         except BaseException:
-            self.reset()
+            self.emergency_release_all()
             raise
 
     def reset(self) -> None:

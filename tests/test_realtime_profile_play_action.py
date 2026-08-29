@@ -920,6 +920,7 @@ def _completed_play_harness(
     tmp_path,
     *,
     debug_recording,
+    diagnostic_trace=True,
     collection_status=ResultCollectionStatus.STABLE,
     engine_stopped=False,
     calibration_report=False,
@@ -969,27 +970,32 @@ def _completed_play_harness(
         lambda: False,
     )
     recorder_holder = {}
-    if debug_recording:
-        class FakeRecorder:
-            def __init__(self):
-                self.output_dir = tmp_path / "debug-rec"
-                self.output_dir.mkdir(parents=True, exist_ok=True)
-                self.session_metadata = None
-                recorder_holder["value"] = self
+    class FakeRecorder:
+        def __init__(self, *, video_enabled=True):
+            self.output_dir = tmp_path / "debug-rec"
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            self.video_enabled = video_enabled
+            self.session_metadata = None
+            recorder_holder["value"] = self
 
-            def set_session_metadata(self, metadata):
-                self.session_metadata = metadata
+        def set_session_metadata(self, metadata):
+            self.session_metadata = metadata
 
-            def close(self):
-                (self.output_dir / "summary.json").write_text(json.dumps({
-                    "schema_version": 1,
-                    "session": self.session_metadata,
-                }), encoding="utf-8")
+        def close(self):
+            (self.output_dir / "summary.json").write_text(json.dumps({
+                "schema_version": 2,
+                "recording_mode": (
+                    "video" if self.video_enabled else "trace-only"
+                ),
+                "session": self.session_metadata,
+            }), encoding="utf-8")
 
-        monkeypatch.setattr(
-            "agent.realtime.profile_play_action.RealtimeDebugRecorder",
-            lambda _root: FakeRecorder(),
-        )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.RealtimeDebugRecorder",
+        lambda _root, **kwargs: FakeRecorder(
+            video_enabled=kwargs.get("video_enabled", True)
+        ),
+    )
 
     class Engine:
         def __init__(self, *args, **kwargs):
@@ -1061,6 +1067,7 @@ def _completed_play_harness(
         "require_completion": True,
         "save_result_frame": True,
         "debug_recording": debug_recording,
+        "diagnostic_trace": diagnostic_trace,
     }
     if calibration_report:
         params["calibration_report"] = "screencap/calibration-round.json"
@@ -1073,8 +1080,8 @@ def _completed_play_harness(
     return tmp_path, writes, recorder_holder.get("value")
 
 
-def test_completed_without_debug_recording_writes_json_only(tmp_path, monkeypatch):
-    root, writes, _ = _completed_play_harness(
+def test_completed_without_video_writes_json_and_trace_only(tmp_path, monkeypatch):
+    root, writes, recorder = _completed_play_harness(
         monkeypatch, tmp_path, debug_recording=False,
     )
 
@@ -1088,7 +1095,29 @@ def test_completed_without_debug_recording_writes_json_only(tmp_path, monkeypatc
     assert payload["processed_frames"] == 120
     assert payload["run_id"]
     assert payload["song_id"] == "song-phash-v1-0123456789abcdef"
+    assert payload["debug_recording_path"].endswith("debug-rec")
+    assert recorder.video_enabled is False
+    summary = json.loads(
+        (recorder.output_dir / "summary.json").read_text(encoding="utf-8")
+    )
+    assert summary["recording_mode"] == "trace-only"
+
+
+def test_completed_with_diagnostics_disabled_writes_result_only(
+    tmp_path, monkeypatch,
+):
+    root, writes, recorder = _completed_play_harness(
+        monkeypatch,
+        tmp_path,
+        debug_recording=False,
+        diagnostic_trace=False,
+    )
+
+    report = next((root / "screencap").glob("realtime-result-*.json"))
+    payload = json.loads(report.read_text(encoding="utf-8"))
     assert payload["debug_recording_path"] is None
+    assert recorder is None
+    assert writes == []
 
 
 def test_direct_profile_play_does_not_reuse_unprepared_song_identity(
@@ -1110,7 +1139,7 @@ def test_direct_profile_play_does_not_reuse_unprepared_song_identity(
 def test_completed_with_debug_recording_writes_json_and_screenshot(
     tmp_path, monkeypatch,
 ):
-    root, writes, _ = _completed_play_harness(
+    root, writes, recorder = _completed_play_harness(
         monkeypatch, tmp_path, debug_recording=True,
     )
 
@@ -1122,6 +1151,7 @@ def test_completed_with_debug_recording_writes_json_and_screenshot(
     assert str(screenshots[0]) == writes[0]
     payload = json.loads(reports[0].read_text(encoding="utf-8"))
     assert payload["debug_recording_path"].endswith("debug-rec")
+    assert recorder.video_enabled is True
 
 
 def test_result_collection_timeout_writes_invalid_correlated_json(
@@ -1340,9 +1370,10 @@ def test_collect_result_dismisses_reward_popup_before_stabilizing():
         clock=clock,
         reward_click_delay_seconds=0.0,
         reward_threshold=0.8,
+        judgement_details_template=None,
     )
 
     assert outcome.status is ResultCollectionStatus.STABLE
     assert outcome.result is not None
     assert clicks == [(639, 605)]
-    assert keys == [4]
+    assert keys == []

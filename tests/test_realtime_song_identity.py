@@ -5,7 +5,9 @@ import numpy as np
 
 from agent.realtime.song_identity import (
     SONG_ID_METHOD,
+    SONG_ID_ROI,
     UNKNOWN_SONG_ID,
+    fingerprint_jacket,
     identify_song,
     same_song,
 )
@@ -14,10 +16,19 @@ from agent.realtime.song_identity import (
 def song_screen(seed: int = 7) -> np.ndarray:
     image = np.zeros((720, 1280, 3), dtype=np.uint8)
     rng = np.random.default_rng(seed)
-    image[110:600, 40:450] = rng.integers(
-        0, 256, size=(490, 410, 3), dtype=np.uint8,
+    x, y, width, height = SONG_ID_ROI
+    image[y:y + height, x:x + width] = rng.integers(
+        0, 256, size=(height, width, 3), dtype=np.uint8,
     )
     return image
+
+
+def test_song_identity_ignores_changes_to_the_scrolling_song_list():
+    first = song_screen()
+    second = first.copy()
+    second[110:600, 40:450] = 255
+
+    assert identify_song(first) == identify_song(second)
 
 
 def test_song_identity_is_stable_and_versioned():
@@ -28,6 +39,14 @@ def test_song_identity_is_stable_and_versioned():
     assert first.method == SONG_ID_METHOD
     assert first.song_id.startswith(f"{SONG_ID_METHOD}-")
     assert len(first.song_id.removeprefix(f"{SONG_ID_METHOD}-")) == 16
+
+
+def test_screen_crop_and_source_jacket_use_identical_hash_algorithm():
+    screen = song_screen()
+    x, y, width, height = SONG_ID_ROI
+    jacket = screen[y:y + height, x:x + width]
+
+    assert identify_song(screen) == fingerprint_jacket(jacket)
 
 
 def test_song_identity_matches_after_brightness_and_compression_changes():

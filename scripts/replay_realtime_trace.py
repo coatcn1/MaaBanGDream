@@ -195,6 +195,7 @@ def replay(
                 str(action.get("reason", "")),
                 action.get("track_id"),
                 action.get("target_x"),
+                action.get("flick_direction"),
             ) for action in frame.get("actions", []))
             replayed.extend(planner.update(notes, now))
             diagnostics.extend(planner.drain_diagnostics())
@@ -204,6 +205,9 @@ def replay(
             "calibrated": planner.chart_calibrated,
             "predicted_presses": planner.chart_predicted_presses,
             "predicted_releases": planner.chart_predicted_releases,
+            "song_offset_ms": planner.chart_song_offset_ms,
+            "disabled_for_run": planner.chart_disabled_for_run,
+            "disable_reason": planner.chart_disable_reason,
         }
         if chart_prediction else None
     )
@@ -312,6 +316,7 @@ def replay(
                 "reason": action.reason,
                 "track_id": action.track_id,
                 "target_x": action.target_x,
+                "flick_direction": action.flick_direction,
             }
             for action in replayed
         ]
@@ -354,7 +359,7 @@ def main() -> None:
         "--chart",
         type=Path,
         default=None,
-        help="Official chart JSON (BestDori raw chart) for chart prediction",
+        help="Local Bestdori raw or schema-v1 chart JSON for chart prediction",
     )
     parser.add_argument(
         "--chart-prediction",

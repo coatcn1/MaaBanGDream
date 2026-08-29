@@ -23,8 +23,15 @@ import json
 import statistics
 from collections import defaultdict
 from pathlib import Path
+import sys
 
 import numpy as np
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from agent.realtime.chart_timeline import ChartTimeline
 
 
 MATCH_WINDOW_MS = 250.0
@@ -36,53 +43,15 @@ def beat_to_seconds(beat: float, bpm: float) -> float:
 
 def load_chart_judgements(path: Path) -> list[dict[str, object]]:
     """Return chart judgements as (time_s, lane, judgement_type)."""
-    raw = json.loads(path.read_text(encoding="utf-8-sig"))
-    judgements: list[dict[str, object]] = []
-    for note in raw:
-        note_type = note.get("type")
-        if note_type == "BPM":
-            continue
-        if note_type == "System":
-            continue
-        if note_type == "Single":
-            judgements.append({
-                "time_s": beat_to_seconds(float(note["beat"]), 192.0),
-                "lane": int(note["lane"]),
-                "type": "tap",
-            })
-            continue
-        if note_type in {"Long", "Slide"}:
-            connections = note.get("connections", [])
-            if not connections:
-                continue
-            visible = [
-                connection
-                for connection in connections
-                if not connection.get("hidden")
-            ]
-            head_connection = visible[0]
-            tail_connection = max(
-                visible,
-                key=lambda connection: float(connection["beat"]),
-            )
-            head_beat = float(head_connection["beat"])
-            tail_beat = float(tail_connection["beat"])
-            head_lane = int(head_connection["lane"])
-            tail_lane = int(tail_connection["lane"])
-            judgements.append({
-                "time_s": beat_to_seconds(head_beat, 192.0),
-                "lane": head_lane,
-                "type": "hold-head",
-            })
-            judgements.append({
-                "time_s": beat_to_seconds(tail_beat, 192.0),
-                "lane": tail_lane,
-                "type": "hold-tail",
-            })
-            continue
-        raise ValueError(f"unhandled chart note type: {note_type}")
-    judgements.sort(key=lambda item: (float(item["time_s"]), int(item["lane"])))
-    return judgements
+    timeline = ChartTimeline.from_json(path)
+    return [
+        {
+            "time_s": judgement.time_s,
+            "lane": judgement.lane,
+            "type": judgement.kind,
+        }
+        for judgement in timeline.judgements
+    ]
 
 
 def load_trace_actions(trace_path: Path) -> list[dict[str, object]]:

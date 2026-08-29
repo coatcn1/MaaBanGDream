@@ -377,6 +377,37 @@ def _adjust_speed(
     )
 
 
+def _close_settings_dialog(
+    context: Context,
+    controller,
+    coordinates: dict[str, tuple[int, int]],
+    *,
+    attempts: int,
+    delay_seconds: float,
+) -> None:
+    """Close the settings dialog and prove that the speed display vanished."""
+    for attempt in range(1, max(1, attempts) + 1):
+        if context.tasker.stopping:
+            return
+        _click(controller, coordinates["close"])
+        time.sleep(delay_seconds)
+        image = controller.post_screencap().wait().get()
+        try:
+            _read_speed(image, coordinates["speed_roi"])
+        except (RuntimeError, StopIteration):
+            return
+        if attempt < max(1, attempts):
+            print(
+                "RealtimePerformanceSettingsGate close_retry "
+                f"attempt={attempt + 1}/{max(1, attempts)}",
+                flush=True,
+            )
+    raise RuntimeError(
+        f"演出设置关闭按钮连续点击 {max(1, attempts)} 次后，"
+        "流速显示仍然可见"
+    )
+
+
 @AgentServer.custom_action("RealtimePerformanceSettingsGate")
 class RealtimePerformanceSettingsGate(CustomAction):
     """Read and adjust note speed on the explicitly selected first settings tab."""
@@ -522,8 +553,21 @@ class RealtimePerformanceSettingsGate(CustomAction):
         finally:
             if opened:
                 try:
-                    _click(controller, coordinates["close"])
-                    time.sleep(float(params.get("close_delay_seconds", 0.35)))
+                    if verified_successfully:
+                        _close_settings_dialog(
+                            context,
+                            controller,
+                            coordinates,
+                            attempts=int(params.get("close_attempts", 3)),
+                            delay_seconds=float(
+                                params.get("close_delay_seconds", 0.5)
+                            ),
+                        )
+                    else:
+                        _click(controller, coordinates["close"])
+                        time.sleep(
+                            float(params.get("close_delay_seconds", 0.5))
+                        )
                 except Exception:
                     traceback.print_exc()
                     if verified_successfully:

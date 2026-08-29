@@ -23,7 +23,7 @@ def test_all_pipeline_clicks_use_the_foreground_guard():
 def test_interface_references_existing_entry_and_resource():
     interface = load(ROOT / "interface.json")
     assert interface["interface_version"] == 2
-    assert interface["version"] == "0.8.1"
+    assert interface["version"] == "0.8.2"
     assert [task["name"] for task in interface["task"]] == [
         "AutoLive", "RealtimeLive", "ContinuousRealtimeLive",
         "RealtimeCalibration", "ChallengeLive",
@@ -85,6 +85,19 @@ def test_recovery_is_bounded_and_shared():
     assert params["escape_timeout_ms"] == 60000
     assert params["restart_limit"] == 2
     assert params["click_nodes"] == ["LoginTapToStart", "LoginNext", "CommonClose"]
+    download = common["ResourceDownloadConfirm"]
+    assert download["template"] == "login_resource_download.png"
+    assert download["roi"] == [620, 520, 300, 120]
+    assert download["threshold"] == .9
+    assert download["custom_action"] == "ForegroundClick"
+    download_page = common["ResourceDownloadPageMarker"]
+    assert download_page["template"] == "login_resource_download_page.png"
+    assert download_page["roi"] == [360, 80, 260, 110]
+    assert download_page["threshold"] == .9
+    download_progress = common["ResourceDownloadProgressMarker"]
+    assert download_progress["template"] == "login_resource_download_progress.png"
+    assert download_progress["roi"] == [20, 550, 240, 100]
+    assert download_progress["threshold"] == .82
     refresh = common["CommonRefreshScreen"]
     assert refresh == {
         "recognition": "DirectHit",
@@ -182,6 +195,18 @@ def test_auto_live_safety_and_timeout_contract():
     assert result_recover["login_start_target"] == [640, 635]
     assert result_recover["login_tap_target"] == [640, 360]
     assert result_recover["escape_after_login_start"] is True
+
+
+def test_realtime_start_clicks_require_visible_transition_confirmation():
+    nodes = load(ROOT / "resource/pipeline/realtime_multi_live.json")
+    for name in ("RealtimeLiveRehearsalStart", "RealtimeLiveFormalStart"):
+        node = nodes[name]
+        assert node["custom_action"] == "ForegroundClick"
+        assert node["custom_action_param"] == {
+            "confirm_absent_node": name,
+            "confirm_attempts": 3,
+            "confirm_interval_ms": 750,
+        }
 
 
 def test_auto_live_entry_recovers_to_home_before_navigation():
@@ -472,8 +497,21 @@ def test_realtime_multi_live_contract_and_options():
     ]
     assert nodes["RealtimeLiveRehearsalStart"]["template"] == "rehearsal_start.png"
     debug = interface["option"]["RealtimeLiveDebug"]
-    enabled = next(case for case in debug["cases"] if case["name"] == "On")
-    assert enabled["pipeline_override"]["RealtimeLiveDebugGate"]["custom_action_param"] == {"debug_recording": True}
+    assert debug["default_case"] == "Light"
+    assert [case["name"] for case in debug["cases"]] == [
+        "Light", "Off", "Full",
+    ]
+    params = {
+        case["name"]: case["pipeline_override"]["RealtimeLiveDebugGate"][
+            "custom_action_param"
+        ]
+        for case in debug["cases"]
+    }
+    assert params == {
+        "Light": {"debug_recording": False, "diagnostic_trace": True},
+        "Off": {"debug_recording": False, "diagnostic_trace": False},
+        "Full": {"debug_recording": True, "diagnostic_trace": True},
+    }
     assert not any(task["name"] == "RealtimeFullSong" for task in interface["task"])
 
 
@@ -514,11 +552,45 @@ def test_continuous_realtime_live_is_a_pure_listener_task():
         assert params["difficulty"] == case["name"]
         assert params["debug_recording"] is False
     debug = interface["option"]["ContinuousRealtimeDebug"]
-    assert debug["default_case"] == "Off"
-    enabled = next(case for case in debug["cases"] if case["name"] == "On")
-    assert enabled["pipeline_override"]["ContinuousRealtimeWatcher"][
-        "custom_action_param"
-    ]["debug_recording"] is True
+    assert debug["default_case"] == "Light"
+    assert [case["name"] for case in debug["cases"]] == [
+        "Light", "Off", "Full",
+    ]
+    params = {
+        case["name"]: case["pipeline_override"]["ContinuousRealtimeWatcher"][
+            "custom_action_param"
+        ]
+        for case in debug["cases"]
+    }
+    assert params == {
+        "Light": {"debug_recording": False, "diagnostic_trace": True},
+        "Off": {"debug_recording": False, "diagnostic_trace": False},
+        "Full": {"debug_recording": True, "diagnostic_trace": True},
+    }
+
+
+def test_calibration_and_challenge_offer_three_diagnostic_levels():
+    interface = load(ROOT / "interface.json")
+    for option_name, gate in (
+        ("CalibrationDebug", "CalibrationDebugSetting"),
+        ("ChallengeDebug", "ChallengeDebugGate"),
+    ):
+        option = interface["option"][option_name]
+        assert option["default_case"] == "Light"
+        assert [case["name"] for case in option["cases"]] == [
+            "Light", "Off", "Full",
+        ]
+        params = {
+            case["name"]: case["pipeline_override"][gate][
+                "custom_action_param"
+            ]
+            for case in option["cases"]
+        }
+        assert params == {
+            "Light": {"debug_recording": False, "diagnostic_trace": True},
+            "Off": {"debug_recording": False, "diagnostic_trace": False},
+            "Full": {"debug_recording": True, "diagnostic_trace": True},
+        }
 
 
 def test_task_entries_bootstrap_before_round_execution():

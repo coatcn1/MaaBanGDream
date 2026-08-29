@@ -506,7 +506,7 @@ hold-tail 漏判（80.156s）是 TAP1/TAP4 共有的尾释放 grace 问题
 ### 2026-08-12 谱面时间轴预测 v1：chart-tail 尾释放救援
 
 实现 `agent/realtime/chart_timeline.py`（BestDori 谱面解析、
-`resource/charts/song-306-hard.json` 固定数据）与
+当时的单曲固定数据，现已迁移到 `resource/charts/manifest.json`）与
 `agent/realtime/chart_predictor.py`（`ChartPredictor`）：
 
 - 用前 16 个可信动作粗-细网格校准引擎↔谱面偏移（0.02s 粗搜 + 0.005s
@@ -606,3 +606,29 @@ FAST 从 70–86 降到 10–11，SLOW 略高（11–32），与历史 miss=3 �
 按压关。**最终配置：按压关 + 新触发 + chart-tail**，完成轮 miss
 3–4、FAST 10–11。剩余死亡轮（约 1/4–1/2，随 FPS 波动）死前漏判
 2–4 个，均为 hold 头/尾（tracker 漂移/占用），这是下一阶段的主攻点。
+
+### 2026-08-25 Bestdori 本地谱面仓库与视觉闭环
+
+单曲固定谱面已替换为可重现的本地仓库：收藏 3 的 12 首代表歌曲共
+53 个现有难度写入 `resource/charts/bestdori/`，索引、来源 URL 与
+SHA-256 写入 `resource/charts/manifest.json`。同步只发生在部署/开发阶段；
+实时进程不导入下载脚本，也不访问网络。
+
+歌曲身份改为选歌界面右侧封面内框 `(684,120,320,320)` 的
+`song-jacket-phash-v2`。当前《詩超絆》真机截图与 Bestdori 原始封面
+pHash 完全一致（Hamming distance 0）；14 个封面变体指纹跨歌曲最小
+距离为 24，高于运行时容差 8。只有“新鲜选歌截图 + 精确难度 + 唯一指纹”
+同时成立时才启用谱面。
+
+解析和执行闭环覆盖：
+
+- 分段 BPM 累积计时，而不是全曲使用第一个 BPM；
+- 保留 Long/Slide 的全部 connection，盲滑按每段曲线移动；
+- 只有显式 `flick` 或 `Directional` 才升级为 FLICK，Left/Right 使用
+  水平手势；普通 Slide 尾不再一律误判为 flick；
+- 校准后继续用可信视觉动作修正小幅相位漂移；连续 8 次可信失配则整局
+  禁用谱面、释放谱面独占触点，并保留纯视觉动作；
+- 一点 Long/Slide 按 Bestdori 语义修复成普通单点，避免零时长 hold。
+
+仓库格式、更新命令和门禁见
+[`docs/bestdori-chart-repository.md`](bestdori-chart-repository.md)。

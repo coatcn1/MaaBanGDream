@@ -484,6 +484,50 @@ class OrdinaryPipeline:
                     tracked.previous_y is None
                     and note.y >= self._config.judgement_y + 8
                 ):
+                    provisional = (
+                        self._chart_gate.provisional_residue_judgement(
+                            note.lane,
+                            now,
+                        )
+                        if self._chart_gate is not None
+                        and hasattr(
+                            self._chart_gate,
+                            "provisional_residue_judgement",
+                        )
+                        else None
+                    )
+                    if provisional is not None:
+                        kind = (
+                            ActionKind.FLICK
+                            if bool(getattr(provisional, "flick", False))
+                            else ActionKind.TAP
+                        )
+                        actions.append(TouchAction(
+                            kind,
+                            note.lane,
+                            now,
+                            reason="chart-provisional-rescue",
+                            track_id=tracked.track_id,
+                            flick_direction=getattr(
+                                provisional,
+                                "direction",
+                                None,
+                            ),
+                        ))
+                        self._note_tracker.mark_fired(tracked.track_id, now)
+                        self._record_diagnostic(
+                            "chart_provisional_residue_rescued",
+                            now,
+                            lane=note.lane,
+                            track_id=tracked.track_id,
+                            y=round(note.y, 2),
+                            chart_time_s=round(
+                                float(provisional.time_s),
+                                3,
+                            ),
+                            chart_kind=kind.value,
+                        )
+                        continue
                     # Tap-effect ripples and hold-tail residue park a flat
                     # fragment just below the line (around judgement + 9)
                     # with no prior motion. A real head is always first seen

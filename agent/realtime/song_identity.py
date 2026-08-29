@@ -6,9 +6,13 @@ import cv2
 import numpy as np
 
 
-SONG_ID_METHOD = "song-phash-v1"
+SONG_ID_METHOD = "song-jacket-phash-v2"
 UNKNOWN_SONG_ID = "unknown"
-SONG_ID_ROI = (40, 110, 410, 490)
+# Exact square jacket interior on the 1280x720 song-selection screen.  This
+# intentionally excludes the red selection border and the ranking text below.
+# v1 accidentally hashed the scrolling list on the left, so different songs
+# on the same page could look almost identical to the chart registry.
+SONG_ID_ROI = (684, 120, 320, 320)
 MAX_SAME_SONG_DISTANCE = 8
 
 
@@ -19,7 +23,7 @@ class SongIdentity:
 
 
 def identify_song(image: np.ndarray) -> SongIdentity:
-    """Return a versioned perceptual identity for the selected song screen."""
+    """Return a versioned perceptual identity of the selected song jacket."""
     x, y, width, height = SONG_ID_ROI
     if (
         not isinstance(image, np.ndarray)
@@ -29,8 +33,20 @@ def identify_song(image: np.ndarray) -> SongIdentity:
         or image.shape[2] < 3
     ):
         return SongIdentity(UNKNOWN_SONG_ID, "unknown")
-    crop = image[y:y + height, x:x + width]
-    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    return fingerprint_jacket(image[y:y + height, x:x + width])
+
+
+def fingerprint_jacket(image: np.ndarray) -> SongIdentity:
+    """Return the runtime-compatible identity of a square source jacket."""
+    if (
+        not isinstance(image, np.ndarray)
+        or image.ndim != 3
+        or image.shape[0] < 8
+        or image.shape[1] < 8
+        or image.shape[2] < 3
+    ):
+        return SongIdentity(UNKNOWN_SONG_ID, "unknown")
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     if float(gray.std()) < 2.0:
         return SongIdentity(UNKNOWN_SONG_ID, "unknown")
     normalized = cv2.resize(gray, (32, 32), interpolation=cv2.INTER_AREA)

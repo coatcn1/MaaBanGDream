@@ -45,19 +45,54 @@ from .run_reporting import (
 )
 from .timing_feedback import AdaptiveTimingController, TimingFeedbackDetector
 from .touch_planner import RealtimePlanner, sliding_holds_enabled
-from .runtime_options import debug_enabled
+from .runtime_options import debug_enabled, diagnostic_trace_enabled
 from .performance_settings_action import verified_settings
-from .chart_timeline import ChartTimeline
+from .chart_repository import ChartResolution, LocalChartRepository
 
 
 REWARD_CONFIRM_TEMPLATE = PROJECT_ROOT / "resource" / "image" / "result_reward_confirm.png"
 REWARD_OK_TEMPLATE = PROJECT_ROOT / "resource" / "image" / "result_reward_ok.png"
+RESULT_RANK_NEXT_TEMPLATE = (
+    PROJECT_ROOT / "resource" / "image" / "result_rank_next.png"
+)
+JUDGEMENT_DETAILS_TEMPLATE = (
+    PROJECT_ROOT / "resource" / "image" / "result_judgement_details.png"
+)
+ACTIVITY_POINTS_TEMPLATE = (
+    PROJECT_ROOT / "resource" / "image" / "result_activity_points.png"
+)
+# Kept as a compatibility alias for callers/tests that override this template.
+RESULT_NEXT_TEMPLATE = RESULT_RANK_NEXT_TEMPLATE
 REWARD_TEMPLATE_THRESHOLD = 0.85
 REWARD_DISMISS_LIMIT = 3
 REWARD_CLICK_DELAY_SECONDS = 1.0
+RESULT_NEXT_TEMPLATE_THRESHOLD = 0.9
+RESULT_NEXT_CLICK_LIMIT = 2
+RESULT_NEXT_CLICK_DELAY_SECONDS = 1.0
+JUDGEMENT_DETAILS_TEMPLATE_THRESHOLD = 0.9
+ACTIVITY_POINTS_TEMPLATE_THRESHOLD = 0.9
+ACTIVITY_POINTS_CLICK_DELAY_SECONDS = 1.0
+ACTIVITY_POINTS_CLICK_LIMIT = 2
 
 
 _LAST_LIFE_SAFETY_ABORT = False
+
+
+def resolve_local_chart_for_run(
+    live_run: LiveRunContext | None,
+    difficulty: str,
+    *,
+    repository: LocalChartRepository | None = None,
+) -> ChartResolution:
+    """Fail closed unless the prepared screen identity matches this run."""
+    if live_run is None or not live_run.prepared_for_play:
+        return ChartResolution(None, "no fresh song/difficulty identity")
+    if live_run.difficulty.strip().lower() != str(difficulty).strip().lower():
+        return ChartResolution(None, "no fresh song/difficulty identity")
+    repository = repository or LocalChartRepository(
+        PROJECT_ROOT / "resource" / "charts"
+    )
+    return repository.resolve(live_run.song_id, difficulty)
 
 
 class StallSafeCapture:
@@ -219,6 +254,7 @@ class ResultCollectionStatus(str, Enum):
     STABLE = "stable"
     TIMED_OUT = "timed_out"
     STOPPED = "stopped"
+    BLOCKED = "blocked"
 
 
 @dataclass(frozen=True)
@@ -227,6 +263,8 @@ class ResultCollectionOutcome:
     result: LiveResult | None = None
     image: object | None = None
     elapsed_seconds: float = 0.0
+    page_state: str = "unknown"
+    reason: str | None = None
 
 
 def _wait_until(deadline, stopping, *, clock, sleeper) -> bool:
@@ -265,6 +303,73 @@ def _dismiss_reward_popup(
     return True
 
 
+def _template_click_point(
+    image,
+    template_paths,
+    threshold: float,
+) -> tuple[int, int] | None:
+    best_score = threshold
+    best_point = None
+    for template_path in template_paths:
+        template = cv2.imread(str(template_path))
+        if template is None:
+            continue
+        matched = cv2.matchTemplate(image, template, cv2.TM_CCOEFF_NORMED)
+        _, score, _, location = cv2.minMaxLoc(matched)
+        if score > best_score:
+            best_score = score
+            height, width = template.shape[:2]
+            best_point = (location[0] + width // 2, location[1] + height // 2)
+    return best_point
+
+
+def _plausible_result(
+    result: LiveResult,
+    *,
+    expected_notes: int | None,
+    maximum_notes: int,
+) -> tuple[bool, str | None]:
+    if result.total <= 0:
+        return False, "judgement total is zero"
+    if result.total > maximum_notes:
+        return False, f"judgement total {result.total} exceeds {maximum_notes}"
+    if expected_notes is not None and result.total != expected_notes:
+        return False, (
+            f"judgement total {result.total} does not match chart "
+            f"expected_notes {expected_notes}"
+        )
+    if result.confidence < 0.30:
+        return False, f"result confidence {result.confidence:.3f} is too low"
+    if result.fast < 0 or result.slow < 0 or result.fast + result.slow > result.total:
+        return False, "FAST/SLOW counts are inconsistent with judgement total"
+    return True, None
+
+
+def _advance_result_rank_page(
+    controller,
+    image,
+    *,
+    before_input=lambda: None,
+    template_path=RESULT_NEXT_TEMPLATE,
+    threshold: float = RESULT_NEXT_TEMPLATE_THRESHOLD,
+) -> bool:
+    """Advance the rank/score page only when its visible Next label matches."""
+    template = cv2.imread(str(template_path))
+    if template is None:
+        return False
+    matched = cv2.matchTemplate(image, template, cv2.TM_CCOEFF_NORMED)
+    _, score, _, location = cv2.minMaxLoc(matched)
+    if score < threshold:
+        return False
+    height, width = template.shape[:2]
+    before_input()
+    controller.post_click(
+        location[0] + width // 2,
+        location[1] + height // 2,
+    ).wait()
+    return True
+
+
 def collect_result(
     controller,
     stopping,
@@ -282,32 +387,223 @@ def collect_result(
     reward_threshold: float = REWARD_TEMPLATE_THRESHOLD,
     reward_dismiss_limit: int = REWARD_DISMISS_LIMIT,
     reward_click_delay_seconds: float = REWARD_CLICK_DELAY_SECONDS,
+    result_next_template=RESULT_NEXT_TEMPLATE,
+    result_next_threshold: float = RESULT_NEXT_TEMPLATE_THRESHOLD,
+    result_next_click_limit: int = RESULT_NEXT_CLICK_LIMIT,
+    result_next_click_delay_seconds: float = RESULT_NEXT_CLICK_DELAY_SECONDS,
+    judgement_details_template=JUDGEMENT_DETAILS_TEMPLATE,
+    judgement_details_threshold: float = JUDGEMENT_DETAILS_TEMPLATE_THRESHOLD,
+    activity_points_template=ACTIVITY_POINTS_TEMPLATE,
+    activity_points_threshold: float = ACTIVITY_POINTS_TEMPLATE_THRESHOLD,
+    activity_points_click_delay_seconds: float = (
+        ACTIVITY_POINTS_CLICK_DELAY_SECONDS
+    ),
+    activity_points_click_limit: int = ACTIVITY_POINTS_CLICK_LIMIT,
+    expected_notes: int | None = None,
+    maximum_notes: int = 3000,
 ) -> ResultCollectionOutcome:
-    """Use only ESC while seeking a stable result, bounded by 60 seconds."""
+    """Read reward, rank and judgement pages without blind navigation."""
     parser = parser or ResultParser()
     started_at = clock()
     deadline = started_at + timeout_seconds
     candidate: LiveResult | None = None
     candidate_at = 0.0
     last_image = None
-    none_streak = 0
     dismissals = 0
+    result_next_clicks = 0
+    activity_points_clicks = 0
+    page_state = "unknown"
+    last_reason: str | None = None
     while clock() < deadline:
         if stopping():
             return ResultCollectionOutcome(
                 ResultCollectionStatus.STOPPED,
                 elapsed_seconds=clock() - started_at,
+                page_state=page_state,
+                reason="user stopped result collection",
             )
         image = controller.post_screencap().wait().get()
         last_image = image
+        now = clock()
+
+        reward_point = _template_click_point(
+            image, reward_templates, reward_threshold,
+        )
+        if reward_point is not None:
+            if page_state == "reward-popup":
+                if dismissals >= reward_dismiss_limit:
+                    return ResultCollectionOutcome(
+                        ResultCollectionStatus.BLOCKED,
+                        image=image,
+                        elapsed_seconds=now - started_at,
+                        page_state="reward-popup",
+                        reason="recognised reward popup did not disappear after click",
+                    )
+                # Do not hammer the same popup.  Count a bounded verification
+                # frame and wait for its close animation to finish.
+                dismissals += 1
+            else:
+                before_input()
+                controller.post_click(*reward_point).wait()
+                dismissals = 1
+            page_state = "reward-popup"
+            candidate = None
+            if not _wait_until(
+                min(deadline, now + reward_click_delay_seconds),
+                stopping,
+                clock=clock,
+                sleeper=sleeper,
+            ):
+                return ResultCollectionOutcome(
+                    ResultCollectionStatus.STOPPED,
+                    elapsed_seconds=clock() - started_at,
+                    page_state=page_state,
+                    reason="user stopped result collection",
+                )
+            continue
+
+        activity_points_point = (
+            _template_click_point(
+                image, (activity_points_template,), activity_points_threshold,
+            )
+            if activity_points_template is not None
+            else None
+        )
+        if activity_points_point is not None:
+            # A normal, boost-consuming live can insert the event points page
+            # before the score/judgement page.  Calibration rehearsals often
+            # skip it, which previously made the formal round look as if its
+            # judgement details had already been lost.  Advance only after the
+            # dedicated page marker matches.  Some emulator frames accept the
+            # first click job but do not deliver it to the game; retry the same
+            # recognised button once, then fail closed if the marker persists.
+            # This remains template-gated and never becomes a blind click.
+            if activity_points_clicks >= activity_points_click_limit:
+                return ResultCollectionOutcome(
+                    ResultCollectionStatus.BLOCKED,
+                    image=image,
+                    elapsed_seconds=now - started_at,
+                    page_state="activity-points",
+                    reason=(
+                        "已识别活动点数页，但"
+                        f"{activity_points_clicks}次点击推进后页面仍未消失"
+                    ),
+                )
+            before_input()
+            controller.post_click(*activity_points_point).wait()
+            activity_points_clicks += 1
+            page_state = "activity-points"
+            candidate = None
+            print(
+                "RealtimeResult state=activity-points action=advance"
+                + f" attempt={activity_points_clicks}",
+                flush=True,
+            )
+            if not _wait_until(
+                min(deadline, now + activity_points_click_delay_seconds),
+                stopping,
+                clock=clock,
+                sleeper=sleeper,
+            ):
+                return ResultCollectionOutcome(
+                    ResultCollectionStatus.STOPPED,
+                    elapsed_seconds=clock() - started_at,
+                    page_state=page_state,
+                    reason="user stopped result collection",
+                )
+            continue
+
+        rank_point = _template_click_point(
+            image, (result_next_template,), result_next_threshold,
+        )
+        if rank_point is not None:
+            if page_state == "rank-page":
+                if result_next_clicks >= result_next_click_limit:
+                    return ResultCollectionOutcome(
+                        ResultCollectionStatus.BLOCKED,
+                        image=image,
+                        elapsed_seconds=now - started_at,
+                        page_state="rank-page",
+                        reason="recognised rank page did not disappear after click",
+                    )
+                result_next_clicks += 1
+            else:
+                before_input()
+                controller.post_click(*rank_point).wait()
+                result_next_clicks = 1
+            page_state = "rank-page"
+            candidate = None
+            if not _wait_until(
+                min(deadline, now + result_next_click_delay_seconds),
+                stopping,
+                clock=clock,
+                sleeper=sleeper,
+            ):
+                return ResultCollectionOutcome(
+                    ResultCollectionStatus.STOPPED,
+                    elapsed_seconds=clock() - started_at,
+                    page_state=page_state,
+                    reason="user stopped result collection",
+                )
+            continue
+
+        details_visible = (
+            judgement_details_template is None
+            or _template_click_point(
+                image,
+                (judgement_details_template,),
+                judgement_details_threshold,
+            ) is not None
+        )
+        if not details_visible:
+            # Fixed digit ROIs overlap unrelated score/rank-page elements.
+            # Never invoke the parser until the dedicated judgement-page
+            # identity marker is visible.
+            candidate = None
+            page_state = "unknown"
+            if not _wait_until(
+                min(deadline, now + min(slow_interval_seconds, medium_interval_seconds)),
+                stopping,
+                clock=clock,
+                sleeper=sleeper,
+            ):
+                return ResultCollectionOutcome(
+                    ResultCollectionStatus.STOPPED,
+                    elapsed_seconds=clock() - started_at,
+                    page_state=page_state,
+                    reason="user stopped result collection",
+                )
+            continue
+
         try:
             result = parser.parse(image)
         except ValueError:
             result = None
 
-        now = clock()
         if result is not None:
-            none_streak = 0
+            plausible, validation_reason = _plausible_result(
+                result,
+                expected_notes=expected_notes,
+                maximum_notes=maximum_notes,
+            )
+            if not plausible:
+                candidate = None
+                page_state = "judgement-details-invalid"
+                last_reason = validation_reason
+                if not _wait_until(
+                    min(deadline, now + stability_interval_seconds),
+                    stopping,
+                    clock=clock,
+                    sleeper=sleeper,
+                ):
+                    return ResultCollectionOutcome(
+                        ResultCollectionStatus.STOPPED,
+                        elapsed_seconds=clock() - started_at,
+                        page_state=page_state,
+                        reason="user stopped result collection",
+                    )
+                continue
+            page_state = "judgement-details"
             if (
                 candidate is not None
                 and now - candidate_at >= stability_interval_seconds
@@ -318,6 +614,7 @@ def collect_result(
                     result=result,
                     image=image,
                     elapsed_seconds=now - started_at,
+                    page_state=page_state,
                 )
             if candidate is None or _result_counts(result) != _result_counts(candidate):
                 candidate = result
@@ -331,57 +628,13 @@ def collect_result(
                 return ResultCollectionOutcome(
                     ResultCollectionStatus.STOPPED,
                     elapsed_seconds=clock() - started_at,
+                    page_state=page_state,
+                    reason="user stopped result collection",
                 )
             continue
-
-        if candidate is not None:
-            none_streak = 0
-            if not _wait_until(
-                min(deadline, now + stability_interval_seconds),
-                stopping,
-                clock=clock,
-                sleeper=sleeper,
-            ):
-                return ResultCollectionOutcome(
-                    ResultCollectionStatus.STOPPED,
-                    elapsed_seconds=clock() - started_at,
-                )
-            continue
-
-        none_streak += 1
-        if (
-            none_streak >= 2
-            and dismissals < reward_dismiss_limit
-            and _dismiss_reward_popup(
-                controller,
-                image,
-                before_input=before_input,
-                templates=reward_templates,
-                threshold=reward_threshold,
-            )
-        ):
-            dismissals += 1
-            none_streak = 0
-            if not _wait_until(
-                min(deadline, now + reward_click_delay_seconds),
-                stopping,
-                clock=clock,
-                sleeper=sleeper,
-            ):
-                return ResultCollectionOutcome(
-                    ResultCollectionStatus.STOPPED,
-                    elapsed_seconds=clock() - started_at,
-                )
-            continue
-
-        before_input()
-        controller.post_click_key(4).wait()
-        elapsed = now - started_at
-        interval = (
-            slow_interval_seconds
-            if elapsed < slow_phase_seconds
-            else medium_interval_seconds
-        )
+        candidate = None
+        page_state = "unknown"
+        interval = min(slow_interval_seconds, medium_interval_seconds)
         if not _wait_until(
             min(deadline, now + interval),
             stopping,
@@ -391,12 +644,16 @@ def collect_result(
             return ResultCollectionOutcome(
                 ResultCollectionStatus.STOPPED,
                 elapsed_seconds=clock() - started_at,
+                page_state=page_state,
+                reason="user stopped result collection",
             )
 
     return ResultCollectionOutcome(
         ResultCollectionStatus.TIMED_OUT,
         image=last_image,
         elapsed_seconds=clock() - started_at,
+        page_state=page_state,
+        reason=last_reason or "result page was not recognised before timeout",
     )
 
 
@@ -618,29 +875,42 @@ class RealtimeProfilePlay(CustomAction):
             ).runtime_options()
             chart_prediction_enabled = (
                 bool(runtime_options.get("chart_prediction_enabled", False))
-                and sliding_holds_enabled(
-                    str(params.get("difficulty", "Easy"))
-                )
             )
             chart_predict_presses = bool(
                 runtime_options.get("chart_predict_presses", False)
             )
             chart_timeline = None
+            selected_chart = None
             if chart_prediction_enabled:
-                chart_path = (
-                    PROJECT_ROOT / "resource" / "charts" / "song-306-hard.json"
-                )
-                if chart_path.is_file():
-                    chart_timeline = ChartTimeline.from_json(chart_path)
-                    print(
-                        "RealtimeProfilePlay chart_prediction=on",
-                        flush=True,
+                live_run = current_live_run()
+                try:
+                    resolution = resolve_local_chart_for_run(
+                        live_run,
+                        difficulty,
                     )
-                else:
+                    chart_reason = resolution.reason
+                    if resolution.selection is not None:
+                        selected_chart = resolution.selection
+                        chart_timeline = selected_chart.timeline
+                        print(
+                            "RealtimeProfilePlay chart_prediction=on "
+                            f"bestdori_song_id={selected_chart.bestdori_song_id} "
+                            f"difficulty={selected_chart.difficulty} "
+                            f"song={live_run.song_id}",
+                            flush=True,
+                        )
+                    else:
+                        chart_prediction_enabled = False
+                        print(
+                            "RealtimeProfilePlay chart_prediction=off "
+                            f"reason={chart_reason}",
+                            flush=True,
+                        )
+                except (OSError, ValueError, KeyError, TypeError) as exc:
                     chart_prediction_enabled = False
                     print(
                         "RealtimeProfilePlay chart_prediction=off "
-                        "chart file missing",
+                        f"reason=local chart repository invalid: {exc}",
                         flush=True,
                     )
             (
@@ -650,6 +920,13 @@ class RealtimeProfilePlay(CustomAction):
             ) = resolve_life_policy(params, runtime_options)
             debug_recording = bool(
                 params.get("debug_recording") or debug_enabled()
+            )
+            diagnostic_trace = bool(
+                debug_recording
+                or params.get(
+                    "diagnostic_trace",
+                    diagnostic_trace_enabled(),
+                )
             )
             run_mode = _run_mode(params, is_rehearsal=is_rehearsal)
             expected_note_speed = (
@@ -805,17 +1082,24 @@ class RealtimeProfilePlay(CustomAction):
                 controller,
                 lambda: context.tasker.stopping,
             )
-            recorder = (
-                RealtimeDebugRecorder(PROJECT_ROOT / "debug" / "recordings")
-                if debug_recording else None
-            )
+            if debug_recording:
+                recorder = RealtimeDebugRecorder(
+                    PROJECT_ROOT / "debug" / "recordings"
+                )
+            elif diagnostic_trace:
+                recorder = RealtimeDebugRecorder(
+                    PROJECT_ROOT / "debug" / "recordings",
+                    video_enabled=False,
+                )
             if recorder is not None:
                 live_run = update_live_run(
                     recording_path=_relative_artifact_path(recorder.output_dir),
                 )
                 recorder.set_session_metadata(live_run.to_mapping())
                 print(
-                    f"RealtimeProfilePlay debug={recorder.output_dir}",
+                    "RealtimeProfilePlay diagnostics="
+                    f"{recorder.output_dir} "
+                    f"mode={'video' if debug_recording else 'trace-only'}",
                     flush=True,
                 )
             engine = RealtimeEngine(
@@ -909,7 +1193,7 @@ class RealtimeProfilePlay(CustomAction):
                     f"{type(artifact_error).__name__}: {artifact_error}"
                 )
             raise
-        save_screenshot = recorder is not None
+        save_screenshot = debug_recording
         print(
             "RealtimeProfilePlay life_policy "
             f"rehearsal={is_rehearsal} "
@@ -1125,6 +1409,10 @@ class RealtimeProfilePlay(CustomAction):
                     lambda: context.tasker.stopping,
                     before_input=lambda: require_game_foreground(controller),
                     timeout_seconds=60.0,
+                    expected_notes=(
+                        selected_chart.expected_notes
+                        if selected_chart is not None else None
+                    ),
                 )
             except Exception as exc:
                 reason = (
@@ -1159,20 +1447,23 @@ class RealtimeProfilePlay(CustomAction):
                 write_calibration_payload(stopped_payload)
                 print("RealtimeProfilePlay result collection stopped by user", flush=True)
                 return True
-            if outcome.status is ResultCollectionStatus.TIMED_OUT:
+            if outcome.status in {
+                ResultCollectionStatus.TIMED_OUT,
+                ResultCollectionStatus.BLOCKED,
+            }:
                 diagnostic = result_output / (
                     f"realtime-result-timeout-{result_stamp}.png"
                 )
                 if save_screenshot and outcome.image is not None:
                     cv2.imwrite(str(diagnostic), outcome.image)
-                reason = "结算数字在 60 秒内未稳定，已跳过本次读取并继续"
+                reason = outcome.reason or "结算数字在 60 秒内未稳定"
                 timeout_payload = _result_report_payload(
                     None,
                     stats,
                     timing_offset_ms=timing_offset_ms,
                     suggested_timing_offset_ms=None,
                     run_context=live_run,
-                    result_status="timed_out",
+                    result_status=outcome.status.value,
                     reason=reason,
                 )
                 _write_json_atomic(result_report_path, timeout_payload)

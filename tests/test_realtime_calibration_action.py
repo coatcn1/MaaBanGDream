@@ -1,9 +1,14 @@
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
+
+import agent.realtime.calibration_action as calibration_action_module
 from agent.realtime.calibration_action import (
     CalibrationRunner,
+    RealtimeCalibration,
     calibration_round_plan,
     latest_result_report_since,
     result_report_snapshot,
@@ -22,6 +27,7 @@ def test_calibration_round_plan_never_falls_back_to_prepare():
         difficulty="Normal",
         note_speed=3.5,
         calibration_debug=True,
+        diagnostic_trace=True,
         formal=False,
         play_node="RealtimeLivePlayNormal",
         offset=-13,
@@ -38,6 +44,7 @@ def test_calibration_round_plan_never_falls_back_to_prepare():
     assert play_params["run_mode"] == "calibration-rehearsal"
     assert play_params["rehearsal_mode"] is True
     assert play_params["calibration_report"] == str(report)
+    assert play_params["diagnostic_trace"] is True
 
 
 def test_calibration_round_plan_forces_formal_mode_gate():
@@ -57,6 +64,26 @@ def test_calibration_round_plan_forces_formal_mode_gate():
     ]
 
 
+def test_calibration_round_plan_random_preserves_filter_and_excludes_used_songs():
+    _, override = calibration_round_plan(
+        difficulty="Hard",
+        note_speed=5.0,
+        calibration_debug=False,
+        formal=False,
+        play_node="RealtimeLivePlayHard",
+        offset=0,
+        report_path=Path("screencap/calibration-round-test.json"),
+        song_mode="random",
+        excluded_song_ids=["song-a", "song-b"],
+    )
+    assert override["RealtimeLiveSongSelectMarker"]["next"] == [
+        "RealtimeLiveRandomSong",
+    ]
+    params = override["RealtimeLiveRandomSong"]["custom_action_param"]
+    assert params["preserve_filter"] is True
+    assert params["excluded_song_ids"] == ["song-a", "song-b"]
+
+
 def test_calibration_accepts_repeated_song_rehearsals_then_formal():
     records = iter([record("A", slow=20), record("A"), record("A"), record("A")])
     calls = []
@@ -74,14 +101,14 @@ def test_calibration_accepts_repeated_song_rehearsals_then_formal():
     assert [formal for formal, _ in calls] == [False, False, False, True]
 
 
-def test_failed_rehearsal_counts_and_adjusts_offset():
+def test_low_score_rehearsal_still_counts_and_adjusts_offset():
     records = iter([
         record("bad", hit=60, miss=40, slow=20),
         record("A"), record("B"), record("D"),
     ])
     offset, rehearsals, formal = CalibrationRunner(lambda *_: next(records)).run()
     assert [item["song_id"] for item in rehearsals] == ["bad", "A", "B"]
-    assert rehearsals[0]["passed"] is False
+    assert rehearsals[0]["passed"] is True
     assert offset == 12
     assert formal["passed"]
 
@@ -106,25 +133,23 @@ def test_next_round_starts_from_the_live_adjusted_offset():
     assert offset == 15
 
 
-def test_three_failed_rehearsals_stop_before_formal():
+def test_three_low_score_rehearsals_still_reach_single_formal():
     calls = []
     records = iter([
         record("A", hit=60, miss=40),
         record("B", hit=60, miss=40),
         record("C", hit=60, miss=40),
+        record("D"),
     ])
 
     def run_round(formal, offset):
         calls.append(formal)
         return next(records)
 
-    try:
-        CalibrationRunner(run_round).run()
-    except RuntimeError as exc:
-        assert "三首排练全部失败" in str(exc)
-    else:
-        raise AssertionError("all failed rehearsals must stop calibration")
-    assert calls == [False, False, False]
+    _, rehearsals, formal = CalibrationRunner(run_round).run()
+    assert len(rehearsals) == 3
+    assert formal["passed"] is True
+    assert calls == [False, False, False, True]
 
 
 def test_formal_failure_returns_unaccepted_candidate():
@@ -133,30 +158,38 @@ def test_formal_failure_returns_unaccepted_candidate():
     assert formal["passed"] is False
 
 
-def test_calibration_is_bounded_when_no_three_valid_results():
-    runner = CalibrationRunner(lambda *_: {"valid": False}, max_attempts=4)
+def test_invalid_rehearsal_ends_invocation_without_automatic_retry():
+    calls = []
+
+    def run_round(formal, offset):
+        calls.append((formal, offset))
+        return {"valid": False, "completed": False}
+
+    runner = CalibrationRunner(run_round)
     try:
         runner.run()
     except RuntimeError as exc:
-        assert "三次有效排练" in str(exc)
+        assert "排练1" in str(exc)
     else:
-        raise AssertionError("calibration should be bounded")
+        raise AssertionError("invalid result must end this invocation")
+    assert calls == [(False, 0)]
 
 
-def test_invalid_result_rounds_are_retried_within_existing_budget():
+def test_invalid_formal_is_not_retried_in_same_invocation():
     records = iter([
-        {"valid": False, "song_id": "invalid-1"},
         record("A"),
-        {"valid": False, "song_id": "invalid-2"},
-        record("B"), record("C"), record("D"),
+        record("B"), record("C"),
+        {"valid": False, "completed": False, "song_id": "invalid-formal"},
     ])
+    calls = []
 
-    _, rehearsals, formal = CalibrationRunner(
-        lambda *_: next(records), max_attempts=10,
-    ).run()
+    def run_round(formal, offset):
+        calls.append(formal)
+        return next(records)
 
-    assert [item["song_id"] for item in rehearsals] == ["A", "B", "C"]
-    assert formal["song_id"] == "D"
+    with pytest.raises(RuntimeError, match="正式验证"):
+        CalibrationRunner(run_round).run()
+    assert calls == [False, False, False, True]
 
 
 def test_unknown_song_identity_still_counts_when_result_is_valid():
@@ -166,9 +199,7 @@ def test_unknown_song_identity_still_counts_when_result_is_valid():
         record("unknown"), missing_identity, record(None), record("A"),
     ])
 
-    _, rehearsals, formal = CalibrationRunner(
-        lambda *_: next(records), max_attempts=10,
-    ).run()
+    _, rehearsals, formal = CalibrationRunner(lambda *_: next(records)).run()
 
     assert len(rehearsals) == 3
     assert formal["song_id"] == "A"
@@ -202,3 +233,64 @@ def test_calibration_report_selection_is_not_broken_by_filesystem_clock_skew(tmp
 
     assert loaded["song_id"] == "song-clock-skew"
     assert loaded["perfect"] == 90
+
+
+def test_user_stop_is_neutral_success_for_calibration(monkeypatch):
+    action = RealtimeCalibration()
+
+    def stopped(*_args, **_kwargs):
+        raise InterruptedError("校准已停止")
+
+    monkeypatch.setattr(action, "_run", stopped)
+    context = SimpleNamespace(tasker=SimpleNamespace(stopping=True))
+    argv = SimpleNamespace(custom_action_param="{}")
+
+    assert action.run(context, argv) is True
+
+
+def test_user_stop_after_nested_round_is_neutral_before_result_lookup(
+    monkeypatch, capsys, tmp_path,
+):
+    class Job:
+        def wait(self):
+            return self
+
+        def get(self):
+            return object()
+
+    controller = SimpleNamespace(post_screencap=lambda: Job())
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=controller),
+    )
+
+    def run_task(*_args, **_kwargs):
+        context.tasker.stopping = True
+        return SimpleNamespace(status=SimpleNamespace(succeeded=True))
+
+    context.run_task = run_task
+    monkeypatch.setattr(
+        calibration_action_module, "calibration_difficulty", lambda: "Expert",
+    )
+    monkeypatch.setattr(calibration_action_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(calibration_action_module, "debug_enabled", lambda: False)
+    monkeypatch.setattr(calibration_action_module, "calibration_song_mode", lambda: "current")
+    monkeypatch.setattr(calibration_action_module, "calibration_resume_mode", lambda: "auto")
+    monkeypatch.setattr(calibration_action_module, "frame_resolution", lambda _image: (1280, 720))
+    monkeypatch.setattr(
+        calibration_action_module,
+        "verified_game_visual_settings",
+        lambda: SimpleNamespace(
+            note_skin_type=1,
+            tap_effect=1,
+            judgement_assist_effect=True,
+        ),
+    )
+    monkeypatch.setattr(
+        calibration_action_module, "result_report_snapshot", lambda _root: set(),
+    )
+    argv = SimpleNamespace(custom_action_param="{}")
+
+    assert RealtimeCalibration().run(context, argv) is True
+    output = capsys.readouterr().out
+    assert "RealtimeCalibration stopped=true" in output
+    assert "RealtimeCalibration failed=" not in output

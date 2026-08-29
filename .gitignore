@@ -6,6 +6,7 @@
 /config.local.json
 /screencap/
 /profiles/*.json
+/profiles/calibration-sessions/
 !/profiles/.gitkeep
 __pycache__/
 *.py[cod]

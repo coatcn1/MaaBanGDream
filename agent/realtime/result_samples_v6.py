@@ -1,0 +1,29 @@
+"""Expert-result glyphs captured from two 713-note calibration rounds."""
+
+RESULT_CROPS_V6_ZLIB_BASE64 = (
+    "eNrtWsF2IzEI0///NLuHdGNAwuA0fdvWviSeiSYeGyTABm774c1s+frR3JVwP/w6Qh9XRC/8nGJVz5YBP7oU+hx26P799vGH6d3+PXJ99HoZz6EvF7FcHGDDVEAPQ2D53ORV4FgrV8yQXs38r61eMoJ9Go9txwG3SCDrCvLIjPUz6t8T/r3nWEhsuNnE5vfLhkTGbGGJFif1k0PmihsS60tbwd6QjLNK4hwQZkjdxF3Ch8Xt23610BVmx8WN/jgbdE/bmKsEjsi9jQ8uhOU+GAeEv13Vf3lkIKysT/APSb3PxIZZRg9rImYosHGC/TxrLAedYGMIscEyWo0LKbGPh+v4pxqzt1v9v9Kugg5O7Nm8dp/4UV7fpv+qST/gjT5d8WD7ttveI4s8hhI3hStQP5LpItfjXi6ZGJF+pHTRx8DkEU/SAZdUwrFI3J6z1SY/O1b14tDQlIidaCjH2itY+2os9Brt53mgg9bHVnalscqQg016r6TXKSj5wks+CKv0qvT1WIVKPRhuTnfbty2rkl5RpOg7UldEyU3qvxPiwFZErSK7mYi2sBVBs+SqKwx5mfqCxNbsq7FHY8Yr2HMBHiSxvGSBeWBnSkQbAWVO+AciOktE45IQEd31TG7zjPOFK8CnEyfaG7G3qSmlelyXdFgSzBZK7V5EP4xPLapFyf1l6S4mIXFTKGI1Uzra0VhRZrTPwTI2a5VGGdb2WJxhU8m7j7Ua2yl9n2AJj7TXqI0V4dgAS+y5eF+ondMmtvbfAgsb8MaYt/2TL33fdtttOXLZhepBX+uqgz4g1ch4aNjDa+hs95aFLkWgQvYE91gynJxtlYUFRuQu7MEGKyZ+hzV+lOAQ67Zk+9hQDeph81ZKGwuAnvxjZawCqzKolm2oMwLKJpNtuq1o7QvGfOElH0y5RZ2zVGFPvV1YbyhOtiJvrHPbf1K5oTZanwVRdTeoJJUlI0yPKTOpgSS6rrJ+UmZ0HF+IKMEiY7kQIp8odW+GEmsaa2/E+nNMI6yx40oDLM6w7Jxad56j6mXr0yLaxGa7Avh5cWmTtFQAYc+gB7I3omlFgUoLH43VykC9fQZ6kxV87wrxH9kJDdQ="
+)
+
+RESULT_CROPS_V6_LABELS = (
+    (0, 5, 6, 8),
+    (0, 0, 9, 5),
+    (0, 0, 0, 6),
+    (0, 0, 0, 3),
+    (0, 0, 4, 1),
+    (0, 0, 6, 4),
+    (0, 0, 4, 0),
+)
+
+RESULT_CROPS_V7_ZLIB_BASE64 = (
+    "eNrtWtt25CAM8///tPalF7Al2WQ653R34aUlEyXEGNkWRNz2bzdg+fezbVfUr2sHSD+LXrqfYlXvC/txWUG/h436RQm7X8Xyt6BWMHlixobDJkvkR7F379hiG25mgYW1eoNtuwz77S1g4yDm/vw1yLwudi5uGsv11cIwN/8oNs1swqqJr9+H4lf587e1gGTnZDNUO5tF1s6v87rWrwrDEJbxi4HxE7WpRN72H0Y6Fs34z+5mYOa05Ga+kNg696swBx36J5NAeu0a/pdHJsYiwWx/SOnlQDzGyjHnTEVhqZ0H2FBThBMsJdl+zCto5zCHLU6Q7DuZo8yPyZ8UNrZopt/r/aq6sfXnPaih5mhmHe0zypKVJ+v3Fd54zleXxW97T2i0WZTLqUAqSNYjLmwSQVdNlnEMA6FYV+QRUeoLh1XkvocenGCDxphBIMQPYr8I8xybYtoJFq9iY4oN8t7kdaP57bHBsaK64j6pPJRmdrpQ5pWnXYO6FiNr34VFaM4J1wtYvrrttl8sq5IeGslVdSE019MQ+gptyFpSxV2juSpS7VnriJ6DWXkafo/qUCgsTrFndagMv4+w8zq0VoDzOtRgMQ6hscsMPoTK8JtE1Wk6qUXVfg0e1qFecj1K2w/L0EZyve1MfxTtjdjbuCVtHuv1nHT7oPxFg910rTZalwVt+cpk5h1PwmhSs/jL64NWB4az61gHJnzsNdWKjWPsrmHPxkw2OYfaddmorNnPBEsSjjE2LJbpwCOs0oG5dB1tHis483j9vsAbT2pYuSl/22233XTG6A5M+MZEaMg5hjjTYZVBzpwptcjxYqfOcoZFJyv5I+pONH0fZfu6A66lBRYptveGxYo6LgvvDJsPFK3f/0Ys29rHbMyAEKAHtpIlD92JdljUXWzjGwSLHksyd7Lz3q+FfBiEnG30KYY9YsnzHo1Vyn0mnfkBLq+c3ur2tl+jF7iKIaZygSkKAHugOmNDnjRVpzVVxc/lAjEoE0QpMXcnzoy4r6p2XfJz9pphMcGGwOIRlrjLcMxU051gpfQ0sHOHbXzjHJvcChMsOTYm7byobmQdAcOjyzGU+/T5FckbJsY2hGVrgr+n/QGGi8wH"
+)
+
+RESULT_CROPS_V7_LABELS = (
+    (0, 5, 6, 5),
+    (0, 0, 8, 5),
+    (0, 0, 0, 4),
+    (0, 0, 0, 5),
+    (0, 0, 5, 4),
+    (0, 0, 4, 3),
+    (0, 0, 5, 1),
+)
