@@ -76,12 +76,25 @@ def test_launcher_patches_mfa_user_stop_status_race():
     assert "git clone" not in patcher
     assert ".maabangdream-backup" in patcher
     assert "MFAAvalonia.Core.dll" in patcher
+    assert "MFAAvalonia.Desktop\\MFAAvalonia.Desktop.csproj" in patcher
+    assert "MFAAvalonia.exe" in patcher
+    assert "patched_executable_sha256" in patcher
+    assert "-p:Platform=x64" in patcher
     assert "git -c core.quotePath=false -C $SourceRoot ls-files" in patcher
     assert "SHA256]::Create()" in patcher
     assert "ComputeHash($fingerprintBytes)" in patcher
     assert "SHA256]::HashData" not in patcher
     assert "Convert]::ToHexString" not in patcher
     assert "when (token.IsCancellationRequested)" in patch
+
+
+def test_readme_displays_the_project_logo():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    logo = ROOT / "docs/assets/maabangdream-logo.png"
+
+    assert logo.is_file()
+    assert 'src="docs/assets/maabangdream-logo.png"' in readme
+    assert 'alt="MaaBanGDream Logo"' in readme
 
 
 def test_launcher_scopes_process_cleanup_authorization_to_one_mfa_session():

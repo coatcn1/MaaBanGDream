@@ -1,4 +1,8 @@
-# MaaBanGDream
+<p align="center">
+  <img src="docs/assets/maabangdream-logo.png" alt="MaaBanGDream Logo" width="320">
+</p>
+
+<h1 align="center">MaaBanGDream</h1>
 
 基于 [MaaFramework](https://github.com/MaaAssistantArknights/MaaFramework) 的《BanG Dream! 少女乐团派对！》自动化项目。
 

@@ -11,6 +11,7 @@ $customBranch = 'feature/performance-visual-settings'
 $customizationCommit = 'd7b381b2fa6a09e140d925fb1504bac19ca1f921'
 $patch = Join-Path $projectRoot 'patches\mfaavalonia-v2.12.0-stop-status.patch'
 $deployedAssembly = Join-Path $MfaRoot 'MFAAvalonia.Core.dll'
+$deployedExecutable = Join-Path $MfaRoot 'MFAAvalonia.exe'
 $marker = Join-Path $MfaRoot '.maabangdream-mfa-stop-status.json'
 $backupDirectory = Join-Path $MfaRoot '.maabangdream-backup'
 
@@ -19,7 +20,9 @@ if (-not $SourceRoot) {
 }
 
 $sourceGit = Join-Path $SourceRoot '.git'
-$project = Join-Path $SourceRoot 'MFAAvalonia\MFAAvalonia.csproj'
+$coreProject = Join-Path $SourceRoot 'MFAAvalonia\MFAAvalonia.csproj'
+$desktopProject = Join-Path $SourceRoot 'MFAAvalonia.Desktop\MFAAvalonia.Desktop.csproj'
+$applicationIcon = Join-Path $SourceRoot 'MFAAvalonia\Assets\logo.ico'
 $taskSource = Join-Path $SourceRoot 'MFAAvalonia\Helper\ValueType\MFATask.cs'
 $settingsSource = Join-Path $SourceRoot 'MFAAvalonia\Views\Pages\SettingsView.axaml'
 $versionCheckerSource = Join-Path $SourceRoot 'MFAAvalonia\Helper\VersionChecker.cs'
@@ -31,8 +34,11 @@ foreach ($required in (
     $MfaRoot,
     $patch,
     $deployedAssembly,
+    $deployedExecutable,
     $sourceGit,
-    $project,
+    $coreProject,
+    $desktopProject,
+    $applicationIcon,
     $taskSource,
     $settingsSource,
     $versionCheckerSource,
@@ -114,14 +120,16 @@ $customSourceFingerprint = [BitConverter]::ToString($fingerprintHash).Replace('-
 if (Test-Path -LiteralPath $marker) {
     $metadata = Get-Content -LiteralPath $marker -Raw -Encoding utf8 | ConvertFrom-Json
     $currentHash = (Get-FileHash -LiteralPath $deployedAssembly -Algorithm SHA256).Hash
+    $currentExecutableHash = (Get-FileHash -LiteralPath $deployedExecutable -Algorithm SHA256).Hash
     if (
         $metadata.source_commit -eq $sourceCommit -and
         $metadata.task_source_sha256 -eq $taskSourceHash -and
         $metadata.custom_source_fingerprint -eq $customSourceFingerprint -and
         $metadata.patched_sha256 -eq $currentHash -and
+        $metadata.patched_executable_sha256 -eq $currentExecutableHash -and
         $metadata.customization_commit -eq $customizationCommit
     ) {
-        Write-Host 'Customized MFA stop-status patch is already deployed.'
+        Write-Host 'Customized MFA runtime and branding are already deployed.'
         return
     }
 }
@@ -131,14 +139,18 @@ if (-not ($sdks -match '^10\.')) {
     throw 'Building the customized MFAAvalonia stop-status fix requires .NET SDK 10.'
 }
 
-& dotnet build $project -c Release --no-self-contained
+& dotnet build $desktopProject -c Release -p:Platform=x64 --no-self-contained
 if ($LASTEXITCODE -ne 0) {
-    throw 'Unable to build the customized MFAAvalonia assembly.'
+    throw 'Unable to build the customized MFAAvalonia runtime.'
 }
 
-$builtAssembly = Join-Path $SourceRoot 'MFAAvalonia\bin\Release\net10.0\MFAAvalonia.Core.dll'
+$builtAssembly = Join-Path $SourceRoot 'MFAAvalonia\bin\x64\Release\net10.0\MFAAvalonia.Core.dll'
+$builtExecutable = Join-Path $SourceRoot 'bin\x64\Release\MFAAvalonia.exe'
 if (-not (Test-Path -LiteralPath $builtAssembly)) {
     throw "Customized MFAAvalonia assembly was not produced: $builtAssembly"
+}
+if (-not (Test-Path -LiteralPath $builtExecutable)) {
+    throw "Customized MFAAvalonia executable was not produced: $builtExecutable"
 }
 
 New-Item -ItemType Directory -Force -Path $backupDirectory | Out-Null
@@ -147,9 +159,16 @@ $backupAssembly = Join-Path $backupDirectory "MFAAvalonia.Core.$currentHash.dll"
 if (-not (Test-Path -LiteralPath $backupAssembly)) {
     Copy-Item -LiteralPath $deployedAssembly -Destination $backupAssembly
 }
+$currentExecutableHash = (Get-FileHash -LiteralPath $deployedExecutable -Algorithm SHA256).Hash
+$backupExecutable = Join-Path $backupDirectory "MFAAvalonia.$currentExecutableHash.exe"
+if (-not (Test-Path -LiteralPath $backupExecutable)) {
+    Copy-Item -LiteralPath $deployedExecutable -Destination $backupExecutable
+}
 
 Copy-Item -LiteralPath $builtAssembly -Destination $deployedAssembly -Force
+Copy-Item -LiteralPath $builtExecutable -Destination $deployedExecutable -Force
 $patchedHash = (Get-FileHash -LiteralPath $deployedAssembly -Algorithm SHA256).Hash
+$patchedExecutableHash = (Get-FileHash -LiteralPath $deployedExecutable -Algorithm SHA256).Hash
 [ordered]@{
     source_kind = 'custom-performance-profile-settings'
     source_branch = $customBranch
@@ -159,7 +178,9 @@ $patchedHash = (Get-FileHash -LiteralPath $deployedAssembly -Algorithm SHA256).H
     custom_source_fingerprint = $customSourceFingerprint
     patch = 'mfaavalonia-v2.12.0-stop-status.patch'
     patched_sha256 = $patchedHash
+    patched_executable_sha256 = $patchedExecutableHash
     backup = $backupAssembly
+    backup_executable = $backupExecutable
 } | ConvertTo-Json | Set-Content -LiteralPath $marker -Encoding utf8
 
-Write-Host "Customized MFAAvalonia deployed with performance settings and stop-status fix: $patchedHash"
+Write-Host "Customized MFAAvalonia runtime deployed with branding, performance settings, and stop-status fix: $patchedHash / $patchedExecutableHash"
