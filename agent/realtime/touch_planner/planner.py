@@ -229,6 +229,19 @@ class RealtimePlanner:
         self._chart_input_finished = False
         return actions
 
+    def recover_touch_state(self, now: float) -> None:
+        """Synchronize planner state after an out-of-band device release.
+
+        Keep visual tracker identities and the calibrated chart clock: both
+        remain valid observations of the current song.  Only state which
+        claims that a finger is physically down may survive neither the
+        controller release nor the next planning frame.
+        """
+        self._state.reset()
+        if self._chart_predictor is not None:
+            self._chart_predictor.recover_touch_state()
+        self._record_diagnostic("planner_touch_state_recovered", now)
+
     # Backward-compatible accessors for tests and the engine.
     @property
     def judgement_y(self) -> float:

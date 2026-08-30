@@ -11,9 +11,10 @@ git status --short
 git diff --check
 ```
 
-Every code, dependency, workflow, or behavior change must update `README.md` in
-the same branch. Keep its project status, dated change log, and future plan in
-sync with the verified result. An outdated README blocks the commit and merge.
+Every user-visible code, dependency, workflow, or behavior change must keep the
+concise overview in `README.md` and the dated record in `CHANGELOG.md` in sync
+with the verified result. Do not copy detailed investigation logs into the
+README; preserve durable engineering constraints in `AGENTS.md` instead.
 
 Review the complete diff and stage only the intended files. Local emulator paths,
 credentials, logs, screenshots, profiles, virtual environments, and UI runtimes

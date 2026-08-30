@@ -30,6 +30,7 @@ class Planner:
     def __init__(self):
         self.updates = 0
         self.resets = 0
+        self.touch_recoveries = 0
         self.timing_offset_ms = 0
         self.offset_changes = []
         self.has_active_holds = False
@@ -41,6 +42,9 @@ class Planner:
     def reset(self, now):
         self.resets += 1
         return [TouchAction(ActionKind.UP, 5, now, 5)]
+
+    def recover_touch_state(self, now):
+        self.touch_recoveries += 1
 
     def set_timing_offset_ms(self, value):
         self.timing_offset_ms = value
@@ -69,11 +73,25 @@ class ResetTrackingTouch(Touch):
         self.force_release_calls = 0
         self.emergency_release_calls = 0
 
+    def dispatch(self, actions):
+        super().dispatch(actions)
+        for action in actions:
+            contact = action.lane if action.contact is None else action.contact
+            if action.kind is ActionKind.DOWN:
+                self.active_contacts.add(contact)
+            elif action.kind is ActionKind.UP:
+                self.active_contacts.discard(contact)
+
     def force_release_all(self):
         self.force_release_calls += 1
 
     def emergency_release_all(self):
         self.emergency_release_calls += 1
+        self.active_contacts.clear()
+
+    @property
+    def has_active_or_pending_contacts(self):
+        return bool(self.active_contacts)
 
 
 def build(fail=False):
@@ -185,6 +203,7 @@ def test_engine_uses_nonblocking_emergency_release_on_severe_life_drop():
     clock = Clock()
     planner = Planner()
     touch = ResetTrackingTouch()
+    touch.active_contacts.add(1)
     engine = RealtimeEngine(Detector(), planner, touch, clock)
 
     class FallingLife:
@@ -218,6 +237,7 @@ def test_engine_resets_touch_before_rapid_life_loss_reaches_safety_threshold():
     clock = Clock()
     planner = Planner()
     touch = ResetTrackingTouch()
+    touch.active_contacts.add(1)
     engine = RealtimeEngine(Detector(), planner, touch, clock)
 
     class RapidlyFallingLife:
@@ -252,6 +272,127 @@ def test_engine_resets_touch_before_rapid_life_loss_reaches_safety_threshold():
 
     assert touch.emergency_release_calls == 1
     assert stats.touch_resets == 1
+
+
+def test_engine_does_not_repeat_touch_reset_while_life_stays_low():
+    clock = Clock()
+    planner = Planner()
+    touch = ResetTrackingTouch()
+    touch.active_contacts.add(1)
+    engine = RealtimeEngine(Detector(), planner, touch, clock)
+
+    class FallingThenStableLife:
+        def __init__(self):
+            self.frames = 0
+
+        def detect(self, image):
+            self.frames += 1
+            return LifeReading(True, 1000 if self.frames <= 3 else 250)
+
+    engine.life_detector = FallingThenStableLife()
+    engine.life_guard = LifeGuard(confirm_frames=3)
+
+    def capture():
+        clock.value += 0.02
+        return np.zeros((720, 1280, 3), dtype=np.uint8)
+
+    stats = engine.run(
+        capture,
+        lambda: False,
+        duration_seconds=7,
+        target_fps=60,
+    )
+
+    assert touch.emergency_release_calls == 1
+    assert planner.touch_recoveries == 1
+    assert stats.touch_resets == 1
+
+
+def test_engine_recovers_planner_state_before_planning_drop_frame():
+    clock = Clock()
+
+    class StatefulPlanner(Planner):
+        def __init__(self):
+            super().__init__()
+            self.active = False
+
+        def update(self, notes, now):
+            self.updates += 1
+            if not self.active:
+                self.active = True
+                return [
+                    TouchAction(ActionKind.DOWN, 1, now, 1),
+                    TouchAction(ActionKind.TAP, 2, now),
+                ]
+            return [TouchAction(ActionKind.MOVE, 1, now, 1)]
+
+        def recover_touch_state(self, now):
+            super().recover_touch_state(now)
+            self.active = False
+
+    class FallingLife:
+        def __init__(self):
+            self.frames = 0
+
+        def detect(self, image):
+            self.frames += 1
+            return LifeReading(True, 1000 if self.frames <= 3 else 250)
+
+    planner = StatefulPlanner()
+    touch = ResetTrackingTouch()
+    engine = RealtimeEngine(Detector(), planner, touch, clock)
+    engine.life_detector = FallingLife()
+    engine.life_guard = LifeGuard(confirm_frames=3)
+
+    def capture():
+        clock.value += 0.02
+        return np.zeros((720, 1280, 3), dtype=np.uint8)
+
+    engine.run(
+        capture,
+        lambda: planner.updates >= 2,
+        duration_seconds=1,
+        target_fps=60,
+    )
+
+    planned_batches = [batch for batch in touch.batches if batch]
+    assert planner.touch_recoveries == 1
+    assert planned_batches[0][0].kind is ActionKind.DOWN
+    assert planned_batches[1][0].kind is ActionKind.DOWN
+
+
+def test_engine_skips_touch_reset_after_all_contacts_have_finished():
+    clock = Clock()
+    planner = Planner()
+    touch = ResetTrackingTouch()
+    engine = RealtimeEngine(Detector(), planner, touch, clock)
+
+    class FallingLife:
+        def __init__(self):
+            self.frames = 0
+
+        def detect(self, image):
+            self.frames += 1
+            return LifeReading(True, 1000 if self.frames <= 3 else 722)
+
+    engine.life_detector = FallingLife()
+    engine.life_guard = LifeGuard(confirm_frames=3)
+
+    def capture():
+        clock.value += 0.02
+        return np.zeros((720, 1280, 3), dtype=np.uint8)
+
+    stats = engine.run(
+        capture,
+        lambda: planner.updates >= 2,
+        duration_seconds=1,
+        target_fps=60,
+    )
+
+    assert touch.active_contacts == set()
+    assert touch.emergency_release_calls == 0
+    assert planner.touch_recoveries == 0
+    assert stats.touch_resets == 0
 
 
 @pytest.mark.parametrize("failure_stage", ["capture", "detector", "planner", "dispatch"])
@@ -891,6 +1032,63 @@ def test_engine_never_dispatches_before_alive_life_is_confirmed():
     assert not stats.aborted_for_life
     assert planner.updates == 0
     assert not [batch for batch in touch.batches if batch[0].kind is ActionKind.TAP]
+
+
+def test_engine_fails_fast_and_records_frame_when_playfield_never_appears():
+    engine, clock, planner, touch, _ = build()
+
+    class NeverVisible:
+        def detect(self, image):
+            return LifeReading(False)
+
+    class Recorder:
+        def __init__(self):
+            self.records = []
+            self.closed = 0
+
+        def record(
+            self, image, timestamp, notes, actions, life_status,
+            diagnostics, timing_state, life_value=None, touch_state=None,
+        ):
+            self.records.append({
+                "image": image.copy(),
+                "diagnostics": diagnostics,
+                "life_status": life_status,
+            })
+
+        def close(self):
+            self.closed += 1
+
+    recorder = Recorder()
+    engine.life_detector = NeverVisible()
+    engine.life_guard = LifeGuard(confirm_frames=3)
+    engine.debug_recorder = recorder
+
+    def capture():
+        clock.value += 0.02
+        return np.full((720, 1280, 3), 37, dtype=np.uint8)
+
+    stats = engine.run(
+        capture,
+        lambda: False,
+        duration_seconds=600,
+        target_fps=60,
+        startup_timeout_seconds=1,
+    )
+
+    assert stats.startup_timed_out
+    assert not stats.completed
+    assert stats.processed_frames < 100
+    assert stats.dispatched_actions == 0
+    assert planner.updates == 0
+    assert "开演后 1 秒仍未识别到生命条" in stats.terminal_reason
+    assert len(recorder.records) == 1
+    assert recorder.records[0]["diagnostics"][0]["event"] == (
+        "playfield_start_timeout"
+    )
+    assert int(recorder.records[0]["image"][0, 0, 0]) == 37
+    assert recorder.closed == 1
+    assert touch.closed == 1
 
 
 def test_engine_completes_after_confirmed_playfield_disappears():

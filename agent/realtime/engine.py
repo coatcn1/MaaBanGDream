@@ -71,6 +71,7 @@ class EngineStats:
     cleanup_failed: bool = False
     cleanup_errors: tuple[str, ...] = ()
     recorder_error: str | None = None
+    startup_timed_out: bool = False
 
 
 class RealtimeEngine:
@@ -115,11 +116,14 @@ class RealtimeEngine:
         touch_reset_recent_action_seconds: float = 0.35,
         touch_reset_drop_threshold: int = 180,
         touch_reset_drop_window_seconds: float = 2.0,
+        startup_timeout_seconds: float = 20.0,
     ) -> EngineStats:
         if duration_seconds is not None and not 1 <= duration_seconds <= 600:
             raise ValueError("duration_seconds 必须在 1..600 之间")
         if not 15 <= target_fps <= 120:
             raise ValueError("target_fps 必须在 15..120 之间")
+        if not 1 <= startup_timeout_seconds <= 120:
+            raise ValueError("startup_timeout_seconds 必须在 1..120 之间")
         interval = 1 / target_fps
         started_at = self.clock()
         deadline = (
@@ -133,6 +137,7 @@ class RealtimeEngine:
         aborted_for_life = False
         completed = False
         life_depleted = False
+        startup_timed_out = False
         below_threshold_streak = 0
         touch_resets = 0
         last_touch_reset_at = float("-inf")
@@ -213,6 +218,38 @@ class RealtimeEngine:
                 }],
                 timing_state,
                 life_value,
+                touch_state,
+            )
+
+        def record_startup_timeout_frame(
+            image: np.ndarray,
+            now: float,
+            *,
+            life_status: str,
+        ) -> None:
+            """Persist one diagnostic frame before normal trace capture starts."""
+            if self.debug_recorder is None:
+                return
+            trace_state = getattr(self.touch, "trace_state", None)
+            touch_state = trace_state() if trace_state is not None else {
+                "active_contacts": sorted(
+                    getattr(self.touch, "active_contacts", ())
+                ),
+            }
+            self.debug_recorder.record(
+                image,
+                now,
+                [],
+                [],
+                life_status,
+                [{
+                    "event": "playfield_start_timeout",
+                    "timestamp": now,
+                    "timeout_seconds": startup_timeout_seconds,
+                    "reason": "life bar was never confirmed after live start",
+                }],
+                {},
+                None,
                 touch_state,
             )
 
@@ -320,6 +357,7 @@ class RealtimeEngine:
                 ) * 1000.0,
                 stage_timings_ms=stage_timings_ms,
                 frame_interval_outliers=tuple(frame_interval_outliers),
+                startup_timed_out=startup_timed_out,
             )
 
         synchronize_touch = getattr(self.touch, "synchronize", None)
@@ -423,11 +461,87 @@ class RealtimeEngine:
                         # non-zero life bar has been confirmed.
                         if not self.life_guard.alive_confirmed:
                             frames += 1
+                            if now - started_at >= startup_timeout_seconds:
+                                startup_timed_out = True
+                                record_startup_timeout_frame(
+                                    image,
+                                    now,
+                                    life_status=(
+                                        life_status or LifeStatus.UNKNOWN.value
+                                    ),
+                                )
+                                break
                             continue
                 finally:
                     record_stage_sample(
                         "life", (self.clock() - stage_started) * 1000
                     )
+                diagnostics: list[dict[str, object]] = []
+                reset_touch = getattr(
+                    self.touch, "emergency_release_all", None
+                )
+                if reset_touch is not None:
+                    has_live_touches = getattr(
+                        self.touch,
+                        "has_active_or_pending_contacts",
+                        True,
+                    )
+                    if callable(has_live_touches):
+                        has_live_touches = has_live_touches()
+                    recent_peak_life = max(
+                        (
+                            value
+                            for _sample_at, value in touch_reset_life_samples
+                        ),
+                        default=(reading.value if reading is not None else 0),
+                    )
+                    rapid_life_drop = (
+                        reading is not None
+                        and reading.visible
+                        and recent_peak_life - reading.value
+                        >= touch_reset_drop_threshold
+                    )
+                    life_drop_reset = (
+                        self.life_guard is not None
+                        and self.life_guard.alive_confirmed
+                        and reading is not None
+                        and rapid_life_drop
+                        and bool(has_live_touches)
+                        and now - last_transient_action_at
+                        <= touch_reset_recent_action_seconds
+                        and now - last_touch_reset_at
+                        >= touch_reset_cooldown_seconds
+                    )
+                    if life_drop_reset:
+                        # Device and planner touch state form one boundary.  A
+                        # device-only release leaves the next planned MOVE
+                        # referring to a contact that no longer exists; the
+                        # controller then has to guess a DOWN and the gesture
+                        # can remain broken for the rest of the hold.
+                        reset_touch()
+                        recover_planner = getattr(
+                            self.planner, "recover_touch_state", None
+                        )
+                        if recover_planner is not None:
+                            recover_planner(now)
+                        touch_resets += 1
+                        last_touch_reset_at = now
+                        diagnostics.append({
+                            "event": "touch_reset",
+                            "timestamp": now,
+                            "reason": "rapid-life-drop",
+                            "life_value": reading.value,
+                            "recent_peak_life": recent_peak_life,
+                            "life_drop": recent_peak_life - reading.value,
+                        })
+                        touch_reset_life_samples.clear()
+                        touch_reset_life_samples.append((now, reading.value))
+                        print(
+                            "RealtimeTouchReset reason=rapid-life-drop"
+                            + f" life_value={reading.value}"
+                            + f" recent_peak={recent_peak_life}",
+                            flush=True,
+                        )
                 stage_started = self.clock()
                 notes = self.detector.detect(image, now)
                 record_stage_sample(
@@ -435,7 +549,7 @@ class RealtimeEngine:
                 )
                 stage_started = self.clock()
                 actions = self.planner.update(notes, now)
-                diagnostics = self.planner.drain_diagnostics()
+                diagnostics.extend(self.planner.drain_diagnostics())
                 record_stage_sample(
                     "planner", (self.clock() - stage_started) * 1000
                 )
@@ -462,67 +576,6 @@ class RealtimeEngine:
                     hold_feedback_block_until = max(
                         hold_feedback_block_until, now + .4
                     )
-                reset_touch = getattr(
-                    self.touch, "emergency_release_all", None
-                )
-                if reset_touch is not None:
-                    recent_peak_life = max(
-                        (
-                            value
-                            for _sample_at, value in touch_reset_life_samples
-                        ),
-                        default=(reading.value if reading is not None else 0),
-                    )
-                    rapid_life_drop = (
-                        reading is not None
-                        and reading.visible
-                        and recent_peak_life - reading.value
-                        >= touch_reset_drop_threshold
-                    )
-                    low_life = (
-                        reading is not None
-                        and reading.visible
-                        and reading.value <= touch_reset_life_threshold
-                    )
-                    life_drop_reset = (
-                        self.life_guard is not None
-                        and self.life_guard.alive_confirmed
-                        and reading is not None
-                        and (low_life or rapid_life_drop)
-                        and now - last_transient_action_at
-                        <= touch_reset_recent_action_seconds
-                        and now - last_touch_reset_at
-                        >= touch_reset_cooldown_seconds
-                    )
-                    if life_drop_reset:
-                        # Clear the stale device-side gesture before this
-                        # frame's planned actions are submitted.  Resetting
-                        # after dispatch cancels the very TAP/HOLD that should
-                        # recover the song and only notices the failure once
-                        # life is already near zero.
-                        reset_touch()
-                        touch_resets += 1
-                        last_touch_reset_at = now
-                        reset_reason = (
-                            "low-life" if low_life else "rapid-life-drop"
-                        )
-                        diagnostics.append({
-                            "event": "touch_reset",
-                            "timestamp": now,
-                            "reason": reset_reason,
-                            "life_value": reading.value,
-                            "recent_peak_life": recent_peak_life,
-                            "life_drop": recent_peak_life - reading.value,
-                        })
-                        touch_reset_life_samples.clear()
-                        touch_reset_life_samples.append((now, reading.value))
-                        print(
-                            "RealtimeTouchReset"
-                            + f" reason={reset_reason}"
-                            + f" life_value={reading.value}"
-                            + f" recent_peak={recent_peak_life}",
-                            flush=True,
-                        )
                 stage_started = self.clock()
                 if (
                     self.timing_feedback_detector is not None
@@ -652,6 +705,11 @@ class RealtimeEngine:
                 terminal_reason = "生命值触发安全停止"
             elif completed:
                 terminal_reason = "已识别演奏结束并进入结算"
+            elif startup_timed_out:
+                terminal_reason = (
+                    f"开演后 {startup_timeout_seconds:g} 秒仍未识别到生命条，"
+                    "可能停留在加载页、网络弹窗或非演奏画面"
+                )
             elif duration_seconds is not None:
                 terminal_reason = (
                     f"演奏超过安全时限 {duration_seconds:g} 秒，"

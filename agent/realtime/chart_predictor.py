@@ -43,13 +43,52 @@ TRUSTED_CALIBRATION_REASONS = {
 # behaviour for a genuinely wrong chart without abandoning a correct chart on
 # the nine-action burst observed in the Hard representative trace.
 MAX_CONSECUTIVE_VISUAL_CHART_MISMATCHES = 8
+MAX_EARLY_PHASE_RELOCKS = 1
+EARLY_PHASE_RELOCK_WINDOW_S = 12.0
+PHASE_RELOCK_MAD_LIMIT_S = 0.020
+PHASE_RELOCK_MAX_SHIFT_S = 0.200
+PHASE_RELOCK_MIN_LANES = 2
 HOLD_HEAD_CLAIM_WINDOW_S = 0.25
+MAX_EARLY_VISUAL_HOLD_HEAD_S = 0.08
 POST_CHART_INPUT_GRACE_S = 0.75
 MIN_PROVISIONAL_RESCUE_TRACKS = 6
 MIN_PROVISIONAL_RESCUE_JUDGEMENTS = 4
 PROVISIONAL_OFFSET_WINDOW_S = 0.12
 PROVISIONAL_MAD_LIMIT_S = 0.08
 PROVISIONAL_CROSSING_WINDOW_S = 0.06
+PRELOCK_SEMANTIC_OFFSET_WINDOW_S = 0.06
+MIN_ADJACENT_ZIGZAG_TRANSITIONS = 3
+
+
+def _adjacent_zigzag_anchor(
+    path: tuple[tuple[float, float], ...],
+) -> tuple[int, int] | None:
+    """Return the two judgement lanes for a one-lane sawtooth slide.
+
+    Garupa accepts a slide connection from the target lane and either
+    neighbouring lane.  Repeatedly moving an already-held contact for a
+    1-2-1-2 sawtooth adds input traffic but no judgement value, so these
+    paths can use the midpoint shared by both judgement windows.
+    """
+    if len(path) < MIN_ADJACENT_ZIGZAG_TRANSITIONS + 1:
+        return None
+    lanes: list[int] = []
+    for _time_s, lane_value in path:
+        lane = round(lane_value)
+        if abs(lane_value - lane) > 0.01:
+            return None
+        lanes.append(lane)
+    lower = min(lanes)
+    upper = max(lanes)
+    if upper - lower != 1:
+        return None
+    transitions = sum(
+        previous != current
+        for previous, current in zip(lanes, lanes[1:])
+    )
+    if transitions < MIN_ADJACENT_ZIGZAG_TRANSITIONS:
+        return None
+    return lower, upper
 
 
 class ChartPredictor:
@@ -89,6 +128,11 @@ class ChartPredictor:
         self.disable_reason: str | None = None
         self._phase_residuals: list[float] = []
         self._mismatch_streak = 0
+        self._mismatch_direction: int | None = None
+        self._mismatch_residuals: list[tuple[float, int]] = []
+        self._calibrated_at_relative_s: float | None = None
+        self._phase_relock_count = 0
+        self._pending_phase_relock: dict | None = None
         self._disabled_diagnosed = False
         self._claimed_hold_note_indices: set[int] = set()
         self._track_phase_candidates: dict[
@@ -97,6 +141,10 @@ class ChartPredictor:
         self._sampled_track_ids: set[int] = set()
         self._consumed_judgements: set[tuple[int, str]] = set()
         self._phase_validation_track_ids: set[int] = set()
+        self._phase_validation_judgement_indices: set[int] = set()
+        self._prelock_semantic_offset_s: float | None = None
+        self._prelock_semantic_judgement_indices: set[int] = set()
+        self._pending_opening_semantic_lock: dict | None = None
 
     def reset(self) -> None:
         self.calibrated = False
@@ -116,12 +164,25 @@ class ChartPredictor:
         self.disable_reason = None
         self._phase_residuals = []
         self._mismatch_streak = 0
+        self._mismatch_direction = None
+        self._mismatch_residuals = []
+        self._calibrated_at_relative_s = None
+        self._phase_relock_count = 0
+        self._pending_phase_relock = None
         self._disabled_diagnosed = False
         self._claimed_hold_note_indices = set()
         self._track_phase_candidates = {}
         self._sampled_track_ids = set()
         self._consumed_judgements = set()
         self._phase_validation_track_ids = set()
+        self._phase_validation_judgement_indices = set()
+        self._prelock_semantic_offset_s = None
+        self._prelock_semantic_judgement_indices = set()
+        self._pending_opening_semantic_lock = None
+
+    def recover_touch_state(self) -> None:
+        """Forget chart contacts released outside the normal planner flow."""
+        self.expected_hold_tail.clear()
 
     def _relative(self, engine_time: float) -> float:
         """Convert an absolute monotonic engine time to song-relative time."""
@@ -195,18 +256,93 @@ class ChartPredictor:
         # 80-150 ms bias.  Only projected crossings in ``observe_tracks`` may
         # establish or adjust song phase.
 
-    def _record_phase_residual(self, residual: float, lane: int) -> None:
+    def _try_early_phase_relock(self, relative_time_s: float | None) -> bool:
+        """Apply one bounded low-MAD correction shortly after initial lock.
+
+        Eight unique chart judgements that agree in direction and magnitude
+        across multiple lanes are stronger evidence of an early off-by-one
+        phase choice than of a wrong local chart.  Only the first such burst,
+        within a bounded window, may move the song clock.  Any later repeated
+        disagreement still fails closed to visual input.
+        """
+        if (
+            self._phase_relock_count >= MAX_EARLY_PHASE_RELOCKS
+            or self._calibrated_at_relative_s is None
+            or relative_time_s is None
+            or relative_time_s < self._calibrated_at_relative_s
+            or relative_time_s - self._calibrated_at_relative_s
+            > EARLY_PHASE_RELOCK_WINDOW_S
+        ):
+            return False
+        evidence = self._mismatch_residuals[
+            -MAX_CONSECUTIVE_VISUAL_CHART_MISMATCHES:
+        ]
+        if (
+            len(evidence) < MAX_CONSECUTIVE_VISUAL_CHART_MISMATCHES
+            or len({lane for _residual, lane in evidence})
+            < PHASE_RELOCK_MIN_LANES
+        ):
+            return False
+        residuals = [residual for residual, _lane in evidence]
+        median = float(statistics.median(residuals))
+        mad = float(statistics.median(
+            abs(residual - median) for residual in residuals
+        ))
+        if (
+            mad > PHASE_RELOCK_MAD_LIMIT_S
+            or abs(median) > PHASE_RELOCK_MAX_SHIFT_S
+        ):
+            return False
+        previous_offset = self.song_offset_s
+        self.song_offset_s += median
+        self._phase_relock_count += 1
+        self._pending_phase_relock = {
+            "previous_offset_ms": round(previous_offset * 1000, 1),
+            "offset_ms": round(self.song_offset_s * 1000, 1),
+            "correction_ms": round(median * 1000, 1),
+            "mad_ms": round(mad * 1000, 1),
+            "samples": len(evidence),
+            "lanes": len({lane for _residual, lane in evidence}),
+        }
+        self._mismatch_streak = 0
+        self._mismatch_direction = None
+        self._mismatch_residuals = []
+        self._phase_residuals = []
+        return True
+
+    def _record_phase_residual(
+        self,
+        residual: float,
+        lane: int,
+        *,
+        relative_time_s: float | None = None,
+    ) -> None:
         if abs(residual) > 0.08:
+            direction = 1 if residual > 0 else -1
+            if self._mismatch_direction != direction:
+                # Song-clock drift is directional.  Dense note projection can
+                # jump to the neighbouring same-lane judgement and produce a
+                # burst of large residuals on both sides of zero; treating
+                # those as one streak disabled the correct chart in the fatal
+                # Hibana Expert trace.  A sign reversal starts new evidence.
+                self._mismatch_streak = 0
+                self._mismatch_direction = direction
+                self._mismatch_residuals = []
             self._mismatch_streak += 1
+            self._mismatch_residuals.append((residual, lane))
             if self._mismatch_streak >= MAX_CONSECUTIVE_VISUAL_CHART_MISMATCHES:
+                if self._try_early_phase_relock(relative_time_s):
+                    return
                 self.disabled_for_run = True
                 self.disable_reason = (
-                    f"{MAX_CONSECUTIVE_VISUAL_CHART_MISMATCHES} credible "
-                    f"phase residuals exceeded 80ms (lane={lane}, "
+                    f"{MAX_CONSECUTIVE_VISUAL_CHART_MISMATCHES} same-direction "
+                    f"credible phase residuals exceeded 80ms (lane={lane}, "
                     f"residual_ms={residual * 1000:.1f})"
                 )
             return
         self._mismatch_streak = 0
+        self._mismatch_direction = None
+        self._mismatch_residuals = []
         self._phase_residuals.append(residual)
         self._phase_residuals = self._phase_residuals[-9:]
         if len(self._phase_residuals) >= 4:
@@ -258,9 +394,23 @@ class ChartPredictor:
                 )
                 if judgement is None or judgement.kind != "tap":
                     continue
+                if (
+                    judgement.note_index
+                    in self._phase_validation_judgement_indices
+                ):
+                    # Dense sections frequently split one physical head into
+                    # several independently tracked visual fragments.  Phase
+                    # disagreement is defined over chart judgements, not
+                    # detector track IDs; otherwise one note can consume the
+                    # entire eight-sample fail-closed budget in a few frames.
+                    continue
+                self._phase_validation_judgement_indices.add(
+                    judgement.note_index
+                )
                 self._record_phase_residual(
                     judgement.time_s - crossing_song_time,
                     tracked.note.lane,
+                    relative_time_s=relative_now,
                 )
                 if self.disabled_for_run:
                     return
@@ -368,6 +518,7 @@ class ChartPredictor:
             return
         self.song_offset_s = float(median)
         self.calibrated = True
+        self._calibrated_at_relative_s = relative_now
         self.calibration_samples = [
             (crossing, lane, "track-crossing", offset)
             for offset, lane, _note_index, _chart_time, crossing in best
@@ -470,8 +621,10 @@ class ChartPredictor:
         state: PlannerState,
     ) -> list[TouchAction]:
         """Apply explicit chart flick kind/direction to matched visual taps."""
-        if self.disabled_for_run or not self.calibrated:
+        if self.disabled_for_run:
             return actions
+        if not self.calibrated:
+            return self._apply_prelock_flick_semantics(actions, state)
         enriched: list[TouchAction] = []
         for action in actions:
             if (
@@ -518,6 +671,288 @@ class ChartPredictor:
             )
         return enriched
 
+    def _apply_prelock_flick_semantics(
+        self,
+        actions: list[TouchAction],
+        state: PlannerState,
+    ) -> list[TouchAction]:
+        """Upgrade visible FLICK kinds using a semantic-only provisional phase.
+
+        Periodic lane patterns can keep strict phase calibration ambiguous for
+        the first few seconds.  An exact, fully visible first all-FLICK chord
+        establishes a provisional offset without granting scheduling control.
+        Later visible actions may reuse that offset only when their own track
+        candidate identifies the exact chart note.  This changes input kind;
+        it never creates an input or changes the authoritative song clock.
+        """
+        transient = [
+            action
+            for action in actions
+            if action.kind in {ActionKind.TAP, ActionKind.FLICK}
+            and action.contact is None
+        ]
+        if not transient:
+            return actions
+        if (
+            not self.predict_presses
+            or self._anchor_time is None
+            or len(self._track_phase_candidates)
+            < max(MIN_PROVISIONAL_RESCUE_TRACKS, self.min_calibration_samples)
+        ):
+            return actions
+        if self._prelock_semantic_offset_s is not None:
+            return self._apply_followup_prelock_flicks(
+                actions,
+                transient,
+                state,
+            )
+        first_time = min(
+            judgement.time_s for judgement in self.chart.judgements
+        )
+        opening = [
+            judgement
+            for judgement in self.chart.judgements
+            if abs(judgement.time_s - first_time) <= 0.03
+        ]
+        if (
+            len(opening) < 2
+            or any(
+                judgement.kind != "tap" or not judgement.flick
+                for judgement in opening
+            )
+        ):
+            return actions
+        opening_by_lane = {judgement.lane: judgement for judgement in opening}
+        if (
+            len(opening_by_lane) != len(opening)
+            or {action.lane for action in transient} != set(opening_by_lane)
+            or len(transient) != len(opening)
+        ):
+            return actions
+        relative_by_lane = {
+            action.lane: action.timestamp - self._anchor_time
+            for action in transient
+        }
+        semantic_offsets: list[float] = []
+        for lane, relative_now in relative_by_lane.items():
+            opening_note_index = opening_by_lane[lane].note_index
+            matches = [
+                (offset, crossing_relative)
+                for candidates in self._track_phase_candidates.values()
+                for (
+                    offset,
+                    candidate_lane,
+                    note_index,
+                    _chart_time,
+                    crossing_relative,
+                ) in candidates
+                if (
+                    candidate_lane == lane
+                    and note_index == opening_note_index
+                    and abs(crossing_relative - relative_now)
+                    <= PROVISIONAL_OFFSET_WINDOW_S
+                )
+            ]
+            if not matches:
+                return actions
+            semantic_offsets.append(min(
+                matches,
+                key=lambda item: abs(item[1] - relative_now),
+            )[0])
+        self._prelock_semantic_offset_s = float(statistics.median(
+            semantic_offsets
+        ))
+        self._prelock_semantic_judgement_indices.update(
+            judgement.note_index for judgement in opening
+        )
+        enriched: list[TouchAction] = []
+        for action in actions:
+            judgement = opening_by_lane.get(action.lane)
+            if action not in transient or judgement is None:
+                enriched.append(action)
+                continue
+            updated = replace(
+                action,
+                kind=ActionKind.FLICK,
+                flick_direction=judgement.direction,
+            )
+            enriched.append(updated)
+            state._last_trigger_action_kind[action.lane] = ActionKind.FLICK
+            state.record_diagnostic(
+                "chart_provisional_opening_flick",
+                action.timestamp,
+                lane=action.lane,
+                visual_kind=action.kind.value,
+                direction=judgement.direction,
+                offset_ms=round(self._prelock_semantic_offset_s * 1000, 1),
+            )
+        return enriched
+
+    def _apply_followup_prelock_flicks(
+        self,
+        actions: list[TouchAction],
+        transient: list[TouchAction],
+        state: PlannerState,
+    ) -> list[TouchAction]:
+        semantic_offset = self._prelock_semantic_offset_s
+        if semantic_offset is None or self._anchor_time is None:
+            return actions
+        tap_judgements = {
+            judgement.note_index: judgement
+            for judgement in self.chart.judgements
+            if judgement.kind == "tap" and judgement.flick
+        }
+        enriched: list[TouchAction] = []
+        for action in actions:
+            if action not in transient:
+                enriched.append(action)
+                continue
+            relative_now = action.timestamp - self._anchor_time
+            candidates = [
+                (
+                    abs(offset - semantic_offset)
+                    + abs(crossing_relative - relative_now),
+                    judgement,
+                )
+                for track_candidates in self._track_phase_candidates.values()
+                for (
+                    offset,
+                    candidate_lane,
+                    note_index,
+                    _chart_time,
+                    crossing_relative,
+                ) in track_candidates
+                for judgement in [tap_judgements.get(note_index)]
+                if (
+                    judgement is not None
+                    and candidate_lane == action.lane
+                    and note_index
+                    not in self._prelock_semantic_judgement_indices
+                    and abs(offset - semantic_offset)
+                    <= PRELOCK_SEMANTIC_OFFSET_WINDOW_S
+                    and abs(crossing_relative - relative_now)
+                    <= PROVISIONAL_OFFSET_WINDOW_S
+                )
+            ]
+            if not candidates:
+                enriched.append(action)
+                continue
+            _score, judgement = min(candidates, key=lambda item: item[0])
+            updated = replace(
+                action,
+                kind=ActionKind.FLICK,
+                flick_direction=judgement.direction,
+            )
+            enriched.append(updated)
+            self._prelock_semantic_judgement_indices.add(
+                judgement.note_index
+            )
+            state._last_trigger_action_kind[action.lane] = ActionKind.FLICK
+            state.record_diagnostic(
+                "chart_provisional_flick_semantics",
+                action.timestamp,
+                lane=action.lane,
+                note_index=judgement.note_index,
+                visual_kind=action.kind.value,
+                direction=judgement.direction,
+            )
+        self._try_promote_opening_semantic_lock(
+            max(action.timestamp for action in transient),
+        )
+        return enriched
+
+    def _try_promote_opening_semantic_lock(self, engine_time: float) -> bool:
+        """Promote two fully-confirmed opening FLICK chords to chart control.
+
+        This deliberately covers only the exact Hyadain-style opening seen in
+        the real trace: two consecutive, same-lane, all-FLICK chords.  Each of
+        their four judgements must have been matched by its own projected track,
+        while at least six trajectories still agree within the normal 20 ms
+        phase MAD.  Ordinary openings and partially seen second chords remain
+        visual-only until strict calibration succeeds.
+        """
+        if (
+            self.calibrated
+            or self._anchor_time is None
+            or self._prelock_semantic_offset_s is None
+        ):
+            return False
+        times = sorted({judgement.time_s for judgement in self.chart.judgements})
+        if len(times) < 2:
+            return False
+        groups = [
+            [
+                judgement
+                for judgement in self.chart.judgements
+                if abs(judgement.time_s - time_s) <= 0.001
+            ]
+            for time_s in times[:2]
+        ]
+        if any(
+            len(group) < 2
+            or any(
+                judgement.kind != "tap" or not judgement.flick
+                for judgement in group
+            )
+            for group in groups
+        ):
+            return False
+        lane_sets = [{judgement.lane for judgement in group} for group in groups]
+        if lane_sets[0] != lane_sets[1] or len(lane_sets[0]) < 2:
+            return False
+        required_indices = {
+            judgement.note_index for group in groups for judgement in group
+        }
+        if not required_indices.issubset(
+            self._prelock_semantic_judgement_indices
+        ):
+            return False
+
+        support: list[tuple[float, int, int, float]] = []
+        semantic_offset = self._prelock_semantic_offset_s
+        for candidates in self._track_phase_candidates.values():
+            eligible = [
+                item for item in candidates
+                if abs(item[0] - semantic_offset)
+                <= PRELOCK_SEMANTIC_OFFSET_WINDOW_S
+            ]
+            if not eligible:
+                continue
+            offset, lane, _note_index, _chart_time, crossing = min(
+                eligible,
+                key=lambda item: abs(item[0] - semantic_offset),
+            )
+            support.append((offset, lane, _note_index, crossing))
+        if (
+            len(support) < self.min_calibration_samples
+            or len({item[1] for item in support}) < 2
+        ):
+            return False
+        offsets = [item[0] for item in support]
+        median = float(statistics.median(offsets))
+        mad = float(statistics.median(abs(offset - median) for offset in offsets))
+        if mad > 0.020:
+            return False
+
+        self.song_offset_s = median
+        self.calibrated = True
+        self._calibrated_at_relative_s = self._relative(engine_time)
+        self.calibration_samples = [
+            (crossing, lane, "opening-flick-track", offset)
+            for offset, lane, _note_index, crossing in support
+        ]
+        self._consumed_judgements.update(
+            (note_index, "tap") for note_index in required_indices
+        )
+        self._pending_opening_semantic_lock = {
+            "offset_ms": round(median * 1000, 1),
+            "mad_ms": round(mad * 1000, 1),
+            "samples": len(support),
+            "judgements": len(required_indices),
+            "lanes": len(lane_sets[0]),
+        }
+        return True
+
     def filter_chart_owned_holds(
         self,
         actions: list[TouchAction],
@@ -539,18 +974,22 @@ class ChartPredictor:
             if action.kind != ActionKind.DOWN:
                 continue
             song_time = self.song_time(action.timestamp)
-            head = min(
-                (
-                    judgement
-                    for judgement in self.chart._by_lane[action.lane]
-                    if judgement.kind == "hold-head"
-                ),
-                key=lambda judgement: abs(judgement.time_s - song_time),
-                default=None,
+            nearest = self.chart.judgement_near(
+                action.lane,
+                song_time,
+                window_s=HOLD_HEAD_CLAIM_WINDOW_S,
+            )
+            early_by = (
+                nearest.time_s - song_time
+                if nearest is not None and nearest.kind == "hold-head"
+                else None
             )
             if (
-                head is not None
-                and abs(head.time_s - song_time) <= HOLD_HEAD_CLAIM_WINDOW_S
+                nearest is not None
+                and nearest.kind == "hold-head"
+                and nearest.note_index not in self._claimed_hold_note_indices
+                and early_by is not None
+                and early_by <= MAX_EARLY_VISUAL_HOLD_HEAD_S
             ):
                 continue
             contact = action.lane if action.contact is None else action.contact
@@ -560,13 +999,28 @@ class ChartPredictor:
                 state._hold_chord_partner.pop(partner, None)
             if contact in state._active_hold_tail:
                 holds._discard_undispatched_hold(contact)
+            diagnostic_event = (
+                "chart_early_hold_suppressed"
+                if early_by is not None
+                and early_by > MAX_EARLY_VISUAL_HOLD_HEAD_S
+                else "chart_unmatched_hold_suppressed"
+            )
             state.record_diagnostic(
-                "chart_unmatched_hold_suppressed",
+                diagnostic_event,
                 now,
                 lane=action.lane,
                 contact=contact,
                 reason=action.reason,
                 song_time_s=round(song_time, 3),
+                chart_head_s=(
+                    round(nearest.time_s, 3)
+                    if nearest is not None and nearest.kind == "hold-head"
+                    else None
+                ),
+                early_ms=(
+                    round(early_by * 1000)
+                    if early_by is not None else None
+                ),
             )
         if not suppressed_contacts:
             return actions
@@ -1059,6 +1513,25 @@ class ChartPredictor:
                 continue
             expected = self.expected_hold_tail.get(contact)
             if expected is not None:
+                current_tail = self.chart.hold_tail_for_head(judgement)
+                if (
+                    current_tail is not None
+                    and abs(expected[0] - current_tail.time_s) <= 0.000001
+                    and expected[1] == current_tail.lane
+                ):
+                    # ``next_judgement`` still returns the just-consumed head
+                    # during its rescue window.  This contact owns that exact
+                    # head, so it is not an obstruction to free.  This matters
+                    # for 75 ms Expert holds, whose tail is already inside the
+                    # generic lane-free lead on the following analysis frame.
+                    continue
+                if expected[1] != active_lane:
+                    # This is not a phantom lane occupant: a real cross-lane
+                    # slide still has to move from this head lane to a tail on
+                    # another lane.  A simultaneous new head can use another
+                    # contact; releasing the old finger here drops its tail
+                    # judgement (and its flick, when present).
+                    continue
                 if song_now < expected[0] - 0.05:
                     continue
             else:
@@ -1146,6 +1619,37 @@ class ChartPredictor:
                     if tail.direction is not None:
                         state._hold_tail_flick_direction[action.contact] = tail.direction
 
+    def _retire_visually_released_holds(
+        self,
+        actions: list[TouchAction],
+        state: PlannerState,
+    ) -> None:
+        """Synchronise chart tail ownership after the visual hold pipeline.
+
+        Visual processing runs before chart prediction.  It can release an
+        old contact and the chart can legitimately reuse that contact for a
+        new head later in the same frame.  Retire the old expected tail first;
+        otherwise ``_schedule_hold_tails`` mistakes the new DOWN for the old
+        hold and ``_release_due_holds`` immediately lifts the new contact.
+        """
+        for action in actions:
+            if (
+                action.kind not in {ActionKind.UP, ActionKind.FLICK}
+                or action.contact is None
+            ):
+                continue
+            expected = self.expected_hold_tail.pop(action.contact, None)
+            if expected is None:
+                continue
+            state.record_diagnostic(
+                "chart_visual_tail_retired",
+                action.timestamp,
+                contact=action.contact,
+                release_reason=action.reason,
+                chart_time_s=round(expected[0], 3),
+                tail_lane=expected[1],
+            )
+
     def _release_due_holds(
         self,
         now: float,
@@ -1173,6 +1677,16 @@ class ChartPredictor:
                 if contact in state._blind_hold_contacts:
                     # A chart-pressed straight hold: the finger stayed on the
                     # head lane and the release position does not matter.
+                    pass
+                elif (
+                    (anchor := _adjacent_zigzag_anchor(
+                        state._chart_slide_path.get(contact, ()),
+                    ))
+                    is not None
+                    and tail_lane in anchor
+                ):
+                    # The fixed midpoint lies inside both adjacent-lane
+                    # judgement windows, including the tail judgement.
                     pass
                 elif song_now >= tail_time - 0.25:
                     # The slide body vanished before the finger reached the
@@ -1241,12 +1755,13 @@ class ChartPredictor:
         actions: list[TouchAction],
         state: PlannerState,
     ) -> None:
-        """Keep matched holds on each counted chart connection lane.
+        """Keep matched holds inside each chart connection judgement window.
 
         Visual green-body segmentation remains useful between nodes, but it
-        is not authoritative at the connection itself.  In a small window
-        around each counted point the exact chart lane is restored after the
-        visual hold pipeline has run.  This also drives fully blind slides.
+        is not authoritative at the connection itself.  One-lane sawtooth
+        paths share a stable midpoint because adjacent-lane judgement covers
+        both node lanes; wider paths still restore the exact chart lane.  This
+        also drives fully blind slides.
         """
         if not state._chart_slide_path:
             return
@@ -1257,6 +1772,46 @@ class ChartPredictor:
                 state._chart_slide_next_index.pop(contact, None)
                 continue
             if len(path) < 2 or path[-1][0] <= path[0][0]:
+                continue
+            adjacent_anchor = _adjacent_zigzag_anchor(path)
+            if adjacent_anchor is not None:
+                lower_lane, upper_lane = adjacent_anchor
+                target_x = (
+                    lane_center_x(lower_lane, self.judgement_y)
+                    + lane_center_x(upper_lane, self.judgement_y)
+                ) / 2.0
+                previous_lane = state._active_hold_lane.get(contact, contact)
+                previous_x = state._active_hold_x.get(
+                    contact,
+                    lane_center_x(previous_lane, self.judgement_y),
+                )
+                if abs(previous_x - target_x) < 18:
+                    continue
+                target_lane = (
+                    previous_lane
+                    if previous_lane in adjacent_anchor
+                    else lower_lane
+                )
+                actions.append(TouchAction(
+                    ActionKind.MOVE,
+                    target_lane,
+                    now,
+                    contact,
+                    "chart-slide-move",
+                    target_x=round(target_x),
+                ))
+                state._active_hold_lane[contact] = target_lane
+                state._active_hold_x[contact] = float(target_x)
+                state.record_diagnostic(
+                    "chart_slide_move",
+                    now,
+                    contact=contact,
+                    previous_lane=previous_lane,
+                    target_lane=target_lane,
+                    target_x=round(target_x),
+                    strategy="adjacent-lane-anchor",
+                    anchor_lanes=list(adjacent_anchor),
+                )
                 continue
             if contact in state._blind_hold_contacts:
                 # A fully blind slide has no visual body between counted
@@ -1355,6 +1910,20 @@ class ChartPredictor:
         """Return ``actions`` plus any chart-predicted inputs."""
         self._relative(now)
         self.observe_tracks(tracked_notes, now)
+        if self._pending_opening_semantic_lock is not None:
+            state.record_diagnostic(
+                "chart_opening_semantic_lock",
+                now,
+                **self._pending_opening_semantic_lock,
+            )
+            self._pending_opening_semantic_lock = None
+        if self._pending_phase_relock is not None:
+            state.record_diagnostic(
+                "chart_phase_relocked",
+                now,
+                **self._pending_phase_relock,
+            )
+            self._pending_phase_relock = None
         if not visual_observed:
             self.observe_visual_actions(actions)
         if self.disabled_for_run:
@@ -1384,6 +1953,7 @@ class ChartPredictor:
                 samples=len(self.calibration_samples),
             )
             self._calibration_diagnosed = True
+        self._retire_visually_released_holds(actions, state)
         # Free lanes for due hold heads regardless of press prediction: the
         # normal hold pipeline can then start the real head next frame.
         song_now = self.input_song_time(now)

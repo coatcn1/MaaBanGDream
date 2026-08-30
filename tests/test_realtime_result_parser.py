@@ -66,6 +66,27 @@ MISREAD_HARD_GREAT_81_CROPS = (
     "eSKlH+I4WQenflgmRN8Ndm3w/uR7sY"
 )
 
+MISREAD_EXPERT_810_BAD_TEN_CROPS = (
+    "eNrtmt12wyAMg/X+L+3dbCeAJdmh6c5+4GZNl68EsC1jApz2x1vE8PGrTRcx3ILr"
+    "YvrXfHNQmNy+x35eJzRfX999fh7GsAyM9LQMcZiANirY1DdDHbssyU12XvLpZ9"
+    "LI8qKo5XTsvAy5W/BnxmgiUB8Fm8fIJuqyHctGm829ZWvM7DhVY28FG8sSTfPMr"
+    "JT7YFpeauDPsGJMsKyKXYsx2/B22j8Ut2DGEjqOhrH2gJUnFhpraVvCn3pKxg43"
+    "Lo40PS2YbngWSR8ZO8M+5IGyy1zR24l/s6CcFjDusFoWl5RHskG7bT4zj34Vq/"
+    "SpN89MbSqWSm8wjwvayytsuEcekzrGUiNNq1D4r8gZyyzXsDpecXc97bQ3bPpMs"
+    "mauyEaG+BGN5mIrwhzPyOLqN+xP/hkuZkuES9IGEj6SEOIZlmbxEwvDpmyC5Qw1"
+    "C5kzvJelOVKPDbq+N1ih9x0WmsUuS826eOZFCD0bJN1SZZpijVbfb6TTYXZqPCH"
+    "JP3vaaT9+60msO7Q9d/0Iagur/Dcq/c1hSelv2uGhrb9aB/GohtLU+yld2Gbju1"
+    "g81++3aejLbDOvo6UKYtCVhqLWUFHvgavl7+XPL+Xt/f0CjvxuC4Jub2RPk1Op"
+    "pFrIr6vBMs9SpyT0nOSq8ib/TqxICdQfUoIGmmGSFJFFnZBNSbzKNurAXOJ0MXe"
+    "bbUmoCpTvZrHHhmejYlGx00HlLhtuuGAvKMyiLqvkuJE+69p7FTcabFd8+RennX"
+    "baKTPkcyJfkVWvdulqQbA4KUIhT7dyfGYplOoWorCQRuTPFuXhg2ChivOUjaIe3"
+    "NwrenZ+5YqccW6xUbFL9Ye8aABb2J+/mO4o2RAHTmyNJBtQeTP8Jv1rztrsOrH"
+    "ZvtYza50n5DPz0gfl+hK3K94rULl7O+aY+KVzm7O5Pe2nlAsgd6X6bEoIbtT/1"
+    "IIbJGyQiMyLByRckVpBjtRX/ILYj/GaaL4abjZsGhk8C4itXpIUV7bZY2ObnZfo"
+    "DqvfuCtZnud05hmmjL2e4pijGMNmuzIVCm6Ttva1slheWp8WMrwf8bM1Weuj+ss"
+    "rB7xO2JRC+5b+L2wfNYgEzw=="
+)
+
 
 def _result_image(payload: str) -> np.ndarray:
     crops = np.frombuffer(
@@ -148,6 +169,32 @@ def test_result_parser_reads_hard_great_eighty_one_variant():
         slow=29,
         confidence=result.confidence,
     )
+
+
+def test_expected_chart_total_resolves_bad_ten_vote_regression():
+    image = _result_image(MISREAD_EXPERT_810_BAD_TEN_CROPS)
+    parser = ResultParser()
+
+    uncorrected = parser.parse(image)
+    corrected = parser.resolve_expected_total(
+        image,
+        expected_notes=810,
+        fallback=uncorrected,
+    )
+
+    assert uncorrected.total == 800
+    assert uncorrected.bad == 0
+    assert corrected == LiveResult(
+        perfect=574,
+        great=137,
+        good=18,
+        bad=10,
+        miss=71,
+        fast=145,
+        slow=20,
+        confidence=corrected.confidence,
+    )
+    assert corrected.total == 810
 
 
 @pytest.mark.parametrize(

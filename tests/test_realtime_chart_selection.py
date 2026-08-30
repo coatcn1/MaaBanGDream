@@ -10,8 +10,8 @@ class Repository:
     def __init__(self):
         self.calls = []
 
-    def resolve(self, song_id, difficulty):
-        self.calls.append((song_id, difficulty))
+    def resolve(self, song_id, difficulty, *, level=None, title=None):
+        self.calls.append((song_id, difficulty, level, title))
         return ChartResolution(None, "resolved by fake repository")
 
 
@@ -44,6 +44,8 @@ def test_chart_selection_requires_exact_difficulty_and_passes_song_identity():
         prepared_for_play=True,
         difficulty="Expert",
         song_id="song-jacket-phash-v2-0123456789abcdef",
+        song_level=25,
+        song_title="Tokimeki Experience!",
     )
 
     mismatch = resolve_local_chart_for_run(
@@ -60,5 +62,10 @@ def test_chart_selection_requires_exact_difficulty_and_passes_song_identity():
     assert mismatch.reason == "no fresh song/difficulty identity"
     assert exact.reason == "resolved by fake repository"
     assert repository.calls == [
-        ("song-jacket-phash-v2-0123456789abcdef", "expert")
+        (
+            "song-jacket-phash-v2-0123456789abcdef",
+            "expert",
+            25,
+            "Tokimeki Experience!",
+        )
     ]

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import base64
+from itertools import product
+import math
 import zlib
 
 import cv2
@@ -76,6 +78,8 @@ class ResultParser:
     # this are genuinely ambiguous in captured samples; 0.30-0.55 is common for
     # correctly read 8/5 glyphs because their antialiasing changes with the card.
     MIN_FIELD_CONFIDENCE = .30
+    MAX_EXPECTED_TOTAL_REPAIR_DIGITS = 2
+    JUDGEMENT_FIELDS = ("perfect", "great", "good", "bad", "miss")
 
     # x1, y1, x2, y2. Each field contains four monospaced digital glyphs.
     FIELDS = {
@@ -105,6 +109,130 @@ class ResultParser:
         result = LiveResult(**values, confidence=min(confidences))
         self._validate_result(result)
         return result
+
+    def resolve_expected_total(
+        self,
+        image: np.ndarray,
+        *,
+        expected_notes: int,
+        fallback: LiveResult | None = None,
+    ) -> LiveResult:
+        """Re-rank ambiguous judgement glyphs against an exact chart total.
+
+        The ordinary classifier remains authoritative when no exact local
+        chart exists.  With one, consider only the nearest per-glyph labels,
+        change at most two digits, and choose the lowest-distance combination
+        whose five judgement fields sum to ``expected_notes``.
+        """
+        if image.shape[:2] != (720, 1280):
+            raise ValueError(f"结算截图尺寸必须为1280x720，实际为{image.shape[:2]}")
+        fallback = fallback or self.parse(image)
+        expected_notes = int(expected_notes)
+        if fallback.total == expected_notes or expected_notes <= 0:
+            return fallback
+
+        field_candidates: dict[str, list[tuple[int, float, int]]] = {}
+        for name in self.JUDGEMENT_FIELDS:
+            x1, y1, x2, y2 = self.FIELDS[name]
+            field_candidates[name] = self._field_candidates(
+                image[y1:y2, x1:x2],
+                expected_notes=expected_notes,
+            )
+
+        # total -> (distance penalty, changed digits, chosen field values)
+        states: dict[int, tuple[float, int, dict[str, int]]] = {
+            0: (0.0, 0, {}),
+        }
+        for name in self.JUDGEMENT_FIELDS:
+            next_states: dict[int, tuple[float, int, dict[str, int]]] = {}
+            for subtotal, (cost, changes, values) in states.items():
+                for value, field_cost, field_changes in field_candidates[name]:
+                    total = subtotal + value
+                    changed = changes + field_changes
+                    if (
+                        total > expected_notes
+                        or changed > self.MAX_EXPECTED_TOTAL_REPAIR_DIGITS
+                    ):
+                        continue
+                    candidate = (
+                        cost + field_cost,
+                        changed,
+                        {**values, name: value},
+                    )
+                    known = next_states.get(total)
+                    if known is None or candidate[:2] < known[:2]:
+                        next_states[total] = candidate
+            states = next_states
+            if not states:
+                return fallback
+
+        resolved = states.get(expected_notes)
+        if resolved is None:
+            return fallback
+        values = resolved[2]
+        result = LiveResult(
+            **values,
+            fast=fallback.fast,
+            slow=fallback.slow,
+            confidence=fallback.confidence,
+        )
+        self._validate_result(result)
+        return result
+
+    @classmethod
+    def _field_candidates(
+        cls,
+        crop: np.ndarray,
+        *,
+        expected_notes: int,
+    ) -> list[tuple[int, float, int]]:
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        binary = cv2.threshold(gray, 238, 255, cv2.THRESH_BINARY_INV)[1]
+        width = binary.shape[1]
+        cell_options: list[list[tuple[int, float, bool]]] = []
+        for index in range(4):
+            left = round(index * width / 4)
+            right = round((index + 1) * width / 4)
+            normalised = cls._normalise_glyph(binary[:, left:right])
+            selected, _confidence = cls._classify_glyph(normalised)
+            distances = np.mean(
+                (
+                    cls._samples.astype(np.float32)
+                    - normalised.astype(np.float32)
+                ) ** 2,
+                axis=(1, 2),
+            )
+            by_label = {
+                label: float(np.min(distances[cls._labels == label]))
+                for label in range(10)
+            }
+            nearest_labels = sorted(by_label, key=by_label.get)[:2]
+            labels = list(dict.fromkeys((selected, *nearest_labels)))
+            minimum_cost = min(math.log1p(value) for value in by_label.values())
+            cell_options.append([
+                (
+                    label,
+                    math.log1p(by_label[label]) - minimum_cost,
+                    label != selected,
+                )
+                for label in labels
+            ])
+
+        candidates: dict[int, tuple[float, int]] = {}
+        for cells in product(*cell_options):
+            digits = [cell[0] for cell in cells]
+            value = int("".join(str(digit) for digit in digits))
+            if value > expected_notes:
+                continue
+            cost = sum(cell[1] for cell in cells)
+            changes = sum(cell[2] for cell in cells)
+            known = candidates.get(value)
+            if known is None or (cost, changes) < known:
+                candidates[value] = (cost, changes)
+        return [
+            (value, cost, changes)
+            for value, (cost, changes) in candidates.items()
+        ]
 
     @staticmethod
     def _validate_result(result: LiveResult) -> None:

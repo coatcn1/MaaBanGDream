@@ -104,6 +104,9 @@ def result_report_payload(
         "cleanup_failed": bool(getattr(stats, "cleanup_failed", False)),
         "cleanup_errors": list(getattr(stats, "cleanup_errors", ())),
         "recorder_error": getattr(stats, "recorder_error", None),
+        "startup_timed_out": bool(
+            getattr(stats, "startup_timed_out", False)
+        ),
         "effective_fps": stats.effective_fps,
         "terminal_reason": stats.terminal_reason,
     }

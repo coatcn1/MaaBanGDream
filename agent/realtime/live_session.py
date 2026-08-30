@@ -17,6 +17,9 @@ class LiveRunContext:
     profile_name: str | None = None
     song_id: str = UNKNOWN_SONG_ID
     song_id_method: str = "unknown"
+    song_level: int | None = None
+    song_title: str | None = None
+    song_title_confidence: float | None = None
     expected_note_speed: float | None = None
     actual_note_speed: float | None = None
     note_skin_type: int | None = None
@@ -37,6 +40,9 @@ class LiveRunContext:
             "profile_name": self.profile_name,
             "song_id": self.song_id,
             "song_id_method": self.song_id_method,
+            "song_level": self.song_level,
+            "song_title": self.song_title,
+            "song_title_confidence": self.song_title_confidence,
             "settings": {
                 "expected_note_speed": self.expected_note_speed,
                 "actual_note_speed": self.actual_note_speed,

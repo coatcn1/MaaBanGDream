@@ -927,6 +927,8 @@ def _completed_play_harness(
     prepared_for_play=True,
     collection_exception=None,
     screenshot_success=True,
+    expected_success=True,
+    startup_timed_out=False,
 ):
     reset_live_run(
         mode="pending",
@@ -1002,13 +1004,15 @@ def _completed_play_harness(
             self.debug_recorder = kwargs.get("debug_recorder")
 
         def run(self, _capture, _stopping, **_kwargs):
+            if startup_timed_out:
+                _capture()
             if self.debug_recorder is not None:
                 self.debug_recorder.close()
             return EngineStats(
                 120,
                 42,
                 engine_stopped,
-                completed=not engine_stopped,
+                completed=not engine_stopped and not startup_timed_out,
                 action_counts={"tap": 31, "flick": 4, "down": 7},
                 frame_interval_p50_ms=16.4,
                 frame_interval_p95_ms=18.2,
@@ -1016,10 +1020,14 @@ def _completed_play_harness(
                 effective_fps=59.1,
                 terminal_reason=(
                     "用户已停止任务"
-                    if engine_stopped else "已识别演奏结束并进入结算"
+                    if engine_stopped
+                    else "开演后 20 秒仍未识别到生命条"
+                    if startup_timed_out
+                    else "已识别演奏结束并进入结算"
                 ),
                 initial_timing_offset_ms=-11,
                 final_timing_offset_ms=-13,
+                startup_timed_out=startup_timed_out,
             )
 
     monkeypatch.setattr("agent.realtime.profile_play_action.RealtimeEngine", Engine)
@@ -1076,7 +1084,7 @@ def _completed_play_harness(
         with pytest.raises(type(collection_exception), match=str(collection_exception)):
             RealtimeProfilePlay()._run(context, argv)
     else:
-        assert RealtimeProfilePlay()._run(context, argv)
+        assert RealtimeProfilePlay()._run(context, argv) is expected_success
     return tmp_path, writes, recorder_holder.get("value")
 
 
@@ -1162,17 +1170,66 @@ def test_result_collection_timeout_writes_invalid_correlated_json(
         tmp_path,
         debug_recording=False,
         collection_status=ResultCollectionStatus.TIMED_OUT,
+        expected_success=False,
     )
 
     reports = list((root / "screencap").glob("realtime-result-*.json"))
     assert len(reports) == 1
-    assert writes == []
+    assert len(writes) == 1
+    assert "realtime-result-timeout-" in writes[0]
     payload = json.loads(reports[0].read_text(encoding="utf-8"))
     assert payload["valid"] is False
     assert payload["result_status"] == "timed_out"
     assert payload["run_id"]
     assert payload["song_id"] == "song-phash-v1-0123456789abcdef"
+    assert payload["result_diagnostic_frame"].startswith(
+        "screencap/realtime-result-timeout-"
+    )
     assert "perfect" not in payload
+
+
+def test_result_collection_timeout_stays_reportable_for_calibration_round(
+    tmp_path, monkeypatch,
+):
+    root, writes, _ = _completed_play_harness(
+        monkeypatch,
+        tmp_path,
+        debug_recording=False,
+        collection_status=ResultCollectionStatus.TIMED_OUT,
+        calibration_report=True,
+        expected_success=True,
+    )
+
+    calibration = json.loads(
+        (root / "screencap" / "calibration-round.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert calibration["valid"] is False
+    assert calibration["result_status"] == "timed_out"
+    assert len(writes) == 1
+
+
+def test_playfield_start_timeout_saves_frame_and_fails_ordinary_play(
+    tmp_path, monkeypatch,
+):
+    root, writes, _ = _completed_play_harness(
+        monkeypatch,
+        tmp_path,
+        debug_recording=False,
+        startup_timed_out=True,
+        expected_success=False,
+    )
+
+    report = next((root / "screencap").glob("realtime-result-*.json"))
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["valid"] is False
+    assert payload["result_status"] == "playfield_start_timeout"
+    assert payload["startup_timed_out"] is True
+    assert payload["startup_diagnostic_frame"].startswith(
+        "screencap/realtime-startup-timeout-"
+    )
+    assert len(writes) == 1
 
 
 def test_result_collection_exception_writes_invalid_correlated_json(
@@ -1375,5 +1432,5 @@ def test_collect_result_dismisses_reward_popup_before_stabilizing():
 
     assert outcome.status is ResultCollectionStatus.STABLE
     assert outcome.result is not None
-    assert clicks == [(639, 605)]
-    assert keys == []
+    assert clicks == []
+    assert keys == [4, 4]

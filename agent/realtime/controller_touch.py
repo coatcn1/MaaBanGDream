@@ -86,7 +86,19 @@ class ControllerTouchDispatcher:
             },
             "pending_taps": sorted(self._pending_taps),
             "pending_flicks": sorted(self._pending_flicks),
+            "recovered_contacts": self.recovered_contacts,
+            "down_recoveries": self.down_recoveries,
+            "stale_move_recoveries": self.stale_move_recoveries,
         }
+
+    @property
+    def has_active_or_pending_contacts(self) -> bool:
+        """Whether an emergency release can still clear physical input."""
+        return bool(
+            self.active_contacts
+            or self._pending_taps
+            or self._pending_flicks
+        )
 
     def _ensure_running(self) -> None:
         if self.stopping():

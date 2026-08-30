@@ -87,7 +87,15 @@ def test_trace_state_exposes_physical_contacts_and_logical_aliases():
         "contact_aliases": {"3": 3},
         "pending_taps": [7],
         "pending_flicks": [],
+        "recovered_contacts": 0,
+        "down_recoveries": 0,
+        "stale_move_recoveries": 0,
     }
+    assert touch.has_active_or_pending_contacts
+
+    touch.emergency_release_all()
+
+    assert not touch.has_active_or_pending_contacts
 
 
 def test_flick_advance_can_share_ten_contacts_without_blocking():

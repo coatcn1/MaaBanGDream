@@ -61,11 +61,17 @@ JUDGEMENT_DETAILS_TEMPLATE = (
 ACTIVITY_POINTS_TEMPLATE = (
     PROJECT_ROOT / "resource" / "image" / "result_activity_points.png"
 )
+ACHIEVEMENT_LIST_CLOSE_TEMPLATE = (
+    PROJECT_ROOT / "resource" / "image" / "common_close.png"
+)
 # Kept as a compatibility alias for callers/tests that override this template.
 RESULT_NEXT_TEMPLATE = RESULT_RANK_NEXT_TEMPLATE
 REWARD_TEMPLATE_THRESHOLD = 0.85
-REWARD_DISMISS_LIMIT = 3
+REWARD_DISMISS_LIMIT = 4
 REWARD_CLICK_DELAY_SECONDS = 1.0
+ACHIEVEMENT_LIST_CLOSE_TEMPLATE_THRESHOLD = 0.9
+ACHIEVEMENT_LIST_CLOSE_CLICK_LIMIT = 2
+ACHIEVEMENT_LIST_CLOSE_CLICK_DELAY_SECONDS = 1.0
 RESULT_NEXT_TEMPLATE_THRESHOLD = 0.9
 RESULT_NEXT_CLICK_LIMIT = 2
 RESULT_NEXT_CLICK_DELAY_SECONDS = 1.0
@@ -73,6 +79,20 @@ JUDGEMENT_DETAILS_TEMPLATE_THRESHOLD = 0.9
 ACTIVITY_POINTS_TEMPLATE_THRESHOLD = 0.9
 ACTIVITY_POINTS_CLICK_DELAY_SECONDS = 1.0
 ACTIVITY_POINTS_CLICK_LIMIT = 2
+# The activity-points template is a page identity marker in the score panel,
+# not an actionable control.  The pink confirmation button occupies this
+# stable normalised position on the 1280x720 result layout (1067, 644).
+ACTIVITY_POINTS_CONFIRM_X_RATIO = 1067 / 1280
+ACTIVITY_POINTS_CONFIRM_Y_RATIO = 644 / 720
+# The same white "confirm" control appears throughout the result UI.  A real
+# modal acknowledgement is always centred in the lower part of the 1280x720
+# screen; score-page achievement entries live outside this region.  Template
+# text alone is therefore never sufficient to classify a reward popup.
+REWARD_POPUP_BUTTON_REGION = (0.40, 0.68, 0.60, 0.90)
+# Song achievement details have a dedicated Chinese "close" control at the
+# bottom centre.  Recognising this page lets result collection recover from a
+# stale/legacy accidental navigation without pressing Back or guessing.
+ACHIEVEMENT_LIST_CLOSE_REGION = (0.40, 0.80, 0.60, 0.94)
 
 
 _LAST_LIFE_SAFETY_ABORT = False
@@ -92,7 +112,12 @@ def resolve_local_chart_for_run(
     repository = repository or LocalChartRepository(
         PROJECT_ROOT / "resource" / "charts"
     )
-    return repository.resolve(live_run.song_id, difficulty)
+    return repository.resolve(
+        live_run.song_id,
+        difficulty,
+        level=getattr(live_run, "song_level", None),
+        title=getattr(live_run, "song_title", None),
+    )
 
 
 class StallSafeCapture:
@@ -160,6 +185,11 @@ class StallSafeCapture:
         # The in-flight capture has not finished: reuse the last completed
         # frame so the engine clock and chart rescues keep advancing.
         self.stall_count += 1
+        return self._last_image
+
+    @property
+    def last_image(self):
+        """Latest completed capture, retained for terminal diagnostics."""
         return self._last_image
 
 
@@ -283,19 +313,13 @@ def _dismiss_reward_popup(
     templates=(REWARD_CONFIRM_TEMPLATE, REWARD_OK_TEMPLATE),
     threshold: float = REWARD_TEMPLATE_THRESHOLD,
 ) -> bool:
-    """Click a visible achievement-reward OK button, if any."""
-    best_score = threshold
-    best_point = None
-    for template_path in templates:
-        template = cv2.imread(str(template_path))
-        if template is None:
-            continue
-        matched = cv2.matchTemplate(image, template, cv2.TM_CCOEFF_NORMED)
-        _, score, _, location = cv2.minMaxLoc(matched)
-        if score > best_score:
-            best_score = score
-            height, width = template.shape[:2]
-            best_point = (location[0] + width // 2, location[1] + height // 2)
+    """Click a visible central result-popup acknowledgement, if any."""
+    best_point = _template_click_point(
+        image,
+        templates,
+        threshold,
+        center_region=REWARD_POPUP_BUTTON_REGION,
+    )
     if best_point is None:
         return False
     before_input()
@@ -307,6 +331,8 @@ def _template_click_point(
     image,
     template_paths,
     threshold: float,
+    *,
+    center_region: tuple[float, float, float, float] | None = None,
 ) -> tuple[int, int] | None:
     best_score = threshold
     best_point = None
@@ -314,13 +340,63 @@ def _template_click_point(
         template = cv2.imread(str(template_path))
         if template is None:
             continue
+        if (
+            image.shape[0] < template.shape[0]
+            or image.shape[1] < template.shape[1]
+        ):
+            continue
         matched = cv2.matchTemplate(image, template, cv2.TM_CCOEFF_NORMED)
-        _, score, _, location = cv2.minMaxLoc(matched)
+        search = matched
+        offset_x = offset_y = 0
+        if center_region is not None:
+            image_height, image_width = image.shape[:2]
+            template_height, template_width = template.shape[:2]
+            min_x, min_y, max_x, max_y = center_region
+            left = max(0, round(image_width * min_x - template_width / 2))
+            top = max(0, round(image_height * min_y - template_height / 2))
+            right = min(
+                matched.shape[1],
+                round(image_width * max_x - template_width / 2) + 1,
+            )
+            bottom = min(
+                matched.shape[0],
+                round(image_height * max_y - template_height / 2) + 1,
+            )
+            if right <= left or bottom <= top:
+                continue
+            search = matched[top:bottom, left:right]
+            offset_x, offset_y = left, top
+        _, score, _, location = cv2.minMaxLoc(search)
         if score > best_score:
             best_score = score
             height, width = template.shape[:2]
-            best_point = (location[0] + width // 2, location[1] + height // 2)
+            best_point = (
+                offset_x + location[0] + width // 2,
+                offset_y + location[1] + height // 2,
+            )
     return best_point
+
+
+def _activity_points_confirm_point(
+    image,
+    template_path,
+    threshold: float,
+) -> tuple[int, int] | None:
+    """Return the real confirm button after the activity page is identified.
+
+    ``result_activity_points.png`` deliberately contains a distinctive page
+    label.  Clicking the centre of that label does nothing; only use it as the
+    recognition gate, then scale the known lower-right confirm position to the
+    captured resolution.
+    """
+    marker = _template_click_point(image, (template_path,), threshold)
+    if marker is None:
+        return None
+    height, width = image.shape[:2]
+    return (
+        round(width * ACTIVITY_POINTS_CONFIRM_X_RATIO),
+        round(height * ACTIVITY_POINTS_CONFIRM_Y_RATIO),
+    )
 
 
 def _plausible_result(
@@ -353,7 +429,7 @@ def _advance_result_rank_page(
     template_path=RESULT_NEXT_TEMPLATE,
     threshold: float = RESULT_NEXT_TEMPLATE_THRESHOLD,
 ) -> bool:
-    """Advance the rank/score page only when its visible Next label matches."""
+    """Advance a recognised rank page through Android Back, never a click."""
     template = cv2.imread(str(template_path))
     if template is None:
         return False
@@ -361,12 +437,8 @@ def _advance_result_rank_page(
     _, score, _, location = cv2.minMaxLoc(matched)
     if score < threshold:
         return False
-    height, width = template.shape[:2]
     before_input()
-    controller.post_click(
-        location[0] + width // 2,
-        location[1] + height // 2,
-    ).wait()
+    controller.post_click_key(4).wait()
     return True
 
 
@@ -399,10 +471,28 @@ def collect_result(
         ACTIVITY_POINTS_CLICK_DELAY_SECONDS
     ),
     activity_points_click_limit: int = ACTIVITY_POINTS_CLICK_LIMIT,
+    achievement_close_template=ACHIEVEMENT_LIST_CLOSE_TEMPLATE,
+    achievement_close_threshold: float = (
+        ACHIEVEMENT_LIST_CLOSE_TEMPLATE_THRESHOLD
+    ),
+    achievement_close_click_delay_seconds: float = (
+        ACHIEVEMENT_LIST_CLOSE_CLICK_DELAY_SECONDS
+    ),
+    achievement_close_click_limit: int = (
+        ACHIEVEMENT_LIST_CLOSE_CLICK_LIMIT
+    ),
+    unknown_back_grace_seconds: float = 2.0,
+    unknown_back_interval_seconds: float = 1.0,
+    unknown_back_limit: int = 12,
     expected_notes: int | None = None,
     maximum_notes: int = 3000,
 ) -> ResultCollectionOutcome:
-    """Read reward, rank and judgement pages without blind navigation."""
+    """Read result pages while navigating exclusively with Android Back.
+
+    Every post-live reward/rank overlay supports the game's Back/ESC shortcut.
+    Coordinate clicks are intentionally forbidden here: visually similar pink
+    buttons can open the achievement list instead of advancing the flow.
+    """
     parser = parser or ResultParser()
     started_at = clock()
     deadline = started_at + timeout_seconds
@@ -412,6 +502,9 @@ def collect_result(
     dismissals = 0
     result_next_clicks = 0
     activity_points_clicks = 0
+    achievement_close_clicks = 0
+    unknown_back_presses = 0
+    unknown_since: float | None = None
     page_state = "unknown"
     last_reason: str | None = None
     while clock() < deadline:
@@ -425,27 +518,98 @@ def collect_result(
         image = controller.post_screencap().wait().get()
         last_image = image
         now = clock()
+        details_marker_visible = (
+            judgement_details_template is not None
+            and _template_click_point(
+                image,
+                (judgement_details_template,),
+                judgement_details_threshold,
+            ) is not None
+        )
 
-        reward_point = _template_click_point(
-            image, reward_templates, reward_threshold,
+        achievement_close_point = (
+            _template_click_point(
+                image,
+                (achievement_close_template,),
+                achievement_close_threshold,
+                center_region=ACHIEVEMENT_LIST_CLOSE_REGION,
+            )
+            if (
+                achievement_close_template is not None
+                and not details_marker_visible
+            ) else None
+        )
+        if achievement_close_point is not None:
+            if achievement_close_clicks >= achievement_close_click_limit:
+                return ResultCollectionOutcome(
+                    ResultCollectionStatus.BLOCKED,
+                    image=image,
+                    elapsed_seconds=now - started_at,
+                    page_state="achievement-list",
+                    reason=(
+                        "已识别达成报酬一览，但"
+                        f"{achievement_close_clicks}次返回后页面仍未消失"
+                    ),
+                )
+            before_input()
+            controller.post_click_key(4).wait()
+            achievement_close_clicks += 1
+            unknown_since = None
+            page_state = "achievement-list"
+            candidate = None
+            print(
+                "RealtimeResult state=achievement-list action=back"
+                + f" attempt={achievement_close_clicks}",
+                flush=True,
+            )
+            if not _wait_until(
+                min(deadline, now + achievement_close_click_delay_seconds),
+                stopping,
+                clock=clock,
+                sleeper=sleeper,
+            ):
+                return ResultCollectionOutcome(
+                    ResultCollectionStatus.STOPPED,
+                    elapsed_seconds=clock() - started_at,
+                    page_state=page_state,
+                    reason="user stopped result collection",
+                )
+            continue
+
+        reward_point = (
+            _template_click_point(
+                image,
+                reward_templates,
+                reward_threshold,
+                center_region=REWARD_POPUP_BUTTON_REGION,
+            )
+            if not details_marker_visible else None
         )
         if reward_point is not None:
-            if page_state == "reward-popup":
-                if dismissals >= reward_dismiss_limit:
-                    return ResultCollectionOutcome(
-                        ResultCollectionStatus.BLOCKED,
-                        image=image,
-                        elapsed_seconds=now - started_at,
-                        page_state="reward-popup",
-                        reason="recognised reward popup did not disappear after click",
-                    )
-                # Do not hammer the same popup.  Count a bounded verification
-                # frame and wait for its close animation to finish.
-                dismissals += 1
-            else:
-                before_input()
-                controller.post_click(*reward_point).wait()
-                dismissals = 1
+            if dismissals >= reward_dismiss_limit:
+                return ResultCollectionOutcome(
+                    ResultCollectionStatus.BLOCKED,
+                    image=image,
+                    elapsed_seconds=now - started_at,
+                    page_state="reward-popup",
+                    reason=(
+                        "recognised reward popup did not disappear after "
+                        f"{dismissals} Back attempts"
+                    ),
+                )
+            # Daily-first-live and seven-day streak rewards can appear as two
+            # consecutive popups with the same dedicated confirm/OK marker.
+            # Dismiss each recognised popup, with a strict sequence limit that
+            # also bounds retries if the emulator drops an input.
+            before_input()
+            controller.post_click_key(4).wait()
+            dismissals += 1
+            unknown_since = None
+            print(
+                "RealtimeResult state=reward-popup action=back"
+                + f" attempt={dismissals}",
+                flush=True,
+            )
             page_state = "reward-popup"
             candidate = None
             if not _wait_until(
@@ -463,10 +627,13 @@ def collect_result(
             continue
 
         activity_points_point = (
-            _template_click_point(
-                image, (activity_points_template,), activity_points_threshold,
+            _activity_points_confirm_point(
+                image, activity_points_template, activity_points_threshold,
             )
-            if activity_points_template is not None
+            if (
+                activity_points_template is not None
+                and not details_marker_visible
+            )
             else None
         )
         if activity_points_point is not None:
@@ -475,9 +642,8 @@ def collect_result(
             # skip it, which previously made the formal round look as if its
             # judgement details had already been lost.  Advance only after the
             # dedicated page marker matches.  Some emulator frames accept the
-            # first click job but do not deliver it to the game; retry the same
-            # recognised button once, then fail closed if the marker persists.
-            # This remains template-gated and never becomes a blind click.
+            # first Back job but do not deliver it to the game; retry the same
+            # safe shortcut once, then fail closed if the marker persists.
             if activity_points_clicks >= activity_points_click_limit:
                 return ResultCollectionOutcome(
                     ResultCollectionStatus.BLOCKED,
@@ -486,16 +652,17 @@ def collect_result(
                     page_state="activity-points",
                     reason=(
                         "已识别活动点数页，但"
-                        f"{activity_points_clicks}次点击推进后页面仍未消失"
+                        f"{activity_points_clicks}次返回推进后页面仍未消失"
                     ),
                 )
             before_input()
-            controller.post_click(*activity_points_point).wait()
+            controller.post_click_key(4).wait()
             activity_points_clicks += 1
+            unknown_since = None
             page_state = "activity-points"
             candidate = None
             print(
-                "RealtimeResult state=activity-points action=advance"
+                "RealtimeResult state=activity-points action=back"
                 + f" attempt={activity_points_clicks}",
                 flush=True,
             )
@@ -513,26 +680,35 @@ def collect_result(
                 )
             continue
 
-        rank_point = _template_click_point(
-            image, (result_next_template,), result_next_threshold,
+        rank_point = (
+            _template_click_point(
+                image, (result_next_template,), result_next_threshold,
+            )
+            if not details_marker_visible else None
         )
         if rank_point is not None:
-            if page_state == "rank-page":
-                if result_next_clicks >= result_next_click_limit:
-                    return ResultCollectionOutcome(
-                        ResultCollectionStatus.BLOCKED,
-                        image=image,
-                        elapsed_seconds=now - started_at,
-                        page_state="rank-page",
-                        reason="recognised rank page did not disappear after click",
-                    )
-                result_next_clicks += 1
-            else:
-                before_input()
-                controller.post_click(*rank_point).wait()
-                result_next_clicks = 1
+            if result_next_clicks >= result_next_click_limit:
+                return ResultCollectionOutcome(
+                    ResultCollectionStatus.BLOCKED,
+                    image=image,
+                    elapsed_seconds=now - started_at,
+                    page_state="rank-page",
+                    reason=(
+                        "已识别排名结算页，但"
+                        f"{result_next_clicks}次返回推进后页面仍未消失"
+                    ),
+                )
+            before_input()
+            controller.post_click_key(4).wait()
+            result_next_clicks += 1
+            unknown_since = None
             page_state = "rank-page"
             candidate = None
+            print(
+                "RealtimeResult state=rank-page action=back"
+                + f" attempt={result_next_clicks}",
+                flush=True,
+            )
             if not _wait_until(
                 min(deadline, now + result_next_click_delay_seconds),
                 stopping,
@@ -549,11 +725,7 @@ def collect_result(
 
         details_visible = (
             judgement_details_template is None
-            or _template_click_point(
-                image,
-                (judgement_details_template,),
-                judgement_details_threshold,
-            ) is not None
+            or details_marker_visible
         )
         if not details_visible:
             # Fixed digit ROIs overlap unrelated score/rank-page elements.
@@ -561,8 +733,36 @@ def collect_result(
             # identity marker is visible.
             candidate = None
             page_state = "unknown"
+            if unknown_since is None:
+                unknown_since = now
+            if now - unknown_since >= unknown_back_grace_seconds:
+                if unknown_back_presses >= unknown_back_limit:
+                    return ResultCollectionOutcome(
+                        ResultCollectionStatus.BLOCKED,
+                        image=image,
+                        elapsed_seconds=now - started_at,
+                        page_state=page_state,
+                        reason=(
+                            "结算后未知页面在"
+                            f"{unknown_back_presses}次返回后仍未消失"
+                        ),
+                    )
+                before_input()
+                controller.post_click_key(4).wait()
+                unknown_back_presses += 1
+                print(
+                    "RealtimeResult state=unknown action=back"
+                    + f" attempt={unknown_back_presses}",
+                    flush=True,
+                )
+                interval = unknown_back_interval_seconds
+            else:
+                interval = min(
+                    slow_interval_seconds,
+                    medium_interval_seconds,
+                )
             if not _wait_until(
-                min(deadline, now + min(slow_interval_seconds, medium_interval_seconds)),
+                min(deadline, now + interval),
                 stopping,
                 clock=clock,
                 sleeper=sleeper,
@@ -575,12 +775,27 @@ def collect_result(
                 )
             continue
 
+        unknown_since = None
+
         try:
             result = parser.parse(image)
         except ValueError:
             result = None
 
         if result is not None:
+            if expected_notes is not None and result.total != expected_notes:
+                resolver = getattr(parser, "resolve_expected_total", None)
+                if callable(resolver):
+                    try:
+                        result = resolver(
+                            image,
+                            expected_notes=expected_notes,
+                            fallback=result,
+                        )
+                    except ValueError:
+                        # Preserve the original parse so the normal plausibility
+                        # path reports a precise expected-total mismatch.
+                        pass
             plausible, validation_reason = _plausible_result(
                 result,
                 expected_notes=expected_notes,
@@ -1385,7 +1600,8 @@ class RealtimeProfilePlay(CustomAction):
         ) and not stats.stopped:
             result_output.mkdir(parents=True, exist_ok=True)
             status = (
-                "life_safety_abort" if stats.aborted_for_life
+                "playfield_start_timeout" if stats.startup_timed_out
+                else "life_safety_abort" if stats.aborted_for_life
                 else "cleanup_failed" if stats.cleanup_failed
                 else "engine_incomplete"
             )
@@ -1398,6 +1614,26 @@ class RealtimeProfilePlay(CustomAction):
                 result_status=status,
                 reason=stats.terminal_reason or "实时演奏引擎未完成",
             )
+            if stats.startup_timed_out and stall_safe_capture.last_image is not None:
+                startup_diagnostic = result_output / (
+                    f"realtime-startup-timeout-{result_stamp}.png"
+                )
+                try:
+                    if cv2.imwrite(
+                        str(startup_diagnostic), stall_safe_capture.last_image,
+                    ):
+                        failed_payload["startup_diagnostic_frame"] = str(
+                            startup_diagnostic.relative_to(PROJECT_ROOT).as_posix()
+                        )
+                    else:
+                        failed_payload["startup_diagnostic_error"] = (
+                            f"无法保存开演失败现场: {startup_diagnostic}"
+                        )
+                except Exception as exc:
+                    failed_payload["startup_diagnostic_error"] = (
+                        "保存开演失败现场异常: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
             _write_json_atomic(result_report_path, failed_payload)
             write_calibration_payload(failed_payload)
 
@@ -1454,8 +1690,22 @@ class RealtimeProfilePlay(CustomAction):
                 diagnostic = result_output / (
                     f"realtime-result-timeout-{result_stamp}.png"
                 )
-                if save_screenshot and outcome.image is not None:
-                    cv2.imwrite(str(diagnostic), outcome.image)
+                diagnostic_error = None
+                diagnostic_saved = False
+                if outcome.image is not None:
+                    try:
+                        diagnostic_saved = bool(
+                            cv2.imwrite(str(diagnostic), outcome.image)
+                        )
+                        if not diagnostic_saved:
+                            diagnostic_error = (
+                                f"无法保存结算失败现场: {diagnostic}"
+                            )
+                    except Exception as exc:
+                        diagnostic_error = (
+                            "保存结算失败现场异常: "
+                            f"{type(exc).__name__}: {exc}"
+                        )
                 reason = outcome.reason or "结算数字在 60 秒内未稳定"
                 timeout_payload = _result_report_payload(
                     None,
@@ -1466,15 +1716,35 @@ class RealtimeProfilePlay(CustomAction):
                     result_status=outcome.status.value,
                     reason=reason,
                 )
+                if diagnostic_saved:
+                    timeout_payload["result_diagnostic_frame"] = str(
+                        diagnostic.relative_to(PROJECT_ROOT).as_posix()
+                    )
+                if diagnostic_error is not None:
+                    timeout_payload["result_diagnostic_error"] = diagnostic_error
                 _write_json_atomic(result_report_path, timeout_payload)
                 write_calibration_payload(timeout_payload)
                 print(
                     "RealtimeProfilePlay result_timeout=true "
-                    f"diagnostic={diagnostic.name if save_screenshot else 'none'} "
+                    f"diagnostic={diagnostic.name if diagnostic_saved else 'none'} "
                     f"reason={reason}",
                     flush=True,
                 )
-                return True
+                # A calibration round must return control to its outer state
+                # machine so the invalid report can be persisted/resumed.
+                # Ordinary play has no such consumer: treating this technical
+                # failure as success hid repeated broken result flows from MFA.
+                if params.get("calibration_report"):
+                    return True
+                failure_reason = (
+                    f"结算读取失败（{outcome.page_state}）：{reason}"
+                )
+                record_failure_reason(failure_reason)
+                print(
+                    f"[任务][实时演奏][结算][ERROR] {failure_reason}",
+                    flush=True,
+                )
+                return False
             result_data = outcome.result
             result = outcome.image
             if result_data is None or result is None:

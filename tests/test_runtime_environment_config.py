@@ -42,6 +42,19 @@ def test_launcher_generates_machine_local_profile_manager_configuration():
     assert "resolution = @(1280, 720)" in launch
 
 
+def test_launcher_exposes_manual_bestdori_sync_to_custom_mfa():
+    launch = (ROOT / "scripts/launch-mfa.ps1").read_text(encoding="utf-8")
+
+    assert "chart_sync = [ordered]@{" in launch
+    assert "scripts\\sync_bestdori_catalog.py" in launch
+    assert "'--jacket-server'" in launch
+    assert "'cn'" in launch
+    assert "'--jacket-fallback-server'" in launch
+    assert "'jp,en'" in launch
+    assert "'--prune-other-difficulties'" in launch
+    assert "manifest_path = $chartManifest" in launch
+
+
 def test_launcher_propagates_framework_task_failures_to_mfa():
     launch = (ROOT / "scripts/launch-mfa.ps1").read_text(encoding="utf-8")
 
@@ -57,7 +70,7 @@ def test_launcher_patches_mfa_user_stop_status_race():
     ).read_text(encoding="utf-8")
 
     assert "patch-mfa-stop-status.ps1" in launch
-    assert "feature/performance-profile-settings" in patcher
+    assert "feature/performance-visual-settings" in patcher
     assert "PerformanceProfileSettingsUserControl" in patcher
     assert "SupportsSelectedResourceUpdateSource" in patcher
     assert "git clone" not in patcher
