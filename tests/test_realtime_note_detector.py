@@ -38,6 +38,22 @@ def test_regular_purple_ring_is_not_misclassified_as_flick():
     assert [note.kind for note in notes if note.lane == 3] == [NoteKind.TAP]
 
 
+def test_detector_finds_small_square_type4_heads():
+    image = _frame()
+    # TYPE4 heads are solid cyan diamonds that stay small (roughly 14x12 px)
+    # in the upper playfield, unlike TYPE1's outline-laden spindles.  The old
+    # minimum-width curve (12 + 45*progress) rejected them entirely.
+    cv2.rectangle(image, (633, 224), (647, 236), (55, 185, 255), -1)
+    cv2.rectangle(image, (688, 224), (702, 236), (55, 185, 255), -1)
+
+    notes = NoteDetector(input_color_order="RGB").detect(image, timestamp=1.0)
+
+    assert {(note.kind, note.lane) for note in notes} == {
+        (NoteKind.TAP, 3),
+        (NoteKind.TAP, 4),
+    }
+
+
 def test_detector_collapses_flick_chevrons_into_one_flick_head():
     image = _frame()
     # A real flick has multiple vertically aligned magenta chevrons above its
@@ -77,6 +93,41 @@ def test_detector_reports_a_lone_flick_chevron_without_a_stack():
     flicks = [note for note in notes if note.kind == NoteKind.FLICK]
     assert len(flicks) == 1
     assert flicks[0].lane == 3
+
+
+def test_detector_classifies_horizontal_flick_wing_bars_as_flick():
+    image = _frame()
+    # Hard charts render horizontal flick arrows as two wide flat magenta
+    # wings (plus chevron halves). Without reassembly the wings become tap
+    # siblings, shadow the chevron half, and the whole arrow is tapped -
+    # which the game judges as a miss.
+    cv2.rectangle(image, (300, 498), (360, 508), (255, 65, 185), -1)
+    cv2.rectangle(image, (390, 498), (450, 508), (255, 65, 185), -1)
+
+    notes = NoteDetector(input_color_order="RGB").detect(image, timestamp=1.0)
+
+    flicks = [note for note in notes if note.kind == NoteKind.FLICK]
+    assert len(flicks) == 1
+    assert flicks[0].lane == 1
+    assert 495 <= flicks[0].y <= 515
+    assert flicks[0].width >= 120
+
+
+def test_horizontal_flick_wings_above_hold_body_mark_tail_flick():
+    image = _frame()
+    # A hold that ends in a horizontal flick carries the same wide magenta
+    # wings at the tail of its green body. They belong to the hold release,
+    # not to a standalone flick stream.
+    cv2.rectangle(image, (610, 390), (670, 460), (70, 240, 110), -1)
+    cv2.rectangle(image, (560, 368), (640, 378), (255, 65, 185), -1)
+    cv2.rectangle(image, (650, 368), (730, 378), (255, 65, 185), -1)
+
+    notes = NoteDetector(input_color_order="RGB").detect(image, timestamp=1.0)
+
+    assert not [note for note in notes if note.kind == NoteKind.FLICK]
+    holds = [note for note in notes if note.kind == NoteKind.HOLD]
+    assert holds
+    assert any(note.hold_tail_flick for note in holds)
 
 
 def test_chevron_stack_with_ring_siblings_is_not_a_flick():

@@ -7,7 +7,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $workspaceRoot = Split-Path -Parent $projectRoot
-$customBranch = 'feature/performance-profile-settings'
+$customBranch = 'feature/performance-visual-settings'
 $customizationCommit = 'd7b381b2fa6a09e140d925fb1504bac19ca1f921'
 $patch = Join-Path $projectRoot 'patches\mfaavalonia-v2.12.0-stop-status.patch'
 $deployedAssembly = Join-Path $MfaRoot 'MFAAvalonia.Core.dll'
@@ -79,10 +79,38 @@ if (-not $alreadyPatched) {
 }
 
 $taskSourceHash = (Get-FileHash -LiteralPath $taskSource -Algorithm SHA256).Hash
-$customSourceFingerprint = (
-@($settingsSource, $versionCheckerSource, $performanceSettingsView, $performanceSettingsModel, $focusHandlerSource) |
-        ForEach-Object { (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash }
-) -join ':'
+# Git quotes non-ASCII paths as C-style octal escapes by default.  Passing
+# those quoted strings to Join-Path/Test-Path produces an illegal Windows
+# path (for example docs/zh/\345...md).  Emit the real Unicode paths before
+# hashing the complete customized MFA worktree.
+$sourceFingerprintEntries = & git -c core.quotePath=false -C $SourceRoot ls-files -co --exclude-standard |
+    Sort-Object |
+    ForEach-Object {
+        $relativePath = $_
+        $absolutePath = Join-Path $SourceRoot $relativePath
+        if (Test-Path -LiteralPath $absolutePath -PathType Leaf) {
+            "$relativePath=$((Get-FileHash -LiteralPath $absolutePath -Algorithm SHA256).Hash)"
+        }
+        else {
+            "$relativePath=<deleted>"
+        }
+    }
+if ($LASTEXITCODE -ne 0) {
+    throw "Unable to enumerate the custom MFA source worktree: $SourceRoot"
+}
+$fingerprintBytes = [Text.Encoding]::UTF8.GetBytes(
+    [string]::Join("`n", $sourceFingerprintEntries)
+)
+$fingerprintHasher = [Security.Cryptography.SHA256]::Create()
+try {
+    $fingerprintHash = $fingerprintHasher.ComputeHash($fingerprintBytes)
+}
+finally {
+    $fingerprintHasher.Dispose()
+}
+# BitConverter is available in Windows PowerShell 5.1; Convert.ToHexString
+# and SHA256.HashData are only available on newer .NET runtimes.
+$customSourceFingerprint = [BitConverter]::ToString($fingerprintHash).Replace('-', '')
 if (Test-Path -LiteralPath $marker) {
     $metadata = Get-Content -LiteralPath $marker -Raw -Encoding utf8 | ConvertFrom-Json
     $currentHash = (Get-FileHash -LiteralPath $deployedAssembly -Algorithm SHA256).Hash

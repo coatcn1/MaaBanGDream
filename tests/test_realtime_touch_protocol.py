@@ -38,3 +38,17 @@ def test_tap_and_linked_hold_release_share_one_commit():
     commits = stream.getvalue().decode("ascii").strip().split("c\n")
     assert "d 0 340 590 50" in commits[0]
     assert "u 5" in commits[0]
+
+
+def test_directional_flick_uses_horizontal_move():
+    stream = io.BytesIO()
+    touch = MaaTouchProtocol(stream)
+
+    touch.dispatch([
+        TouchAction(ActionKind.FLICK, 3, 1.0, flick_direction="Left"),
+    ])
+
+    lines = stream.getvalue().decode("ascii").splitlines()
+    assert "d 0 640 590 50" in lines
+    assert "m 0 490 590 50" in lines
+    assert "m 0 640 490 50" not in lines

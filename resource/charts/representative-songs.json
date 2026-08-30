@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "collection": "收藏3",
+  "songs": [
+    {"bestdori_song_id": 170, "display_title": "Jumpin'", "category": "original", "fingerprints": []},
+    {"bestdori_song_id": 125, "display_title": "天下トーイツ A to Z☆", "category": "original", "fingerprints": []},
+    {"bestdori_song_id": 325, "display_title": "EXIST", "category": "original", "fingerprints": []},
+    {"bestdori_song_id": 489, "display_title": "迷星叫", "category": "original", "fingerprints": []},
+    {"bestdori_song_id": 522, "display_title": "詩超絆", "category": "original", "fingerprints": []},
+    {"bestdori_song_id": 540, "display_title": "影色舞", "category": "original", "fingerprints": []},
+    {"bestdori_song_id": 85, "display_title": "ハッピーシンセサイザ", "category": "cover", "fingerprints": []},
+    {"bestdori_song_id": 499, "display_title": "アイウエ", "category": "cover", "fingerprints": []},
+    {"bestdori_song_id": 697, "display_title": "最高到達点", "category": "cover", "fingerprints": []},
+    {"bestdori_song_id": 532, "display_title": "祝福", "category": "cover", "fingerprints": []},
+    {"bestdori_song_id": 306, "display_title": "SAVIOR OF SONG", "category": "cover", "fingerprints": []},
+    {"bestdori_song_id": 595, "display_title": "「僕は…」", "category": "cover", "fingerprints": []}
+  ]
+}

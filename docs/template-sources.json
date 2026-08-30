@@ -23,5 +23,7 @@
     "reward_story_confirm.png": "d02512cf2efd4d04ab7f96ea4edb8706ea6ee62682270bc730277e48ab90a5f3",
     "story_skip_confirm.png": "f221bb2769be4f7a760560a422a617982b481d29770f81ede1d493d87a35ce1a",
     "story_skip_confirm_large.png": "2a7ae31fcfaf9f699690d49b488b25369c749a7d4ac0f3b78df1c072409727f5"
+    ,
+    "quit_confirm_cancel.png": "7d1e5242c155cd772ec7ff393803ddb86faf75e3434839efaa05e36fd5f7cf93"
   }
 }

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from functools import lru_cache
 
-from .note_detector import NoteKind, ObservedNote
+from .note_detector import NoteDetector, NoteKind, ObservedNote
 
 
 @dataclass
@@ -49,9 +49,16 @@ class MultiNoteTracker:
 
     ORDINARY_KINDS = frozenset({NoteKind.TAP, NoteKind.SKILL, NoteKind.FLICK})
 
-    def __init__(self, *, memory_seconds: float = .15, max_samples: int = 5):
+    def __init__(
+        self,
+        *,
+        memory_seconds: float = .15,
+        max_samples: int = 5,
+        keep_downward_on_jitter: bool = False,
+    ):
         self.memory_seconds = float(memory_seconds)
         self.max_samples = max(3, min(5, int(max_samples)))
+        self.keep_downward_on_jitter = bool(keep_downward_on_jitter)
         self._tracks: dict[int, _Track] = {}
         self._current_ids: set[int] = set()
         self._next_id = 1
@@ -104,6 +111,76 @@ class MultiNoteTracker:
         return max(0.0, min(4000.0, velocity))
 
     @staticmethod
+    def _lane_center_x(lane: int, y: float) -> float:
+        progress = min(1.08, max(0.0, (y - NoteDetector.VANISHING_Y) / (
+            NoteDetector.JUDGEMENT_Y - NoteDetector.VANISHING_Y
+        )))
+        return 640 + (
+            NoteDetector.DEFAULT_LANE_CENTERS[lane] - 640
+        ) * progress
+
+    def _merge_cross_lane_fragments(
+        self,
+        notes: list[ObservedNote],
+    ) -> list[ObservedNote]:
+        """Merge one physical note split across an adjacent-lane boundary.
+
+        Perspective segmentation can assign the head ring to one lane and the
+        trail/glow fragment to the neighbouring lane.  Both fragments then
+        become independent tracks and fire twice, which the game reads as a
+        miss on the following note.  Real chord partners sit near their own
+        lane centres; only fragments that hug the shared boundary are merged,
+        keeping the head (lowest playable fragment).
+        """
+        if not self.keep_downward_on_jitter or len(notes) < 2:
+            return notes
+        remaining = list(notes)
+        merged: list[ObservedNote] = []
+        while remaining:
+            note = remaining.pop(0)
+            for other in list(remaining):
+                if (
+                    note.kind != other.kind
+                    or abs(note.lane - other.lane) != 1
+                ):
+                    continue
+                y_note = note.y + note.height / 2
+                y_other = other.y + other.height / 2
+                if abs(y_note - y_other) > 14:
+                    continue
+                center_note = self._lane_center_x(note.lane, y_note)
+                center_other = self._lane_center_x(other.lane, y_other)
+                spacing = max(
+                    24.0,
+                    abs(
+                        self._lane_center_x(1, y_note)
+                        - self._lane_center_x(0, y_note)
+                    ),
+                )
+                if other.lane > note.lane:
+                    toward_note = note.x - center_note
+                    toward_other = center_other - other.x
+                else:
+                    toward_note = center_note - note.x
+                    toward_other = other.x - center_other
+                if (
+                    toward_note <= spacing * .12
+                    or toward_other <= spacing * .12
+                ):
+                    continue
+                if (
+                    abs(note.x - other.x)
+                    > max(45.0, (note.width + other.width) * .6)
+                ):
+                    continue
+                if y_other > y_note:
+                    note = other
+                remaining.remove(other)
+                break
+            merged.append(note)
+        return merged
+
+    @staticmethod
     def _compatible(track: _Track, note: ObservedNote, now: float) -> bool:
         latest = track.samples[-1]
         elapsed = max(0.0, now - track.last_seen)
@@ -146,8 +223,25 @@ class MultiNoteTracker:
             if note.kind in self.ORDINARY_KINDS:
                 grouped.setdefault((note.kind, note.lane), []).append(note)
 
+        clustered: dict[tuple[NoteKind, int], list[ObservedNote]] = {}
         for (kind, lane), raw in grouped.items():
-            candidates = self._cluster(raw)
+            clustered[(kind, lane)] = self._cluster(raw)
+        if self.keep_downward_on_jitter:
+            by_kind: dict[NoteKind, list[ObservedNote]] = {}
+            for (kind, _lane), candidates in clustered.items():
+                by_kind.setdefault(kind, []).extend(candidates)
+            merged_by_kind = {
+                kind: self._merge_cross_lane_fragments(candidates)
+                for kind, candidates in by_kind.items()
+            }
+            clustered = {}
+            for kind, candidates in merged_by_kind.items():
+                for note in candidates:
+                    clustered.setdefault((kind, note.lane), []).append(note)
+            for key in clustered:
+                clustered[key].sort(key=lambda item: item.y)
+
+        for (kind, lane), candidates in clustered.items():
             tracks = sorted(
                 (track for track in self._tracks.values()
                  if track.kind == kind and track.lane == lane),
@@ -176,7 +270,7 @@ class MultiNoteTracker:
                     kind,
                     lane,
                     [note],
-                    now,
+                    last_seen=now,
                     first_y=note.y,
                     minimum_y=note.y,
                 )

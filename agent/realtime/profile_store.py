@@ -16,15 +16,35 @@ class EnvironmentSignature:
     game_fps: int
     render_quality: str
     note_speed: float
+    note_skin_type: int = 1
+    tap_effect: int = 1
+    judgement_assist_effect: bool = True
 
     @classmethod
     def from_mapping(cls, value: dict[str, Any]) -> "EnvironmentSignature":
         try:
             resolution = value["resolution"]
+            note_skin_type = value.get("note_skin_type", 1)
+            tap_effect = value.get("tap_effect", 1)
+            judgement_assist_effect = value.get(
+                "judgement_assist_effect", True
+            )
+            if isinstance(note_skin_type, bool) or isinstance(tap_effect, bool):
+                raise TypeError("visual setting numbers cannot be boolean")
+            if (
+                note_skin_type != int(note_skin_type)
+                or tap_effect != int(tap_effect)
+            ):
+                raise ValueError("visual setting numbers must be integers")
+            if not isinstance(judgement_assist_effect, bool):
+                raise TypeError("judgement_assist_effect must be boolean")
             signature = cls(
                 resolution=(int(resolution[0]), int(resolution[1])),
                 dpi=int(value["dpi"]), game_fps=int(value["game_fps"]),
                 render_quality=str(value["render_quality"]), note_speed=float(value["note_speed"]),
+                note_skin_type=int(note_skin_type),
+                tap_effect=int(tap_effect),
+                judgement_assist_effect=judgement_assist_effect,
             )
         except (KeyError, IndexError, TypeError, ValueError) as exc:
             raise ValueError(f"环境签名不完整: {exc}") from exc
@@ -43,6 +63,20 @@ class EnvironmentSignature:
             raise ValueError("演出画质不能为空")
         if not 0.1 <= self.note_speed <= 20:
             raise ValueError("音符流速必须在 0.1..20 之间")
+        if (
+            isinstance(self.note_skin_type, bool)
+            or not isinstance(self.note_skin_type, int)
+            or not 1 <= self.note_skin_type <= 7
+        ):
+            raise ValueError("note_skin_type 必须是 1..7 的整数")
+        if (
+            isinstance(self.tap_effect, bool)
+            or not isinstance(self.tap_effect, int)
+            or not 1 <= self.tap_effect <= 5
+        ):
+            raise ValueError("tap_effect 必须是 1..5 的整数")
+        if not isinstance(self.judgement_assist_effect, bool):
+            raise ValueError("judgement_assist_effect 必须是布尔值")
 
     def to_mapping(self) -> dict[str, Any]:
         data = asdict(self)
@@ -73,8 +107,11 @@ class RealtimeProfileStore:
         "rehearsal_ignore_life_safety": True,
         "skip_process_conflict_cleanup": False,
         "game_effect_settings_enabled": True,
+        "note_skin_type": 1,
         "judgement_assist_effect": True,
         "tap_effect": 1,
+        "chart_prediction_enabled": True,
+        "chart_predict_presses": True,
         "calibration_note_speeds": {
             "Easy": 2.0,
             "Normal": 2.0,
@@ -186,6 +223,15 @@ class RealtimeProfileStore:
         judgement_assist = options.get("judgement_assist_effect", True)
         if not isinstance(judgement_assist, bool):
             raise ValueError("judgement_assist_effect 必须是布尔值")
+        note_skin_raw = options.get("note_skin_type", 1)
+        if isinstance(note_skin_raw, bool):
+            raise ValueError("note_skin_type 必须是 1..7 的整数")
+        try:
+            note_skin_type = int(note_skin_raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("note_skin_type 必须是 1..7 的整数") from exc
+        if note_skin_raw != note_skin_type or not 1 <= note_skin_type <= 7:
+            raise ValueError("note_skin_type 必须是 1..7 的整数")
         tap_effect_raw = options.get("tap_effect", 1)
         if isinstance(tap_effect_raw, bool):
             raise ValueError("tap_effect 必须是 1..5 的整数")
@@ -195,6 +241,12 @@ class RealtimeProfileStore:
             raise ValueError("tap_effect 必须是 1..5 的整数") from exc
         if tap_effect_raw != tap_effect or not 1 <= tap_effect <= 5:
             raise ValueError("tap_effect 必须是 1..5 的整数")
+        chart_prediction_enabled = options.get("chart_prediction_enabled", True)
+        if not isinstance(chart_prediction_enabled, bool):
+            raise ValueError("chart_prediction_enabled 必须是布尔值")
+        chart_predict_presses = options.get("chart_predict_presses", True)
+        if not isinstance(chart_predict_presses, bool):
+            raise ValueError("chart_predict_presses 必须是布尔值")
         try:
             threshold = int(options.get("life_exit_threshold", 200))
         except (TypeError, ValueError) as exc:
@@ -226,8 +278,11 @@ class RealtimeProfileStore:
             "rehearsal_ignore_life_safety": rehearsal_ignore,
             "skip_process_conflict_cleanup": skip_conflict_cleanup,
             "game_effect_settings_enabled": effect_settings_enabled,
+            "note_skin_type": note_skin_type,
             "judgement_assist_effect": judgement_assist,
             "tap_effect": tap_effect,
+            "chart_prediction_enabled": chart_prediction_enabled,
+            "chart_predict_presses": chart_predict_presses,
             "calibration_note_speeds": speeds,
         }
 
@@ -299,6 +354,62 @@ class RealtimeProfileStore:
             note_speed=saved.note_speed,
         )
 
+    @staticmethod
+    def _same_visual_evaluation_environment(
+        saved: EnvironmentSignature,
+        current: EnvironmentSignature,
+    ) -> bool:
+        """Match every gameplay invariant except the three visual factors."""
+        return (
+            saved.resolution == current.resolution
+            and saved.dpi == current.dpi
+            and saved.game_fps == current.game_fps
+            and saved.render_quality == current.render_quality
+            and saved.note_speed == current.note_speed
+        )
+
+    def resolve_for_visual_evaluation(
+        self,
+        value: str | Path,
+        *,
+        difficulty: str,
+        current_signature: EnvironmentSignature,
+    ) -> RuntimeSettings:
+        """Resolve accepted geometry for an isolated visual-factor experiment."""
+        current_signature.validate()
+        profile = self.load(value)
+        if profile.get("accepted") is not True:
+            raise ValueError("Profile 尚未通过用户真机验收")
+        if profile.get("difficulty") not in self.compatible_difficulties(difficulty):
+            raise ValueError(
+                f"Profile 难度为 {profile.get('difficulty')!r}，"
+                f"不兼容任务难度 {difficulty!r}"
+            )
+        saved = EnvironmentSignature.from_mapping(profile.get("environment", {}))
+        if not self._same_visual_evaluation_environment(saved, current_signature):
+            before, now = saved.to_mapping(), current_signature.to_mapping()
+            visual_keys = {
+                "note_skin_type", "tap_effect", "judgement_assist_effect"
+            }
+            mismatches = [
+                key
+                for key in now
+                if key not in visual_keys and before[key] != now[key]
+            ]
+            details = ", ".join(
+                f"{key}={before[key]!r} (当前 {now[key]!r})"
+                for key in mismatches
+            )
+            raise ValueError(
+                "Profile 与视觉评估核心环境不匹配: " + details
+            )
+        settings = self._validated_settings(profile.get("settings", {}))
+        return RuntimeSettings(
+            **settings,
+            profile_path=profile["_path"],
+            note_speed=saved.note_speed,
+        )
+
     def resolve_latest(self, *, difficulty: str, current_signature: EnvironmentSignature) -> RuntimeSettings:
         pinned = self.pinned_profile(difficulty)
         if pinned:
@@ -315,6 +426,107 @@ class RealtimeProfileStore:
                     continue
         raise ValueError(f"没有已验收且环境匹配的 {difficulty} Profile")
 
+    def resolve_latest_for_visual_evaluation(
+        self,
+        *,
+        difficulty: str,
+        current_signature: EnvironmentSignature,
+    ) -> RuntimeSettings:
+        current_signature.validate()
+        pinned = self.pinned_profile(difficulty)
+        if pinned:
+            try:
+                return self.resolve_for_visual_evaluation(
+                    pinned,
+                    difficulty=difficulty,
+                    current_signature=current_signature,
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    f"钉选 Profile 不可用于视觉评估，禁止自动回退: {exc}"
+                ) from exc
+        for source in self.compatible_difficulties(difficulty):
+            candidates = [
+                profile
+                for profile in self.list_profiles(accepted_only=True)
+                if profile.get("difficulty") == source
+            ]
+            for profile in candidates:
+                try:
+                    return self.resolve_for_visual_evaluation(
+                        profile["_path"].name,
+                        difficulty=difficulty,
+                        current_signature=current_signature,
+                    )
+                except ValueError:
+                    continue
+        raise ValueError(
+            f"没有已验收且核心环境匹配的 {difficulty} Profile"
+        )
+
+    @staticmethod
+    def _same_visual_evaluation_precheck_environment(
+        saved: EnvironmentSignature,
+        current: EnvironmentSignature,
+    ) -> bool:
+        return (
+            saved.resolution == current.resolution
+            and saved.dpi == current.dpi
+            and saved.game_fps == current.game_fps
+            and saved.render_quality == current.render_quality
+        )
+
+    def resolve_latest_for_visual_evaluation_environment(
+        self,
+        *,
+        difficulty: str,
+        current_signature: EnvironmentSignature,
+    ) -> RuntimeSettings:
+        """Precheck an experiment before the accepted speed is read.
+
+        Only the speed and visual factors are deferred.  Play must later call
+        ``resolve_latest_for_visual_evaluation`` with the verified speed.
+        """
+        current_signature.validate()
+        pinned = self.pinned_profile(difficulty)
+        if pinned:
+            profile = self.load(pinned)
+            if profile.get("accepted") is not True:
+                raise ValueError("钉选 Profile 尚未通过用户真机验收")
+            if profile.get("difficulty") not in self.compatible_difficulties(difficulty):
+                raise ValueError("钉选 Profile 难度不兼容")
+            saved = EnvironmentSignature.from_mapping(profile.get("environment", {}))
+            if not self._same_visual_evaluation_precheck_environment(
+                saved, current_signature
+            ):
+                raise ValueError("钉选 Profile 与视觉评估核心环境不匹配")
+            return self.resolve_for_visual_evaluation(
+                pinned,
+                difficulty=difficulty,
+                current_signature=saved,
+            )
+        for source in self.compatible_difficulties(difficulty):
+            candidates = [
+                profile
+                for profile in self.list_profiles(accepted_only=True)
+                if profile.get("difficulty") == source
+            ]
+            for profile in candidates:
+                saved = EnvironmentSignature.from_mapping(
+                    profile.get("environment", {})
+                )
+                if self._same_visual_evaluation_precheck_environment(
+                    saved, current_signature
+                ):
+                    return self.resolve_for_visual_evaluation(
+                        profile["_path"].name,
+                        difficulty=difficulty,
+                        current_signature=saved,
+                    )
+        raise ValueError(
+            f"没有已验收且核心环境匹配的 {difficulty} Profile"
+        )
+
     @staticmethod
     def _same_non_speed_environment(
         saved: EnvironmentSignature,
@@ -325,6 +537,10 @@ class RealtimeProfileStore:
             and saved.dpi == current.dpi
             and saved.game_fps == current.game_fps
             and saved.render_quality == current.render_quality
+            and saved.note_skin_type == current.note_skin_type
+            and saved.tap_effect == current.tap_effect
+            and saved.judgement_assist_effect
+            == current.judgement_assist_effect
         )
 
     def resolve_latest_for_environment(
@@ -402,6 +618,17 @@ class RealtimeProfileStore:
         temporary = path.with_suffix(".json.tmp")
         temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         os.replace(temporary, path)
+
+    def replace(self, value: str | Path, payload: dict[str, Any]) -> Path:
+        """Atomically replace one existing Profile without changing its name."""
+        path = self._path(value)
+        if not path.exists():
+            raise ValueError(f"Profile 不存在: {path.name}")
+        difficulty = str(payload.get("difficulty", ""))
+        self.compatible_difficulties(difficulty)
+        clean = {key: item for key, item in payload.items() if key != "_path"}
+        self._atomic_write(path, {"schema_version": self.SCHEMA_VERSION, **clean})
+        return path
 
     def write(self, payload: dict[str, Any]) -> Path:
         difficulty = str(payload.get("difficulty", ""))

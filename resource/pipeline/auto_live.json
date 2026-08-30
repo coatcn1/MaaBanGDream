@@ -52,6 +52,9 @@
     "custom_action": "CommonRecover",
     "custom_action_param": {
       "home_node": "AutoLiveHomeMarker",
+      "modal_cancel_nodes": [
+        "QuitConfirmCancel"
+      ],
       "click_nodes": [
         "AutoLiveLoginTap",
         "AutoLiveLoginNext",
@@ -145,6 +148,9 @@
     "custom_action": "CommonRecover",
     "custom_action_param": {
       "home_node": "AutoLiveHomeMarker",
+      "modal_cancel_nodes": [
+        "QuitConfirmCancel"
+      ],
       "click_nodes": [
         "AutoLiveLoginTap",
         "AutoLiveLoginNext",
@@ -405,7 +411,11 @@
   "AutoLiveRandomSong": {
     "recognition": "DirectHit",
     "action": "Custom",
-    "custom_action": "ForegroundClick",
+    "custom_action": "RandomSongSelect",
+    "custom_action_param": {
+      "max_attempts": 3,
+      "verify_delay_seconds": 1.0
+    },
     "target": [
       687,
       642
@@ -638,22 +648,34 @@
     "custom_action": "CommonRecover",
     "custom_action_param": {
       "home_node": "AutoLiveHomeMarker",
-      "click_nodes": [
-        "AutoLiveResultConfirm",
-        "AutoLiveRewardStoryConfirm",
+      "modal_cancel_nodes": [
+        "QuitConfirmCancel"
+      ],
+      "click_nodes": [],
+      "back_only_click_nodes": [
         "AutoLiveStorySkipConfirmLarge",
         "AutoLiveStorySkipConfirm",
         "AutoLiveStorySkip",
-        "AutoLiveStoryMenu",
-        "AutoLiveLoginTap",
-        "AutoLiveLoginNext",
-        "AutoLiveCommonClose"
+        "AutoLiveStoryMenu"
       ],
-      "escape_interval_ms": 1500,
+      "back_only": true,
+      "escape_interval_ms": 500,
       "escape_timeout_ms": 60000,
-      "restart_limit": 2,
+      "restart_limit": 1,
       "restart_wait_ms": 5000,
-      "package": "com.bilibili.star.bili"
+      "startup_grace_ms": 12000,
+      "login_start_node": "AutoLiveLoginScreenMarker",
+      "login_start_target": [
+        640,
+        635
+      ],
+      "login_marker_priority_attempts": 3,
+      "escape_after_login_start": true,
+      "package": "com.bilibili.star.bili",
+      "login_tap_target": [
+        640,
+        360
+      ]
     },
     "next": [
       "AutoLiveRoundCompleted"

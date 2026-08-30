@@ -23,6 +23,9 @@ $deployedResource = Join-Path $MfaRoot 'resource\resource'
 $python = Join-Path $CondaRoot "envs\$EnvironmentName\python.exe"
 $agent = Join-Path $projectRoot 'agent\server.py'
 $profileManager = Join-Path $projectRoot 'agent\profile_manager.py'
+$chartSync = Join-Path $projectRoot 'scripts\sync_bestdori_catalog.py'
+$chartRoot = Join-Path $projectRoot 'resource\charts'
+$chartManifest = Join-Path $chartRoot 'manifest.json'
 $profileDirectory = Join-Path $projectRoot 'profiles'
 $recordingDirectory = Join-Path $projectRoot 'debug\recordings'
 $captureDirectory = Join-Path $projectRoot 'screencap'
@@ -31,7 +34,7 @@ $mfaLogDirectory = Join-Path $MfaRoot 'logs'
 $instanceConfigDirectory = Join-Path $MfaRoot 'config\instances'
 $mfaStopStatusPatch = Join-Path $PSScriptRoot 'patch-mfa-stop-status.ps1'
 
-foreach ($required in ($mfaExe, $sourceInterface, $sourceResource, $python, $agent, $profileManager, $mfaStopStatusPatch)) {
+foreach ($required in ($mfaExe, $sourceInterface, $sourceResource, $python, $agent, $profileManager, $chartSync, $mfaStopStatusPatch)) {
     if (-not (Test-Path -LiteralPath $required)) {
         throw "Required MaaBanGDream runtime path is missing: $required"
     }
@@ -52,6 +55,38 @@ foreach ($runtimeDirectory in ($profileDirectory, $recordingDirectory, $captureD
 }
 Copy-Item -Path (Join-Path $sourceResource '*') -Destination $deployedResource -Recurse -Force
 
+# The local chart catalog intentionally stores only Hard/Expert/Special.  A
+# normal Copy-Item deployment does not remove Easy/Normal files left by older
+# snapshots, so delete only those two known obsolete filenames from validated
+# numeric Bestdori song directories.
+$deployedBestdoriRoot = [System.IO.Path]::GetFullPath(
+    (Join-Path $deployedResource 'charts\bestdori')
+)
+if (Test-Path -LiteralPath $deployedBestdoriRoot -PathType Container) {
+    $deployedBestdoriPrefix = $deployedBestdoriRoot.TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar
+    ) + [System.IO.Path]::DirectorySeparatorChar
+    foreach ($songDirectory in Get-ChildItem -LiteralPath $deployedBestdoriRoot -Directory) {
+        if ($songDirectory.Name -notmatch '^\d+$') {
+            continue
+        }
+        foreach ($obsoleteName in @('easy.json', 'normal.json')) {
+            $obsoletePath = [System.IO.Path]::GetFullPath(
+                (Join-Path $songDirectory.FullName $obsoleteName)
+            )
+            if (-not $obsoletePath.StartsWith(
+                $deployedBestdoriPrefix,
+                [System.StringComparison]::OrdinalIgnoreCase
+            )) {
+                throw "Refusing to remove chart outside deployment root: $obsoletePath"
+            }
+            if (Test-Path -LiteralPath $obsoletePath -PathType Leaf) {
+                Remove-Item -LiteralPath $obsoletePath -Force
+            }
+        }
+    }
+}
+
 $interface = Get-Content -LiteralPath $sourceInterface -Raw -Encoding utf8 | ConvertFrom-Json
 $interface.resource[0].path = @('./resource/resource')
 $interface.agent.child_exec = $python.Replace('\', '/')
@@ -64,6 +99,21 @@ $profileManagerConfig = [ordered]@{
     version = 1
     child_exec = $python
     child_args = @($profileManager)
+    chart_sync = [ordered]@{
+        child_exec = $python
+        child_args = @(
+            $chartSync
+            '--output-root'
+            $chartRoot
+            '--jacket-server'
+            'cn'
+            '--jacket-fallback-server'
+            'jp,en'
+            '--prune-other-difficulties'
+        )
+        working_directory = $projectRoot
+        manifest_path = $chartManifest
+    }
     environment = [ordered]@{
         resolution = @(1280, 720)
         dpi = 240
@@ -88,6 +138,11 @@ if (Test-Path -LiteralPath $instanceConfigDirectory) {
     Get-ChildItem -LiteralPath $instanceConfigDirectory -Filter '*.json' -File | ForEach-Object {
         $instanceConfig = Get-Content -LiteralPath $_.FullName -Raw -Encoding utf8 | ConvertFrom-Json
         $instanceConfig | Add-Member -NotePropertyName 'ContinueRunningWhenError' -NotePropertyValue $false -Force
+        # MaaTouch's injected events are silently ignored by the game's live
+        # screen on LDPlayer 9 after emulator restarts, while Minitouch stays
+        # reliable.  The ADB device probe resets InputMethods on every MFA
+        # start, so pin the input mode here (the UI setting overrides it).
+        $instanceConfig | Add-Member -NotePropertyName 'AdbControlInputType' -NotePropertyValue 'MinitouchAndAdbKey' -Force
         $instanceConfig | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $_.FullName -Encoding utf8
     }
 }

@@ -1,0 +1,7707 @@
+{
+  "schema_version": 1,
+  "source": {
+    "provider": "bestdori",
+    "url": "https://bestdori.com/api/charts/79/special.json",
+    "raw_sha256": "357abef8bb45cd50048d88519f106ebbec76186df92a1b23c7612e607b1701f3",
+    "chart_sha256": "297df3d4fe2303b656409a30589b416c35620b77e5f5b0b50dcebd20e27e54d7"
+  },
+  "song": {
+    "bestdori_id": 79,
+    "titles": [
+      "世界は恋に落ちている",
+      "Sekaiwa Koini Ochiteiru",
+      "世界は戀に落ちている",
+      "世界は恋に落ちている",
+      "Sekaiwa Koini Ochiteiru"
+    ]
+  },
+  "difficulty": {
+    "name": "special",
+    "level": 25,
+    "expected_notes": 686
+  },
+  "chart": [
+    {
+      "type": "BPM",
+      "bpm": 130,
+      "beat": 0
+    },
+    {
+      "type": "System",
+      "data": "bgm079.wav",
+      "beat": 0
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 8
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 8
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 8.75
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 9.5
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 9.5
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 10
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 10.5
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 10.75
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 11
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 11.5
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 12
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 12
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 12.75
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 13.5
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 13.5
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 14
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 14.75
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 15.5
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 16
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 16
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 16.75
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 17.5
+    },
+    {
+      "type": "Single",
+      "lane": 3,
+      "beat": 18
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 18
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 18.75
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 19.5
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 20
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 20
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 20.75
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 21.5
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 21.75
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 1,
+          "beat": 22
+        },
+        {
+          "lane": 0,
+          "beat": 23
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 23
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 23.5
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 24
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 24
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 24.75
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 25
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 25.5
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 26
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 26
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 26.75
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 27
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 27.5
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 28
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 28
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 6,
+          "beat": 28.5
+        },
+        {
+          "lane": 5,
+          "beat": 28.75
+        },
+        {
+          "lane": 4,
+          "beat": 29
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 29
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 29.5
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 29.5
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 30
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 30.5
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 2,
+          "beat": 31
+        },
+        {
+          "lane": 1.72,
+          "beat": 31.0625,
+          "hidden": true
+        },
+        {
+          "lane": 1.46,
+          "beat": 31.125,
+          "hidden": true
+        },
+        {
+          "lane": 1.25,
+          "beat": 31.1875,
+          "hidden": true
+        },
+        {
+          "lane": 1.06,
+          "beat": 31.25,
+          "hidden": true
+        },
+        {
+          "lane": 0.91,
+          "beat": 31.3125,
+          "hidden": true
+        },
+        {
+          "lane": 0.77,
+          "beat": 31.375,
+          "hidden": true
+        },
+        {
+          "lane": 0.6499999999999999,
+          "beat": 31.4375,
+          "hidden": true
+        },
+        {
+          "lane": 0.51,
+          "beat": 31.5,
+          "hidden": true
+        },
+        {
+          "lane": 0.39,
+          "beat": 31.5625,
+          "hidden": true
+        },
+        {
+          "lane": 0.31,
+          "beat": 31.625,
+          "hidden": true
+        },
+        {
+          "lane": 0.24,
+          "beat": 31.6875,
+          "hidden": true
+        },
+        {
+          "lane": 0.18,
+          "beat": 31.75,
+          "hidden": true
+        },
+        {
+          "lane": 0.12,
+          "beat": 31.8125,
+          "hidden": true
+        },
+        {
+          "lane": 0.06,
+          "beat": 31.875,
+          "hidden": true
+        },
+        {
+          "lane": 0.02,
+          "beat": 31.9375,
+          "hidden": true
+        },
+        {
+          "lane": 0,
+          "beat": 32
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 31.5
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 4,
+          "beat": 32
+        },
+        {
+          "lane": 4.14,
+          "beat": 32.0625,
+          "hidden": true
+        },
+        {
+          "lane": 4.28,
+          "beat": 32.125,
+          "hidden": true
+        },
+        {
+          "lane": 4.41,
+          "beat": 32.1875,
+          "hidden": true
+        },
+        {
+          "lane": 4.53,
+          "beat": 32.25,
+          "hidden": true
+        },
+        {
+          "lane": 4.63,
+          "beat": 32.3125,
+          "hidden": true
+        },
+        {
+          "lane": 4.73,
+          "beat": 32.375,
+          "hidden": true
+        },
+        {
+          "lane": 4.82,
+          "beat": 32.4375,
+          "hidden": true
+        },
+        {
+          "lane": 4.9,
+          "beat": 32.5,
+          "hidden": true
+        },
+        {
+          "lane": 4.98,
+          "beat": 32.5625,
+          "hidden": true
+        },
+        {
+          "lane": 5.05,
+          "beat": 32.625,
+          "hidden": true
+        },
+        {
+          "lane": 5.12,
+          "beat": 32.6875,
+          "hidden": true
+        },
+        {
+          "lane": 5.18,
+          "beat": 32.75,
+          "hidden": true
+        },
+        {
+          "lane": 5.24,
+          "beat": 32.8125,
+          "hidden": true
+        },
+        {
+          "lane": 5.29,
+          "beat": 32.875,
+          "hidden": true
+        },
+        {
+          "lane": 5.35,
+          "beat": 32.9375,
+          "hidden": true
+        },
+        {
+          "lane": 5.4,
+          "beat": 33,
+          "hidden": true
+        },
+        {
+          "lane": 5.44,
+          "beat": 33.0625,
+          "hidden": true
+        },
+        {
+          "lane": 5.48,
+          "beat": 33.125,
+          "hidden": true
+        },
+        {
+          "lane": 5.52,
+          "beat": 33.1875,
+          "hidden": true
+        },
+        {
+          "lane": 5.56,
+          "beat": 33.25,
+          "hidden": true
+        },
+        {
+          "lane": 5.6,
+          "beat": 33.3125,
+          "hidden": true
+        },
+        {
+          "lane": 5.63,
+          "beat": 33.375,
+          "hidden": true
+        },
+        {
+          "lane": 5.66,
+          "beat": 33.4375,
+          "hidden": true
+        },
+        {
+          "lane": 5.7,
+          "beat": 33.5,
+          "hidden": true
+        },
+        {
+          "lane": 5.73,
+          "beat": 33.5625,
+          "hidden": true
+        },
+        {
+          "lane": 5.75,
+          "beat": 33.625,
+          "hidden": true
+        },
+        {
+          "lane": 5.77,
+          "beat": 33.6875,
+          "hidden": true
+        },
+        {
+          "lane": 5.79,
+          "beat": 33.75,
+          "hidden": true
+        },
+        {
+          "lane": 5.82,
+          "beat": 33.8125,
+          "hidden": true
+        },
+        {
+          "lane": 5.84,
+          "beat": 33.875,
+          "hidden": true
+        },
+        {
+          "lane": 5.85,
+          "beat": 33.9375,
+          "hidden": true
+        },
+        {
+          "lane": 5.87,
+          "beat": 34,
+          "hidden": true
+        },
+        {
+          "lane": 5.89,
+          "beat": 34.0625,
+          "hidden": true
+        },
+        {
+          "lane": 5.9,
+          "beat": 34.125,
+          "hidden": true
+        },
+        {
+          "lane": 5.91,
+          "beat": 34.1875,
+          "hidden": true
+        },
+        {
+          "lane": 5.93,
+          "beat": 34.25,
+          "hidden": true
+        },
+        {
+          "lane": 5.94,
+          "beat": 34.3125,
+          "hidden": true
+        },
+        {
+          "lane": 5.95,
+          "beat": 34.375,
+          "hidden": true
+        },
+        {
+          "lane": 5.95,
+          "beat": 34.4375,
+          "hidden": true
+        },
+        {
+          "lane": 5.96,
+          "beat": 34.5,
+          "hidden": true
+        },
+        {
+          "lane": 5.97,
+          "beat": 34.5625,
+          "hidden": true
+        },
+        {
+          "lane": 5.97,
+          "beat": 34.625,
+          "hidden": true
+        },
+        {
+          "lane": 5.98,
+          "beat": 34.6875,
+          "hidden": true
+        },
+        {
+          "lane": 5.98,
+          "beat": 34.75,
+          "hidden": true
+        },
+        {
+          "lane": 6,
+          "beat": 34.8125,
+          "hidden": true
+        },
+        {
+          "lane": 6,
+          "beat": 34.875,
+          "hidden": true
+        },
+        {
+          "lane": 6,
+          "beat": 34.9375,
+          "hidden": true
+        },
+        {
+          "lane": 6,
+          "beat": 35
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 33
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 34
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 35
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 4,
+          "beat": 36
+        },
+        {
+          "lane": 4.47,
+          "beat": 36.0625,
+          "hidden": true
+        },
+        {
+          "lane": 4.69,
+          "beat": 36.125,
+          "hidden": true
+        },
+        {
+          "lane": 4.81,
+          "beat": 36.1875,
+          "hidden": true
+        },
+        {
+          "lane": 4.9,
+          "beat": 36.25,
+          "hidden": true
+        },
+        {
+          "lane": 4.95,
+          "beat": 36.3125,
+          "hidden": true
+        },
+        {
+          "lane": 4.98,
+          "beat": 36.375,
+          "hidden": true
+        },
+        {
+          "lane": 5,
+          "beat": 36.4375,
+          "hidden": true
+        },
+        {
+          "lane": 5,
+          "beat": 36.5
+        },
+        {
+          "lane": 5.47,
+          "beat": 36.5625,
+          "hidden": true
+        },
+        {
+          "lane": 5.69,
+          "beat": 36.625,
+          "hidden": true
+        },
+        {
+          "lane": 5.81,
+          "beat": 36.6875,
+          "hidden": true
+        },
+        {
+          "lane": 5.9,
+          "beat": 36.75,
+          "hidden": true
+        },
+        {
+          "lane": 5.95,
+          "beat": 36.8125,
+          "hidden": true
+        },
+        {
+          "lane": 5.98,
+          "beat": 36.875,
+          "hidden": true
+        },
+        {
+          "lane": 6,
+          "beat": 36.9375,
+          "hidden": true
+        },
+        {
+          "lane": 6,
+          "beat": 37
+        }
+      ]
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 2,
+          "beat": 37
+        },
+        {
+          "lane": 1.53,
+          "beat": 37.0625,
+          "hidden": true
+        },
+        {
+          "lane": 1.31,
+          "beat": 37.125,
+          "hidden": true
+        },
+        {
+          "lane": 1.19,
+          "beat": 37.1875,
+          "hidden": true
+        },
+        {
+          "lane": 1.1,
+          "beat": 37.25,
+          "hidden": true
+        },
+        {
+          "lane": 1.05,
+          "beat": 37.3125,
+          "hidden": true
+        },
+        {
+          "lane": 1.02,
+          "beat": 37.375,
+          "hidden": true
+        },
+        {
+          "lane": 1,
+          "beat": 37.4375,
+          "hidden": true
+        },
+        {
+          "lane": 1,
+          "beat": 37.5
+        },
+        {
+          "lane": 0.53,
+          "beat": 37.5625,
+          "hidden": true
+        },
+        {
+          "lane": 0.31,
+          "beat": 37.625,
+          "hidden": true
+        },
+        {
+          "lane": 0.19,
+          "beat": 37.6875,
+          "hidden": true
+        },
+        {
+          "lane": 0.1,
+          "beat": 37.75,
+          "hidden": true
+        },
+        {
+          "lane": 0.05,
+          "beat": 37.8125,
+          "hidden": true
+        },
+        {
+          "lane": 0.02,
+          "beat": 37.875,
+          "hidden": true
+        },
+        {
+          "lane": 0,
+          "beat": 37.9375,
+          "hidden": true
+        },
+        {
+          "lane": 0,
+          "beat": 38
+        }
+      ]
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 3,
+          "beat": 38
+        },
+        {
+          "lane": 3.47,
+          "beat": 38.0625,
+          "hidden": true
+        },
+        {
+          "lane": 3.69,
+          "beat": 38.125,
+          "hidden": true
+        },
+        {
+          "lane": 3.81,
+          "beat": 38.1875,
+          "hidden": true
+        },
+        {
+          "lane": 3.9,
+          "beat": 38.25,
+          "hidden": true
+        },
+        {
+          "lane": 3.95,
+          "beat": 38.3125,
+          "hidden": true
+        },
+        {
+          "lane": 3.98,
+          "beat": 38.375,
+          "hidden": true
+        },
+        {
+          "lane": 4,
+          "beat": 38.4375,
+          "hidden": true
+        },
+        {
+          "lane": 4,
+          "beat": 38.5
+        },
+        {
+          "lane": 4.47,
+          "beat": 38.5625,
+          "hidden": true
+        },
+        {
+          "lane": 4.69,
+          "beat": 38.625,
+          "hidden": true
+        },
+        {
+          "lane": 4.81,
+          "beat": 38.6875,
+          "hidden": true
+        },
+        {
+          "lane": 4.9,
+          "beat": 38.75,
+          "hidden": true
+        },
+        {
+          "lane": 4.95,
+          "beat": 38.8125,
+          "hidden": true
+        },
+        {
+          "lane": 4.98,
+          "beat": 38.875,
+          "hidden": true
+        },
+        {
+          "lane": 5,
+          "beat": 38.9375,
+          "hidden": true
+        },
+        {
+          "lane": 5,
+          "beat": 39
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 39
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 39.5
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 39.75
+    },
+    {
+      "type": "Directional",
+      "beat": 40,
+      "lane": 5,
+      "direction": "Right",
+      "width": 2
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 40.75
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 41
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 4,
+          "beat": 41.5
+        },
+        {
+          "lane": 4.27,
+          "beat": 41.5625,
+          "hidden": true
+        },
+        {
+          "lane": 4.53,
+          "beat": 41.625,
+          "hidden": true
+        },
+        {
+          "lane": 4.72,
+          "beat": 41.6875,
+          "hidden": true
+        },
+        {
+          "lane": 4.9,
+          "beat": 41.75,
+          "hidden": true
+        },
+        {
+          "lane": 5.06,
+          "beat": 41.8125,
+          "hidden": true
+        },
+        {
+          "lane": 5.2,
+          "beat": 41.875,
+          "hidden": true
+        },
+        {
+          "lane": 5.33,
+          "beat": 41.9375,
+          "hidden": true
+        },
+        {
+          "lane": 5.45,
+          "beat": 42,
+          "hidden": true
+        },
+        {
+          "lane": 5.56,
+          "beat": 42.0625,
+          "hidden": true
+        },
+        {
+          "lane": 5.65,
+          "beat": 42.125,
+          "hidden": true
+        },
+        {
+          "lane": 5.73,
+          "beat": 42.1875,
+          "hidden": true
+        },
+        {
+          "lane": 5.8,
+          "beat": 42.25,
+          "hidden": true
+        },
+        {
+          "lane": 5.88,
+          "beat": 42.3125,
+          "hidden": true
+        },
+        {
+          "lane": 5.94,
+          "beat": 42.375,
+          "hidden": true
+        },
+        {
+          "lane": 5.98,
+          "beat": 42.4375,
+          "hidden": true
+        },
+        {
+          "lane": 6,
+          "beat": 42.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 41.75,
+      "skill": true
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 42.5
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 43
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 43.5
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 0,
+          "beat": 44
+        },
+        {
+          "lane": 0.43,
+          "beat": 44.0625,
+          "hidden": true
+        },
+        {
+          "lane": 0.61,
+          "beat": 44.125,
+          "hidden": true
+        },
+        {
+          "lane": 0.72,
+          "beat": 44.1875,
+          "hidden": true
+        },
+        {
+          "lane": 0.79,
+          "beat": 44.25,
+          "hidden": true
+        },
+        {
+          "lane": 0.85,
+          "beat": 44.3125,
+          "hidden": true
+        },
+        {
+          "lane": 0.9,
+          "beat": 44.375,
+          "hidden": true
+        },
+        {
+          "lane": 0.94,
+          "beat": 44.4375,
+          "hidden": true
+        },
+        {
+          "lane": 0.96,
+          "beat": 44.5,
+          "hidden": true
+        },
+        {
+          "lane": 0.97,
+          "beat": 44.5625,
+          "hidden": true
+        },
+        {
+          "lane": 0.98,
+          "beat": 44.625,
+          "hidden": true
+        },
+        {
+          "lane": 1,
+          "beat": 44.6875,
+          "hidden": true
+        },
+        {
+          "lane": 1,
+          "beat": 44.75
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 44.75
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 45
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 5,
+          "beat": 45.5
+        },
+        {
+          "lane": 5.25,
+          "beat": 45.625,
+          "hidden": true
+        },
+        {
+          "lane": 5.45,
+          "beat": 45.75,
+          "hidden": true
+        },
+        {
+          "lane": 5.62,
+          "beat": 45.875,
+          "hidden": true
+        },
+        {
+          "lane": 5.75,
+          "beat": 46,
+          "hidden": true
+        },
+        {
+          "lane": 5.85,
+          "beat": 46.125,
+          "hidden": true
+        },
+        {
+          "lane": 5.94,
+          "beat": 46.25,
+          "hidden": true
+        },
+        {
+          "lane": 5.98,
+          "beat": 46.375,
+          "hidden": true
+        },
+        {
+          "lane": 6,
+          "beat": 46.5,
+          "hidden": true
+        },
+        {
+          "lane": 6,
+          "beat": 47
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 45.75
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 46.5
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 1,
+          "beat": 47
+        },
+        {
+          "lane": 0,
+          "beat": 47.25
+        },
+        {
+          "lane": 1,
+          "beat": 47.5
+        },
+        {
+          "lane": 2,
+          "beat": 47.75
+        },
+        {
+          "lane": 3,
+          "beat": 48
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 47.5
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 48
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 48.75
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 49
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 2,
+          "beat": 49.5
+        },
+        {
+          "lane": 1.49,
+          "beat": 49.5625,
+          "hidden": true
+        },
+        {
+          "lane": 1.15,
+          "beat": 49.625,
+          "hidden": true
+        },
+        {
+          "lane": 0.92,
+          "beat": 49.6875,
+          "hidden": true
+        },
+        {
+          "lane": 0.74,
+          "beat": 49.75,
+          "hidden": true
+        },
+        {
+          "lane": 0.59,
+          "beat": 49.8125,
+          "hidden": true
+        },
+        {
+          "lane": 0.47000000000000003,
+          "beat": 49.875,
+          "hidden": true
+        },
+        {
+          "lane": 0.37,
+          "beat": 49.9375,
+          "hidden": true
+        },
+        {
+          "lane": 0.29,
+          "beat": 50,
+          "hidden": true
+        },
+        {
+          "lane": 0.22,
+          "beat": 50.0625,
+          "hidden": true
+        },
+        {
+          "lane": 0.16,
+          "beat": 50.125,
+          "hidden": true
+        },
+        {
+          "lane": 0.11,
+          "beat": 50.1875,
+          "hidden": true
+        },
+        {
+          "lane": 0.07,
+          "beat": 50.25,
+          "hidden": true
+        },
+        {
+          "lane": 0.04,
+          "beat": 50.3125,
+          "hidden": true
+        },
+        {
+          "lane": 0.02,
+          "beat": 50.375,
+          "hidden": true
+        },
+        {
+          "lane": 0.01,
+          "beat": 50.4375,
+          "hidden": true
+        },
+        {
+          "lane": 0,
+          "beat": 50.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 49.75
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 50.5
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 51
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 51.5
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 52
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 6,
+          "beat": 52
+        },
+        {
+          "lane": 5.57,
+          "beat": 52.0625,
+          "hidden": true
+        },
+        {
+          "lane": 5.39,
+          "beat": 52.125,
+          "hidden": true
+        },
+        {
+          "lane": 5.28,
+          "beat": 52.1875,
+          "hidden": true
+        },
+        {
+          "lane": 5.21,
+          "beat": 52.25,
+          "hidden": true
+        },
+        {
+          "lane": 5.15,
+          "beat": 52.3125,
+          "hidden": true
+        },
+        {
+          "lane": 5.1,
+          "beat": 52.375,
+          "hidden": true
+        },
+        {
+          "lane": 5.06,
+          "beat": 52.4375,
+          "hidden": true
+        },
+        {
+          "lane": 5.04,
+          "beat": 52.5,
+          "hidden": true
+        },
+        {
+          "lane": 5.03,
+          "beat": 52.5625,
+          "hidden": true
+        },
+        {
+          "lane": 5.02,
+          "beat": 52.625,
+          "hidden": true
+        },
+        {
+          "lane": 5,
+          "beat": 52.6875,
+          "hidden": true
+        },
+        {
+          "lane": 5,
+          "beat": 52.75
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 52.75
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 53
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 1,
+          "beat": 53.5
+        },
+        {
+          "lane": 0.75,
+          "beat": 53.625,
+          "hidden": true
+        },
+        {
+          "lane": 0.55,
+          "beat": 53.75,
+          "hidden": true
+        },
+        {
+          "lane": 0.38,
+          "beat": 53.875,
+          "hidden": true
+        },
+        {
+          "lane": 0.25,
+          "beat": 54,
+          "hidden": true
+        },
+        {
+          "lane": 0.15,
+          "beat": 54.125,
+          "hidden": true
+        },
+        {
+          "lane": 0.06,
+          "beat": 54.25,
+          "hidden": true
+        },
+        {
+          "lane": 0.02,
+          "beat": 54.375,
+          "hidden": true
+        },
+        {
+          "lane": 0,
+          "beat": 54.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 53.75
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 54.5
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 54.75
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 55
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 55.25
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 55.5
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 55.75
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 6,
+          "beat": 56
+        },
+        {
+          "lane": 5.57,
+          "beat": 56.0625,
+          "hidden": true
+        },
+        {
+          "lane": 5.39,
+          "beat": 56.125,
+          "hidden": true
+        },
+        {
+          "lane": 5.28,
+          "beat": 56.1875,
+          "hidden": true
+        },
+        {
+          "lane": 5.21,
+          "beat": 56.25,
+          "hidden": true
+        },
+        {
+          "lane": 5.15,
+          "beat": 56.3125,
+          "hidden": true
+        },
+        {
+          "lane": 5.1,
+          "beat": 56.375,
+          "hidden": true
+        },
+        {
+          "lane": 5.06,
+          "beat": 56.4375,
+          "hidden": true
+        },
+        {
+          "lane": 5.04,
+          "beat": 56.5,
+          "hidden": true
+        },
+        {
+          "lane": 5.03,
+          "beat": 56.5625,
+          "hidden": true
+        },
+        {
+          "lane": 5.02,
+          "beat": 56.625,
+          "hidden": true
+        },
+        {
+          "lane": 5,
+          "beat": 56.6875,
+          "hidden": true
+        },
+        {
+          "lane": 5,
+          "beat": 56.75
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 56.75
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 57
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 0,
+          "beat": 57.5
+        },
+        {
+          "lane": 0.27,
+          "beat": 57.5625,
+          "hidden": true
+        },
+        {
+          "lane": 0.53,
+          "beat": 57.625,
+          "hidden": true
+        },
+        {
+          "lane": 0.72,
+          "beat": 57.6875,
+          "hidden": true
+        },
+        {
+          "lane": 0.9,
+          "beat": 57.75,
+          "hidden": true
+        },
+        {
+          "lane": 1.06,
+          "beat": 57.8125,
+          "hidden": true
+        },
+        {
+          "lane": 1.2,
+          "beat": 57.875,
+          "hidden": true
+        },
+        {
+          "lane": 1.33,
+          "beat": 57.9375,
+          "hidden": true
+        },
+        {
+          "lane": 1.45,
+          "beat": 58,
+          "hidden": true
+        },
+        {
+          "lane": 1.56,
+          "beat": 58.0625,
+          "hidden": true
+        },
+        {
+          "lane": 1.65,
+          "beat": 58.125,
+          "hidden": true
+        },
+        {
+          "lane": 1.73,
+          "beat": 58.1875,
+          "hidden": true
+        },
+        {
+          "lane": 1.8,
+          "beat": 58.25,
+          "hidden": true
+        },
+        {
+          "lane": 1.88,
+          "beat": 58.3125,
+          "hidden": true
+        },
+        {
+          "lane": 1.94,
+          "beat": 58.375,
+          "hidden": true
+        },
+        {
+          "lane": 1.98,
+          "beat": 58.4375,
+          "hidden": true
+        },
+        {
+          "lane": 2,
+          "beat": 58.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 57.75
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 4,
+          "beat": 58.5
+        },
+        {
+          "lane": 6,
+          "beat": 59
+        },
+        {
+          "lane": 4,
+          "beat": 59.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 59.5
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 60
+    },
+    {
+      "type": "Long",
+      "connections": [
+        {
+          "lane": 6,
+          "beat": 60
+        },
+        {
+          "lane": 6,
+          "beat": 60.75
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 60.75
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 61
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 2,
+          "beat": 61.5
+        },
+        {
+          "lane": 1.75,
+          "beat": 61.625,
+          "hidden": true
+        },
+        {
+          "lane": 1.55,
+          "beat": 61.75,
+          "hidden": true
+        },
+        {
+          "lane": 1.38,
+          "beat": 61.875,
+          "hidden": true
+        },
+        {
+          "lane": 1.25,
+          "beat": 62,
+          "hidden": true
+        },
+        {
+          "lane": 1.15,
+          "beat": 62.125,
+          "hidden": true
+        },
+        {
+          "lane": 1.06,
+          "beat": 62.25,
+          "hidden": true
+        },
+        {
+          "lane": 1.02,
+          "beat": 62.375,
+          "hidden": true
+        },
+        {
+          "lane": 1,
+          "beat": 62.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 61.75
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 62.5
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 6,
+          "beat": 63
+        },
+        {
+          "lane": 5,
+          "beat": 63.166666666666664
+        },
+        {
+          "lane": 4,
+          "beat": 63.333333333333336
+        },
+        {
+          "lane": 3,
+          "beat": 63.5
+        },
+        {
+          "lane": 4,
+          "beat": 63.666666666666664
+        },
+        {
+          "lane": 5,
+          "beat": 63.833333333333336
+        },
+        {
+          "lane": 6,
+          "beat": 64
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 63.5
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 1,
+          "beat": 64
+        },
+        {
+          "lane": 1.43,
+          "beat": 64.0625,
+          "hidden": true
+        },
+        {
+          "lane": 1.6099999999999999,
+          "beat": 64.125,
+          "hidden": true
+        },
+        {
+          "lane": 1.72,
+          "beat": 64.1875,
+          "hidden": true
+        },
+        {
+          "lane": 1.79,
+          "beat": 64.25,
+          "hidden": true
+        },
+        {
+          "lane": 1.85,
+          "beat": 64.3125,
+          "hidden": true
+        },
+        {
+          "lane": 1.9,
+          "beat": 64.375,
+          "hidden": true
+        },
+        {
+          "lane": 1.94,
+          "beat": 64.4375,
+          "hidden": true
+        },
+        {
+          "lane": 1.96,
+          "beat": 64.5,
+          "hidden": true
+        },
+        {
+          "lane": 1.97,
+          "beat": 64.5625,
+          "hidden": true
+        },
+        {
+          "lane": 1.98,
+          "beat": 64.625,
+          "hidden": true
+        },
+        {
+          "lane": 2,
+          "beat": 64.6875,
+          "hidden": true
+        },
+        {
+          "lane": 2,
+          "beat": 64.75
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 64.75
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 65
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 4,
+          "beat": 65.5
+        },
+        {
+          "lane": 4.25,
+          "beat": 65.625,
+          "hidden": true
+        },
+        {
+          "lane": 4.45,
+          "beat": 65.75,
+          "hidden": true
+        },
+        {
+          "lane": 4.62,
+          "beat": 65.875,
+          "hidden": true
+        },
+        {
+          "lane": 4.75,
+          "beat": 66,
+          "hidden": true
+        },
+        {
+          "lane": 4.85,
+          "beat": 66.125,
+          "hidden": true
+        },
+        {
+          "lane": 4.94,
+          "beat": 66.25,
+          "hidden": true
+        },
+        {
+          "lane": 4.98,
+          "beat": 66.375,
+          "hidden": true
+        },
+        {
+          "lane": 5,
+          "beat": 66.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 65.75
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 66.5
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 6,
+          "beat": 67
+        },
+        {
+          "lane": 5.5,
+          "beat": 67.0625,
+          "hidden": true
+        },
+        {
+          "lane": 5.1,
+          "beat": 67.125,
+          "hidden": true
+        },
+        {
+          "lane": 4.8,
+          "beat": 67.1875,
+          "hidden": true
+        },
+        {
+          "lane": 4.55,
+          "beat": 67.25,
+          "hidden": true
+        },
+        {
+          "lane": 4.35,
+          "beat": 67.3125,
+          "hidden": true
+        },
+        {
+          "lane": 4.2,
+          "beat": 67.375,
+          "hidden": true
+        },
+        {
+          "lane": 4.07,
+          "beat": 67.4375,
+          "hidden": true
+        },
+        {
+          "lane": 4,
+          "beat": 67.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 67.5
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 68
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 1,
+          "beat": 68
+        },
+        {
+          "lane": 1.43,
+          "beat": 68.0625,
+          "hidden": true
+        },
+        {
+          "lane": 1.6099999999999999,
+          "beat": 68.125,
+          "hidden": true
+        },
+        {
+          "lane": 1.72,
+          "beat": 68.1875,
+          "hidden": true
+        },
+        {
+          "lane": 1.79,
+          "beat": 68.25,
+          "hidden": true
+        },
+        {
+          "lane": 1.85,
+          "beat": 68.3125,
+          "hidden": true
+        },
+        {
+          "lane": 1.9,
+          "beat": 68.375,
+          "hidden": true
+        },
+        {
+          "lane": 1.94,
+          "beat": 68.4375,
+          "hidden": true
+        },
+        {
+          "lane": 1.96,
+          "beat": 68.5,
+          "hidden": true
+        },
+        {
+          "lane": 1.97,
+          "beat": 68.5625,
+          "hidden": true
+        },
+        {
+          "lane": 1.98,
+          "beat": 68.625,
+          "hidden": true
+        },
+        {
+          "lane": 2,
+          "beat": 68.6875,
+          "hidden": true
+        },
+        {
+          "lane": 2,
+          "beat": 68.75
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 68.75
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 69
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 69.5
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 69.75
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 70
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 70.25
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 70.5
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 70.75
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 71
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 71.25
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 71.5
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 71.75
+    },
+    {
+      "type": "Long",
+      "connections": [
+        {
+          "lane": 5,
+          "beat": 72,
+          "skill": true
+        },
+        {
+          "lane": 5,
+          "beat": 72.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 72.5
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 72.75
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 73.25
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 4,
+          "beat": 73.5
+        },
+        {
+          "lane": 5,
+          "beat": 73.75
+        },
+        {
+          "lane": 6,
+          "beat": 74
+        }
+      ]
+    },
+    {
+      "type": "Long",
+      "connections": [
+        {
+          "lane": 2,
+          "beat": 74
+        },
+        {
+          "lane": 2,
+          "beat": 74.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 74.5
+    },
+    {
+      "type": "Long",
+      "connections": [
+        {
+          "lane": 0,
+          "beat": 75
+        },
+        {
+          "lane": 0,
+          "beat": 75.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 75.5
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 76
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 76.5
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 4,
+          "beat": 76.75
+        },
+        {
+          "lane": 5,
+          "beat": 77.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 77.5
+    },
+    {
+      "type": "Long",
+      "connections": [
+        {
+          "lane": 6,
+          "beat": 78
+        },
+        {
+          "lane": 6,
+          "beat": 78.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 78.5
+    },
+    {
+      "type": "Long",
+      "connections": [
+        {
+          "lane": 4,
+          "beat": 79
+        },
+        {
+          "lane": 4,
+          "beat": 79.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 79.5
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 2,
+          "beat": 80
+        },
+        {
+          "lane": 1.49,
+          "beat": 80.125,
+          "hidden": true
+        },
+        {
+          "lane": 1.15,
+          "beat": 80.25,
+          "hidden": true
+        },
+        {
+          "lane": 0.92,
+          "beat": 80.375,
+          "hidden": true
+        },
+        {
+          "lane": 0.74,
+          "beat": 80.5,
+          "hidden": true
+        },
+        {
+          "lane": 0.59,
+          "beat": 80.625,
+          "hidden": true
+        },
+        {
+          "lane": 0.47000000000000003,
+          "beat": 80.75,
+          "hidden": true
+        },
+        {
+          "lane": 0.37,
+          "beat": 80.875,
+          "hidden": true
+        },
+        {
+          "lane": 0.29,
+          "beat": 81,
+          "hidden": true
+        },
+        {
+          "lane": 0.22,
+          "beat": 81.125,
+          "hidden": true
+        },
+        {
+          "lane": 0.16,
+          "beat": 81.25,
+          "hidden": true
+        },
+        {
+          "lane": 0.11,
+          "beat": 81.375,
+          "hidden": true
+        },
+        {
+          "lane": 0.07,
+          "beat": 81.5,
+          "hidden": true
+        },
+        {
+          "lane": 0.04,
+          "beat": 81.625,
+          "hidden": true
+        },
+        {
+          "lane": 0.02,
+          "beat": 81.75,
+          "hidden": true
+        },
+        {
+          "lane": 0.01,
+          "beat": 81.875,
+          "hidden": true
+        },
+        {
+          "lane": 0,
+          "beat": 82,
+          "hidden": true
+        },
+        {
+          "lane": 0,
+          "beat": 82.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 80.5
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 81
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 82
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 82.5
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 83.5
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 84
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 84.5
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 85
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 85.5
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 2,
+          "beat": 85.5
+        },
+        {
+          "lane": 3,
+          "beat": 85.75
+        },
+        {
+          "lane": 4,
+          "beat": 86
+        },
+        {
+          "lane": 3,
+          "beat": 86.25
+        },
+        {
+          "lane": 2,
+          "beat": 86.5
+        },
+        {
+          "lane": 1,
+          "beat": 86.75
+        },
+        {
+          "lane": 0,
+          "beat": 87
+        }
+      ]
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 6,
+          "beat": 87
+        },
+        {
+          "lane": 5,
+          "beat": 87.25
+        },
+        {
+          "lane": 4,
+          "beat": 87.5
+        },
+        {
+          "lane": 3,
+          "beat": 87.75
+        },
+        {
+          "lane": 2,
+          "beat": 88
+        }
+      ]
+    },
+    {
+      "type": "Long",
+      "connections": [
+        {
+          "lane": 0,
+          "beat": 88
+        },
+        {
+          "lane": 0,
+          "beat": 88.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 88.5
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 88.75
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 89.25
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 0,
+          "beat": 89.5
+        },
+        {
+          "lane": 1,
+          "beat": 89.75
+        },
+        {
+          "lane": 2,
+          "beat": 90
+        }
+      ]
+    },
+    {
+      "type": "Long",
+      "connections": [
+        {
+          "lane": 6,
+          "beat": 90
+        },
+        {
+          "lane": 6,
+          "beat": 90.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 3,
+      "beat": 90.5
+    },
+    {
+      "type": "Long",
+      "connections": [
+        {
+          "lane": 5,
+          "beat": 91
+        },
+        {
+          "lane": 5,
+          "beat": 91.5
+        }
+      ]
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 2,
+          "beat": 91.5
+        },
+        {
+          "lane": 1,
+          "beat": 91.75
+        },
+        {
+          "lane": 0,
+          "beat": 92
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 92
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 92.5
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 2,
+          "beat": 92.75
+        },
+        {
+          "lane": 1,
+          "beat": 93.5
+        }
+      ]
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 6,
+          "beat": 93.5
+        },
+        {
+          "lane": 5,
+          "beat": 93.75
+        },
+        {
+          "lane": 4,
+          "beat": 94
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 94
+    },
+    {
+      "type": "Single",
+      "lane": 3,
+      "beat": 94.5
+    },
+    {
+      "type": "Long",
+      "connections": [
+        {
+          "lane": 1,
+          "beat": 95
+        },
+        {
+          "lane": 1,
+          "beat": 95.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 95.5
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 96
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 4,
+          "beat": 96
+        },
+        {
+          "lane": 4.51,
+          "beat": 96.125,
+          "hidden": true
+        },
+        {
+          "lane": 4.85,
+          "beat": 96.25,
+          "hidden": true
+        },
+        {
+          "lane": 5.08,
+          "beat": 96.375,
+          "hidden": true
+        },
+        {
+          "lane": 5.26,
+          "beat": 96.5,
+          "hidden": true
+        },
+        {
+          "lane": 5.41,
+          "beat": 96.625,
+          "hidden": true
+        },
+        {
+          "lane": 5.53,
+          "beat": 96.75,
+          "hidden": true
+        },
+        {
+          "lane": 5.63,
+          "beat": 96.875,
+          "hidden": true
+        },
+        {
+          "lane": 5.71,
+          "beat": 97,
+          "hidden": true
+        },
+        {
+          "lane": 5.78,
+          "beat": 97.125,
+          "hidden": true
+        },
+        {
+          "lane": 5.84,
+          "beat": 97.25,
+          "hidden": true
+        },
+        {
+          "lane": 5.89,
+          "beat": 97.375,
+          "hidden": true
+        },
+        {
+          "lane": 5.93,
+          "beat": 97.5,
+          "hidden": true
+        },
+        {
+          "lane": 5.96,
+          "beat": 97.625,
+          "hidden": true
+        },
+        {
+          "lane": 5.98,
+          "beat": 97.75,
+          "hidden": true
+        },
+        {
+          "lane": 5.99,
+          "beat": 97.875,
+          "hidden": true
+        },
+        {
+          "lane": 6,
+          "beat": 98
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 96.5
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 97
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 98
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 99
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 6,
+          "beat": 100
+        },
+        {
+          "lane": 4.81,
+          "beat": 100.0625,
+          "hidden": true
+        },
+        {
+          "lane": 4.33,
+          "beat": 100.125,
+          "hidden": true
+        },
+        {
+          "lane": 4.02,
+          "beat": 100.1875,
+          "hidden": true
+        },
+        {
+          "lane": 3.8,
+          "beat": 100.25,
+          "hidden": true
+        },
+        {
+          "lane": 3.62,
+          "beat": 100.3125,
+          "hidden": true
+        },
+        {
+          "lane": 3.48,
+          "beat": 100.375,
+          "hidden": true
+        },
+        {
+          "lane": 3.37,
+          "beat": 100.4375,
+          "hidden": true
+        },
+        {
+          "lane": 3.25,
+          "beat": 100.5,
+          "hidden": true
+        },
+        {
+          "lane": 3.17,
+          "beat": 100.5625,
+          "hidden": true
+        },
+        {
+          "lane": 3.11,
+          "beat": 100.625,
+          "hidden": true
+        },
+        {
+          "lane": 3.07,
+          "beat": 100.6875,
+          "hidden": true
+        },
+        {
+          "lane": 3.04,
+          "beat": 100.75,
+          "hidden": true
+        },
+        {
+          "lane": 3.02,
+          "beat": 100.8125,
+          "hidden": true
+        },
+        {
+          "lane": 3,
+          "beat": 100.875,
+          "hidden": true
+        },
+        {
+          "lane": 3,
+          "beat": 100.9375,
+          "hidden": true
+        },
+        {
+          "lane": 3,
+          "beat": 101
+        },
+        {
+          "lane": 4.19,
+          "beat": 101.0625,
+          "hidden": true
+        },
+        {
+          "lane": 4.67,
+          "beat": 101.125,
+          "hidden": true
+        },
+        {
+          "lane": 4.98,
+          "beat": 101.1875,
+          "hidden": true
+        },
+        {
+          "lane": 5.2,
+          "beat": 101.25,
+          "hidden": true
+        },
+        {
+          "lane": 5.38,
+          "beat": 101.3125,
+          "hidden": true
+        },
+        {
+          "lane": 5.52,
+          "beat": 101.375,
+          "hidden": true
+        },
+        {
+          "lane": 5.63,
+          "beat": 101.4375,
+          "hidden": true
+        },
+        {
+          "lane": 5.75,
+          "beat": 101.5,
+          "hidden": true
+        },
+        {
+          "lane": 5.83,
+          "beat": 101.5625,
+          "hidden": true
+        },
+        {
+          "lane": 5.89,
+          "beat": 101.625,
+          "hidden": true
+        },
+        {
+          "lane": 5.93,
+          "beat": 101.6875,
+          "hidden": true
+        },
+        {
+          "lane": 5.96,
+          "beat": 101.75,
+          "hidden": true
+        },
+        {
+          "lane": 5.98,
+          "beat": 101.8125,
+          "hidden": true
+        },
+        {
+          "lane": 6,
+          "beat": 101.875,
+          "hidden": true
+        },
+        {
+          "lane": 6,
+          "beat": 101.9375,
+          "hidden": true
+        },
+        {
+          "lane": 6,
+          "beat": 102
+        },
+        {
+          "lane": 4.98,
+          "beat": 102.0625,
+          "hidden": true
+        },
+        {
+          "lane": 4.57,
+          "beat": 102.125,
+          "hidden": true
+        },
+        {
+          "lane": 4.34,
+          "beat": 102.1875,
+          "hidden": true
+        },
+        {
+          "lane": 4.17,
+          "beat": 102.25,
+          "hidden": true
+        },
+        {
+          "lane": 4.06,
+          "beat": 102.3125,
+          "hidden": true
+        },
+        {
+          "lane": 4.02,
+          "beat": 102.375,
+          "hidden": true
+        },
+        {
+          "lane": 4,
+          "beat": 102.4375,
+          "hidden": true
+        },
+        {
+          "lane": 4,
+          "beat": 102.5
+        },
+        {
+          "lane": 5.02,
+          "beat": 102.5625,
+          "hidden": true
+        },
+        {
+          "lane": 5.43,
+          "beat": 102.625,
+          "hidden": true
+        },
+        {
+          "lane": 5.66,
+          "beat": 102.6875,
+          "hidden": true
+        },
+        {
+          "lane": 5.83,
+          "beat": 102.75,
+          "hidden": true
+        },
+        {
+          "lane": 5.94,
+          "beat": 102.8125,
+          "hidden": true
+        },
+        {
+          "lane": 5.98,
+          "beat": 102.875,
+          "hidden": true
+        },
+        {
+          "lane": 6,
+          "beat": 102.9375,
+          "hidden": true
+        },
+        {
+          "lane": 6,
+          "beat": 103,
+          "flick": true
+        }
+      ]
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 2,
+          "beat": 100
+        },
+        {
+          "lane": 1.16,
+          "beat": 100.0625,
+          "hidden": true
+        },
+        {
+          "lane": 0.86,
+          "beat": 100.125,
+          "hidden": true
+        },
+        {
+          "lane": 0.6599999999999999,
+          "beat": 100.1875,
+          "hidden": true
+        },
+        {
+          "lane": 0.51,
+          "beat": 100.25,
+          "hidden": true
+        },
+        {
+          "lane": 0.4,
+          "beat": 100.3125,
+          "hidden": true
+        },
+        {
+          "lane": 0.31,
+          "beat": 100.375,
+          "hidden": true
+        },
+        {
+          "lane": 0.23,
+          "beat": 100.4375,
+          "hidden": true
+        },
+        {
+          "lane": 0.16,
+          "beat": 100.5,
+          "hidden": true
+        },
+        {
+          "lane": 0.1,
+          "beat": 100.5625,
+          "hidden": true
+        },
+        {
+          "lane": 0.07,
+          "beat": 100.625,
+          "hidden": true
+        },
+        {
+          "lane": 0.04,
+          "beat": 100.6875,
+          "hidden": true
+        },
+        {
+          "lane": 0.02,
+          "beat": 100.75,
+          "hidden": true
+        },
+        {
+          "lane": 0.01,
+          "beat": 100.8125,
+          "hidden": true
+        },
+        {
+          "lane": 0,
+          "beat": 100.875,
+          "hidden": true
+        },
+        {
+          "lane": 0,
+          "beat": 100.9375,
+          "hidden": true
+        },
+        {
+          "lane": 0,
+          "beat": 101
+        },
+        {
+          "lane": 1.46,
+          "beat": 101.0625,
+          "hidden": true
+        },
+        {
+          "lane": 2.14,
+          "beat": 101.125,
+          "hidden": true
+        },
+        {
+          "lane": 2.57,
+          "beat": 101.1875,
+          "hidden": true
+        },
+        {
+          "lane": 2.89,
+          "beat": 101.25,
+          "hidden": true
+        },
+        {
+          "lane": 3.13,
+          "beat": 101.3125,
+          "hidden": true
+        },
+        {
+          "lane": 3.32,
+          "beat": 101.375,
+          "hidden": true
+        },
+        {
+          "lane": 3.48,
+          "beat": 101.4375,
+          "hidden": true
+        },
+        {
+          "lane": 3.63,
+          "beat": 101.5,
+          "hidden": true
+        },
+        {
+          "lane": 3.75,
+          "beat": 101.5625,
+          "hidden": true
+        },
+        {
+          "lane": 3.82,
+          "beat": 101.625,
+          "hidden": true
+        },
+        {
+          "lane": 3.88,
+          "beat": 101.6875,
+          "hidden": true
+        },
+        {
+          "lane": 3.92,
+          "beat": 101.75,
+          "hidden": true
+        },
+        {
+          "lane": 3.95,
+          "beat": 101.8125,
+          "hidden": true
+        },
+        {
+          "lane": 3.97,
+          "beat": 101.875,
+          "hidden": true
+        },
+        {
+          "lane": 3.98,
+          "beat": 101.9375,
+          "hidden": true
+        },
+        {
+          "lane": 4,
+          "beat": 102
+        },
+        {
+          "lane": 2.98,
+          "beat": 102.0625,
+          "hidden": true
+        },
+        {
+          "lane": 2.57,
+          "beat": 102.125,
+          "hidden": true
+        },
+        {
+          "lane": 2.34,
+          "beat": 102.1875,
+          "hidden": true
+        },
+        {
+          "lane": 2.17,
+          "beat": 102.25,
+          "hidden": true
+        },
+        {
+          "lane": 2.06,
+          "beat": 102.3125,
+          "hidden": true
+        },
+        {
+          "lane": 2.02,
+          "beat": 102.375,
+          "hidden": true
+        },
+        {
+          "lane": 2,
+          "beat": 102.4375,
+          "hidden": true
+        },
+        {
+          "lane": 2,
+          "beat": 102.5
+        },
+        {
+          "lane": 3.02,
+          "beat": 102.5625,
+          "hidden": true
+        },
+        {
+          "lane": 3.43,
+          "beat": 102.625,
+          "hidden": true
+        },
+        {
+          "lane": 3.66,
+          "beat": 102.6875,
+          "hidden": true
+        },
+        {
+          "lane": 3.83,
+          "beat": 102.75,
+          "hidden": true
+        },
+        {
+          "lane": 3.94,
+          "beat": 102.8125,
+          "hidden": true
+        },
+        {
+          "lane": 3.98,
+          "beat": 102.875,
+          "hidden": true
+        },
+        {
+          "lane": 4,
+          "beat": 102.9375,
+          "hidden": true
+        },
+        {
+          "lane": 4,
+          "beat": 103,
+          "flick": true
+        }
+      ]
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 1,
+          "beat": 104
+        },
+        {
+          "lane": 1.25,
+          "beat": 104.125,
+          "hidden": true
+        },
+        {
+          "lane": 1.45,
+          "beat": 104.25,
+          "hidden": true
+        },
+        {
+          "lane": 1.62,
+          "beat": 104.375,
+          "hidden": true
+        },
+        {
+          "lane": 1.75,
+          "beat": 104.5,
+          "hidden": true
+        },
+        {
+          "lane": 1.85,
+          "beat": 104.625,
+          "hidden": true
+        },
+        {
+          "lane": 1.94,
+          "beat": 104.75,
+          "hidden": true
+        },
+        {
+          "lane": 1.98,
+          "beat": 104.875,
+          "hidden": true
+        },
+        {
+          "lane": 2,
+          "beat": 105,
+          "hidden": true
+        },
+        {
+          "lane": 2,
+          "beat": 105.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 105
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 4,
+          "beat": 105.5
+        },
+        {
+          "lane": 4.25,
+          "beat": 105.625,
+          "hidden": true
+        },
+        {
+          "lane": 4.45,
+          "beat": 105.75,
+          "hidden": true
+        },
+        {
+          "lane": 4.62,
+          "beat": 105.875,
+          "hidden": true
+        },
+        {
+          "lane": 4.75,
+          "beat": 106,
+          "hidden": true
+        },
+        {
+          "lane": 4.85,
+          "beat": 106.125,
+          "hidden": true
+        },
+        {
+          "lane": 4.94,
+          "beat": 106.25,
+          "hidden": true
+        },
+        {
+          "lane": 4.98,
+          "beat": 106.375,
+          "hidden": true
+        },
+        {
+          "lane": 5,
+          "beat": 106.5,
+          "hidden": true
+        },
+        {
+          "lane": 5,
+          "beat": 107
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 106
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 0,
+          "beat": 107
+        },
+        {
+          "lane": 0.51,
+          "beat": 107.0625,
+          "hidden": true
+        },
+        {
+          "lane": 0.85,
+          "beat": 107.125,
+          "hidden": true
+        },
+        {
+          "lane": 1.08,
+          "beat": 107.1875,
+          "hidden": true
+        },
+        {
+          "lane": 1.26,
+          "beat": 107.25,
+          "hidden": true
+        },
+        {
+          "lane": 1.4100000000000001,
+          "beat": 107.3125,
+          "hidden": true
+        },
+        {
+          "lane": 1.53,
+          "beat": 107.375,
+          "hidden": true
+        },
+        {
+          "lane": 1.63,
+          "beat": 107.4375,
+          "hidden": true
+        },
+        {
+          "lane": 1.71,
+          "beat": 107.5,
+          "hidden": true
+        },
+        {
+          "lane": 1.78,
+          "beat": 107.5625,
+          "hidden": true
+        },
+        {
+          "lane": 1.84,
+          "beat": 107.625,
+          "hidden": true
+        },
+        {
+          "lane": 1.89,
+          "beat": 107.6875,
+          "hidden": true
+        },
+        {
+          "lane": 1.93,
+          "beat": 107.75,
+          "hidden": true
+        },
+        {
+          "lane": 1.96,
+          "beat": 107.8125,
+          "hidden": true
+        },
+        {
+          "lane": 1.98,
+          "beat": 107.875,
+          "hidden": true
+        },
+        {
+          "lane": 1.99,
+          "beat": 107.9375,
+          "hidden": true
+        },
+        {
+          "lane": 2,
+          "beat": 108
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 107.5
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 6,
+          "beat": 108
+        },
+        {
+          "lane": 5.75,
+          "beat": 108.125,
+          "hidden": true
+        },
+        {
+          "lane": 5.55,
+          "beat": 108.25,
+          "hidden": true
+        },
+        {
+          "lane": 5.38,
+          "beat": 108.375,
+          "hidden": true
+        },
+        {
+          "lane": 5.25,
+          "beat": 108.5,
+          "hidden": true
+        },
+        {
+          "lane": 5.15,
+          "beat": 108.625,
+          "hidden": true
+        },
+        {
+          "lane": 5.06,
+          "beat": 108.75,
+          "hidden": true
+        },
+        {
+          "lane": 5.02,
+          "beat": 108.875,
+          "hidden": true
+        },
+        {
+          "lane": 5,
+          "beat": 109,
+          "hidden": true
+        },
+        {
+          "lane": 5,
+          "beat": 109.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 109
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 2,
+          "beat": 109.5
+        },
+        {
+          "lane": 1.75,
+          "beat": 109.625,
+          "hidden": true
+        },
+        {
+          "lane": 1.55,
+          "beat": 109.75,
+          "hidden": true
+        },
+        {
+          "lane": 1.38,
+          "beat": 109.875,
+          "hidden": true
+        },
+        {
+          "lane": 1.25,
+          "beat": 110,
+          "hidden": true
+        },
+        {
+          "lane": 1.15,
+          "beat": 110.125,
+          "hidden": true
+        },
+        {
+          "lane": 1.06,
+          "beat": 110.25,
+          "hidden": true
+        },
+        {
+          "lane": 1.02,
+          "beat": 110.375,
+          "hidden": true
+        },
+        {
+          "lane": 1,
+          "beat": 110.5,
+          "hidden": true
+        },
+        {
+          "lane": 1,
+          "beat": 111
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 110
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 111
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 112
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 4,
+          "beat": 112
+        },
+        {
+          "lane": 4.51,
+          "beat": 112.125,
+          "hidden": true
+        },
+        {
+          "lane": 4.85,
+          "beat": 112.25,
+          "hidden": true
+        },
+        {
+          "lane": 5.08,
+          "beat": 112.375,
+          "hidden": true
+        },
+        {
+          "lane": 5.26,
+          "beat": 112.5,
+          "hidden": true
+        },
+        {
+          "lane": 5.41,
+          "beat": 112.625,
+          "hidden": true
+        },
+        {
+          "lane": 5.53,
+          "beat": 112.75,
+          "hidden": true
+        },
+        {
+          "lane": 5.63,
+          "beat": 112.875,
+          "hidden": true
+        },
+        {
+          "lane": 5.71,
+          "beat": 113,
+          "hidden": true
+        },
+        {
+          "lane": 5.78,
+          "beat": 113.125,
+          "hidden": true
+        },
+        {
+          "lane": 5.84,
+          "beat": 113.25,
+          "hidden": true
+        },
+        {
+          "lane": 5.89,
+          "beat": 113.375,
+          "hidden": true
+        },
+        {
+          "lane": 5.93,
+          "beat": 113.5,
+          "hidden": true
+        },
+        {
+          "lane": 5.96,
+          "beat": 113.625,
+          "hidden": true
+        },
+        {
+          "lane": 5.98,
+          "beat": 113.75,
+          "hidden": true
+        },
+        {
+          "lane": 5.99,
+          "beat": 113.875,
+          "hidden": true
+        },
+        {
+          "lane": 6,
+          "beat": 114
+        }
+      ]
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 0,
+          "beat": 113.25
+        },
+        {
+          "lane": 1,
+          "beat": 113.5
+        },
+        {
+          "lane": 2,
+          "beat": 113.75
+        },
+        {
+          "lane": 1,
+          "beat": 114
+        },
+        {
+          "lane": 0,
+          "beat": 115
+        }
+      ]
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 3,
+          "beat": 115.5
+        },
+        {
+          "lane": 4,
+          "beat": 115.625
+        },
+        {
+          "lane": 5,
+          "beat": 115.75
+        },
+        {
+          "lane": 6,
+          "beat": 116
+        },
+        {
+          "lane": 5,
+          "beat": 116.75
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 116.75
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 2,
+          "beat": 117.5
+        },
+        {
+          "lane": 1,
+          "beat": 117.75
+        },
+        {
+          "lane": 0,
+          "beat": 118
+        }
+      ]
+    },
+    {
+      "type": "Long",
+      "connections": [
+        {
+          "lane": 4,
+          "beat": 118
+        },
+        {
+          "lane": 4,
+          "beat": 118.75
+        }
+      ]
+    },
+    {
+      "type": "Long",
+      "connections": [
+        {
+          "lane": 1,
+          "beat": 118.75
+        },
+        {
+          "lane": 1,
+          "beat": 119.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 119.5
+    },
+    {
+      "type": "System",
+      "data": "cmd_fever_ready.wav",
+      "beat": 120
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 120
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 120
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 120.5,
+      "charge": true
+    },
+    {
+      "type": "Directional",
+      "beat": 121,
+      "lane": 1,
+      "direction": "Left",
+      "width": 1
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 121.5,
+      "charge": true
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 122,
+      "skill": true
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 122.5,
+      "charge": true
+    },
+    {
+      "type": "Directional",
+      "beat": 123,
+      "lane": 6,
+      "direction": "Right",
+      "width": 1
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 123.5,
+      "charge": true
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 124,
+      "charge": true
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 124.5,
+      "charge": true
+    },
+    {
+      "type": "Directional",
+      "beat": 125,
+      "lane": 0,
+      "direction": "Left",
+      "width": 1
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 125.5,
+      "charge": true
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 2,
+          "beat": 126
+        },
+        {
+          "lane": 1.75,
+          "beat": 126.0625,
+          "hidden": true
+        },
+        {
+          "lane": 1.55,
+          "beat": 126.125,
+          "hidden": true
+        },
+        {
+          "lane": 1.38,
+          "beat": 126.1875,
+          "hidden": true
+        },
+        {
+          "lane": 1.25,
+          "beat": 126.25,
+          "hidden": true
+        },
+        {
+          "lane": 1.15,
+          "beat": 126.3125,
+          "hidden": true
+        },
+        {
+          "lane": 1.06,
+          "beat": 126.375,
+          "hidden": true
+        },
+        {
+          "lane": 1.02,
+          "beat": 126.4375,
+          "hidden": true
+        },
+        {
+          "lane": 1,
+          "beat": 126.5,
+          "hidden": true
+        },
+        {
+          "lane": 1.02,
+          "beat": 126.5625,
+          "hidden": true
+        },
+        {
+          "lane": 1.06,
+          "beat": 126.625,
+          "hidden": true
+        },
+        {
+          "lane": 1.15,
+          "beat": 126.6875,
+          "hidden": true
+        },
+        {
+          "lane": 1.25,
+          "beat": 126.75,
+          "hidden": true
+        },
+        {
+          "lane": 1.38,
+          "beat": 126.8125,
+          "hidden": true
+        },
+        {
+          "lane": 1.55,
+          "beat": 126.875,
+          "hidden": true
+        },
+        {
+          "lane": 1.75,
+          "beat": 126.9375,
+          "hidden": true
+        },
+        {
+          "lane": 2,
+          "beat": 127
+        }
+      ]
+    },
+    {
+      "type": "Directional",
+      "beat": 127,
+      "lane": 5,
+      "direction": "Right",
+      "width": 1
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 128,
+      "charge": true
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 128.5,
+      "charge": true
+    },
+    {
+      "type": "Directional",
+      "beat": 129,
+      "lane": 1,
+      "direction": "Left",
+      "width": 1
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 129.5,
+      "charge": true
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 130,
+      "charge": true
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 130.5,
+      "charge": true
+    },
+    {
+      "type": "Directional",
+      "beat": 131,
+      "lane": 6,
+      "direction": "Right",
+      "width": 1
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 131.5,
+      "charge": true
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 5,
+          "beat": 132
+        },
+        {
+          "lane": 5.21,
+          "beat": 132.0625,
+          "hidden": true
+        },
+        {
+          "lane": 5.4,
+          "beat": 132.125,
+          "hidden": true
+        },
+        {
+          "lane": 5.57,
+          "beat": 132.1875,
+          "hidden": true
+        },
+        {
+          "lane": 5.72,
+          "beat": 132.25,
+          "hidden": true
+        },
+        {
+          "lane": 5.84,
+          "beat": 132.3125,
+          "hidden": true
+        },
+        {
+          "lane": 5.93,
+          "beat": 132.375,
+          "hidden": true
+        },
+        {
+          "lane": 5.99,
+          "beat": 132.4375,
+          "hidden": true
+        },
+        {
+          "lane": 6,
+          "beat": 132.5
+        },
+        {
+          "lane": 5.99,
+          "beat": 132.5625,
+          "hidden": true
+        },
+        {
+          "lane": 5.95,
+          "beat": 132.625,
+          "hidden": true
+        },
+        {
+          "lane": 5.87,
+          "beat": 132.6875,
+          "hidden": true
+        },
+        {
+          "lane": 5.73,
+          "beat": 132.75,
+          "hidden": true
+        },
+        {
+          "lane": 5.49,
+          "beat": 132.8125,
+          "hidden": true
+        },
+        {
+          "lane": 5.13,
+          "beat": 132.875,
+          "hidden": true
+        },
+        {
+          "lane": 4.63,
+          "beat": 132.9375,
+          "hidden": true
+        },
+        {
+          "lane": 4,
+          "beat": 133
+        }
+      ]
+    },
+    {
+      "type": "Directional",
+      "beat": 133,
+      "lane": 0,
+      "direction": "Left",
+      "width": 1
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 1,
+          "beat": 134
+        },
+        {
+          "lane": 0.79,
+          "beat": 134.0625,
+          "hidden": true
+        },
+        {
+          "lane": 0.6,
+          "beat": 134.125,
+          "hidden": true
+        },
+        {
+          "lane": 0.43,
+          "beat": 134.1875,
+          "hidden": true
+        },
+        {
+          "lane": 0.28,
+          "beat": 134.25,
+          "hidden": true
+        },
+        {
+          "lane": 0.16,
+          "beat": 134.3125,
+          "hidden": true
+        },
+        {
+          "lane": 0.07,
+          "beat": 134.375,
+          "hidden": true
+        },
+        {
+          "lane": 0.01,
+          "beat": 134.4375,
+          "hidden": true
+        },
+        {
+          "lane": 0,
+          "beat": 134.5
+        },
+        {
+          "lane": 0.01,
+          "beat": 134.5625,
+          "hidden": true
+        },
+        {
+          "lane": 0.05,
+          "beat": 134.625,
+          "hidden": true
+        },
+        {
+          "lane": 0.13,
+          "beat": 134.6875,
+          "hidden": true
+        },
+        {
+          "lane": 0.27,
+          "beat": 134.75,
+          "hidden": true
+        },
+        {
+          "lane": 0.51,
+          "beat": 134.8125,
+          "hidden": true
+        },
+        {
+          "lane": 0.87,
+          "beat": 134.875,
+          "hidden": true
+        },
+        {
+          "lane": 1.37,
+          "beat": 134.9375,
+          "hidden": true
+        },
+        {
+          "lane": 2,
+          "beat": 135
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 135,
+      "charge": true
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 135.25,
+      "charge": true
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 135.5,
+      "charge": true
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 135.75,
+      "charge": true
+    },
+    {
+      "type": "Directional",
+      "beat": 136,
+      "lane": 5,
+      "direction": "Right",
+      "width": 2
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 137,
+      "charge": true
+    },
+    {
+      "type": "Directional",
+      "beat": 137.5,
+      "lane": 1,
+      "direction": "Left",
+      "width": 2
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 138.5,
+      "charge": true
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 139,
+      "charge": true
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 139.25,
+      "charge": true
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 139.5,
+      "charge": true
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 139.75,
+      "charge": true
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 140,
+      "charge": true
+    },
+    {
+      "type": "Directional",
+      "beat": 140.5,
+      "lane": 5,
+      "direction": "Right",
+      "width": 2
+    },
+    {
+      "type": "Directional",
+      "beat": 141,
+      "lane": 1,
+      "direction": "Left",
+      "width": 2
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 141.5,
+      "charge": true
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 141.75,
+      "charge": true
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 142,
+      "charge": true
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 142.25,
+      "charge": true
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 142.5,
+      "charge": true
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 142.75,
+      "charge": true
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 143
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 143.25
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 143.5
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 143.75
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 144
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 2,
+          "beat": 144.5
+        },
+        {
+          "lane": 0,
+          "beat": 145
+        },
+        {
+          "lane": 2,
+          "beat": 145.5
+        }
+      ]
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 4,
+          "beat": 146
+        },
+        {
+          "lane": 5,
+          "beat": 146.5
+        },
+        {
+          "lane": 6,
+          "beat": 146.75
+        },
+        {
+          "lane": 4,
+          "beat": 147.25
+        },
+        {
+          "lane": 5,
+          "beat": 147.5
+        }
+      ]
+    },
+    {
+      "type": "Long",
+      "connections": [
+        {
+          "lane": 2,
+          "beat": 148
+        },
+        {
+          "lane": 2,
+          "beat": 149
+        }
+      ]
+    },
+    {
+      "type": "Long",
+      "connections": [
+        {
+          "lane": 4,
+          "beat": 148
+        },
+        {
+          "lane": 4,
+          "beat": 149
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 149.5
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 149.75
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 150
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 150
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 150.75
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 150.75
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 151.5
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 151.5
+    },
+    {
+      "type": "System",
+      "data": "cmd_fever_start.wav",
+      "beat": 152
+    },
+    {
+      "type": "Directional",
+      "beat": 152,
+      "lane": 2,
+      "direction": "Left",
+      "width": 3
+    },
+    {
+      "type": "Directional",
+      "beat": 152,
+      "lane": 4,
+      "direction": "Right",
+      "width": 3
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 1,
+          "beat": 152.75
+        },
+        {
+          "lane": 0,
+          "beat": 153.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 153
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 153.5
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 4,
+          "beat": 154
+        },
+        {
+          "lane": 5,
+          "beat": 154.75
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 154.25
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 0,
+          "beat": 154.75
+        },
+        {
+          "lane": 1,
+          "beat": 155.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 155
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 155.5
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 5,
+          "beat": 156
+        },
+        {
+          "lane": 4,
+          "beat": 156.75
+        }
+      ]
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 1,
+          "beat": 156.75
+        },
+        {
+          "lane": 0,
+          "beat": 157.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 3,
+      "beat": 157
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 157.5
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 5,
+          "beat": 158
+        },
+        {
+          "lane": 6,
+          "beat": 158.75
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 158.25
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 0,
+          "beat": 158.75
+        },
+        {
+          "lane": 1,
+          "beat": 159.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 159
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 159.5
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 160
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 2,
+          "beat": 160
+        },
+        {
+          "lane": 1.68,
+          "beat": 160.0625,
+          "hidden": true
+        },
+        {
+          "lane": 1.3,
+          "beat": 160.125,
+          "hidden": true
+        },
+        {
+          "lane": 0.96,
+          "beat": 160.1875,
+          "hidden": true
+        },
+        {
+          "lane": 0.6699999999999999,
+          "beat": 160.25,
+          "hidden": true
+        },
+        {
+          "lane": 0.47000000000000003,
+          "beat": 160.3125,
+          "hidden": true
+        },
+        {
+          "lane": 0.33,
+          "beat": 160.375,
+          "hidden": true
+        },
+        {
+          "lane": 0.24,
+          "beat": 160.4375,
+          "hidden": true
+        },
+        {
+          "lane": 0.18,
+          "beat": 160.5,
+          "hidden": true
+        },
+        {
+          "lane": 0.13,
+          "beat": 160.5625,
+          "hidden": true
+        },
+        {
+          "lane": 0.09,
+          "beat": 160.625,
+          "hidden": true
+        },
+        {
+          "lane": 0.05,
+          "beat": 160.6875,
+          "hidden": true
+        },
+        {
+          "lane": 0,
+          "beat": 160.75
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 160.75
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 1,
+          "beat": 161
+        },
+        {
+          "lane": 2,
+          "beat": 161.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 161.5
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 162
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 4,
+          "beat": 162
+        },
+        {
+          "lane": 4.32,
+          "beat": 162.0625,
+          "hidden": true
+        },
+        {
+          "lane": 4.7,
+          "beat": 162.125,
+          "hidden": true
+        },
+        {
+          "lane": 5.04,
+          "beat": 162.1875,
+          "hidden": true
+        },
+        {
+          "lane": 5.33,
+          "beat": 162.25,
+          "hidden": true
+        },
+        {
+          "lane": 5.53,
+          "beat": 162.3125,
+          "hidden": true
+        },
+        {
+          "lane": 5.67,
+          "beat": 162.375,
+          "hidden": true
+        },
+        {
+          "lane": 5.76,
+          "beat": 162.4375,
+          "hidden": true
+        },
+        {
+          "lane": 5.82,
+          "beat": 162.5,
+          "hidden": true
+        },
+        {
+          "lane": 5.87,
+          "beat": 162.5625,
+          "hidden": true
+        },
+        {
+          "lane": 5.91,
+          "beat": 162.625,
+          "hidden": true
+        },
+        {
+          "lane": 5.95,
+          "beat": 162.6875,
+          "hidden": true
+        },
+        {
+          "lane": 6,
+          "beat": 162.75
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 162.75
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 5,
+          "beat": 163
+        },
+        {
+          "lane": 4,
+          "beat": 163.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 163.5
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 164
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 5,
+          "beat": 164
+        },
+        {
+          "lane": 6,
+          "beat": 164.75
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 164.75
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 165
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 165.5
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 165.75
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 166
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 166.25
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 166.5
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 166.75
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 167
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 167.25
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 167.5
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 167.75
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 168,
+      "skill": true
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 4,
+          "beat": 168.75
+        },
+        {
+          "lane": 5,
+          "beat": 169.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 169
+    },
+    {
+      "type": "Single",
+      "lane": 3,
+      "beat": 169.5
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 2,
+          "beat": 170
+        },
+        {
+          "lane": 1,
+          "beat": 170.75
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 170.25
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 6,
+          "beat": 170.75
+        },
+        {
+          "lane": 5,
+          "beat": 171.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 171
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 171.5
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 1,
+          "beat": 172
+        },
+        {
+          "lane": 2,
+          "beat": 172.75
+        }
+      ]
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 5,
+          "beat": 172.75
+        },
+        {
+          "lane": 6,
+          "beat": 173.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 3,
+      "beat": 173
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 173.5
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 173.75
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 174
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 174.25
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 174.5
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 175
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 175
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 175.5
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 6,
+          "beat": 176
+        },
+        {
+          "lane": 6,
+          "beat": 176.9375,
+          "hidden": true
+        },
+        {
+          "lane": 5,
+          "beat": 177
+        },
+        {
+          "lane": 5,
+          "beat": 177.9375,
+          "hidden": true
+        },
+        {
+          "lane": 4,
+          "beat": 178
+        },
+        {
+          "lane": 4,
+          "beat": 178.9375,
+          "hidden": true
+        },
+        {
+          "lane": 3,
+          "beat": 179
+        },
+        {
+          "lane": 3,
+          "beat": 180
+        }
+      ]
+    },
+    {
+      "type": "Long",
+      "connections": [
+        {
+          "lane": 0,
+          "beat": 176
+        },
+        {
+          "lane": 0,
+          "beat": 179
+        }
+      ]
+    },
+    {
+      "type": "Directional",
+      "beat": 180,
+      "lane": 0,
+      "direction": "Left",
+      "width": 1
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 180.5
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 180.75
+    },
+    {
+      "type": "Directional",
+      "beat": 181,
+      "lane": 5,
+      "direction": "Right",
+      "width": 1
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 181.25
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 181.5
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 181.75
+    },
+    {
+      "type": "Directional",
+      "beat": 182,
+      "lane": 6,
+      "direction": "Right",
+      "width": 1
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 182.5
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 182.75
+    },
+    {
+      "type": "Directional",
+      "beat": 183,
+      "lane": 0,
+      "direction": "Left",
+      "width": 1
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 183.25
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 183.5
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 183.75
+    },
+    {
+      "type": "Long",
+      "connections": [
+        {
+          "lane": 0,
+          "beat": 184
+        },
+        {
+          "lane": 0,
+          "beat": 185
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 184.5
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 185
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 185.5
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 186
+    },
+    {
+      "type": "Long",
+      "connections": [
+        {
+          "lane": 5,
+          "beat": 186
+        },
+        {
+          "lane": 5,
+          "beat": 187
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 186.5
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 187
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 187.5
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 188
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 188.5
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 0,
+          "beat": 189
+        },
+        {
+          "lane": 0.64,
+          "beat": 189.0625,
+          "hidden": true
+        },
+        {
+          "lane": 1.33,
+          "beat": 189.125,
+          "hidden": true
+        },
+        {
+          "lane": 1.84,
+          "beat": 189.1875,
+          "hidden": true
+        },
+        {
+          "lane": 2.17,
+          "beat": 189.25,
+          "hidden": true
+        },
+        {
+          "lane": 2.37,
+          "beat": 189.3125,
+          "hidden": true
+        },
+        {
+          "lane": 2.5,
+          "beat": 189.375,
+          "hidden": true
+        },
+        {
+          "lane": 2.6,
+          "beat": 189.4375,
+          "hidden": true
+        },
+        {
+          "lane": 2.68,
+          "beat": 189.5,
+          "hidden": true
+        },
+        {
+          "lane": 2.73,
+          "beat": 189.5625,
+          "hidden": true
+        },
+        {
+          "lane": 2.78,
+          "beat": 189.625,
+          "hidden": true
+        },
+        {
+          "lane": 2.82,
+          "beat": 189.6875,
+          "hidden": true
+        },
+        {
+          "lane": 2.86,
+          "beat": 189.75,
+          "hidden": true
+        },
+        {
+          "lane": 2.89,
+          "beat": 189.8125,
+          "hidden": true
+        },
+        {
+          "lane": 2.93,
+          "beat": 189.875,
+          "hidden": true
+        },
+        {
+          "lane": 2.96,
+          "beat": 189.9375,
+          "hidden": true
+        },
+        {
+          "lane": 3,
+          "beat": 190
+        },
+        {
+          "lane": 2.49,
+          "beat": 190.0625,
+          "hidden": true
+        },
+        {
+          "lane": 2.15,
+          "beat": 190.125,
+          "hidden": true
+        },
+        {
+          "lane": 1.92,
+          "beat": 190.1875,
+          "hidden": true
+        },
+        {
+          "lane": 1.74,
+          "beat": 190.25,
+          "hidden": true
+        },
+        {
+          "lane": 1.5899999999999999,
+          "beat": 190.3125,
+          "hidden": true
+        },
+        {
+          "lane": 1.47,
+          "beat": 190.375,
+          "hidden": true
+        },
+        {
+          "lane": 1.37,
+          "beat": 190.4375,
+          "hidden": true
+        },
+        {
+          "lane": 1.29,
+          "beat": 190.5,
+          "hidden": true
+        },
+        {
+          "lane": 1.22,
+          "beat": 190.5625,
+          "hidden": true
+        },
+        {
+          "lane": 1.16,
+          "beat": 190.625,
+          "hidden": true
+        },
+        {
+          "lane": 1.11,
+          "beat": 190.6875,
+          "hidden": true
+        },
+        {
+          "lane": 1.07,
+          "beat": 190.75,
+          "hidden": true
+        },
+        {
+          "lane": 1.04,
+          "beat": 190.8125,
+          "hidden": true
+        },
+        {
+          "lane": 1.02,
+          "beat": 190.875,
+          "hidden": true
+        },
+        {
+          "lane": 1.01,
+          "beat": 190.9375,
+          "hidden": true
+        },
+        {
+          "lane": 1,
+          "beat": 191
+        }
+      ]
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 3,
+          "beat": 189
+        },
+        {
+          "lane": 3.64,
+          "beat": 189.0625,
+          "hidden": true
+        },
+        {
+          "lane": 4.33,
+          "beat": 189.125,
+          "hidden": true
+        },
+        {
+          "lane": 4.84,
+          "beat": 189.1875,
+          "hidden": true
+        },
+        {
+          "lane": 5.17,
+          "beat": 189.25,
+          "hidden": true
+        },
+        {
+          "lane": 5.37,
+          "beat": 189.3125,
+          "hidden": true
+        },
+        {
+          "lane": 5.5,
+          "beat": 189.375,
+          "hidden": true
+        },
+        {
+          "lane": 5.6,
+          "beat": 189.4375,
+          "hidden": true
+        },
+        {
+          "lane": 5.68,
+          "beat": 189.5,
+          "hidden": true
+        },
+        {
+          "lane": 5.73,
+          "beat": 189.5625,
+          "hidden": true
+        },
+        {
+          "lane": 5.78,
+          "beat": 189.625,
+          "hidden": true
+        },
+        {
+          "lane": 5.82,
+          "beat": 189.6875,
+          "hidden": true
+        },
+        {
+          "lane": 5.86,
+          "beat": 189.75,
+          "hidden": true
+        },
+        {
+          "lane": 5.89,
+          "beat": 189.8125,
+          "hidden": true
+        },
+        {
+          "lane": 5.93,
+          "beat": 189.875,
+          "hidden": true
+        },
+        {
+          "lane": 5.96,
+          "beat": 189.9375,
+          "hidden": true
+        },
+        {
+          "lane": 6,
+          "beat": 190
+        },
+        {
+          "lane": 5.49,
+          "beat": 190.0625,
+          "hidden": true
+        },
+        {
+          "lane": 5.15,
+          "beat": 190.125,
+          "hidden": true
+        },
+        {
+          "lane": 4.92,
+          "beat": 190.1875,
+          "hidden": true
+        },
+        {
+          "lane": 4.74,
+          "beat": 190.25,
+          "hidden": true
+        },
+        {
+          "lane": 4.59,
+          "beat": 190.3125,
+          "hidden": true
+        },
+        {
+          "lane": 4.47,
+          "beat": 190.375,
+          "hidden": true
+        },
+        {
+          "lane": 4.37,
+          "beat": 190.4375,
+          "hidden": true
+        },
+        {
+          "lane": 4.29,
+          "beat": 190.5,
+          "hidden": true
+        },
+        {
+          "lane": 4.22,
+          "beat": 190.5625,
+          "hidden": true
+        },
+        {
+          "lane": 4.16,
+          "beat": 190.625,
+          "hidden": true
+        },
+        {
+          "lane": 4.11,
+          "beat": 190.6875,
+          "hidden": true
+        },
+        {
+          "lane": 4.07,
+          "beat": 190.75,
+          "hidden": true
+        },
+        {
+          "lane": 4.04,
+          "beat": 190.8125,
+          "hidden": true
+        },
+        {
+          "lane": 4.02,
+          "beat": 190.875,
+          "hidden": true
+        },
+        {
+          "lane": 4.01,
+          "beat": 190.9375,
+          "hidden": true
+        },
+        {
+          "lane": 4,
+          "beat": 191
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 192,
+      "skill": true
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 192
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 192.5
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 193
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 193
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 193.5
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 194
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 2,
+          "beat": 194
+        },
+        {
+          "lane": 2.25,
+          "beat": 194.125,
+          "hidden": true
+        },
+        {
+          "lane": 2.45,
+          "beat": 194.25,
+          "hidden": true
+        },
+        {
+          "lane": 2.62,
+          "beat": 194.375,
+          "hidden": true
+        },
+        {
+          "lane": 2.75,
+          "beat": 194.5,
+          "hidden": true
+        },
+        {
+          "lane": 2.85,
+          "beat": 194.625,
+          "hidden": true
+        },
+        {
+          "lane": 2.94,
+          "beat": 194.75,
+          "hidden": true
+        },
+        {
+          "lane": 2.98,
+          "beat": 194.875,
+          "hidden": true
+        },
+        {
+          "lane": 3,
+          "beat": 195
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 195
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 195.5
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 195.5
+    },
+    {
+      "type": "Single",
+      "lane": 3,
+      "beat": 196
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 196
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 5,
+          "beat": 196.5
+        },
+        {
+          "lane": 6,
+          "beat": 196.75
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 196.75
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 1,
+          "beat": 197.25
+        },
+        {
+          "lane": 2,
+          "beat": 197.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 197.5
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 4,
+          "beat": 198
+        },
+        {
+          "lane": 5,
+          "beat": 198.25
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 198.25
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 0,
+          "beat": 198.75
+        },
+        {
+          "lane": 1,
+          "beat": 199
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 199
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 5,
+          "beat": 199.5
+        },
+        {
+          "lane": 6,
+          "beat": 199.75
+        },
+        {
+          "lane": 5,
+          "beat": 200
+        }
+      ]
+    },
+    {
+      "type": "Long",
+      "connections": [
+        {
+          "lane": 1,
+          "beat": 200
+        },
+        {
+          "lane": 1,
+          "beat": 201
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 200.5
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 201
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 201.5
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 202
+    },
+    {
+      "type": "Long",
+      "connections": [
+        {
+          "lane": 5,
+          "beat": 202
+        },
+        {
+          "lane": 5,
+          "beat": 203
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 202.5
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 203
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 203.5
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 204
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 204.5
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 0,
+          "beat": 205
+        },
+        {
+          "lane": 0.64,
+          "beat": 205.0625,
+          "hidden": true
+        },
+        {
+          "lane": 1.33,
+          "beat": 205.125,
+          "hidden": true
+        },
+        {
+          "lane": 1.84,
+          "beat": 205.1875,
+          "hidden": true
+        },
+        {
+          "lane": 2.17,
+          "beat": 205.25,
+          "hidden": true
+        },
+        {
+          "lane": 2.37,
+          "beat": 205.3125,
+          "hidden": true
+        },
+        {
+          "lane": 2.5,
+          "beat": 205.375,
+          "hidden": true
+        },
+        {
+          "lane": 2.6,
+          "beat": 205.4375,
+          "hidden": true
+        },
+        {
+          "lane": 2.68,
+          "beat": 205.5,
+          "hidden": true
+        },
+        {
+          "lane": 2.73,
+          "beat": 205.5625,
+          "hidden": true
+        },
+        {
+          "lane": 2.78,
+          "beat": 205.625,
+          "hidden": true
+        },
+        {
+          "lane": 2.82,
+          "beat": 205.6875,
+          "hidden": true
+        },
+        {
+          "lane": 2.86,
+          "beat": 205.75,
+          "hidden": true
+        },
+        {
+          "lane": 2.89,
+          "beat": 205.8125,
+          "hidden": true
+        },
+        {
+          "lane": 2.93,
+          "beat": 205.875,
+          "hidden": true
+        },
+        {
+          "lane": 2.96,
+          "beat": 205.9375,
+          "hidden": true
+        },
+        {
+          "lane": 3,
+          "beat": 206
+        },
+        {
+          "lane": 2.49,
+          "beat": 206.0625,
+          "hidden": true
+        },
+        {
+          "lane": 2.15,
+          "beat": 206.125,
+          "hidden": true
+        },
+        {
+          "lane": 1.92,
+          "beat": 206.1875,
+          "hidden": true
+        },
+        {
+          "lane": 1.74,
+          "beat": 206.25,
+          "hidden": true
+        },
+        {
+          "lane": 1.5899999999999999,
+          "beat": 206.3125,
+          "hidden": true
+        },
+        {
+          "lane": 1.47,
+          "beat": 206.375,
+          "hidden": true
+        },
+        {
+          "lane": 1.37,
+          "beat": 206.4375,
+          "hidden": true
+        },
+        {
+          "lane": 1.29,
+          "beat": 206.5,
+          "hidden": true
+        },
+        {
+          "lane": 1.22,
+          "beat": 206.5625,
+          "hidden": true
+        },
+        {
+          "lane": 1.16,
+          "beat": 206.625,
+          "hidden": true
+        },
+        {
+          "lane": 1.11,
+          "beat": 206.6875,
+          "hidden": true
+        },
+        {
+          "lane": 1.07,
+          "beat": 206.75,
+          "hidden": true
+        },
+        {
+          "lane": 1.04,
+          "beat": 206.8125,
+          "hidden": true
+        },
+        {
+          "lane": 1.02,
+          "beat": 206.875,
+          "hidden": true
+        },
+        {
+          "lane": 1.01,
+          "beat": 206.9375,
+          "hidden": true
+        },
+        {
+          "lane": 1,
+          "beat": 207
+        }
+      ]
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 3,
+          "beat": 205
+        },
+        {
+          "lane": 3.64,
+          "beat": 205.0625,
+          "hidden": true
+        },
+        {
+          "lane": 4.33,
+          "beat": 205.125,
+          "hidden": true
+        },
+        {
+          "lane": 4.84,
+          "beat": 205.1875,
+          "hidden": true
+        },
+        {
+          "lane": 5.17,
+          "beat": 205.25,
+          "hidden": true
+        },
+        {
+          "lane": 5.37,
+          "beat": 205.3125,
+          "hidden": true
+        },
+        {
+          "lane": 5.5,
+          "beat": 205.375,
+          "hidden": true
+        },
+        {
+          "lane": 5.6,
+          "beat": 205.4375,
+          "hidden": true
+        },
+        {
+          "lane": 5.68,
+          "beat": 205.5,
+          "hidden": true
+        },
+        {
+          "lane": 5.73,
+          "beat": 205.5625,
+          "hidden": true
+        },
+        {
+          "lane": 5.78,
+          "beat": 205.625,
+          "hidden": true
+        },
+        {
+          "lane": 5.82,
+          "beat": 205.6875,
+          "hidden": true
+        },
+        {
+          "lane": 5.86,
+          "beat": 205.75,
+          "hidden": true
+        },
+        {
+          "lane": 5.89,
+          "beat": 205.8125,
+          "hidden": true
+        },
+        {
+          "lane": 5.93,
+          "beat": 205.875,
+          "hidden": true
+        },
+        {
+          "lane": 5.96,
+          "beat": 205.9375,
+          "hidden": true
+        },
+        {
+          "lane": 6,
+          "beat": 206
+        },
+        {
+          "lane": 5.49,
+          "beat": 206.0625,
+          "hidden": true
+        },
+        {
+          "lane": 5.15,
+          "beat": 206.125,
+          "hidden": true
+        },
+        {
+          "lane": 4.92,
+          "beat": 206.1875,
+          "hidden": true
+        },
+        {
+          "lane": 4.74,
+          "beat": 206.25,
+          "hidden": true
+        },
+        {
+          "lane": 4.59,
+          "beat": 206.3125,
+          "hidden": true
+        },
+        {
+          "lane": 4.47,
+          "beat": 206.375,
+          "hidden": true
+        },
+        {
+          "lane": 4.37,
+          "beat": 206.4375,
+          "hidden": true
+        },
+        {
+          "lane": 4.29,
+          "beat": 206.5,
+          "hidden": true
+        },
+        {
+          "lane": 4.22,
+          "beat": 206.5625,
+          "hidden": true
+        },
+        {
+          "lane": 4.16,
+          "beat": 206.625,
+          "hidden": true
+        },
+        {
+          "lane": 4.11,
+          "beat": 206.6875,
+          "hidden": true
+        },
+        {
+          "lane": 4.07,
+          "beat": 206.75,
+          "hidden": true
+        },
+        {
+          "lane": 4.04,
+          "beat": 206.8125,
+          "hidden": true
+        },
+        {
+          "lane": 4.02,
+          "beat": 206.875,
+          "hidden": true
+        },
+        {
+          "lane": 4.01,
+          "beat": 206.9375,
+          "hidden": true
+        },
+        {
+          "lane": 4,
+          "beat": 207
+        }
+      ]
+    },
+    {
+      "type": "Directional",
+      "beat": 208,
+      "lane": 1,
+      "direction": "Left",
+      "width": 1
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 208.5
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 208.75
+    },
+    {
+      "type": "Directional",
+      "beat": 209,
+      "lane": 5,
+      "direction": "Right",
+      "width": 1
+    },
+    {
+      "type": "System",
+      "data": "cmd_fever_end.wav",
+      "beat": 209.25
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 209.5
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 209.75
+    },
+    {
+      "type": "Directional",
+      "beat": 210,
+      "lane": 1,
+      "direction": "Left",
+      "width": 2
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 210.5
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 210.75
+    },
+    {
+      "type": "Directional",
+      "beat": 211,
+      "lane": 5,
+      "direction": "Right",
+      "width": 2
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 211.25
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 211.5
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 211.75
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 6,
+          "beat": 212
+        },
+        {
+          "lane": 5,
+          "beat": 212.25
+        },
+        {
+          "lane": 4,
+          "beat": 212.5
+        },
+        {
+          "lane": 3,
+          "beat": 212.75
+        }
+      ]
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 0,
+          "beat": 212.75
+        },
+        {
+          "lane": 1,
+          "beat": 213
+        },
+        {
+          "lane": 2,
+          "beat": 213.25
+        },
+        {
+          "lane": 3,
+          "beat": 213.5
+        }
+      ]
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 6,
+          "beat": 213.5
+        },
+        {
+          "lane": 5,
+          "beat": 213.75
+        },
+        {
+          "lane": 4,
+          "beat": 214
+        },
+        {
+          "lane": 3,
+          "beat": 214.25
+        }
+      ]
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 0,
+          "beat": 214.25
+        },
+        {
+          "lane": 1,
+          "beat": 214.5
+        },
+        {
+          "lane": 2,
+          "beat": 214.75
+        },
+        {
+          "lane": 3,
+          "beat": 215
+        }
+      ]
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 6,
+          "beat": 215
+        },
+        {
+          "lane": 5,
+          "beat": 215.25
+        },
+        {
+          "lane": 4,
+          "beat": 215.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 216,
+      "skill": true
+    },
+    {
+      "type": "Directional",
+      "beat": 216,
+      "lane": 1,
+      "direction": "Left",
+      "width": 2
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 216.75
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 217
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 4,
+          "beat": 217.5
+        },
+        {
+          "lane": 4.27,
+          "beat": 217.5625,
+          "hidden": true
+        },
+        {
+          "lane": 4.53,
+          "beat": 217.625,
+          "hidden": true
+        },
+        {
+          "lane": 4.72,
+          "beat": 217.6875,
+          "hidden": true
+        },
+        {
+          "lane": 4.9,
+          "beat": 217.75,
+          "hidden": true
+        },
+        {
+          "lane": 5.06,
+          "beat": 217.8125,
+          "hidden": true
+        },
+        {
+          "lane": 5.2,
+          "beat": 217.875,
+          "hidden": true
+        },
+        {
+          "lane": 5.33,
+          "beat": 217.9375,
+          "hidden": true
+        },
+        {
+          "lane": 5.45,
+          "beat": 218,
+          "hidden": true
+        },
+        {
+          "lane": 5.56,
+          "beat": 218.0625,
+          "hidden": true
+        },
+        {
+          "lane": 5.65,
+          "beat": 218.125,
+          "hidden": true
+        },
+        {
+          "lane": 5.73,
+          "beat": 218.1875,
+          "hidden": true
+        },
+        {
+          "lane": 5.8,
+          "beat": 218.25,
+          "hidden": true
+        },
+        {
+          "lane": 5.88,
+          "beat": 218.3125,
+          "hidden": true
+        },
+        {
+          "lane": 5.94,
+          "beat": 218.375,
+          "hidden": true
+        },
+        {
+          "lane": 5.98,
+          "beat": 218.4375,
+          "hidden": true
+        },
+        {
+          "lane": 6,
+          "beat": 218.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 217.75
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 218.5
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 219
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 219.5
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 220
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 2,
+          "beat": 220
+        },
+        {
+          "lane": 1.57,
+          "beat": 220.0625,
+          "hidden": true
+        },
+        {
+          "lane": 1.3900000000000001,
+          "beat": 220.125,
+          "hidden": true
+        },
+        {
+          "lane": 1.28,
+          "beat": 220.1875,
+          "hidden": true
+        },
+        {
+          "lane": 1.21,
+          "beat": 220.25,
+          "hidden": true
+        },
+        {
+          "lane": 1.15,
+          "beat": 220.3125,
+          "hidden": true
+        },
+        {
+          "lane": 1.1,
+          "beat": 220.375,
+          "hidden": true
+        },
+        {
+          "lane": 1.06,
+          "beat": 220.4375,
+          "hidden": true
+        },
+        {
+          "lane": 1.04,
+          "beat": 220.5,
+          "hidden": true
+        },
+        {
+          "lane": 1.03,
+          "beat": 220.5625,
+          "hidden": true
+        },
+        {
+          "lane": 1.02,
+          "beat": 220.625,
+          "hidden": true
+        },
+        {
+          "lane": 1,
+          "beat": 220.6875,
+          "hidden": true
+        },
+        {
+          "lane": 1,
+          "beat": 220.75
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 220.75
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 221
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 5,
+          "beat": 221.5
+        },
+        {
+          "lane": 5.25,
+          "beat": 221.625,
+          "hidden": true
+        },
+        {
+          "lane": 5.45,
+          "beat": 221.75,
+          "hidden": true
+        },
+        {
+          "lane": 5.62,
+          "beat": 221.875,
+          "hidden": true
+        },
+        {
+          "lane": 5.75,
+          "beat": 222,
+          "hidden": true
+        },
+        {
+          "lane": 5.85,
+          "beat": 222.125,
+          "hidden": true
+        },
+        {
+          "lane": 5.94,
+          "beat": 222.25,
+          "hidden": true
+        },
+        {
+          "lane": 5.98,
+          "beat": 222.375,
+          "hidden": true
+        },
+        {
+          "lane": 6,
+          "beat": 222.5,
+          "hidden": true
+        },
+        {
+          "lane": 6,
+          "beat": 223
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 221.75
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 222.5
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 1,
+          "beat": 223
+        },
+        {
+          "lane": 0,
+          "beat": 223.25
+        },
+        {
+          "lane": 1,
+          "beat": 223.5
+        },
+        {
+          "lane": 2,
+          "beat": 223.75
+        },
+        {
+          "lane": 3,
+          "beat": 224
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 223.5
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 224
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 224.75
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 225
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 2,
+          "beat": 225.5
+        },
+        {
+          "lane": 1.49,
+          "beat": 225.5625,
+          "hidden": true
+        },
+        {
+          "lane": 1.15,
+          "beat": 225.625,
+          "hidden": true
+        },
+        {
+          "lane": 0.92,
+          "beat": 225.6875,
+          "hidden": true
+        },
+        {
+          "lane": 0.74,
+          "beat": 225.75,
+          "hidden": true
+        },
+        {
+          "lane": 0.59,
+          "beat": 225.8125,
+          "hidden": true
+        },
+        {
+          "lane": 0.47000000000000003,
+          "beat": 225.875,
+          "hidden": true
+        },
+        {
+          "lane": 0.37,
+          "beat": 225.9375,
+          "hidden": true
+        },
+        {
+          "lane": 0.29,
+          "beat": 226,
+          "hidden": true
+        },
+        {
+          "lane": 0.22,
+          "beat": 226.0625,
+          "hidden": true
+        },
+        {
+          "lane": 0.16,
+          "beat": 226.125,
+          "hidden": true
+        },
+        {
+          "lane": 0.11,
+          "beat": 226.1875,
+          "hidden": true
+        },
+        {
+          "lane": 0.07,
+          "beat": 226.25,
+          "hidden": true
+        },
+        {
+          "lane": 0.04,
+          "beat": 226.3125,
+          "hidden": true
+        },
+        {
+          "lane": 0.02,
+          "beat": 226.375,
+          "hidden": true
+        },
+        {
+          "lane": 0.01,
+          "beat": 226.4375,
+          "hidden": true
+        },
+        {
+          "lane": 0,
+          "beat": 226.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 225.75
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 226.5
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 227
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 227.5
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 228
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 6,
+          "beat": 228
+        },
+        {
+          "lane": 5.57,
+          "beat": 228.0625,
+          "hidden": true
+        },
+        {
+          "lane": 5.39,
+          "beat": 228.125,
+          "hidden": true
+        },
+        {
+          "lane": 5.28,
+          "beat": 228.1875,
+          "hidden": true
+        },
+        {
+          "lane": 5.21,
+          "beat": 228.25,
+          "hidden": true
+        },
+        {
+          "lane": 5.15,
+          "beat": 228.3125,
+          "hidden": true
+        },
+        {
+          "lane": 5.1,
+          "beat": 228.375,
+          "hidden": true
+        },
+        {
+          "lane": 5.06,
+          "beat": 228.4375,
+          "hidden": true
+        },
+        {
+          "lane": 5.04,
+          "beat": 228.5,
+          "hidden": true
+        },
+        {
+          "lane": 5.03,
+          "beat": 228.5625,
+          "hidden": true
+        },
+        {
+          "lane": 5.02,
+          "beat": 228.625,
+          "hidden": true
+        },
+        {
+          "lane": 5,
+          "beat": 228.6875,
+          "hidden": true
+        },
+        {
+          "lane": 5,
+          "beat": 228.75
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 228.75
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 229
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 1,
+          "beat": 229.5
+        },
+        {
+          "lane": 0.75,
+          "beat": 229.625,
+          "hidden": true
+        },
+        {
+          "lane": 0.55,
+          "beat": 229.75,
+          "hidden": true
+        },
+        {
+          "lane": 0.38,
+          "beat": 229.875,
+          "hidden": true
+        },
+        {
+          "lane": 0.25,
+          "beat": 230,
+          "hidden": true
+        },
+        {
+          "lane": 0.15,
+          "beat": 230.125,
+          "hidden": true
+        },
+        {
+          "lane": 0.06,
+          "beat": 230.25,
+          "hidden": true
+        },
+        {
+          "lane": 0.02,
+          "beat": 230.375,
+          "hidden": true
+        },
+        {
+          "lane": 0,
+          "beat": 230.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 229.75
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 230.5
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 230.75
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 231
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 231.25
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 231.5
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 231.75
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 6,
+          "beat": 232
+        },
+        {
+          "lane": 5.57,
+          "beat": 232.0625,
+          "hidden": true
+        },
+        {
+          "lane": 5.39,
+          "beat": 232.125,
+          "hidden": true
+        },
+        {
+          "lane": 5.28,
+          "beat": 232.1875,
+          "hidden": true
+        },
+        {
+          "lane": 5.21,
+          "beat": 232.25,
+          "hidden": true
+        },
+        {
+          "lane": 5.15,
+          "beat": 232.3125,
+          "hidden": true
+        },
+        {
+          "lane": 5.1,
+          "beat": 232.375,
+          "hidden": true
+        },
+        {
+          "lane": 5.06,
+          "beat": 232.4375,
+          "hidden": true
+        },
+        {
+          "lane": 5.04,
+          "beat": 232.5,
+          "hidden": true
+        },
+        {
+          "lane": 5.03,
+          "beat": 232.5625,
+          "hidden": true
+        },
+        {
+          "lane": 5.02,
+          "beat": 232.625,
+          "hidden": true
+        },
+        {
+          "lane": 5,
+          "beat": 232.6875,
+          "hidden": true
+        },
+        {
+          "lane": 5,
+          "beat": 232.75
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 232.75
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 233
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 0,
+          "beat": 233.5
+        },
+        {
+          "lane": 0.27,
+          "beat": 233.5625,
+          "hidden": true
+        },
+        {
+          "lane": 0.53,
+          "beat": 233.625,
+          "hidden": true
+        },
+        {
+          "lane": 0.72,
+          "beat": 233.6875,
+          "hidden": true
+        },
+        {
+          "lane": 0.9,
+          "beat": 233.75,
+          "hidden": true
+        },
+        {
+          "lane": 1.06,
+          "beat": 233.8125,
+          "hidden": true
+        },
+        {
+          "lane": 1.2,
+          "beat": 233.875,
+          "hidden": true
+        },
+        {
+          "lane": 1.33,
+          "beat": 233.9375,
+          "hidden": true
+        },
+        {
+          "lane": 1.45,
+          "beat": 234,
+          "hidden": true
+        },
+        {
+          "lane": 1.56,
+          "beat": 234.0625,
+          "hidden": true
+        },
+        {
+          "lane": 1.65,
+          "beat": 234.125,
+          "hidden": true
+        },
+        {
+          "lane": 1.73,
+          "beat": 234.1875,
+          "hidden": true
+        },
+        {
+          "lane": 1.8,
+          "beat": 234.25,
+          "hidden": true
+        },
+        {
+          "lane": 1.88,
+          "beat": 234.3125,
+          "hidden": true
+        },
+        {
+          "lane": 1.94,
+          "beat": 234.375,
+          "hidden": true
+        },
+        {
+          "lane": 1.98,
+          "beat": 234.4375,
+          "hidden": true
+        },
+        {
+          "lane": 2,
+          "beat": 234.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 233.75
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 234.5
+    },
+    {
+      "type": "Single",
+      "lane": 3,
+      "beat": 235
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 235
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 235.5
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 236
+    },
+    {
+      "type": "Long",
+      "connections": [
+        {
+          "lane": 5,
+          "beat": 236
+        },
+        {
+          "lane": 5,
+          "beat": 236.75
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 236.75
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 237
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 1,
+          "beat": 237.5
+        },
+        {
+          "lane": 0.75,
+          "beat": 237.625,
+          "hidden": true
+        },
+        {
+          "lane": 0.55,
+          "beat": 237.75,
+          "hidden": true
+        },
+        {
+          "lane": 0.38,
+          "beat": 237.875,
+          "hidden": true
+        },
+        {
+          "lane": 0.25,
+          "beat": 238,
+          "hidden": true
+        },
+        {
+          "lane": 0.15,
+          "beat": 238.125,
+          "hidden": true
+        },
+        {
+          "lane": 0.06,
+          "beat": 238.25,
+          "hidden": true
+        },
+        {
+          "lane": 0.02,
+          "beat": 238.375,
+          "hidden": true
+        },
+        {
+          "lane": 0,
+          "beat": 238.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 6,
+      "beat": 237.75
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 238.5
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 6,
+          "beat": 239
+        },
+        {
+          "lane": 5,
+          "beat": 239.16666666666666
+        },
+        {
+          "lane": 4,
+          "beat": 239.33333333333334
+        },
+        {
+          "lane": 3,
+          "beat": 239.5
+        },
+        {
+          "lane": 4,
+          "beat": 239.66666666666666
+        },
+        {
+          "lane": 5,
+          "beat": 239.83333333333334
+        },
+        {
+          "lane": 6,
+          "beat": 240
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 239.5
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 2,
+          "beat": 240
+        },
+        {
+          "lane": 1.57,
+          "beat": 240.0625,
+          "hidden": true
+        },
+        {
+          "lane": 1.3900000000000001,
+          "beat": 240.125,
+          "hidden": true
+        },
+        {
+          "lane": 1.28,
+          "beat": 240.1875,
+          "hidden": true
+        },
+        {
+          "lane": 1.21,
+          "beat": 240.25,
+          "hidden": true
+        },
+        {
+          "lane": 1.15,
+          "beat": 240.3125,
+          "hidden": true
+        },
+        {
+          "lane": 1.1,
+          "beat": 240.375,
+          "hidden": true
+        },
+        {
+          "lane": 1.06,
+          "beat": 240.4375,
+          "hidden": true
+        },
+        {
+          "lane": 1.04,
+          "beat": 240.5,
+          "hidden": true
+        },
+        {
+          "lane": 1.03,
+          "beat": 240.5625,
+          "hidden": true
+        },
+        {
+          "lane": 1.02,
+          "beat": 240.625,
+          "hidden": true
+        },
+        {
+          "lane": 1,
+          "beat": 240.6875,
+          "hidden": true
+        },
+        {
+          "lane": 1,
+          "beat": 240.75
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 4,
+      "beat": 240.75
+    },
+    {
+      "type": "Single",
+      "lane": 2,
+      "beat": 241
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 5,
+          "beat": 241.5
+        },
+        {
+          "lane": 5.25,
+          "beat": 241.625,
+          "hidden": true
+        },
+        {
+          "lane": 5.45,
+          "beat": 241.75,
+          "hidden": true
+        },
+        {
+          "lane": 5.62,
+          "beat": 241.875,
+          "hidden": true
+        },
+        {
+          "lane": 5.75,
+          "beat": 242,
+          "hidden": true
+        },
+        {
+          "lane": 5.85,
+          "beat": 242.125,
+          "hidden": true
+        },
+        {
+          "lane": 5.94,
+          "beat": 242.25,
+          "hidden": true
+        },
+        {
+          "lane": 5.98,
+          "beat": 242.375,
+          "hidden": true
+        },
+        {
+          "lane": 6,
+          "beat": 242.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 0,
+      "beat": 241.75
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 242.5
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 2,
+          "beat": 243
+        },
+        {
+          "lane": 1.5,
+          "beat": 243.0625,
+          "hidden": true
+        },
+        {
+          "lane": 1.1,
+          "beat": 243.125,
+          "hidden": true
+        },
+        {
+          "lane": 0.8,
+          "beat": 243.1875,
+          "hidden": true
+        },
+        {
+          "lane": 0.55,
+          "beat": 243.25,
+          "hidden": true
+        },
+        {
+          "lane": 0.35000000000000003,
+          "beat": 243.3125,
+          "hidden": true
+        },
+        {
+          "lane": 0.2,
+          "beat": 243.375,
+          "hidden": true
+        },
+        {
+          "lane": 0.07,
+          "beat": 243.4375,
+          "hidden": true
+        },
+        {
+          "lane": 0,
+          "beat": 243.5
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 243.5
+    },
+    {
+      "type": "Long",
+      "connections": [
+        {
+          "lane": 4,
+          "beat": 244
+        },
+        {
+          "lane": 4,
+          "beat": 244.5
+        }
+      ]
+    },
+    {
+      "type": "Long",
+      "connections": [
+        {
+          "lane": 2,
+          "beat": 244.5
+        },
+        {
+          "lane": 2,
+          "beat": 245
+        }
+      ]
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 6,
+          "beat": 245
+        },
+        {
+          "lane": 5.75,
+          "beat": 245.0625,
+          "hidden": true
+        },
+        {
+          "lane": 5.55,
+          "beat": 245.125,
+          "hidden": true
+        },
+        {
+          "lane": 5.38,
+          "beat": 245.1875,
+          "hidden": true
+        },
+        {
+          "lane": 5.25,
+          "beat": 245.25,
+          "hidden": true
+        },
+        {
+          "lane": 5.15,
+          "beat": 245.3125,
+          "hidden": true
+        },
+        {
+          "lane": 5.06,
+          "beat": 245.375,
+          "hidden": true
+        },
+        {
+          "lane": 5.02,
+          "beat": 245.4375,
+          "hidden": true
+        },
+        {
+          "lane": 5,
+          "beat": 245.5
+        }
+      ]
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 0,
+          "beat": 245.5
+        },
+        {
+          "lane": 0.25,
+          "beat": 245.5625,
+          "hidden": true
+        },
+        {
+          "lane": 0.45,
+          "beat": 245.625,
+          "hidden": true
+        },
+        {
+          "lane": 0.62,
+          "beat": 245.6875,
+          "hidden": true
+        },
+        {
+          "lane": 0.75,
+          "beat": 245.75,
+          "hidden": true
+        },
+        {
+          "lane": 0.85,
+          "beat": 245.8125,
+          "hidden": true
+        },
+        {
+          "lane": 0.94,
+          "beat": 245.875,
+          "hidden": true
+        },
+        {
+          "lane": 0.98,
+          "beat": 245.9375,
+          "hidden": true
+        },
+        {
+          "lane": 1,
+          "beat": 246
+        }
+      ]
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 4,
+          "beat": 246
+        },
+        {
+          "lane": 4.5,
+          "beat": 246.0625,
+          "hidden": true
+        },
+        {
+          "lane": 4.9,
+          "beat": 246.125,
+          "hidden": true
+        },
+        {
+          "lane": 5.2,
+          "beat": 246.1875,
+          "hidden": true
+        },
+        {
+          "lane": 5.45,
+          "beat": 246.25,
+          "hidden": true
+        },
+        {
+          "lane": 5.65,
+          "beat": 246.3125,
+          "hidden": true
+        },
+        {
+          "lane": 5.8,
+          "beat": 246.375,
+          "hidden": true
+        },
+        {
+          "lane": 5.93,
+          "beat": 246.4375,
+          "hidden": true
+        },
+        {
+          "lane": 6,
+          "beat": 246.5
+        }
+      ]
+    },
+    {
+      "type": "Slide",
+      "connections": [
+        {
+          "lane": 2,
+          "beat": 246.5
+        },
+        {
+          "lane": 1.5,
+          "beat": 246.5625,
+          "hidden": true
+        },
+        {
+          "lane": 1.1,
+          "beat": 246.625,
+          "hidden": true
+        },
+        {
+          "lane": 0.8,
+          "beat": 246.6875,
+          "hidden": true
+        },
+        {
+          "lane": 0.55,
+          "beat": 246.75,
+          "hidden": true
+        },
+        {
+          "lane": 0.35000000000000003,
+          "beat": 246.8125,
+          "hidden": true
+        },
+        {
+          "lane": 0.2,
+          "beat": 246.875,
+          "hidden": true
+        },
+        {
+          "lane": 0.07,
+          "beat": 246.9375,
+          "hidden": true
+        },
+        {
+          "lane": 0,
+          "beat": 247
+        }
+      ]
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 247
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 247.25
+    },
+    {
+      "type": "Single",
+      "lane": 5,
+      "beat": 247.5
+    },
+    {
+      "type": "Single",
+      "lane": 1,
+      "beat": 247.75
+    }
+  ]
+}

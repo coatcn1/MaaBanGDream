@@ -117,6 +117,55 @@ def test_tap_ring_cannot_fire_after_its_flick_was_already_dispatched():
     assert ring == []
 
 
+def test_late_flick_ring_residue_is_suppressed_beyond_retrigger_window():
+    planner = RealtimePlanner(
+        judgement_y=565,
+        timing_offset_ms=0,
+        retrigger_seconds=.12,
+        rescue_first_visible=True,
+    )
+    planner.update([
+        ObservedNote(NoteKind.FLICK, 1, 360, 480, 58, 22, 1.00)
+    ], now=1.00)
+    flick = planner.update([
+        ObservedNote(NoteKind.FLICK, 1, 360, 520, 58, 22, 1.04),
+        ObservedNote(NoteKind.TAP, 1, 400, 565, 82, 6, 1.04),
+    ], now=1.04)
+    # Real Hard traces show the playable ring surviving ~0.4 s after the
+    # arrow dispatched; it is first seen at the line and would otherwise be
+    # rescued as a spurious TAP.
+    ring = planner.update([
+        ObservedNote(NoteKind.TAP, 1, 400, 575, 82, 6, 1.42)
+    ], now=1.42)
+
+    assert [(action.kind, action.lane) for action in flick] == [
+        (ActionKind.FLICK, 1)
+    ]
+    assert ring == []
+
+
+def test_occluded_long_falling_head_fires_just_before_trigger_target():
+    planner = RealtimePlanner(
+        judgement_y=565,
+        timing_offset_ms=0,
+        rescue_first_visible=True,
+    )
+    now = 1.00
+    actions = []
+    for y in (480, 500, 520, 540, 549, 556, 562, 566):
+        actions.extend(planner.update([
+            ObservedNote(NoteKind.TAP, 3, 640, y, 40, 20, now)
+        ], now=now))
+        now += 0.016
+
+    # The head is tracked from far up (minimum_y ~480). On Hard the trigger
+    # honours the calibrated offset up to the judgement line, so a strongly
+    # trusted head fires as it crosses the line instead of several px early.
+    assert [(action.kind, action.lane) for action in actions] == [
+        (ActionKind.TAP, 3)
+    ]
+
+
 def test_stale_flick_fragment_cannot_shadow_a_later_tap_crossing():
     planner = RealtimePlanner(
         judgement_y=565,
@@ -598,6 +647,35 @@ def test_paired_hold_with_a_distant_tail_releases_on_its_own():
     ]
 
 
+def test_restarting_slide_head_can_release_a_later_chord_contact_safely():
+    """A paired release may remove a contact from the frame's key snapshot.
+
+    Expert live crash realtime-20260825-033731 raised ``KeyError: 6`` after
+    contact 1 found a new head on its original lane and released both sides
+    of the chord.  Contact 6 was still present in the sorted key snapshot but
+    had already been removed from the active-hold dictionaries.
+    """
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+    planner.update([
+        ObservedNote(NoteKind.HOLD, 1, 340, 510, 70, 105, 1.0),
+        ObservedNote(NoteKind.HOLD, 6, 1090, 530, 70, 110, 1.0),
+    ], now=1.0)
+    planner._active_hold_lane[1] = 2
+    planner._active_hold_tail[6] = 530
+
+    actions = planner.update([
+        ObservedNote(NoteKind.HOLD, 1, 340, 520, 180, 100, 1.7),
+    ], now=1.7)
+
+    assert [(a.kind, a.contact, a.reason) for a in actions] == [
+        (ActionKind.UP, 1, "new-hold-head"),
+        (ActionKind.UP, 6, "new-hold-head-paired"),
+        (ActionKind.DOWN, 1, "rescue"),
+    ]
+
+
 def test_tail_flick_releases_survive_a_same_frame_validated_rescue():
     # Live crash realtime-20260727-235942 frame 3516: two chord holds ended
     # as tail-flick swipes in the same frame as a validated rescue TAP on the
@@ -767,13 +845,15 @@ def test_tracked_note_keeps_dispatch_lead_when_profile_offset_is_negative():
         [_note(NoteKind.TAP, 2, 561, 1.02)], now=1.02
     )
     due = planner.update(
-        [_note(NoteKind.TAP, 2, 562, 1.03)], now=1.03
+        [_note(NoteKind.TAP, 2, 572, 1.03)], now=1.03
     )
 
-    assert [(action.kind, action.reason) for action in before] == [
+    # A negative offset asks for a later press on slide charts: the head is
+    # not pressed while still several px above the line.
+    assert before == []
+    assert [(action.kind, action.reason) for action in due] == [
         (ActionKind.TAP, "crossing")
     ]
-    assert due == []
 
 
 def test_low_capture_fps_predicts_a_crossing_before_the_next_frame():
@@ -790,7 +870,13 @@ def test_low_capture_fps_predicts_a_crossing_before_the_next_frame():
         ObservedNote(NoteKind.TAP, 2, 490, 556, 80, 18, 1.15)
     ], now=1.15)
 
-    assert [(action.kind, action.reason) for action in predicted] == [
+    # The calibrated target is later than the one-frame predictive line; the
+    # note keeps falling and the immutable physical crossing still fires.
+    assert predicted == []
+    crossed = planner.update([
+        ObservedNote(NoteKind.TAP, 2, 490, 568, 80, 18, 1.18)
+    ], now=1.18)
+    assert [(action.kind, action.reason) for action in crossed] == [
         (ActionKind.TAP, "crossing")
     ]
 
@@ -1221,6 +1307,63 @@ def test_released_hold_tail_cannot_be_rescued_as_a_tap_on_the_same_lane():
 
     assert [action.kind for action in released] == [ActionKind.UP]
     assert lingering_tail == []
+
+
+def test_released_hold_body_does_not_validate_new_weak_head_on_adjacent_lane():
+    """TAP EFFECT 4 regression: a just-released body must not start a new hold.
+
+    In the SAVIOR OF SONG Hard TAP4 trace the lane-0 hold released at the
+    same frame a 16 px fragment appeared on lane 1 at the judgement line.
+    The wide lane-0 body (which spans into lane 1) was still visible and
+    validated the fragment as a linked hold head.  The phantom hold then
+    stuck around for 17 s and blocked the real lane-0 hold that followed.
+    """
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+    started = planner.update([
+        ObservedNote(NoteKind.HOLD, 0, 190, 405, 100, 320, 1.0)
+    ], now=1.0)
+    assert [action.kind for action in started] == [ActionKind.DOWN]
+
+    same_frame = planner.update([
+        # The wide old body, still visible while its tail ring releases.
+        ObservedNote(NoteKind.HOLD, 0, 199, 499, 316, 88, 2.0),
+        # Its tail ring at the judgement line.
+        ObservedNote(NoteKind.HOLD, 0, 213, 563, 126, 16, 2.0),
+        # A weak fragment on the adjacent lane that used to link to the body.
+        ObservedNote(NoteKind.HOLD, 1, 319, 563, 34, 16, 2.0),
+    ], now=2.0)
+
+    assert [(action.kind, action.reason) for action in same_frame] == [
+        (ActionKind.UP, "tail-ring")
+    ]
+    assert not [action for action in same_frame if action.kind == ActionKind.DOWN]
+
+
+def test_fresh_body_still_validates_detached_head_after_release_cooldown():
+    """A genuinely new body keeps the detached-head rescue path."""
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+    started = planner.update([
+        ObservedNote(NoteKind.HOLD, 0, 190, 405, 100, 320, 1.0)
+    ], now=1.0)
+    assert [action.kind for action in started] == [ActionKind.DOWN]
+    released = planner.update([
+        ObservedNote(NoteKind.HOLD, 0, 190, 572, 100, 18, 2.0)
+    ], now=2.0)
+    assert [action.kind for action in released] == [ActionKind.UP]
+
+    # 0.5 s later, a different lane shows a fresh body plus a thin playable
+    # head at the line.  The release cooldown must not block this pair.
+    rescued = planner.update([
+        ObservedNote(NoteKind.HOLD, 2, 500, 430, 120, 140, 2.50),
+        ObservedNote(NoteKind.HOLD, 2, 500, 555, 34, 16, 2.50),
+    ], now=2.50)
+    assert [(action.kind, action.lane, action.reason) for action in rescued] == [
+        (ActionKind.DOWN, 2, "rescue")
+    ]
 
 
 def test_real_crossing_note_after_hold_release_is_not_suppressed():

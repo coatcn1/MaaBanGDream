@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import time
 import traceback
 from typing import Any
@@ -34,6 +35,56 @@ def _wait_unless_stopping(context: Context, seconds: float) -> bool:
             return False
         time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
     return not context.tasker.stopping
+
+
+def _wait_for_adb(adb_path: str, serial: str, timeout: float = 90.0) -> bool:
+    """Wait until ``serial`` is back online after an emulator reboot."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            output = subprocess.run(
+                [adb_path, "-s", serial, "get-state"],
+                capture_output=True,
+                text=True,
+                timeout=8,
+            )
+            if output.returncode == 0 and output.stdout.strip() == "device":
+                return True
+        except Exception:
+            pass
+        time.sleep(2.0)
+    return False
+
+
+def _reboot_ldplayer(
+    console_path: str,
+    index: int,
+    adb_path: str,
+    serial: str,
+) -> bool:
+    """Reboot the LDPlayer emulator instance via its console."""
+    try:
+        result = subprocess.run(
+            [console_path, "reboot", "--index", str(index)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except Exception as exc:
+        log_task(
+            "游戏启动",
+            "模拟器",
+            "ERROR",
+            f"模拟器重启命令失败：{type(exc).__name__}: {exc}",
+        )
+        return False
+    log_task(
+        "游戏启动",
+        "模拟器",
+        "INFO",
+        f"模拟器重启命令已发送：rc={result.returncode} {result.stdout.strip()}",
+    )
+    return _wait_for_adb(adb_path, serial)
 
 
 def _package_running(controller: Any, package: str) -> bool | None:
@@ -118,8 +169,46 @@ class CommonRecover(CustomAction):
         package = str(params.get("package", "com.bilibili.star.bili"))
         restart_limit = int(params.get("restart_limit", 2))
         restart_wait = int(params.get("restart_wait_ms", 5000)) / 1000
+        reboot_emulator_on_failure = bool(
+            params.get("reboot_emulator_on_failure", False)
+        )
+        emulator_console = str(
+            params.get(
+                "emulator_console",
+                "E:/leidian/mrfz/ldconsole.exe",
+            )
+        )
+        emulator_index = int(params.get("emulator_index", 1000))
+        adb_path = str(params.get("adb_path", "E:/leidian/mrfz/adb.exe"))
+        adb_serial = str(params.get("adb_serial", "emulator-7554"))
         startup_grace = int(params.get("startup_grace_ms", 0)) / 1000
         click_nodes = [str(node) for node in params.get("click_nodes", [])]
+        resource_download_click_node = str(
+            params.get("resource_download_click_node", "ResourceDownloadConfirm")
+        )
+        configured_download_page_nodes = params.get(
+            "resource_download_page_nodes"
+        )
+        if configured_download_page_nodes is None:
+            configured_download_page_nodes = [
+                params.get(
+                    "resource_download_page_node",
+                    "ResourceDownloadPageMarker",
+                ),
+                "ResourceDownloadProgressMarker",
+            ]
+        resource_download_page_nodes = [
+            str(node)
+            for node in configured_download_page_nodes
+            if str(node).strip()
+        ]
+        resource_download_timeout = max(
+            timeout,
+            int(params.get("resource_download_timeout_ms", 1_200_000)) / 1000,
+        )
+        modal_cancel_nodes = [
+            str(node) for node in params.get("modal_cancel_nodes", [])
+        ]
         back_only = bool(params.get("back_only", False))
         back_only_click_nodes = [
             str(node) for node in params.get("back_only_click_nodes", [])
@@ -154,12 +243,19 @@ class CommonRecover(CustomAction):
                 return True
             return False
 
-        for restart in range(restart_limit + 1):
+        emulator_rebooted = False
+        restart = 0
+        while restart <= restart_limit + (1 if emulator_rebooted else 0):
+            restart_round = restart
+            restart += 1
             login_started = not login_mode
             login_seen = False
             login_tap_attempted = False
             login_recovery_active = False
             login_marker_attempts = 0
+            resource_download_clicked = False
+            resource_download_visible = False
+            resource_download_deadline: float | None = None
             iteration_grace = max(startup_grace, 30.0) if app_started else startup_grace
             grace_deadline = time.monotonic() + iteration_grace
             deadline = time.monotonic() + timeout
@@ -183,6 +279,30 @@ class CommonRecover(CustomAction):
                         continue
                     print(f"CommonRecover {exc}", flush=True)
                     return False
+                modal_dismissed = False
+                for node in modal_cancel_nodes:
+                    result = context.run_recognition(node, image)
+                    if not result or not result.hit or not result.box:
+                        continue
+                    if context.tasker.stopping:
+                        return True
+                    box = result.box
+                    controller.post_click(
+                        box.x + box.w // 2,
+                        box.y + box.h // 2,
+                    ).wait()
+                    modal_dismissed = True
+                    log_task(
+                        "游戏启动",
+                        "弹窗",
+                        "INFO",
+                        f"检测到模态弹窗，已点击取消：{node}",
+                    )
+                    break
+                if modal_dismissed:
+                    if not _wait_unless_stopping(context, interval):
+                        return True
+                    continue
                 result = context.run_recognition(home_node, image)
                 if result and result.hit:
                     login_status = "登录完成" if login_seen else "已登录"
@@ -193,7 +313,90 @@ class CommonRecover(CustomAction):
                         f"已识别主页，状态：{login_status}",
                     )
                     return True
-                if back_only and restart == 0:
+
+                # Resource updates are a recognised login phase, not an
+                # unknown page. Click Download once, then keep the recovery
+                # loop passive while the stable page title remains visible.
+                # This must run before the ESC-only login recovery branch or
+                # BACK can cancel/interfere with an in-progress download.
+                if resource_download_click_node and not resource_download_clicked:
+                    result = context.run_recognition(
+                        resource_download_click_node,
+                        image,
+                    )
+                    if result and result.hit and result.box:
+                        if context.tasker.stopping:
+                            return True
+                        box = result.box
+                        controller.post_click(
+                            box.x + box.w // 2,
+                            box.y + box.h // 2,
+                        ).wait()
+                        now = time.monotonic()
+                        resource_download_clicked = True
+                        resource_download_visible = True
+                        resource_download_deadline = now + resource_download_timeout
+                        login_started = True
+                        login_seen = True
+                        login_recovery_active = True
+                        deadline = now + timeout
+                        log_task(
+                            "游戏启动",
+                            "资源下载",
+                            "INFO",
+                            "识别到数据下载页面，已点击“下载”并等待完成",
+                        )
+                        if not _wait_unless_stopping(context, interval):
+                            return True
+                        continue
+
+                download_page_visible = False
+                for resource_download_page_node in resource_download_page_nodes:
+                    result = context.run_recognition(
+                        resource_download_page_node,
+                        image,
+                    )
+                    if result and result.hit:
+                        download_page_visible = True
+                        break
+                if download_page_visible:
+                    now = time.monotonic()
+                    if resource_download_deadline is None:
+                        resource_download_deadline = now + resource_download_timeout
+                    if now >= resource_download_deadline:
+                        log_task(
+                            "游戏启动",
+                            "资源下载",
+                            "ERROR",
+                            "数据下载页面持续超过 20 分钟，停止自动等待",
+                        )
+                        return False
+                    resource_download_visible = True
+                    login_started = True
+                    login_seen = True
+                    login_recovery_active = True
+                    # Keep the ordinary 60-second recovery deadline alive,
+                    # while the independent 20-minute bound remains fixed.
+                    deadline = min(
+                        resource_download_deadline,
+                        now + timeout,
+                    )
+                    if not _wait_unless_stopping(context, interval):
+                        return True
+                    continue
+                if resource_download_visible:
+                    # The known download page disappeared. Re-enter the
+                    # normal title/login state machine instead of carrying
+                    # ESC-only recovery state across the transition.
+                    resource_download_visible = False
+                    login_recovery_active = False
+                    login_started = not login_mode
+                    login_marker_attempts = 0
+                    now = time.monotonic()
+                    deadline = now + timeout
+                    grace_deadline = now + startup_grace
+
+                if back_only and restart_round == 0:
                     safe_story_clicked = False
                     for node in back_only_click_nodes:
                         result = context.run_recognition(node, image)
@@ -224,7 +427,7 @@ class CommonRecover(CustomAction):
                 # bounded app restart must switch to the normal login state
                 # machine instead of continuing to press BACK on the title
                 # screen.
-                if (back_only and restart == 0) or login_recovery_active:
+                if (back_only and restart_round == 0) or login_recovery_active:
                     if context.tasker.stopping:
                         return True
                     controller.post_click_key(4).wait()
@@ -337,7 +540,7 @@ class CommonRecover(CustomAction):
                     )
                 if not _wait_unless_stopping(context, interval):
                     return True
-            if restart < restart_limit:
+            if restart_round < restart_limit:
                 if context.tasker.stopping:
                     return True
                 controller.post_stop_app(package).wait()
@@ -350,10 +553,43 @@ class CommonRecover(CustomAction):
                     "重启",
                     "WARN",
                     f"{int(timeout)} 秒内未识别主页，"
-                    f"正在重启游戏（第 {restart + 1}/{restart_limit} 次）",
+                    f"正在重启游戏（第 {restart_round + 1}/{restart_limit} 次）",
                 )
                 if not _wait_unless_stopping(context, restart_wait):
                     return True
+            elif (
+                not emulator_rebooted
+                and reboot_emulator_on_failure
+                and restart_round == restart_limit
+            ):
+                if context.tasker.stopping:
+                    return True
+                log_task(
+                    "游戏启动",
+                    "模拟器",
+                    "WARN",
+                    f"游戏重启 {restart_limit} 次仍未识别主页，正在重启模拟器",
+                )
+                if _reboot_ldplayer(
+                    emulator_console,
+                    emulator_index,
+                    adb_path,
+                    adb_serial,
+                ):
+                    emulator_rebooted = True
+                    app_started = True
+                    controller = context.tasker.controller
+                    controller.post_start_app(package).wait()
+                    if not _wait_unless_stopping(context, restart_wait):
+                        return True
+                else:
+                    log_task(
+                        "游戏启动",
+                        "模拟器",
+                        "ERROR",
+                        "模拟器重启后 adb 未恢复；本次任务停止",
+                    )
+                    return False
         log_task(
             "游戏启动",
             "结束",

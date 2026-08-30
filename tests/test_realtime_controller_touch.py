@@ -2,38 +2,41 @@ from __future__ import annotations
 
 import pytest
 
+import agent.realtime.controller_touch as controller_touch_module
 from agent.realtime.controller_touch import ControllerTouchDispatcher
 from agent.realtime.touch_planner import ActionKind, TouchAction
 
 
 class Job:
+    def __init__(self):
+        self.wait_calls = 0
+
     def wait(self):
+        self.wait_calls += 1
         return self
-
-
-class FailingJob(Job):
-    def __init__(self, error):
-        self.error = error
-
-    def wait(self):
-        raise self.error
 
 
 class Controller:
     def __init__(self):
         self.calls = []
+        self.jobs = []
+
+    def _job(self):
+        job = Job()
+        self.jobs.append(job)
+        return job
 
     def post_touch_down(self, x, y, contact=0, pressure=1):
         self.calls.append(("down", contact, x, y, pressure))
-        return Job()
+        return self._job()
 
     def post_touch_move(self, x, y, contact=0, pressure=1):
         self.calls.append(("move", contact, x, y, pressure))
-        return Job()
+        return self._job()
 
     def post_touch_up(self, contact=0):
         self.calls.append(("up", contact))
-        return Job()
+        return self._job()
 
 
 def test_native_dispatch_keeps_hold_contact_while_tapping_and_flicking():
@@ -48,9 +51,9 @@ def test_native_dispatch_keeps_hold_contact_while_tapping_and_flicking():
 
     assert ("up", 3) not in controller.calls
     assert delays == []
-    flick_contacts = set(touch.active_contacts) - {3}
-    assert len(flick_contacts) == 1
-    assert touch.active_contacts == {3, *flick_contacts}
+    transient_contacts = set(touch.active_contacts) - {3}
+    assert len(transient_contacts) == 2
+    assert touch.active_contacts == {3, *transient_contacts}
 
     touch.advance(1.117)
     touch.advance(1.134)
@@ -67,6 +70,32 @@ def test_native_dispatch_keeps_hold_contact_while_tapping_and_flicking():
     down_index = next(i for i, call in enumerate(controller.calls) if call[:2] == ("down", flick_contact))
     up_index = next(i for i, call in enumerate(controller.calls) if call == ("up", flick_contact))
     assert down_index < controller.calls.index(flick_moves[0]) < up_index
+
+
+def test_trace_state_exposes_physical_contacts_and_logical_aliases():
+    controller = Controller()
+    touch = ControllerTouchDispatcher(controller, lambda: False)
+
+    touch.dispatch([
+        TouchAction(ActionKind.DOWN, 3, 1.0, 3),
+        TouchAction(ActionKind.TAP, 2, 1.0),
+    ])
+
+    assert touch.trace_state() == {
+        "active_contacts": [3, 7],
+        "active_positions": {"3": 640, "7": 490},
+        "contact_aliases": {"3": 3},
+        "pending_taps": [7],
+        "pending_flicks": [],
+        "recovered_contacts": 0,
+        "down_recoveries": 0,
+        "stale_move_recoveries": 0,
+    }
+    assert touch.has_active_or_pending_contacts
+
+    touch.emergency_release_all()
+
+    assert not touch.has_active_or_pending_contacts
 
 
 def test_flick_advance_can_share_ten_contacts_without_blocking():
@@ -129,12 +158,13 @@ def test_same_frame_hold_release_precedes_contact_reuse():
     ])
 
     assert controller.calls == [
-        ("down", 6, 640, 590, 50),
+        ("down", 6, 640, 590, 1),
         ("up", 6),
-        ("down", 6, 1060, 590, 50),
+        ("down", 0, 1060, 590, 1),
     ]
-    assert touch.active_contacts == {6}
-    assert touch.active_positions == {6: 1060}
+    assert touch.active_contacts == {0}
+    assert touch.active_positions == {0: 1060}
+    assert touch._contact_alias == {6: 0}
 
 
 def test_stale_internal_contact_is_released_before_reuse():
@@ -149,9 +179,130 @@ def test_stale_internal_contact_is_released_before_reuse():
 
     assert controller.calls == [
         ("up", 6),
-        ("down", 6, 1060, 590, 50),
+        ("down", 0, 1060, 590, 1),
     ]
     assert touch.recovered_contacts == 1
+    assert touch._contact_alias == {6: 0}
+
+
+def test_aliased_hold_release_cools_down_the_actual_contact(monkeypatch):
+    now = [10.0]
+    monkeypatch.setattr(
+        controller_touch_module.time, "monotonic", lambda: now[0],
+    )
+    controller = Controller()
+    touch = ControllerTouchDispatcher(controller, lambda: False)
+    # Make planned id 6 rotate onto actual id 0.
+    touch._last_released[6] = 9.9
+    touch.dispatch([
+        TouchAction(ActionKind.DOWN, 6, 1.0, contact=6, target_x=1060),
+    ])
+    assert touch._contact_alias == {6: 0}
+
+    now[0] = 10.1
+    touch.dispatch([TouchAction(ActionKind.UP, 6, 1.1, contact=6)])
+    now[0] = 10.11
+    touch.dispatch([
+        TouchAction(ActionKind.DOWN, 0, 1.11, contact=0, target_x=190),
+    ])
+
+    # The just-released physical id 0 must not be reused while its UP can
+    # still be queued in MaaFramework/MTouch.
+    assert controller.calls[-1] == ("down", 1, 190, 590, 1)
+    assert touch._contact_alias == {0: 1}
+
+
+def test_dense_hold_fallback_reuses_the_oldest_released_contact(monkeypatch):
+    monkeypatch.setattr(
+        controller_touch_module.time, "monotonic", lambda: 10.0,
+    )
+    touch = ControllerTouchDispatcher(Controller(), lambda: False)
+    # Every id is inside the two-second cooldown, as happens in a dense
+    # Expert phrase. Id 0 has had the longest time for its UP to land.
+    touch._last_released.update({
+        contact: 8.1 + contact * 0.1 for contact in range(10)
+    })
+
+    assert touch._pick_hold_contact(0) == 0
+
+
+def test_same_frame_chord_reserves_distinct_physical_contacts(monkeypatch):
+    """A rotated first TAP must not steal the second TAP's planned contact.
+
+    The real Expert trace reached this state after a dense phrase: contact 7
+    was cooling down, so the first logical TAP rotated onto contact 8.  The
+    second TAP then mistook that contact for its own stale state, released it,
+    and left ``pending_taps`` referring to a contact that was no longer down.
+    """
+    monkeypatch.setattr(
+        controller_touch_module.time, "monotonic", lambda: 10.0,
+    )
+    controller = Controller()
+    touch = ControllerTouchDispatcher(controller, lambda: False)
+    touch._last_released.update({
+        contact: 9.9 for contact in (*range(8), 9)
+    })
+
+    touch.dispatch([
+        TouchAction(ActionKind.TAP, 1, 1.0),
+        TouchAction(ActionKind.TAP, 5, 1.0),
+    ])
+
+    state = touch.trace_state()
+    assert len(state["pending_taps"]) == 2
+    assert set(state["pending_taps"]) == set(state["active_contacts"])
+    down_contacts = {call[1] for call in controller.calls if call[0] == "down"}
+    assert len(down_contacts) == 2
+    for contact in down_contacts:
+        down_index = next(
+            index for index, call in enumerate(controller.calls)
+            if call[:2] == ("down", contact)
+        )
+        assert not [
+            call for call in controller.calls[down_index + 1:]
+            if call[:2] == ("up", contact)
+        ]
+
+
+def test_cross_frame_hold_does_not_release_contact_owned_by_another_hold(
+    monkeypatch,
+):
+    """A new logical id must not steal another hold's rotated physical id.
+
+    The Expert trace rotated logical hold 2 onto physical contact 6.  In the
+    next frame logical hold 6 arrived; treating physical 6 as its own stale
+    state posted UP(6), killed hold 2 and made every later MOVE(2) stale.
+    """
+    monkeypatch.setattr(
+        controller_touch_module.time, "monotonic", lambda: 10.0,
+    )
+    controller = Controller()
+    touch = ControllerTouchDispatcher(controller, lambda: False)
+    # Force logical 2 to rotate onto physical 6.
+    touch._last_released.update({
+        contact: 9.9 for contact in (0, 1, 2, 3, 4, 5)
+    })
+
+    touch.dispatch([
+        TouchAction(ActionKind.DOWN, 2, 1.0, contact=2, target_x=490),
+    ])
+    assert touch._contact_alias == {2: 6}
+
+    touch.dispatch([
+        TouchAction(ActionKind.DOWN, 6, 1.1, contact=6, target_x=1060),
+    ])
+
+    assert touch._contact_alias[2] == 6
+    assert touch._contact_alias[6] != 6
+    assert 6 in touch.active_contacts
+    assert ("up", 6) not in controller.calls
+
+    stale_before = touch.stale_move_recoveries
+    touch.dispatch([
+        TouchAction(ActionKind.MOVE, 1, 1.2, contact=2, target_x=340),
+    ])
+    assert controller.calls[-1] == ("move", 6, 340, 590, 1)
+    assert touch.stale_move_recoveries == stale_before
 
 
 def test_controller_reported_active_contact_is_released_and_retried_once():
@@ -163,7 +314,7 @@ def test_controller_reported_active_contact_is_released_and_retried_once():
         def post_touch_down(self, x, y, contact=0, pressure=1):
             self.calls.append(("down", contact, x, y, pressure))
             if contact in self.external_active:
-                return FailingJob(RuntimeError(f"touch contact {contact} is already active"))
+                raise RuntimeError(f"touch contact {contact} is already active")
             return Job()
 
         def post_touch_up(self, contact=0):
@@ -179,11 +330,64 @@ def test_controller_reported_active_contact_is_released_and_retried_once():
     ])
 
     assert controller.calls == [
-        ("down", 6, 1060, 590, 50),
+        ("down", 6, 1060, 590, 1),
         ("up", 6),
-        ("down", 6, 1060, 590, 50),
+        ("down", 7, 1060, 590, 1),
     ]
     assert touch.recovered_contacts == 1
+    assert touch._contact_alias == {6: 7}
+
+
+def test_transient_tap_release_uses_aliased_contact():
+    controller = Controller()
+    touch = ControllerTouchDispatcher(controller, lambda: False)
+
+    touch.dispatch([TouchAction(ActionKind.TAP, 3, 1.0)])
+
+    assert controller.calls == [("down", 7, 640, 590, 1)]
+    assert touch.active_contacts == {7}
+    assert touch._contact_alias == {}
+
+    touch.advance(1.025)
+
+    assert controller.calls[-1] == ("up", 7)
+    assert touch.active_contacts == set()
+
+
+def test_directional_flick_moves_horizontally_in_declared_direction():
+    controller = Controller()
+    touch = ControllerTouchDispatcher(controller, lambda: False)
+
+    touch.dispatch([
+        TouchAction(ActionKind.FLICK, 3, 1.0, flick_direction="Right"),
+    ])
+    touch.advance(1.017)
+    touch.advance(1.034)
+    touch.advance(1.051)
+    touch.advance(1.068)
+
+    moves = [call for call in controller.calls if call[0] == "move"]
+    assert [(call[2], call[3]) for call in moves] == [
+        (695, 590),
+        (745, 590),
+        (790, 590),
+    ]
+
+    # The second tap is only 100 ms later, so contact 7 is still in the
+    # 2-second cool-down window and must be aliased to a fresh contact. The
+    # release must target the aliased contact, otherwise the backend keeps
+    # it pressed and the next tap desyncs.
+    touch.dispatch([TouchAction(ActionKind.TAP, 4, 1.1)])
+
+    assert controller.calls[-1] == ("down", 0, 790, 590, 1)
+    assert touch.active_contacts == {0}
+    assert touch._contact_alias == {}
+    assert touch.recovered_contacts == 0
+
+    touch.advance(1.125)
+
+    assert controller.calls[-1] == ("up", 0)
+    assert touch.active_contacts == set()
 
 
 def test_synchronize_does_not_send_up_for_contacts_unknown_to_dispatcher():
@@ -203,6 +407,106 @@ def test_synchronize_releases_only_contacts_owned_by_dispatcher():
     touch.synchronize()
 
     assert controller.calls == [("up", 1), ("up", 6)]
+
+
+def test_force_release_all_clears_every_contact_and_state():
+    controller = Controller()
+    touch = ControllerTouchDispatcher(controller, lambda: False)
+    touch.active_contacts.update({0, 3, 9})
+    touch.active_positions.update({0: 640, 3: 640, 9: 640})
+    touch._contact_alias.update({2: 3, 7: 9})
+    touch._last_released.update({3: 1.0, 9: 1.0})
+
+    touch.force_release_all()
+
+    assert [call for call in controller.calls if call[0] == "up"] == [
+        ("up", contact) for contact in range(10)
+    ]
+    assert touch.active_contacts == set()
+    assert touch.active_positions == {}
+    assert touch._contact_alias == {}
+    assert touch._last_released == {}
+
+
+def test_emergency_release_all_posts_without_waiting_in_hot_path():
+    controller = Controller()
+    touch = ControllerTouchDispatcher(controller, lambda: False)
+    touch.active_contacts.update({0, 3, 9})
+    touch.active_positions.update({0: 640, 3: 640, 9: 640})
+    touch._contact_alias.update({2: 3, 7: 9})
+
+    touch.emergency_release_all()
+
+    assert [call for call in controller.calls if call[0] == "up"] == [
+        ("up", contact) for contact in range(10)
+    ]
+    assert sum(job.wait_calls for job in controller.jobs) == 0
+    assert touch.active_contacts == set()
+
+
+def test_flick_advance_never_waits_for_move_or_release_jobs():
+    controller = Controller()
+    touch = ControllerTouchDispatcher(controller, lambda: False)
+
+    touch.dispatch([TouchAction(ActionKind.FLICK, 3, 1.0)])
+    for job in controller.jobs:
+        job.wait_calls = 0
+
+    touch.advance(1.017)
+    touch.advance(1.034)
+    touch.advance(1.051)
+    touch.advance(1.068)
+
+    assert sum(job.wait_calls for job in controller.jobs) == 0
+    assert touch.active_contacts == set()
+    assert touch.active_positions == {}
+    assert touch._contact_alias == {}
+
+
+def test_tap_pulse_spans_frames_and_never_waits_for_touch_jobs():
+    controller = Controller()
+    touch = ControllerTouchDispatcher(controller, lambda: False)
+
+    touch.dispatch([TouchAction(ActionKind.TAP, 3, 1.0)])
+
+    assert controller.calls == [("down", 7, 640, 590, 1)]
+    assert touch.active_contacts == {7}
+    assert sum(job.wait_calls for job in controller.jobs) == 0
+
+    touch.advance(1.017)
+    assert controller.calls == [("down", 7, 640, 590, 1)]
+    assert touch.active_contacts == {7}
+
+    touch.advance(1.025)
+    assert controller.calls == [
+        ("down", 7, 640, 590, 1),
+        ("up", 7),
+    ]
+    assert touch.active_contacts == set()
+    assert sum(job.wait_calls for job in controller.jobs) == 0
+
+
+def test_hold_gesture_never_waits_for_touch_jobs_in_hot_path():
+    controller = Controller()
+    touch = ControllerTouchDispatcher(controller, lambda: False)
+
+    touch.dispatch([
+        TouchAction(ActionKind.DOWN, 2, 1.0, contact=2, target_x=490),
+    ])
+    touch.dispatch([
+        TouchAction(ActionKind.MOVE, 3, 1.1, contact=2, target_x=640),
+    ])
+    touch.dispatch([
+        TouchAction(ActionKind.UP, 3, 1.2, contact=2),
+    ])
+
+    assert controller.calls == [
+        ("down", 2, 490, 590, 1),
+        ("move", 2, 640, 590, 1),
+        ("up", 2),
+    ]
+    assert sum(job.wait_calls for job in controller.jobs) == 0
+    assert touch.active_contacts == set()
 
 
 def test_stop_during_dispatch_releases_every_active_contact():
@@ -255,8 +559,8 @@ def test_move_keeps_the_existing_hold_contact_and_uses_detected_x():
     ])
 
     assert controller.calls == [
-        ("down", 5, 921, 590, 50),
-        ("move", 5, 1013, 590, 50),
+        ("down", 5, 921, 590, 1),
+        ("move", 5, 1013, 590, 1),
     ]
 
 
@@ -281,9 +585,24 @@ def test_long_hold_move_is_interpolated_into_continuous_steps():
 
     moves = [call for call in controller.calls if call[0] == "move"]
     positions = [200, *(call[2] for call in moves)]
-    assert moves[-1] == ("move", 3, 605, 590, 50)
+    assert moves[-1] == ("move", 3, 605, 590, 1)
     assert all(
         0 < right - left <= 80
         for left, right in zip(positions, positions[1:])
     )
     assert touch.active_positions == {3: 605}
+
+
+def test_stale_move_for_inactive_contact_is_skipped_not_fatal():
+    controller = Controller()
+    touch = ControllerTouchDispatcher(controller, lambda: False)
+    # A hold release can race with the planner's MOVE in the same frame; the
+    # contact is no longer down, so the MOVE must be dropped instead of
+    # crashing the whole song.
+    touch.dispatch([
+        TouchAction(ActionKind.MOVE, 3, 1.0, 2, "hold-follow"),
+    ])
+
+    assert controller.calls == []
+    assert touch.recovered_contacts == 1
+    assert touch.active_contacts == set()

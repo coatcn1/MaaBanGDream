@@ -1,6 +1,7 @@
 """Benchmark NoteDetector.detect() on sampled recording frames.
 
-Decodes every K-th frame of a playfield.avi into memory once, then times the
+Decodes every K-th frame of a playfield.mkv (or legacy playfield.avi) into
+memory once, then times the
 detector over those frames. Video decode is excluded from the timings (the
 live hot path receives frames from the controller, not from a file).
 """
@@ -25,11 +26,22 @@ import cv2
 from agent.realtime.note_detector import NoteDetector
 
 
-def sample_frames(video: Path, max_frames: int) -> tuple[list, int]:
+def resolve_video(path: Path) -> Path:
+    if path.is_dir():
+        for name in ("playfield.mkv", "playfield.avi"):
+            candidate = path / name
+            if candidate.is_file():
+                return candidate
+        raise SystemExit(f"no playfield.mkv or playfield.avi in: {path}")
+    return path
+
+
+def sample_frames(video: Path, max_frames: int) -> tuple[list, int, float]:
     capture = cv2.VideoCapture(str(video))
     if not capture.isOpened():
         raise SystemExit(f"cannot open video: {video}")
     total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = float(capture.get(cv2.CAP_PROP_FPS)) or 30.0
     stride = max(1, total // max_frames)
     frames = []
     index = 0
@@ -41,14 +53,14 @@ def sample_frames(video: Path, max_frames: int) -> tuple[list, int]:
             frames.append(frame)
         index += 1
     capture.release()
-    return frames, stride
+    return frames, stride, fps
 
 
-def run_detection(frames: list) -> list[list[dict]]:
+def run_detection(frames: list, fps: float = 60.0) -> list[list[dict]]:
     detector = NoteDetector()
     per_frame = []
     for index, frame in enumerate(frames):
-        notes = detector.detect(frame, index / 30.0)
+        notes = detector.detect(frame, index / fps)
         per_frame.append([
             {
                 "kind": note.kind.value,
@@ -75,18 +87,20 @@ def main() -> None:
     parser.add_argument("--profile", action="store_true")
     args = parser.parse_args()
 
-    frames, stride = sample_frames(args.video, args.max_frames)
-    print(f"sampled {len(frames)} frames (stride {stride}) from {args.video.name}")
+    video = resolve_video(args.video)
+    frames, stride, fps = sample_frames(video, args.max_frames)
+    print(f"sampled {len(frames)} frames (stride {stride}) from {video.name}")
 
     times = []
     detections = None
     for _ in range(max(1, args.repeat)):
         started = time.perf_counter()
-        detections = run_detection(frames)
+        detections = run_detection(frames, fps)
         times.append(time.perf_counter() - started)
     per_frame_ms = [elapsed / len(frames) * 1000 for elapsed in times]
     report = {
-        "video": args.video.name,
+        "video": video.name,
+        "video_fps": fps,
         "sampled_frames": len(frames),
         "stride": stride,
         "repeat": len(times),
@@ -103,7 +117,7 @@ def main() -> None:
         args.dump_detections.parent.mkdir(parents=True, exist_ok=True)
         args.dump_detections.write_text(
             json.dumps(
-                {"video": args.video.name, "stride": stride, "frames": detections},
+                {"video": video.name, "stride": stride, "frames": detections},
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
@@ -115,7 +129,7 @@ def main() -> None:
     if args.profile:
         profiler = cProfile.Profile()
         profiler.enable()
-        run_detection(frames)
+        run_detection(frames, fps)
         profiler.disable()
         stream = io.StringIO()
         pstats.Stats(profiler, stream=stream).sort_stats("tottime").print_stats(20)

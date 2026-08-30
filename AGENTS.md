@@ -7,7 +7,7 @@
 基于 MaaFramework 的 BanG Dream! 自动化项目。通过 MFAAvalonia GUI 加载 Python Agent，控制 Android 模拟器完成自动演出、实时触控演奏、校准和挑战演出。
 
 - 仓库：`https://github.com/coatcn1/MaaBanGDream`
-- 当前版本：`v0.8.0`
+- 当前版本：`v0.9.0`
 - 许可证：GPL-3.0-only
 
 ## MaaBanGDream 运行布局
@@ -46,13 +46,11 @@ Python:   D:\Documents\workplace\.tools\Miniconda3\envs\maabangdream\python.exe 
 ## 当前分支状态
 
 ```
-main                               ← 主线，已发布 v0.6.0
-feature/formal-calibration-challenge  ← realtime 开发主分支（29 commits，未合并）
-fix/realtime-rescue-chord-pairing     ← 最新修复（基于 formal-calibration，已推远程）
-feature/task-lifecycle-and-reporting  ← v0.7.0 任务生命周期、日志与 MFA 定制部署修复
+main                                      ← 发布主线
+feature/bestdori-local-chart-repository   ← 当前 MaaBanGDream 开发分支
 ```
 
-realtime 功能链的所有 checkpoint 分支已清理。当前活跃开发在 `feature/formal-calibration-challenge` 和 `fix/realtime-rescue-chord-pairing` 上。
+定制 MFAAvalonia 独立开发分支为 `feature/performance-visual-settings`；两个仓库必须分别提交和推送。
 
 ## 仓库结构
 
@@ -123,7 +121,7 @@ pytest 临时目录固定在 `.local/pytest-<进程号>`（Git 忽略），不�
 | --- | --- |
 | `D:\Documents\workplace\MFAAvalonia` | 定制 MFAAvalonia 源码，包含“演出设置”、Profile 管理和 Mirror 启动检查保护 |
 
-- 定制分支：`feature/performance-profile-settings`
+- 定制分支：`feature/performance-visual-settings`
 - 定制基线提交：`d7b381b2fa6a09e140d925fb1504bac19ca1f921`
 - `MFAAvalonia.Core.dll` 即使显示相同的 `2.12.0` 版本，也不能视为内容相同。
 
@@ -206,3 +204,8 @@ MaaBanGDream 和定制 MFAAvalonia 是两个独立 Git 仓库。若一次修复�
 7. **日志必须可直接验收**：实时终态至少输出实际/期望流速、是否修正、TAP/FLICK/HOLD 动作数、帧间隔 P50/P95/最大值、有效 FPS 和明确终止原因。
 8. **定制 MFA 脏工作树也必须重新部署**：部署标记不能只比较 MFA 的 Git `HEAD` 和 `MFATask.cs`。设置页/ViewModel 等未提交源码变化也要计入指纹，否则 `launch-mfa.ps1` 会误判“已部署”并继续运行旧 DLL。
 9. **不要假定 Maa OCR 可用**：项目资源包当前不含 MaaFramework OCR 检测/识别模型；未显式部署并验证模型时，JOCR 会返回空结果且日志出现 `recer_ is null`。流速门禁使用仓库内纯黑白数字模板，不是 JOCR；模板读取失败或复核不一致时必须阻止开演，不能退回盲点按钮。
+10. **共享封面不能单独确认歌曲**：早期歌曲和 `[FULL]` 版本可能使用同一封面。封面 pHash 只做候选收窄，必须结合难度等级与本地标题 OCR；等级冲突是硬拒绝条件。`[FULL]` 仅作为本地标题别名参与匹配，不能吞掉等级约束。
+11. **难度数字模板必须覆盖 6/8**：难度等级读取曾因过严相似度门槛稳定拒绝含 6 或 8 的等级。改分类阈值后需用 5–40 的合成数字全集回归；共享封面仍歧义时可跨帧重试，但不得重复点击难度。
+12. **结算导航只使用 Android BACK**：奖励、排名、活动和达成报酬页面禁止坐标盲点；判定详情页身份优先于相似的排名模板。每日首局奖励与七日奖励可能连续出现两个弹窗，应逐帧识别并有界发送 BACK。
+13. **临轨绿条只在严格证据下取中点**：只有至少三次相邻轨来回切换、轨道跨度恰为 1 的锯齿 Slide，才把触点锚在两轨中点；普通滑条仍跟随谱面连接点，不能泛化成宽判定。
+14. **谱面同步是显式维护操作**：MFA 的手动同步入口复用 `scripts/sync_bestdori_catalog.py`，只保存 Hard/Expert/Special，封面按 CN→JP→EN 回退。演奏热路径禁止联网；同步前应停止 Maa 任务，生成清单必须原子替换。

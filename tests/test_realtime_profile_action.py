@@ -38,4 +38,7 @@ def test_profile_draft_is_never_accepted_automatically():
         "game_fps": 60,
         "render_quality": "standard",
         "note_speed": 2.0,
+        "note_skin_type": 1,
+        "tap_effect": 1,
+        "judgement_assist_effect": True,
     }

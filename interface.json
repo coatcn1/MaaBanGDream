@@ -3,7 +3,7 @@
   "interface_version": 2,
   "name": "MaaBanGDream",
   "label": "BanG Dream! 自动化（MaaFramework）",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "支持自动演出、机器人实时演奏、智能校准和挑战演出。",
   "license": "GPL-3.0-only",
   "controller": [
@@ -60,7 +60,7 @@
     {
       "name": "ContinuousRealtimeLive",
       "label": "一键实时演奏",
-      "description": "持续检测演奏页面并自动演奏，不导航、不确认、不读取结算，仅手动停止。",
+      "description": "持续检测演奏页面并自动演奏，不导航、不确认、不读取结算；需在最近 15 分钟内完成一次游戏视觉设置读回复核。",
       "entry": "ContinuousRealtimeLive",
       "option": [
         "ContinuousRealtimeDifficulty",
@@ -70,10 +70,12 @@
     {
       "name": "RealtimeCalibration",
       "label": "实时演奏校准",
-      "description": "三首不同随机曲排练逐曲调整延迟，再用第四首不同歌曲正式验证并自动启用 Profile。",
+      "description": "三次排练逐曲调整延迟，再用正式验证并自动启用 Profile。",
       "entry": "RealtimeCalibration",
       "option": [
         "CalibrationDifficulty",
+        "CalibrationSongMode",
+        "CalibrationResumeMode",
         "CalibrationDebug"
       ]
     },
@@ -231,6 +233,22 @@
               ]
             }
           }
+        },
+        {
+          "name": "VisualEvaluation",
+          "label": "视觉设置评估（实验）",
+          "pipeline_override": {
+            "RealtimeLiveFormalModeGate": {
+              "next": [
+                "RealtimeLiveVisualEvaluationRequireProfile"
+              ]
+            },
+            "RealtimeLiveFormalReady": {
+              "next": [
+                "RealtimeLiveVisualEvaluationSettingsGate"
+              ]
+            }
+          }
         }
       ]
     },
@@ -297,6 +315,16 @@
                 "note_speed": 2.0
               }
             },
+            "RealtimeLiveVisualEvaluationRequireProfile": {
+              "custom_action_param": {
+                "difficulty": "Easy",
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard",
+                "note_speed": 2.0,
+                "visual_evaluation": true
+              }
+            },
             "RealtimeLiveFormalSettingsGate": {
               "custom_action_param": {
                 "difficulty": "Easy",
@@ -306,13 +334,45 @@
                 "render_quality": "standard"
               }
             },
+            "RealtimeLiveVisualEvaluationSettingsGate": {
+              "custom_action_param": {
+                "difficulty": "Easy",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard",
+                "visual_evaluation": true
+              }
+            },
+            "RealtimeLiveVisualEvaluationPlay": {
+              "custom_action_param": {
+                "difficulty": "Easy",
+                "require_profile": true,
+                "settings_gate_required": true,
+                "debug_recording": false,
+                "duration_seconds": 600,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard",
+                "note_speed": 2.0,
+                "wait_for_completion": true,
+                "completion_missing_frames": 120,
+                "require_completion": true,
+                "save_result_frame": true,
+                "result_back_attempts": 30,
+                "result_back_interval_seconds": 1.5,
+                "visual_evaluation": true,
+                "run_mode": "visual-evaluation"
+              }
+            },
             "RealtimeLiveRehearsalSettingsGate": {
               "custom_action_param": {
                 "difficulty": "Easy",
                 "require_profile": false,
                 "dpi": 240,
                 "game_fps": 60,
-                "render_quality": "standard"
+                "render_quality": "standard",
+                "run_mode": "rehearsal"
               }
             }
           }
@@ -346,6 +406,16 @@
                 "note_speed": 2.0
               }
             },
+            "RealtimeLiveVisualEvaluationRequireProfile": {
+              "custom_action_param": {
+                "difficulty": "Normal",
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard",
+                "note_speed": 2.0,
+                "visual_evaluation": true
+              }
+            },
             "RealtimeLiveFormalSettingsGate": {
               "custom_action_param": {
                 "difficulty": "Normal",
@@ -355,13 +425,45 @@
                 "render_quality": "standard"
               }
             },
+            "RealtimeLiveVisualEvaluationSettingsGate": {
+              "custom_action_param": {
+                "difficulty": "Normal",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard",
+                "visual_evaluation": true
+              }
+            },
+            "RealtimeLiveVisualEvaluationPlay": {
+              "custom_action_param": {
+                "difficulty": "Normal",
+                "require_profile": true,
+                "settings_gate_required": true,
+                "debug_recording": false,
+                "duration_seconds": 600,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard",
+                "note_speed": 2.0,
+                "wait_for_completion": true,
+                "completion_missing_frames": 120,
+                "require_completion": true,
+                "save_result_frame": true,
+                "result_back_attempts": 30,
+                "result_back_interval_seconds": 1.5,
+                "visual_evaluation": true,
+                "run_mode": "visual-evaluation"
+              }
+            },
             "RealtimeLiveRehearsalSettingsGate": {
               "custom_action_param": {
                 "difficulty": "Normal",
                 "require_profile": false,
                 "dpi": 240,
                 "game_fps": 60,
-                "render_quality": "standard"
+                "render_quality": "standard",
+                "run_mode": "rehearsal"
               }
             }
           }
@@ -395,6 +497,16 @@
                 "note_speed": 2.0
               }
             },
+            "RealtimeLiveVisualEvaluationRequireProfile": {
+              "custom_action_param": {
+                "difficulty": "Hard",
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard",
+                "note_speed": 2.0,
+                "visual_evaluation": true
+              }
+            },
             "RealtimeLiveFormalSettingsGate": {
               "custom_action_param": {
                 "difficulty": "Hard",
@@ -404,13 +516,45 @@
                 "render_quality": "standard"
               }
             },
+            "RealtimeLiveVisualEvaluationSettingsGate": {
+              "custom_action_param": {
+                "difficulty": "Hard",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard",
+                "visual_evaluation": true
+              }
+            },
+            "RealtimeLiveVisualEvaluationPlay": {
+              "custom_action_param": {
+                "difficulty": "Hard",
+                "require_profile": true,
+                "settings_gate_required": true,
+                "debug_recording": false,
+                "duration_seconds": 600,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard",
+                "note_speed": 2.0,
+                "wait_for_completion": true,
+                "completion_missing_frames": 120,
+                "require_completion": true,
+                "save_result_frame": true,
+                "result_back_attempts": 30,
+                "result_back_interval_seconds": 1.5,
+                "visual_evaluation": true,
+                "run_mode": "visual-evaluation"
+              }
+            },
             "RealtimeLiveRehearsalSettingsGate": {
               "custom_action_param": {
                 "difficulty": "Hard",
                 "require_profile": false,
                 "dpi": 240,
                 "game_fps": 60,
-                "render_quality": "standard"
+                "render_quality": "standard",
+                "run_mode": "rehearsal"
               }
             }
           }
@@ -444,6 +588,16 @@
                 "note_speed": 5.0
               }
             },
+            "RealtimeLiveVisualEvaluationRequireProfile": {
+              "custom_action_param": {
+                "difficulty": "Expert",
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard",
+                "note_speed": 5.0,
+                "visual_evaluation": true
+              }
+            },
             "RealtimeLiveFormalSettingsGate": {
               "custom_action_param": {
                 "difficulty": "Expert",
@@ -453,13 +607,45 @@
                 "render_quality": "standard"
               }
             },
+            "RealtimeLiveVisualEvaluationSettingsGate": {
+              "custom_action_param": {
+                "difficulty": "Expert",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard",
+                "visual_evaluation": true
+              }
+            },
+            "RealtimeLiveVisualEvaluationPlay": {
+              "custom_action_param": {
+                "difficulty": "Expert",
+                "require_profile": true,
+                "settings_gate_required": true,
+                "debug_recording": false,
+                "duration_seconds": 600,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard",
+                "note_speed": 5.0,
+                "wait_for_completion": true,
+                "completion_missing_frames": 120,
+                "require_completion": true,
+                "save_result_frame": true,
+                "result_back_attempts": 30,
+                "result_back_interval_seconds": 1.5,
+                "visual_evaluation": true,
+                "run_mode": "visual-evaluation"
+              }
+            },
             "RealtimeLiveRehearsalSettingsGate": {
               "custom_action_param": {
                 "difficulty": "Expert",
                 "require_profile": false,
                 "dpi": 240,
                 "game_fps": 60,
-                "render_quality": "standard"
+                "render_quality": "standard",
+                "run_mode": "rehearsal"
               }
             }
           }
@@ -493,6 +679,16 @@
                 "note_speed": 5.0
               }
             },
+            "RealtimeLiveVisualEvaluationRequireProfile": {
+              "custom_action_param": {
+                "difficulty": "Special",
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard",
+                "note_speed": 5.0,
+                "visual_evaluation": true
+              }
+            },
             "RealtimeLiveFormalSettingsGate": {
               "custom_action_param": {
                 "difficulty": "Special",
@@ -502,13 +698,45 @@
                 "render_quality": "standard"
               }
             },
+            "RealtimeLiveVisualEvaluationSettingsGate": {
+              "custom_action_param": {
+                "difficulty": "Special",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard",
+                "visual_evaluation": true
+              }
+            },
+            "RealtimeLiveVisualEvaluationPlay": {
+              "custom_action_param": {
+                "difficulty": "Special",
+                "require_profile": true,
+                "settings_gate_required": true,
+                "debug_recording": false,
+                "duration_seconds": 600,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard",
+                "note_speed": 5.0,
+                "wait_for_completion": true,
+                "completion_missing_frames": 120,
+                "require_completion": true,
+                "save_result_frame": true,
+                "result_back_attempts": 30,
+                "result_back_interval_seconds": 1.5,
+                "visual_evaluation": true,
+                "run_mode": "visual-evaluation"
+              }
+            },
             "RealtimeLiveRehearsalSettingsGate": {
               "custom_action_param": {
                 "difficulty": "Special",
                 "require_profile": false,
                 "dpi": 240,
                 "game_fps": 60,
-                "render_quality": "standard"
+                "render_quality": "standard",
+                "run_mode": "rehearsal"
               }
             }
           }
@@ -542,20 +770,41 @@
     },
     "RealtimeLiveDebug": {
       "type": "select",
-      "label": "调试记录",
-      "default_case": "Off",
+      "label": "诊断记录",
+      "default_case": "Light",
       "cases": [
         {
-          "name": "Off",
-          "label": "关闭"
-        },
-        {
-          "name": "On",
-          "label": "开启",
+          "name": "Light",
+          "label": "轻量 Trace（推荐）",
           "pipeline_override": {
             "RealtimeLiveDebugGate": {
               "custom_action_param": {
-                "debug_recording": true
+                "debug_recording": false,
+                "diagnostic_trace": true
+              }
+            }
+          }
+        },
+        {
+          "name": "Off",
+          "label": "完全关闭（只保存结果）",
+          "pipeline_override": {
+            "RealtimeLiveDebugGate": {
+              "custom_action_param": {
+                "debug_recording": false,
+                "diagnostic_trace": false
+              }
+            }
+          }
+        },
+        {
+          "name": "Full",
+          "label": "完整录像（MKV + Trace，大文件）",
+          "pipeline_override": {
+            "RealtimeLiveDebugGate": {
+              "custom_action_param": {
+                "debug_recording": true,
+                "diagnostic_trace": true
               }
             }
           }
@@ -646,20 +895,85 @@
     },
     "ContinuousRealtimeDebug": {
       "type": "select",
-      "label": "调试记录",
-      "default_case": "Off",
+      "label": "诊断记录",
+      "default_case": "Light",
       "cases": [
         {
-          "name": "Off",
-          "label": "关闭"
-        },
-        {
-          "name": "On",
-          "label": "开启",
+          "name": "Light",
+          "label": "轻量 Trace（推荐）",
           "pipeline_override": {
             "ContinuousRealtimeWatcher": {
               "custom_action_param": {
-                "debug_recording": true
+                "debug_recording": false,
+                "diagnostic_trace": true
+              }
+            }
+          }
+        },
+        {
+          "name": "Off",
+          "label": "完全关闭",
+          "pipeline_override": {
+            "ContinuousRealtimeWatcher": {
+              "custom_action_param": {
+                "debug_recording": false,
+                "diagnostic_trace": false
+              }
+            }
+          }
+        },
+        {
+          "name": "Full",
+          "label": "完整录像（MKV + Trace，大文件）",
+          "pipeline_override": {
+            "ContinuousRealtimeWatcher": {
+              "custom_action_param": {
+                "debug_recording": true,
+                "diagnostic_trace": true
+              }
+            }
+          }
+        }
+      ]
+    },
+    "CalibrationSongMode": {
+      "type": "select",
+      "label": "歌曲选择",
+      "default_case": "Current",
+      "cases": [
+        {
+          "name": "Current",
+          "label": "当前曲目"
+        },
+        {
+          "name": "Random",
+          "label": "每轮随机",
+          "pipeline_override": {
+            "CalibrationSongModeSetting": {
+              "custom_action_param": {
+                "calibration_song_mode": "random"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "CalibrationResumeMode": {
+      "type": "select",
+      "label": "校准进度",
+      "default_case": "Auto",
+      "cases": [
+        {
+          "name": "Auto",
+          "label": "自动续跑"
+        },
+        {
+          "name": "Restart",
+          "label": "重新开始",
+          "pipeline_override": {
+            "CalibrationResumeModeSetting": {
+              "custom_action_param": {
+                "calibration_resume_mode": "restart"
               }
             }
           }
@@ -730,20 +1044,41 @@
     },
     "CalibrationDebug": {
       "type": "select",
-      "label": "调试记录",
-      "default_case": "Off",
+      "label": "诊断记录",
+      "default_case": "Light",
       "cases": [
         {
-          "name": "Off",
-          "label": "关闭"
-        },
-        {
-          "name": "On",
-          "label": "开启",
+          "name": "Light",
+          "label": "轻量 Trace（推荐）",
           "pipeline_override": {
             "CalibrationDebugSetting": {
               "custom_action_param": {
-                "debug_recording": true
+                "debug_recording": false,
+                "diagnostic_trace": true
+              }
+            }
+          }
+        },
+        {
+          "name": "Off",
+          "label": "完全关闭（只保存结果）",
+          "pipeline_override": {
+            "CalibrationDebugSetting": {
+              "custom_action_param": {
+                "debug_recording": false,
+                "diagnostic_trace": false
+              }
+            }
+          }
+        },
+        {
+          "name": "Full",
+          "label": "完整录像（MKV + Trace，大文件）",
+          "pipeline_override": {
+            "CalibrationDebugSetting": {
+              "custom_action_param": {
+                "debug_recording": true,
+                "diagnostic_trace": true
               }
             }
           }
@@ -762,7 +1097,8 @@
             "ChallengeDifficulty": {
               "custom_action_param": {
                 "difficulty": "Easy",
-                "max_attempts": 3
+                "max_attempts": 3,
+                "mode": "challenge"
               }
             },
             "ChallengeProfileCheck": {
@@ -771,7 +1107,8 @@
                 "dpi": 240,
                 "game_fps": 60,
                 "render_quality": "standard",
-                "note_speed": 2.0
+                "note_speed": 2.0,
+                "run_mode": "challenge"
               }
             },
             "ChallengeSettingsGate": {
@@ -780,7 +1117,8 @@
                 "require_profile": true,
                 "dpi": 240,
                 "game_fps": 60,
-                "render_quality": "standard"
+                "render_quality": "standard",
+                "run_mode": "challenge"
               }
             },
             "ChallengeStart": {
@@ -797,7 +1135,8 @@
             "ChallengeDifficulty": {
               "custom_action_param": {
                 "difficulty": "Normal",
-                "max_attempts": 3
+                "max_attempts": 3,
+                "mode": "challenge"
               }
             },
             "ChallengeProfileCheck": {
@@ -806,7 +1145,8 @@
                 "dpi": 240,
                 "game_fps": 60,
                 "render_quality": "standard",
-                "note_speed": 2.0
+                "note_speed": 2.0,
+                "run_mode": "challenge"
               }
             },
             "ChallengeSettingsGate": {
@@ -815,7 +1155,8 @@
                 "require_profile": true,
                 "dpi": 240,
                 "game_fps": 60,
-                "render_quality": "standard"
+                "render_quality": "standard",
+                "run_mode": "challenge"
               }
             },
             "ChallengeStart": {
@@ -832,7 +1173,8 @@
             "ChallengeDifficulty": {
               "custom_action_param": {
                 "difficulty": "Hard",
-                "max_attempts": 3
+                "max_attempts": 3,
+                "mode": "challenge"
               }
             },
             "ChallengeProfileCheck": {
@@ -841,7 +1183,8 @@
                 "dpi": 240,
                 "game_fps": 60,
                 "render_quality": "standard",
-                "note_speed": 2.0
+                "note_speed": 2.0,
+                "run_mode": "challenge"
               }
             },
             "ChallengeSettingsGate": {
@@ -850,7 +1193,8 @@
                 "require_profile": true,
                 "dpi": 240,
                 "game_fps": 60,
-                "render_quality": "standard"
+                "render_quality": "standard",
+                "run_mode": "challenge"
               }
             },
             "ChallengeStart": {
@@ -867,7 +1211,8 @@
             "ChallengeDifficulty": {
               "custom_action_param": {
                 "difficulty": "Expert",
-                "max_attempts": 3
+                "max_attempts": 3,
+                "mode": "challenge"
               }
             },
             "ChallengeProfileCheck": {
@@ -876,7 +1221,8 @@
                 "dpi": 240,
                 "game_fps": 60,
                 "render_quality": "standard",
-                "note_speed": 5.0
+                "note_speed": 5.0,
+                "run_mode": "challenge"
               }
             },
             "ChallengeSettingsGate": {
@@ -885,7 +1231,8 @@
                 "require_profile": true,
                 "dpi": 240,
                 "game_fps": 60,
-                "render_quality": "standard"
+                "render_quality": "standard",
+                "run_mode": "challenge"
               }
             },
             "ChallengeStart": {
@@ -902,7 +1249,8 @@
             "ChallengeDifficulty": {
               "custom_action_param": {
                 "difficulty": "Special",
-                "max_attempts": 3
+                "max_attempts": 3,
+                "mode": "challenge"
               }
             },
             "ChallengeProfileCheck": {
@@ -911,7 +1259,8 @@
                 "dpi": 240,
                 "game_fps": 60,
                 "render_quality": "standard",
-                "note_speed": 5.0
+                "note_speed": 5.0,
+                "run_mode": "challenge"
               }
             },
             "ChallengeSettingsGate": {
@@ -920,7 +1269,8 @@
                 "require_profile": true,
                 "dpi": 240,
                 "game_fps": 60,
-                "render_quality": "standard"
+                "render_quality": "standard",
+                "run_mode": "challenge"
               }
             },
             "ChallengeStart": {
@@ -1014,20 +1364,41 @@
     },
     "ChallengeDebug": {
       "type": "select",
-      "label": "调试记录",
-      "default_case": "Off",
+      "label": "诊断记录",
+      "default_case": "Light",
       "cases": [
         {
-          "name": "Off",
-          "label": "关闭"
-        },
-        {
-          "name": "On",
-          "label": "开启",
+          "name": "Light",
+          "label": "轻量 Trace（推荐）",
           "pipeline_override": {
             "ChallengeDebugGate": {
               "custom_action_param": {
-                "debug_recording": true
+                "debug_recording": false,
+                "diagnostic_trace": true
+              }
+            }
+          }
+        },
+        {
+          "name": "Off",
+          "label": "完全关闭（只保存结果）",
+          "pipeline_override": {
+            "ChallengeDebugGate": {
+              "custom_action_param": {
+                "debug_recording": false,
+                "diagnostic_trace": false
+              }
+            }
+          }
+        },
+        {
+          "name": "Full",
+          "label": "完整录像（MKV + Trace，大文件）",
+          "pipeline_override": {
+            "ChallengeDebugGate": {
+              "custom_action_param": {
+                "debug_recording": true,
+                "diagnostic_trace": true
               }
             }
           }

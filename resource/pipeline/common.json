@@ -7,6 +7,7 @@
       "HomeMarker",
       "LoginTapToStart",
       "LoginNext",
+      "ResourceDownloadConfirm",
       "CommonClose"
     ],
     "on_error": [
@@ -28,6 +29,7 @@
     "next": [
       "HomeMarker",
       "LoginNext",
+      "ResourceDownloadConfirm",
       "CommonClose",
       "LoginTapToStart"
     ],
@@ -52,6 +54,7 @@
     "next": [
       "HomeMarker",
       "LoginNext",
+      "ResourceDownloadConfirm",
       "CommonClose"
     ],
     "on_error": [
@@ -65,6 +68,49 @@
         ]
       }
     }
+  },
+  "ResourceDownloadConfirm": {
+    "recognition": "TemplateMatch",
+    "template": "login_resource_download.png",
+    "roi": [
+      620,
+      520,
+      300,
+      120
+    ],
+    "threshold": 0.9,
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
+    "next": [
+      "CommonRecover"
+    ],
+    "on_error": [
+      "CommonRecover"
+    ]
+  },
+  "ResourceDownloadPageMarker": {
+    "recognition": "TemplateMatch",
+    "template": "login_resource_download_page.png",
+    "roi": [
+      360,
+      80,
+      260,
+      110
+    ],
+    "threshold": 0.9,
+    "action": "DoNothing"
+  },
+  "ResourceDownloadProgressMarker": {
+    "recognition": "TemplateMatch",
+    "template": "login_resource_download_progress.png",
+    "roi": [
+      20,
+      550,
+      240,
+      100
+    ],
+    "threshold": 0.82,
+    "action": "DoNothing"
   },
   "CommonClose": {
     "recognition": "TemplateMatch",
@@ -89,13 +135,29 @@
       }
     }
   },
+  "QuitConfirmCancel": {
+    "recognition": "TemplateMatch",
+    "template": "quit_confirm_cancel.png",
+    "roi": [
+      360,
+      510,
+      560,
+      140
+    ],
+    "threshold": 0.9,
+    "action": "DoNothing"
+  },
   "CommonRecover": {
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "CommonRecover",
-    "custom_action_param": {
-      "home_node": "HomeMarker",
-      "escape_interval_ms": 1500,
+  "custom_action_param": {
+   "home_node": "HomeMarker",
+   "modal_cancel_nodes": [
+    "QuitConfirmCancel"
+   ],
+   "reboot_emulator_on_failure": true,
+   "escape_interval_ms": 1500,
       "escape_timeout_ms": 60000,
       "restart_limit": 2,
       "restart_wait_ms": 5000,

@@ -4,6 +4,7 @@ import json
 import math
 import time
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -23,6 +24,11 @@ except ImportError:
 from .profile_action import PROJECT_ROOT
 from .profile_store import EnvironmentSignature, RealtimeProfileStore
 from .rehearsal_action import frame_resolution
+from .live_session import current_live_run
+from .run_reporting import (
+    PreflightPerformanceSnapshot,
+    write_preflight_terminal_result,
+)
 
 
 @dataclass(frozen=True)
@@ -39,6 +45,12 @@ _MINIMUM_NOTE_SPEED = 1.0
 _MAXIMUM_NOTE_SPEED = 12.0
 _DIGIT_TEMPLATE_PATH = (
     PROJECT_ROOT / "resource" / "image" / "performance_settings" / "speed_digits.png"
+)
+_TYPE_DIGIT_TEMPLATE_PATH = (
+    PROJECT_ROOT / "resource" / "image" / "performance_settings" / "type_digits.png"
+)
+_TYPE_LABEL_DIR = (
+    PROJECT_ROOT / "resource" / "image" / "performance_settings" / "type_labels"
 )
 
 # Coordinates are in MaaFramework's canonical 1280x720 game frame.
@@ -122,6 +134,42 @@ def _digit_templates() -> tuple[np.ndarray, ...]:
     return tuple(sprite[:, index * 20:(index + 1) * 20] >= 128 for index in range(10))
 
 
+@lru_cache(maxsize=1)
+def _type_digit_templates() -> tuple[np.ndarray, ...]:
+    """Return TYPE1..TYPE7 suffix templates captured from the real game UI.
+
+    The TYPE labels use a narrower font than the note-speed display, so the
+    shared speed templates misread TYPE5 as 3.  These templates are sampled
+    from the 1280x720 演出皮肤设定 page rows.
+    """
+    sprite = cv2.imread(str(_TYPE_DIGIT_TEMPLATE_PATH), cv2.IMREAD_GRAYSCALE)
+    if sprite is None or sprite.shape != (28, 200):
+        raise RuntimeError(f"TYPE 数字模板损坏：{_TYPE_DIGIT_TEMPLATE_PATH}")
+    return tuple(
+        sprite[:, index * 20:(index + 1) * 20] >= 128
+        for index in range(10)
+    )
+
+
+@lru_cache(maxsize=1)
+def _type_label_templates() -> tuple[tuple[int, np.ndarray], ...]:
+    """Return (TYPE value, label template) pairs for TYPE1..TYPE7.
+
+    The whole ``TYPE<n>`` label is matched instead of classifying the narrow
+    suffix digit alone, because the digit glyph is unstable at 20x28 after
+    nearest-neighbour downsampling (TYPE5 could be read as 3, and TYPE1 can
+    pick up serif pixels and read as 3 as well).
+    """
+    result = []
+    for value in range(1, 8):
+        path = _TYPE_LABEL_DIR / f"type_label_{value}.png"
+        template = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        if template is None or template.shape != (34, 95, 3):
+            raise RuntimeError(f"TYPE 标签模板损坏：{path}")
+        result.append((value, template))
+    return tuple(result)
+
+
 def _classify_digit(mask: np.ndarray) -> int:
     glyph = _normalise_glyph(mask)
     scores = np.asarray([
@@ -188,16 +236,44 @@ def _expected_speed(context: Context, params: dict, image) -> tuple[float, str |
     difficulty = str(params.get("difficulty", "Easy"))
     store = RealtimeProfileStore(PROJECT_ROOT / "profiles")
     if bool(params.get("require_profile", False)):
+        # Imported lazily because the visual gate reuses this module's fixed
+        # digit classifier.  At runtime the gate module is already registered.
+        from .game_effect_settings_action import verified_game_visual_settings
+
+        visual = verified_game_visual_settings()
+        runtime_options = store.runtime_options()
+        note_skin_type = (
+            visual.note_skin_type
+            if visual is not None
+            else int(runtime_options["note_skin_type"])
+        )
+        tap_effect = (
+            visual.tap_effect
+            if visual is not None
+            else int(runtime_options["tap_effect"])
+        )
+        judgement_assist_effect = (
+            visual.judgement_assist_effect
+            if visual is not None
+            else bool(runtime_options["judgement_assist_effect"])
+        )
         signature = EnvironmentSignature(
             frame_resolution(image),
             int(params.get("dpi", 240)),
             int(params.get("game_fps", 60)),
             str(params.get("render_quality", "standard")),
             1.0,
+            note_skin_type,
+            tap_effect,
+            judgement_assist_effect,
         )
-        settings = store.resolve_latest_for_environment(
-            difficulty=difficulty,
-            current_signature=signature,
+        resolver = (
+            store.resolve_latest_for_visual_evaluation_environment
+            if bool(params.get("visual_evaluation", False))
+            else store.resolve_latest_for_environment
+        )
+        settings = resolver(
+            difficulty=difficulty, current_signature=signature
         )
         return settings.note_speed, settings.profile_path.name
     speeds = store.runtime_options()["calibration_note_speeds"]
@@ -301,15 +377,92 @@ def _adjust_speed(
     )
 
 
+def _close_settings_dialog(
+    context: Context,
+    controller,
+    coordinates: dict[str, tuple[int, int]],
+    *,
+    attempts: int,
+    delay_seconds: float,
+) -> None:
+    """Close the settings dialog and prove that the speed display vanished."""
+    for attempt in range(1, max(1, attempts) + 1):
+        if context.tasker.stopping:
+            return
+        _click(controller, coordinates["close"])
+        time.sleep(delay_seconds)
+        image = controller.post_screencap().wait().get()
+        try:
+            _read_speed(image, coordinates["speed_roi"])
+        except (RuntimeError, StopIteration):
+            return
+        if attempt < max(1, attempts):
+            print(
+                "RealtimePerformanceSettingsGate close_retry "
+                f"attempt={attempt + 1}/{max(1, attempts)}",
+                flush=True,
+            )
+    raise RuntimeError(
+        f"演出设置关闭按钮连续点击 {max(1, attempts)} 次后，"
+        "流速显示仍然可见"
+    )
+
+
 @AgentServer.custom_action("RealtimePerformanceSettingsGate")
 class RealtimePerformanceSettingsGate(CustomAction):
     """Read and adjust note speed on the explicitly selected first settings tab."""
 
     def run(self, context: Context, argv: CustomAction.RunArg) -> bool:
+        params: dict = {}
+        run_context = None
+        performance_snapshot = None
+
+        def capture_snapshot(snapshot: PreflightPerformanceSnapshot) -> None:
+            nonlocal performance_snapshot
+            performance_snapshot = snapshot
+
         try:
-            return self._run(context, json.loads(argv.custom_action_param or "{}"))
+            if context.tasker.stopping:
+                return True
+            params = json.loads(argv.custom_action_param or "{}")
+            run_context = current_live_run()
+            return self._run(
+                context,
+                params,
+                on_expected=capture_snapshot,
+            )
         except Exception as exc:
-            record_failure_reason(f"开演前流速设置失败：{type(exc).__name__}: {exc}")
+            if context.tasker.stopping:
+                print(
+                    "RealtimePerformanceSettingsGate stopped=true",
+                    flush=True,
+                )
+                return True
+            reason = f"{type(exc).__name__}: {exc}"
+            record_failure_reason(f"开演前流速设置失败：{reason}")
+            try:
+                # Lazy import avoids the visual gate's dependency on this
+                # module's fixed digit classifier.
+                from .game_effect_settings_action import (
+                    verified_game_visual_settings,
+                )
+
+                write_preflight_terminal_result(
+                    output_dir=PROJECT_ROOT / "screencap",
+                    params=params,
+                    terminal_stage="performance_settings_gate",
+                    reason=reason,
+                    visual_settings=verified_game_visual_settings(),
+                    performance_snapshot=performance_snapshot,
+                    run_context=run_context,
+                )
+            except Exception as artifact_error:
+                print(
+                    "RealtimePerformanceSettingsGate artifact_failed="
+                    f"{type(artifact_error).__name__}: {artifact_error}",
+                    flush=True,
+                )
+                traceback.print_exc()
             traceback.print_exc()
             print(
                 "RealtimePerformanceSettingsGate "
@@ -318,7 +471,13 @@ class RealtimePerformanceSettingsGate(CustomAction):
             )
             return False
 
-    def _run(self, context: Context, params: dict) -> bool:
+    def _run(
+        self,
+        context: Context,
+        params: dict,
+        *,
+        on_expected: Callable[[PreflightPerformanceSnapshot], None] | None = None,
+    ) -> bool:
         if context.tasker.stopping:
             return True
         difficulty = str(params.get("difficulty", "Easy"))
@@ -328,6 +487,11 @@ class RealtimePerformanceSettingsGate(CustomAction):
         before = controller.post_screencap().wait().get()
         expected, profile = _expected_speed(context, params, before)
         _speed_cents(expected)
+        if on_expected is not None:
+            on_expected(PreflightPerformanceSnapshot(
+                expected_note_speed=expected,
+                profile=profile,
+            ))
         coordinates = dict(DEFAULT_COORDINATES)
         coordinates.update(params.get("coordinates", {}))
         coordinates = {
@@ -389,8 +553,21 @@ class RealtimePerformanceSettingsGate(CustomAction):
         finally:
             if opened:
                 try:
-                    _click(controller, coordinates["close"])
-                    time.sleep(float(params.get("close_delay_seconds", 0.35)))
+                    if verified_successfully:
+                        _close_settings_dialog(
+                            context,
+                            controller,
+                            coordinates,
+                            attempts=int(params.get("close_attempts", 3)),
+                            delay_seconds=float(
+                                params.get("close_delay_seconds", 0.5)
+                            ),
+                        )
+                    else:
+                        _click(controller, coordinates["close"])
+                        time.sleep(
+                            float(params.get("close_delay_seconds", 0.5))
+                        )
                 except Exception:
                     traceback.print_exc()
                     if verified_successfully:

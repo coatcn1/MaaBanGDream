@@ -164,6 +164,33 @@ def test_clicks_safe_node_center_instead_of_back(monkeypatch):
     assert context.tasker.controller.keys == []
 
 
+def test_modal_cancel_takes_priority_over_home_marker(monkeypatch):
+    # The quit-confirm dialog sits on top of the home page. HomeMarker still
+    # matches through the dimmed overlay, so recovery must dismiss the dialog
+    # before declaring "already home"; otherwise the next 演出 tap is eaten by
+    # the modal and the flow loops forever.
+    context = Context(
+        {
+            "HomeMarker": [True, True],
+            "QuitConfirmCancel": [True, False],
+        }
+    )
+    ticks = iter(value / 1000 for value in range(1000))
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(common_recover.time, "sleep", lambda _seconds: None)
+
+    assert common_recover.CommonRecover().run(
+        context,
+        argv(
+            escape_interval_ms=0,
+            escape_timeout_ms=100,
+            modal_cancel_nodes=["QuitConfirmCancel"],
+        ),
+    )
+    assert context.tasker.controller.clicks == [(25, 40)]
+    assert context.tasker.controller.keys == []
+
+
 def test_stopping_exits_before_any_controller_operation():
     context = Context(stopping=True)
 
@@ -311,6 +338,56 @@ def test_login_mode_clicks_start_before_using_back(monkeypatch):
     )
     assert context.tasker.controller.clicks == [(640, 635)]
     assert context.tasker.controller.keys == [4]
+
+
+def test_resource_download_clicks_once_waits_and_resumes_login(monkeypatch):
+    context = Context({
+        "HomeMarker": [False, False, False, True],
+        "ResourceDownloadConfirm": [True],
+        "ResourceDownloadPageMarker": [True, False],
+        "LoginScreenMarker": [True],
+    })
+    ticks = iter(value / 1000 for value in range(2000))
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(common_recover.time, "sleep", lambda _seconds: None)
+
+    assert common_recover.CommonRecover().run(
+        context,
+        argv(
+            escape_interval_ms=0,
+            escape_timeout_ms=100,
+            login_start_node="LoginScreenMarker",
+            login_start_target=[640, 635],
+            escape_after_login_start=True,
+        ),
+    )
+    assert context.tasker.controller.clicks == [(25, 40), (640, 635)]
+    assert context.tasker.controller.keys == []
+
+
+def test_resource_download_progress_page_waits_without_escape(monkeypatch):
+    context = Context({
+        "HomeMarker": [False, False, True],
+        "ResourceDownloadConfirm": [False, False],
+        "ResourceDownloadPageMarker": [False, False],
+        "ResourceDownloadProgressMarker": [True, False],
+        "LoginScreenMarker": [True],
+    })
+    ticks = iter(value / 1000 for value in range(2000))
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(common_recover.time, "sleep", lambda _seconds: None)
+
+    assert common_recover.CommonRecover().run(
+        context,
+        argv(
+            escape_interval_ms=0,
+            escape_timeout_ms=100,
+            login_start_node="LoginScreenMarker",
+            login_start_target=[640, 635],
+            escape_after_login_start=True,
+        ),
+    )
+    assert context.tasker.controller.keys == []
 
 
 def test_login_menu_marker_gets_multiple_attempts_before_tap_to_start(

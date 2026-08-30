@@ -27,6 +27,11 @@ class MaaTouchProtocol:
         except (OSError, ValueError) as exc:
             raise TouchProtocolError(f"MaaTouch 发送失败: {exc}") from exc
 
+    def _x(self, action: TouchAction) -> int:
+        if action.target_x is None:
+            return self.LANE_CENTERS[action.lane]
+        return max(120, min(1160, round(action.target_x)))
+
     def dispatch(self, actions: list[TouchAction]) -> None:
         persistent_down = [a for a in actions if a.kind == ActionKind.DOWN]
         transients = [a for a in actions if a.kind in (ActionKind.TAP, ActionKind.FLICK)]
@@ -40,10 +45,10 @@ class MaaTouchProtocol:
         downs: list[str] = []
         for action in persistent_down:
             contact = 0 if action.contact is None else action.contact
-            downs.append(f"d {contact} {self.LANE_CENTERS[action.lane]} 590 50")
+            downs.append(f"d {contact} {self._x(action)} 590 50")
             self.active_contacts.add(contact)
         downs.extend(
-            f"d {contact} {self.LANE_CENTERS[action.lane]} 590 50"
+            f"d {contact} {self._x(action)} 590 50"
             for action, contact in transient_contacts
         )
         persistent_ups: list[str] = []
@@ -57,12 +62,18 @@ class MaaTouchProtocol:
             self._send([*downs, *persistent_ups, "c"])
 
         moves = [
-            f"m {0 if a.contact is None else a.contact} {self.LANE_CENTERS[a.lane]} 590 50"
+            f"m {0 if a.contact is None else a.contact} {self._x(a)} 590 50"
             for a in actions
             if a.kind == ActionKind.MOVE
         ]
         moves.extend(
-            f"m {contact} {self.LANE_CENTERS[action.lane]} 490 50"
+            (
+                f"m {contact} "
+                f"{max(120, min(1160, self._x(action) + (-150 if action.flick_direction == 'Left' else 150)))} "
+                "590 50"
+                if action.flick_direction in {"Left", "Right"}
+                else f"m {contact} {self._x(action)} 490 50"
+            )
             for action, contact in transient_contacts
             if action.kind == ActionKind.FLICK
         )
