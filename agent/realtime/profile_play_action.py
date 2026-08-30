@@ -75,7 +75,12 @@ ACHIEVEMENT_LIST_CLOSE_CLICK_DELAY_SECONDS = 1.0
 RESULT_NEXT_TEMPLATE_THRESHOLD = 0.9
 RESULT_NEXT_CLICK_LIMIT = 2
 RESULT_NEXT_CLICK_DELAY_SECONDS = 1.0
-JUDGEMENT_DETAILS_TEMPLATE_THRESHOLD = 0.9
+# The judgement labels animate in before their final colours settle.  The
+# captured 2026-08-31 loading frame scores 0.776 against the final marker,
+# then 0.999 once the counts appear.  Keep the lower loading threshold safe by
+# searching only the fixed judgement-panel region below.
+JUDGEMENT_DETAILS_TEMPLATE_THRESHOLD = 0.75
+JUDGEMENT_DETAILS_MARKER_REGION = (0.58, 0.34, 0.68, 0.70)
 ACTIVITY_POINTS_TEMPLATE_THRESHOLD = 0.9
 ACTIVITY_POINTS_CLICK_DELAY_SECONDS = 1.0
 ACTIVITY_POINTS_CLICK_LIMIT = 2
@@ -481,15 +486,16 @@ def collect_result(
     achievement_close_click_limit: int = (
         ACHIEVEMENT_LIST_CLOSE_CLICK_LIMIT
     ),
-    unknown_back_grace_seconds: float = 2.0,
+    unknown_back_grace_seconds: float = 20.0,
     unknown_back_interval_seconds: float = 1.0,
     unknown_back_limit: int = 12,
     expected_notes: int | None = None,
     maximum_notes: int = 3000,
 ) -> ResultCollectionOutcome:
-    """Read result pages while navigating exclusively with Android Back.
+    """Read result pages and navigate recognised overlays with Android Back.
 
-    Every post-live reward/rank overlay supports the game's Back/ESC shortcut.
+    Reward/rank overlays support the game's Back/ESC shortcut.  The judgement
+    page itself must remain untouched while its labels and counts animate in.
     Coordinate clicks are intentionally forbidden here: visually similar pink
     buttons can open the achievement list instead of advancing the flow.
     """
@@ -524,6 +530,7 @@ def collect_result(
                 image,
                 (judgement_details_template,),
                 judgement_details_threshold,
+                center_region=JUDGEMENT_DETAILS_MARKER_REGION,
             ) is not None
         )
 
@@ -730,12 +737,20 @@ def collect_result(
         if not details_visible:
             # Fixed digit ROIs overlap unrelated score/rank-page elements.
             # Never invoke the parser until the dedicated judgement-page
-            # identity marker is visible.
+            # identity marker is visible.  The game can spend roughly five
+            # seconds animating the PGGBM counts after the score page appears,
+            # and the preceding result transition starts even earlier.  Treat
+            # that marker-less interval as loading before attempting recovery.
             candidate = None
-            page_state = "unknown"
             if unknown_since is None:
                 unknown_since = now
+                print(
+                    "RealtimeResult state=result-loading action=wait"
+                    + f" grace_seconds={unknown_back_grace_seconds:.1f}",
+                    flush=True,
+                )
             if now - unknown_since >= unknown_back_grace_seconds:
+                page_state = "unknown"
                 if unknown_back_presses >= unknown_back_limit:
                     return ResultCollectionOutcome(
                         ResultCollectionStatus.BLOCKED,
@@ -757,6 +772,7 @@ def collect_result(
                 )
                 interval = unknown_back_interval_seconds
             else:
+                page_state = "result-loading"
                 interval = min(
                     slow_interval_seconds,
                     medium_interval_seconds,
