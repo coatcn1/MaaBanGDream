@@ -1,0 +1,106 @@
+{
+  "ManualFlowRecording": {
+    "recognition": "DirectHit",
+    "action": "DoNothing",
+    "next": [
+      "ManualFlowRecordingProcessConflictGuard"
+    ]
+  },
+  "ManualFlowRecordingProcessConflictGuard": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "ProcessConflictGuard",
+    "next": [
+      "ManualFlowRecordingQualityGate"
+    ],
+    "on_error": [
+      "ManualFlowRecordingFailure"
+    ]
+  },
+  "ManualFlowRecordingQualityGate": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "ManualFlowRecordingConfigure",
+    "custom_action_param": {
+      "reset": true,
+      "fps": 10
+    },
+    "next": [
+      "ManualFlowRecordingDurationGate"
+    ],
+    "on_error": [
+      "ManualFlowRecordingFailure"
+    ]
+  },
+  "ManualFlowRecordingDurationGate": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "ManualFlowRecordingConfigure",
+    "custom_action_param": {
+      "max_duration_seconds": 900
+    },
+    "next": [
+      "ManualFlowRecordingTouchesGate"
+    ],
+    "on_error": [
+      "ManualFlowRecordingFailure"
+    ]
+  },
+  "ManualFlowRecordingTouchesGate": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "ManualFlowRecordingConfigure",
+    "custom_action_param": {
+      "show_touches": true
+    },
+    "next": [
+      "ManualFlowRecordingCapture"
+    ],
+    "on_error": [
+      "ManualFlowRecordingFailure"
+    ]
+  },
+  "ManualFlowRecordingCapture": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "ManualFlowRecording",
+    "on_error": [
+      "ManualFlowRecordingFailure"
+    ],
+    "focus": {
+      "Node.Action.Starting": {
+        "content": "⏺️ 手动流程录像已开始：请直接操作模拟器，完成后点击MFA停止按钮",
+        "display": [
+          "log",
+          "toast"
+        ]
+      },
+      "Node.Action.Succeeded": {
+        "content": "✅ 手动流程录像已保存",
+        "display": [
+          "log",
+          "toast"
+        ]
+      },
+      "Node.Action.Failed": {
+        "content": "❌ 手动流程录像失败，请查看日志中的具体原因",
+        "display": [
+          "log",
+          "toast"
+        ]
+      }
+    }
+  },
+  "ManualFlowRecordingFailure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "TaskOutcome",
+    "custom_action_param": {
+      "task_name": "ManualFlowRecording",
+      "label": "手动流程录像",
+      "status": "failure",
+      "reason": "手动流程录像未完成",
+      "reason_source": "latest"
+    }
+  }
+}

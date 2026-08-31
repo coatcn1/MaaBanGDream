@@ -23,10 +23,10 @@ def test_all_pipeline_clicks_use_the_foreground_guard():
 def test_interface_references_existing_entry_and_resource():
     interface = load(ROOT / "interface.json")
     assert interface["interface_version"] == 2
-    assert interface["version"] == "0.9.1-rc.2"
+    assert interface["version"] == "0.9.1-rc.3"
     assert [task["name"] for task in interface["task"]] == [
         "AutoLive", "RealtimeLive", "ContinuousRealtimeLive",
-        "RealtimeCalibration", "ChallengeLive",
+        "RealtimeCalibration", "ChallengeLive", "ManualFlowRecording",
     ]
     assert interface["resource"][0]["path"] == ["./resource"]
     nodes = {}
@@ -207,6 +207,50 @@ def test_realtime_start_clicks_require_visible_transition_confirmation():
             "confirm_attempts": 3,
             "confirm_interval_ms": 750,
         }
+
+
+def test_realtime_start_handles_optional_pre_live_settings_confirmation():
+    nodes = load(ROOT / "resource/pipeline/realtime_multi_live.json")
+    cases = (
+        (
+            "RealtimeLiveRehearsalStart",
+            "RealtimeLiveRehearsalPostStart",
+            "RealtimeLiveRehearsalSettingsConfirm",
+            "RealtimeLivePlay",
+        ),
+        (
+            "RealtimeLiveFormalStart",
+            "RealtimeLiveFormalPostStart",
+            "RealtimeLiveFormalSettingsConfirm",
+            "RealtimeLiveFormalPlay",
+        ),
+        (
+            "RealtimeLiveVisualEvaluationStart",
+            "RealtimeLiveVisualEvaluationPostStart",
+            "RealtimeLiveVisualEvaluationSettingsConfirm",
+            "RealtimeLiveVisualEvaluationPlay",
+        ),
+    )
+    for start_name, post_start_name, confirm_name, play_name in cases:
+        assert nodes[start_name]["next"] == [post_start_name]
+        assert nodes[post_start_name]["post_delay"] == 1500
+        assert nodes[post_start_name]["next"] == [confirm_name, play_name]
+        confirm = nodes[confirm_name]
+        assert confirm["template"] == "pre_live_settings_confirm.png"
+        assert confirm["roi"] == [600, 520, 380, 180]
+        assert confirm["custom_action"] == "ForegroundClick"
+        assert confirm["target"] is True
+        assert confirm["next"] == [play_name]
+
+    play_nodes = [
+        name for name, node in nodes.items()
+        if node.get("custom_action") == "RealtimeProfilePlay"
+    ]
+    assert play_nodes
+    assert all(
+        nodes[name]["custom_action_param"]["startup_timeout_seconds"] == 60
+        for name in play_nodes
+    )
 
 
 def test_auto_live_entry_recovers_to_home_before_navigation():
@@ -440,13 +484,36 @@ def test_realtime_multi_live_contract_and_options():
         selection = override["RealtimeLiveDifficulty"]["custom_action_param"]
         assert selection == {"difficulty": case["name"], "max_attempts": 3}
         assert target == tuple(DIFFICULTY_TARGETS[case["name"]])
-        assert override["RealtimeLiveRehearsalStart"]["next"] == [play_node]
+        assert override["RealtimeLiveRehearsalStart"]["next"] == [
+            "RealtimeLiveRehearsalPostStart"
+        ]
+        assert override["RealtimeLiveRehearsalPostStart"]["next"] == [
+            "RealtimeLiveRehearsalSettingsConfirm",
+            play_node,
+        ]
+        assert override["RealtimeLiveRehearsalSettingsConfirm"]["next"] == [
+            play_node
+        ]
+        formal_play_node = play_node.replace(
+            "RealtimeLivePlay", "RealtimeLiveFormalPlay"
+        )
+        assert override["RealtimeLiveFormalStart"]["next"] == [
+            "RealtimeLiveFormalPostStart"
+        ]
+        assert override["RealtimeLiveFormalPostStart"]["next"] == [
+            "RealtimeLiveFormalSettingsConfirm",
+            formal_play_node,
+        ]
+        assert override["RealtimeLiveFormalSettingsConfirm"]["next"] == [
+            formal_play_node
+        ]
         params = nodes[play_node]["custom_action_param"]
         assert params["difficulty"] == case["name"]
         assert params["require_profile"] is False
         assert params["settings_gate_required"] is True
         assert params["debug_recording"] is False
         assert params["require_completion"] is True
+        assert params["startup_timeout_seconds"] == 60
         assert params["note_speed"] == (
             5.0 if case["name"] in {"Expert", "Special"} else 2.0
         )

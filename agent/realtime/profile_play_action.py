@@ -1466,6 +1466,9 @@ class RealtimeProfilePlay(CustomAction):
         duration_seconds = (
             None if duration_value is None else float(duration_value)
         )
+        startup_timeout_seconds = float(
+            params.get("startup_timeout_seconds", 60)
+        )
         try:
             stall_safe_capture = StallSafeCapture(controller)
             stats = engine.run(
@@ -1478,6 +1481,7 @@ class RealtimeProfilePlay(CustomAction):
                 on_life_safety=(
                     pause_for_life if life_threshold is not None else None
                 ),
+                startup_timeout_seconds=startup_timeout_seconds,
             )
         except Exception as exc:
             error_stats = getattr(exc, "realtime_stats", None)

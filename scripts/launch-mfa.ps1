@@ -156,11 +156,13 @@ if (Test-Path -LiteralPath $instanceConfigDirectory) {
 # The ALAS conflict guard uses it to allow cleanup only after a first warning
 # in this exact MFA session; restarting MFA invalidates that authorization.
 $env:MAABANGDREAM_MFA_SESSION_ID = [Guid]::NewGuid().ToString('N')
+$env:MAABANGDREAM_MFA_ROOT = $MfaRoot
 try {
     Start-Process -FilePath $mfaExe -WorkingDirectory $MfaRoot
 }
 finally {
     Remove-Item Env:MAABANGDREAM_MFA_SESSION_ID -ErrorAction SilentlyContinue
+    Remove-Item Env:MAABANGDREAM_MFA_ROOT -ErrorAction SilentlyContinue
 }
 
 Write-Host "MFAAvalonia started with MaaBanGDream $($interface.version)"

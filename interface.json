@@ -3,7 +3,7 @@
   "interface_version": 2,
   "name": "MaaBanGDream",
   "label": "BanG Dream! 自动化（MaaFramework）",
-  "version": "0.9.1-rc.2",
+  "version": "0.9.1-rc.3",
   "description": "支持自动演出、机器人实时演奏、智能校准和挑战演出。",
   "license": "GPL-3.0-only",
   "controller": [
@@ -90,9 +90,132 @@
         "ChallengeCount",
         "ChallengeDebug"
       ]
+    },
+    {
+      "name": "ManualFlowRecording",
+      "label": "手动流程录像",
+      "description": "录制任意手动操作界面；启动后直接操作模拟器，完成后点击MFA停止按钮保存。",
+      "entry": "ManualFlowRecording",
+      "option": [
+        "ManualFlowRecordingQuality",
+        "ManualFlowRecordingDuration",
+        "ManualFlowRecordingTouches"
+      ]
     }
   ],
   "option": {
+    "ManualFlowRecordingQuality": {
+      "type": "select",
+      "label": "录像流畅度",
+      "default_case": "Standard",
+      "cases": [
+        {
+          "name": "Small",
+          "label": "节省空间（5 FPS）",
+          "pipeline_override": {
+            "ManualFlowRecordingQualityGate": {
+              "custom_action_param": {
+                "reset": true,
+                "fps": 5
+              }
+            }
+          }
+        },
+        {
+          "name": "Standard",
+          "label": "标准（10 FPS）",
+          "pipeline_override": {
+            "ManualFlowRecordingQualityGate": {
+              "custom_action_param": {
+                "reset": true,
+                "fps": 10
+              }
+            }
+          }
+        },
+        {
+          "name": "Smooth",
+          "label": "流畅（15 FPS）",
+          "pipeline_override": {
+            "ManualFlowRecordingQualityGate": {
+              "custom_action_param": {
+                "reset": true,
+                "fps": 15
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ManualFlowRecordingDuration": {
+      "type": "select",
+      "label": "最长录像时间",
+      "default_case": "FifteenMinutes",
+      "cases": [
+        {
+          "name": "FiveMinutes",
+          "label": "5分钟",
+          "pipeline_override": {
+            "ManualFlowRecordingDurationGate": {
+              "custom_action_param": {
+                "max_duration_seconds": 300
+              }
+            }
+          }
+        },
+        {
+          "name": "FifteenMinutes",
+          "label": "15分钟",
+          "pipeline_override": {
+            "ManualFlowRecordingDurationGate": {
+              "custom_action_param": {
+                "max_duration_seconds": 900
+              }
+            }
+          }
+        },
+        {
+          "name": "ThirtyMinutes",
+          "label": "30分钟",
+          "pipeline_override": {
+            "ManualFlowRecordingDurationGate": {
+              "custom_action_param": {
+                "max_duration_seconds": 1800
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ManualFlowRecordingTouches": {
+      "type": "select",
+      "label": "显示触摸位置",
+      "default_case": "On",
+      "cases": [
+        {
+          "name": "On",
+          "label": "开启（推荐）",
+          "pipeline_override": {
+            "ManualFlowRecordingTouchesGate": {
+              "custom_action_param": {
+                "show_touches": true
+              }
+            }
+          }
+        },
+        {
+          "name": "Off",
+          "label": "关闭",
+          "pipeline_override": {
+            "ManualFlowRecordingTouchesGate": {
+              "custom_action_param": {
+                "show_touches": false
+              }
+            }
+          }
+        }
+      ]
+    },
     "AutoLiveSongMode": {
       "type": "select",
       "label": "歌曲选择",
@@ -298,10 +421,32 @@
             },
             "RealtimeLiveRehearsalStart": {
               "next": [
+                "RealtimeLiveRehearsalPostStart"
+              ]
+            },
+            "RealtimeLiveRehearsalPostStart": {
+              "next": [
+                "RealtimeLiveRehearsalSettingsConfirm",
+                "RealtimeLivePlay"
+              ]
+            },
+            "RealtimeLiveRehearsalSettingsConfirm": {
+              "next": [
                 "RealtimeLivePlay"
               ]
             },
             "RealtimeLiveFormalStart": {
+              "next": [
+                "RealtimeLiveFormalPostStart"
+              ]
+            },
+            "RealtimeLiveFormalPostStart": {
+              "next": [
+                "RealtimeLiveFormalSettingsConfirm",
+                "RealtimeLiveFormalPlay"
+              ]
+            },
+            "RealtimeLiveFormalSettingsConfirm": {
               "next": [
                 "RealtimeLiveFormalPlay"
               ]
@@ -351,6 +496,7 @@
                 "settings_gate_required": true,
                 "debug_recording": false,
                 "duration_seconds": 600,
+                "startup_timeout_seconds": 60,
                 "dpi": 240,
                 "game_fps": 60,
                 "render_quality": "standard",
@@ -389,10 +535,32 @@
             },
             "RealtimeLiveRehearsalStart": {
               "next": [
+                "RealtimeLiveRehearsalPostStart"
+              ]
+            },
+            "RealtimeLiveRehearsalPostStart": {
+              "next": [
+                "RealtimeLiveRehearsalSettingsConfirm",
+                "RealtimeLivePlayNormal"
+              ]
+            },
+            "RealtimeLiveRehearsalSettingsConfirm": {
+              "next": [
                 "RealtimeLivePlayNormal"
               ]
             },
             "RealtimeLiveFormalStart": {
+              "next": [
+                "RealtimeLiveFormalPostStart"
+              ]
+            },
+            "RealtimeLiveFormalPostStart": {
+              "next": [
+                "RealtimeLiveFormalSettingsConfirm",
+                "RealtimeLiveFormalPlayNormal"
+              ]
+            },
+            "RealtimeLiveFormalSettingsConfirm": {
               "next": [
                 "RealtimeLiveFormalPlayNormal"
               ]
@@ -442,6 +610,7 @@
                 "settings_gate_required": true,
                 "debug_recording": false,
                 "duration_seconds": 600,
+                "startup_timeout_seconds": 60,
                 "dpi": 240,
                 "game_fps": 60,
                 "render_quality": "standard",
@@ -480,10 +649,32 @@
             },
             "RealtimeLiveRehearsalStart": {
               "next": [
+                "RealtimeLiveRehearsalPostStart"
+              ]
+            },
+            "RealtimeLiveRehearsalPostStart": {
+              "next": [
+                "RealtimeLiveRehearsalSettingsConfirm",
+                "RealtimeLivePlayHard"
+              ]
+            },
+            "RealtimeLiveRehearsalSettingsConfirm": {
+              "next": [
                 "RealtimeLivePlayHard"
               ]
             },
             "RealtimeLiveFormalStart": {
+              "next": [
+                "RealtimeLiveFormalPostStart"
+              ]
+            },
+            "RealtimeLiveFormalPostStart": {
+              "next": [
+                "RealtimeLiveFormalSettingsConfirm",
+                "RealtimeLiveFormalPlayHard"
+              ]
+            },
+            "RealtimeLiveFormalSettingsConfirm": {
               "next": [
                 "RealtimeLiveFormalPlayHard"
               ]
@@ -533,6 +724,7 @@
                 "settings_gate_required": true,
                 "debug_recording": false,
                 "duration_seconds": 600,
+                "startup_timeout_seconds": 60,
                 "dpi": 240,
                 "game_fps": 60,
                 "render_quality": "standard",
@@ -571,10 +763,32 @@
             },
             "RealtimeLiveRehearsalStart": {
               "next": [
+                "RealtimeLiveRehearsalPostStart"
+              ]
+            },
+            "RealtimeLiveRehearsalPostStart": {
+              "next": [
+                "RealtimeLiveRehearsalSettingsConfirm",
+                "RealtimeLivePlayExpert"
+              ]
+            },
+            "RealtimeLiveRehearsalSettingsConfirm": {
+              "next": [
                 "RealtimeLivePlayExpert"
               ]
             },
             "RealtimeLiveFormalStart": {
+              "next": [
+                "RealtimeLiveFormalPostStart"
+              ]
+            },
+            "RealtimeLiveFormalPostStart": {
+              "next": [
+                "RealtimeLiveFormalSettingsConfirm",
+                "RealtimeLiveFormalPlayExpert"
+              ]
+            },
+            "RealtimeLiveFormalSettingsConfirm": {
               "next": [
                 "RealtimeLiveFormalPlayExpert"
               ]
@@ -624,6 +838,7 @@
                 "settings_gate_required": true,
                 "debug_recording": false,
                 "duration_seconds": 600,
+                "startup_timeout_seconds": 60,
                 "dpi": 240,
                 "game_fps": 60,
                 "render_quality": "standard",
@@ -662,10 +877,32 @@
             },
             "RealtimeLiveRehearsalStart": {
               "next": [
+                "RealtimeLiveRehearsalPostStart"
+              ]
+            },
+            "RealtimeLiveRehearsalPostStart": {
+              "next": [
+                "RealtimeLiveRehearsalSettingsConfirm",
+                "RealtimeLivePlaySpecial"
+              ]
+            },
+            "RealtimeLiveRehearsalSettingsConfirm": {
+              "next": [
                 "RealtimeLivePlaySpecial"
               ]
             },
             "RealtimeLiveFormalStart": {
+              "next": [
+                "RealtimeLiveFormalPostStart"
+              ]
+            },
+            "RealtimeLiveFormalPostStart": {
+              "next": [
+                "RealtimeLiveFormalSettingsConfirm",
+                "RealtimeLiveFormalPlaySpecial"
+              ]
+            },
+            "RealtimeLiveFormalSettingsConfirm": {
               "next": [
                 "RealtimeLiveFormalPlaySpecial"
               ]
@@ -715,6 +952,7 @@
                 "settings_gate_required": true,
                 "debug_recording": false,
                 "duration_seconds": 600,
+                "startup_timeout_seconds": 60,
                 "dpi": 240,
                 "game_fps": 60,
                 "render_quality": "standard",
