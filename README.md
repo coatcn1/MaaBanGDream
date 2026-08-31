@@ -6,7 +6,7 @@
 
 基于 [MaaFramework](https://github.com/MaaAssistantArknights/MaaFramework) 的《BanG Dream! 少女乐团派对！》自动化项目。
 
-当前版本 `v0.9.0` · [GitHub](https://github.com/coatcn1/MaaBanGDream)
+当前版本 `v0.9.1-rc.1` · [GitHub](https://github.com/coatcn1/MaaBanGDream)
 
 ## 功能
 
@@ -31,10 +31,33 @@
 
 精确版本组合记录在 [runtime-compatibility.json](runtime-compatibility.json)。
 
-## 快速开始
+## 普通用户安装
+
+前往 [Releases](https://github.com/coatcn1/MaaBanGDream/releases) 下载最新的
+`MaaBanGDream-v*-win-x64.zip`，完整解压后双击 `启动 MaaBanGDream.cmd`。
+
+完整包已经包含定制 MFAAvalonia、MaaFramework、本地谱面和 Agent。首次启动
+会在解压目录内展开固定版本的便携 Python 环境；.NET 运行时也已经包含，
+不需要克隆源码，也不需要预装 Python、Miniconda、.NET 或开发工具。
+
+## 源码开发
+
+源码开发需要把两个公开仓库放在同一父目录：
+
+```text
+workplace/
+├─ MaaBanGDream/
+└─ MFAAvalonia/  # feature/performance-visual-settings
+```
+
+定制 MFA 源码：
+[coatcn1/MFAAvalonia](https://github.com/coatcn1/MFAAvalonia/tree/feature/performance-visual-settings)。
+不要用同版本官方 Core DLL 覆盖定制版本，否则会丢失“演出设置”和启动保护。
+
+准备开发环境：
 
 ```powershell
-.\scripts\setup.ps1     # 创建 Conda 环境并安装依赖
+.\scripts\setup.ps1
 .\scripts\verify.ps1    # 运行验证
 ```
 
@@ -46,6 +69,15 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\launch-mfa.ps1
 
 启动后可在 MFA 的“设置 → 演出设置 → 谱面辅助”查看本地清单并手动同步。
 同步只在用户点击时联网；开演和实时演奏始终只读本地谱面。
+
+维护者可用下列命令从定制 MFA 源码生成不含本机配置的 Windows 发布包：
+
+```powershell
+.\scripts\setup.ps1
+& '..\.tools\Miniconda3\envs\maabangdream\python.exe' `
+  -m pip install -r .\requirements-release.txt
+.\scripts\build-windows-release.ps1 -Version 0.9.1-rc.1
+```
 
 ## 文档
 

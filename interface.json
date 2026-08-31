@@ -3,7 +3,7 @@
   "interface_version": 2,
   "name": "MaaBanGDream",
   "label": "BanG Dream! 自动化（MaaFramework）",
-  "version": "0.9.0",
+  "version": "0.9.1-rc.1",
   "description": "支持自动演出、机器人实时演奏、智能校准和挑战演出。",
   "license": "GPL-3.0-only",
   "controller": [

@@ -208,6 +208,110 @@ def test_judgement_details_identity_wins_over_false_rank_button_match():
     assert outcome.page_state == "judgement-details"
 
 
+def test_result_collection_waits_through_partial_judgement_marker_animation():
+    """Do not Back out while the result labels are still animating in."""
+    template = cv2.imread(
+        str(profile_play_action.JUDGEMENT_DETAILS_TEMPLATE)
+    )
+    height, width = template.shape[:2]
+
+    partial_template = template.copy()
+    partial_template[round(height * .55):, :] = 255
+    loading = np.zeros((720, 1280, 3), dtype=np.uint8)
+    loading[270:270 + height, 760:760 + width] = partial_template
+    ready = np.zeros((720, 1280, 3), dtype=np.uint8)
+    ready[270:270 + height, 760:760 + width] = template
+
+    class AnimatedDetailsController:
+        def __init__(self):
+            self.frames_seen = 0
+            self.backs = []
+
+        def post_screencap(self):
+            self.frames_seen += 1
+            if self.frames_seen <= 16:
+                return Job(loading.copy())
+            return Job(ready.copy())
+
+        def post_click_key(self, key):
+            self.backs.append(key)
+            return Job()
+
+    class AnimatedDetailsParser:
+        def parse(self, image):
+            if np.array_equal(image, loading):
+                raise ValueError("judgement digits are still animating")
+            return LiveResult(753, 19, 0, 0, 0, 18, 1, .98)
+
+    controller = AnimatedDetailsController()
+    clock = Clock()
+    outcome = collect_result(
+        controller,
+        lambda: False,
+        parser=AnimatedDetailsParser(),
+        expected_notes=772,
+        timeout_seconds=30,
+        clock=clock.monotonic,
+        sleeper=clock.sleep,
+        stability_interval_seconds=1,
+    )
+
+    assert outcome.status is ResultCollectionStatus.STABLE
+    assert outcome.page_state == "judgement-details"
+    assert outcome.result is not None
+    assert outcome.result.total == 772
+    assert controller.backs == []
+
+
+def test_result_collection_waits_for_result_transition_before_unknown_back():
+    """The score page may stay marker-less while PGGBM counts load."""
+    template = cv2.imread(
+        str(profile_play_action.JUDGEMENT_DETAILS_TEMPLATE)
+    )
+    height, width = template.shape[:2]
+    loading = np.zeros((720, 1280, 3), dtype=np.uint8)
+    ready = np.zeros((720, 1280, 3), dtype=np.uint8)
+    ready[270:270 + height, 760:760 + width] = template
+
+    class ResultTransitionController:
+        def __init__(self):
+            self.frames_seen = 0
+            self.backs = []
+
+        def post_screencap(self):
+            self.frames_seen += 1
+            if self.frames_seen <= 16:
+                return Job(loading.copy())
+            return Job(ready.copy())
+
+        def post_click_key(self, key):
+            self.backs.append(key)
+            return Job()
+
+    class ResultTransitionParser:
+        def parse(self, _image):
+            return LiveResult(753, 19, 0, 0, 0, 18, 1, .98)
+
+    controller = ResultTransitionController()
+    clock = Clock()
+    outcome = collect_result(
+        controller,
+        lambda: False,
+        parser=ResultTransitionParser(),
+        expected_notes=772,
+        timeout_seconds=30,
+        clock=clock.monotonic,
+        sleeper=clock.sleep,
+        stability_interval_seconds=1,
+    )
+
+    assert outcome.status is ResultCollectionStatus.STABLE
+    assert outcome.page_state == "judgement-details"
+    assert outcome.result is not None
+    assert outcome.result.total == 772
+    assert controller.backs == []
+
+
 def test_result_collection_retries_rank_back_when_first_input_is_ignored():
     template = cv2.imread(str(profile_play_action.RESULT_NEXT_TEMPLATE))
     rank_page = np.zeros((720, 1280, 3), dtype=np.uint8)
@@ -363,6 +467,7 @@ def test_unknown_post_result_page_uses_bounded_back_recovery():
         parser=NoResultParser(),
         clock=clock.monotonic,
         sleeper=clock.sleep,
+        unknown_back_grace_seconds=2,
     )
 
     assert outcome.status is ResultCollectionStatus.BLOCKED
@@ -466,7 +571,7 @@ def test_result_collection_never_parses_without_judgement_page_identity():
     )
 
     assert outcome.status is ResultCollectionStatus.TIMED_OUT
-    assert outcome.page_state == "unknown"
+    assert outcome.page_state == "result-loading"
     assert parser.calls == 0
 
 
