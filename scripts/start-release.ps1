@@ -156,10 +156,12 @@ if ($NoLaunch) {
 }
 
 $env:MAABANGDREAM_MFA_SESSION_ID = [Guid]::NewGuid().ToString('N')
+$env:MAABANGDREAM_MFA_ROOT = $packageRoot
 try {
     Start-Process -FilePath $mfa -WorkingDirectory $packageRoot
 }
 finally {
     Remove-Item Env:MAABANGDREAM_MFA_SESSION_ID -ErrorAction SilentlyContinue
+    Remove-Item Env:MAABANGDREAM_MFA_ROOT -ErrorAction SilentlyContinue
 }
 Write-Host "MaaBanGDream started: $packageRoot"

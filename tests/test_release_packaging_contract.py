@@ -32,6 +32,7 @@ def test_release_launcher_generates_machine_local_paths_at_first_run():
     assert "ContinueRunningWhenError" in launcher
     assert "MinitouchAndAdbKey" in launcher
     assert "MAABANGDREAM_MFA_SESSION_ID" in launcher
+    assert "$env:MAABANGDREAM_MFA_ROOT = $packageRoot" in launcher
 
 
 def test_release_builder_uses_clean_sources_and_excludes_private_state():

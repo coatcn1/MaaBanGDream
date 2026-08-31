@@ -315,12 +315,7 @@ def _load_runtime_adb_device() -> RuntimeAdbDevice:
     configured_root = os.environ.get("MAABANGDREAM_MFA_ROOT", "").strip()
     if configured_root:
         roots.append(Path(configured_root))
-    roots.extend(
-        [
-            Path.cwd(),
-            PROJECT_ROOT.parent / ".tools" / "MFAAvalonia-profile-v3",
-        ]
-    )
+    roots.append(Path.cwd())
     seen: set[Path] = set()
     for root in roots:
         resolved = root.resolve()
