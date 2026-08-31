@@ -6,7 +6,7 @@
 
 基于 [MaaFramework](https://github.com/MaaAssistantArknights/MaaFramework) 的《BanG Dream! 少女乐团派对！》自动化项目。
 
-当前版本 `v0.9.1-rc.1` · [GitHub](https://github.com/coatcn1/MaaBanGDream)
+当前版本 `v0.9.1-rc.2` · [GitHub](https://github.com/coatcn1/MaaBanGDream)
 
 ## 功能
 
@@ -76,7 +76,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\launch-mfa.ps1
 .\scripts\setup.ps1
 & '..\.tools\Miniconda3\envs\maabangdream\python.exe' `
   -m pip install -r .\requirements-release.txt
-.\scripts\build-windows-release.ps1 -Version 0.9.1-rc.1
+.\scripts\build-windows-release.ps1 -Version 0.9.1-rc.2
 ```
 
 ## 文档
