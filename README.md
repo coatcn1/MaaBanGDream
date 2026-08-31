@@ -6,7 +6,7 @@
 
 基于 [MaaFramework](https://github.com/MaaAssistantArknights/MaaFramework) 的《BanG Dream! 少女乐团派对！》自动化项目。
 
-当前版本 `v0.9.1-rc.2` · [GitHub](https://github.com/coatcn1/MaaBanGDream)
+当前版本 `v0.9.1-rc.3` · [GitHub](https://github.com/coatcn1/MaaBanGDream)
 
 ## 功能
 
@@ -17,6 +17,7 @@
 - **实时演奏校准** — 三排练一正式自动校准，生成 Profile 后启用
 - **挑战演出** — 四档点数、五档难度、连续轮次
 - **调试记录** — 完全关闭、轻度 Trace 或完整记录；完整模式输出 JSONL + 60 FPS MJPG/MKV
+- **手动流程录像** — 在 MFA 中录制任意活动或界面操作，点击停止后生成可逐帧定位的 MKV 和首末帧
 
 ## 环境要求
 
@@ -76,7 +77,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\launch-mfa.ps1
 .\scripts\setup.ps1
 & '..\.tools\Miniconda3\envs\maabangdream\python.exe' `
   -m pip install -r .\requirements-release.txt
-.\scripts\build-windows-release.ps1 -Version 0.9.1-rc.2
+.\scripts\build-windows-release.ps1 -Version 0.9.1-rc.3
 ```
 
 ## 文档

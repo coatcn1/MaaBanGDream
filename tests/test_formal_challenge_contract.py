@@ -87,7 +87,13 @@ def test_visual_evaluation_is_explicit_and_uses_formal_profile_path():
     assert eval_settings["next"] == ["RealtimeLiveVisualEvaluationStart"]
     eval_start = nodes["RealtimeLiveVisualEvaluationStart"]
     assert eval_start["custom_action"] == "ForegroundClick"
-    assert eval_start["next"] == ["RealtimeLiveVisualEvaluationPlay"]
+    assert eval_start["next"] == [
+        "RealtimeLiveVisualEvaluationPostStart"
+    ]
+    assert nodes["RealtimeLiveVisualEvaluationPostStart"]["next"] == [
+        "RealtimeLiveVisualEvaluationSettingsConfirm",
+        "RealtimeLiveVisualEvaluationPlay",
+    ]
     eval_play = nodes["RealtimeLiveVisualEvaluationPlay"]
     assert eval_play["custom_action"] == "RealtimeProfilePlay"
     assert eval_play["custom_action_param"]["visual_evaluation"] is True
@@ -165,7 +171,7 @@ def test_visual_evaluation_keeps_experimental_profile_checks_with_every_difficul
             "RealtimeLiveVisualEvaluationStart"
         ]
         assert merged["RealtimeLiveVisualEvaluationStart"]["next"] == [
-            "RealtimeLiveVisualEvaluationPlay"
+            "RealtimeLiveVisualEvaluationPostStart"
         ]
         assert merged["RealtimeLiveVisualEvaluationPlay"][
             "custom_action_param"
@@ -175,6 +181,7 @@ def test_visual_evaluation_keeps_experimental_profile_checks_with_every_difficul
             "settings_gate_required": True,
             "debug_recording": False,
             "duration_seconds": 600,
+            "startup_timeout_seconds": 60,
             "dpi": 240,
             "game_fps": 60,
             "render_quality": "standard",

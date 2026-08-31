@@ -10,6 +10,7 @@ import live_select  # noqa: F401 - registration happens at import time
 import task_reporting  # noqa: F401 - registration happens at import time
 import foreground_click  # noqa: F401 - registration happens at import time
 import process_conflict_guard  # noqa: F401 - registration happens at import time
+import manual_flow_recording  # noqa: F401 - registration happens at import time
 import realtime.frame_observer  # noqa: F401 - registration happens at import time
 import realtime.note_observer  # noqa: F401 - registration happens at import time
 import realtime.profile_action  # noqa: F401 - registration happens at import time

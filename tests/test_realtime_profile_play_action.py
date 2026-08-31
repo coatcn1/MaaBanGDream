@@ -84,11 +84,14 @@ def test_profile_play_reuses_one_agent_controller_proxy(monkeypatch):
         Dispatcher,
     )
 
+    engine_options = []
+
     class Engine:
         def __init__(self, *args, **kwargs):
             pass
 
         def run(self, capture, stopping, **kwargs):
+            engine_options.append(kwargs)
             capture()
             return EngineStats(1, 0, False)
 
@@ -99,6 +102,7 @@ def test_profile_play_reuses_one_agent_controller_proxy(monkeypatch):
     assert tasker.controller_reads == 1
     assert foreground_checks == [tasker._controller]
     assert dispatcher_options == [{}]
+    assert engine_options[0]["startup_timeout_seconds"] == 60.0
 
 
 def test_profile_play_refuses_pipeline_start_without_fresh_speed_gate(
