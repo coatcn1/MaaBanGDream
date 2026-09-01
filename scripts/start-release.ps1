@@ -18,20 +18,6 @@ $chartSync = Join-Path $PSScriptRoot 'sync_bestdori_catalog.py'
 $chartRoot = Join-Path $packageRoot 'resource\charts'
 $chartManifest = Join-Path $chartRoot 'manifest.json'
 
-function Write-JsonUtf8NoBom {
-    param(
-        [Parameter(Mandatory = $true)] [object]$Value,
-        [Parameter(Mandatory = $true)] [string]$Path,
-        [int]$Depth = 100
-    )
-    $json = $Value | ConvertTo-Json -Depth $Depth
-    [System.IO.File]::WriteAllText(
-        $Path,
-        "$json`r`n",
-        [System.Text.UTF8Encoding]::new($false)
-    )
-}
-
 foreach ($required in @(
     $runtimeArchive,
     $mfa,
@@ -109,7 +95,8 @@ $interface = Get-Content `
 $interface.resource[0].path = @('./resource')
 $interface.agent.child_exec = $python.Replace('\', '/')
 $interface.agent.child_args = @($agent.Replace('\', '/'))
-Write-JsonUtf8NoBom -Value $interface -Path $interfacePath
+$interface | ConvertTo-Json -Depth 100 |
+    Set-Content -LiteralPath $interfacePath -Encoding utf8
 
 $profileManagerConfig = [ordered]@{
     version = 1
@@ -145,10 +132,8 @@ $profileManagerConfig = [ordered]@{
         mfa_logs = $mfaLogs
     }
 }
-Write-JsonUtf8NoBom `
-    -Value $profileManagerConfig `
-    -Path $profileManagerPath `
-    -Depth 10
+$profileManagerConfig | ConvertTo-Json -Depth 10 |
+    Set-Content -LiteralPath $profileManagerPath -Encoding utf8
 
 if (Test-Path -LiteralPath $instanceConfigDirectory) {
     Get-ChildItem `
@@ -167,7 +152,8 @@ if (Test-Path -LiteralPath $instanceConfigDirectory) {
             -NotePropertyName 'AdbControlInputType' `
             -NotePropertyValue 'MinitouchAndAdbKey' `
             -Force
-        Write-JsonUtf8NoBom -Value $instance -Path $_.FullName
+        $instance | ConvertTo-Json -Depth 100 |
+            Set-Content -LiteralPath $_.FullName -Encoding utf8
     }
 }
 

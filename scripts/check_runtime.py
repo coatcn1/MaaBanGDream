@@ -18,10 +18,7 @@ INTERFACE_PATH = ROOT / "interface.json"
 
 
 def load_json(path: Path) -> dict[str, Any]:
-    # Windows PowerShell 5.1 writes a UTF-8 BOM for ``-Encoding utf8``.
-    # Accept it so an older portable launcher can repair its generated files
-    # instead of becoming permanently unable to pass the next startup check.
-    return json.loads(path.read_text(encoding="utf-8-sig"))
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def required_maafw_version(requirements: str) -> str:

@@ -5,13 +5,6 @@ import pytest
 from scripts import check_runtime
 
 
-def test_runtime_json_loader_accepts_windows_powershell_utf8_bom(tmp_path):
-    path = tmp_path / "interface.json"
-    path.write_bytes(b"\xef\xbb\xbf{\"version\": 2}")
-
-    assert check_runtime.load_json(path) == {"version": 2}
-
-
 def test_requirement_must_be_exactly_pinned():
     assert check_runtime.required_maafw_version("MaaFw==5.10.2\n") == "5.10.2"
     with pytest.raises(ValueError):

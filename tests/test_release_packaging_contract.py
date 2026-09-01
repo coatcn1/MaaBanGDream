@@ -37,14 +37,6 @@ def test_release_launcher_generates_machine_local_paths_at_first_run():
     assert "$env:MAABANGDREAM_MFA_ROOT = $packageRoot" in launcher
 
 
-def test_release_launcher_writes_generated_json_without_utf8_bom():
-    launcher = read("scripts/start-release.ps1")
-
-    assert "function Write-JsonUtf8NoBom" in launcher
-    assert "[System.Text.UTF8Encoding]::new($false)" in launcher
-    assert "Set-Content -LiteralPath $interfacePath -Encoding utf8" not in launcher
-
-
 def test_release_builder_uses_clean_sources_and_excludes_private_state():
     builder = read("scripts/build-windows-release.ps1")
     validator = read("scripts/check_release_package.py")
