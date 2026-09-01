@@ -600,3 +600,37 @@ def test_back_only_recovery_uses_login_state_machine_after_restart(monkeypatch):
     assert context.tasker.controller.stops == ["com.bilibili.star.bili"]
     assert context.tasker.controller.starts == ["com.bilibili.star.bili"]
     assert context.tasker.controller.clicks == [(640, 635), (640, 360)]
+
+
+def test_forced_restart_enters_login_without_back_on_known_terminal_page(monkeypatch):
+    context = Context({
+        "HomeMarker": [False, False, True],
+        "LoginScreenMarker": [True],
+    })
+    now = [0.0]
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: now[0])
+
+    def advance(_context, seconds):
+        now[0] += max(seconds, 0.1)
+        return True
+
+    monkeypatch.setattr(common_recover, "_wait_unless_stopping", advance)
+
+    assert common_recover.CommonRecover().run(
+        context,
+        argv(
+            escape_interval_ms=100,
+            escape_timeout_ms=2000,
+            restart_wait_ms=0,
+            restart_limit=0,
+            restart_before_recovery=True,
+            login_start_node="LoginScreenMarker",
+            login_start_target=[640, 635],
+            login_tap_target=[640, 360],
+            escape_after_login_start=True,
+        ),
+    )
+    assert context.tasker.controller.stops == ["com.bilibili.star.bili"]
+    assert context.tasker.controller.starts == ["com.bilibili.star.bili"]
+    assert context.tasker.controller.keys == []
+    assert context.tasker.controller.clicks == [(640, 635), (640, 360)]

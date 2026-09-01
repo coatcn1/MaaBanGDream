@@ -17,6 +17,7 @@ stays disabled for the whole run (a different song is being played).
 
 from __future__ import annotations
 
+import math
 import statistics
 from dataclasses import replace
 
@@ -39,10 +40,12 @@ TRUSTED_CALIBRATION_REASONS = {
 
 # Dense slide sections can emit a short burst of visual hold-body and tail
 # artifacts even while the already-calibrated official chart remains aligned.
-# Requiring a full calibration-window-sized disagreement preserves fail-closed
-# behaviour for a genuinely wrong chart without abandoning a correct chart on
-# the nine-action burst observed in the Hard representative trace.
-MAX_CONSECUTIVE_VISUAL_CHART_MISMATCHES = 8
+# A ten-judgement disagreement preserves fail-closed behaviour for a genuinely
+# wrong chart without abandoning a correct chart on the nine-action bursts seen
+# in dense representative traces.  Relocking still uses the original eight
+# coherent samples so a real early clock shift is corrected promptly.
+MAX_CONSECUTIVE_VISUAL_CHART_MISMATCHES = 10
+PHASE_RELOCK_SAMPLE_COUNT = 8
 MAX_EARLY_PHASE_RELOCKS = 1
 EARLY_PHASE_RELOCK_WINDOW_S = 12.0
 PHASE_RELOCK_MAD_LIMIT_S = 0.020
@@ -274,11 +277,9 @@ class ChartPredictor:
             > EARLY_PHASE_RELOCK_WINDOW_S
         ):
             return False
-        evidence = self._mismatch_residuals[
-            -MAX_CONSECUTIVE_VISUAL_CHART_MISMATCHES:
-        ]
+        evidence = self._mismatch_residuals[-PHASE_RELOCK_SAMPLE_COUNT:]
         if (
-            len(evidence) < MAX_CONSECUTIVE_VISUAL_CHART_MISMATCHES
+            len(evidence) < PHASE_RELOCK_SAMPLE_COUNT
             or len({lane for _residual, lane in evidence})
             < PHASE_RELOCK_MIN_LANES
         ):
@@ -330,9 +331,12 @@ class ChartPredictor:
                 self._mismatch_residuals = []
             self._mismatch_streak += 1
             self._mismatch_residuals.append((residual, lane))
+            if (
+                self._mismatch_streak >= PHASE_RELOCK_SAMPLE_COUNT
+                and self._try_early_phase_relock(relative_time_s)
+            ):
+                return
             if self._mismatch_streak >= MAX_CONSECUTIVE_VISUAL_CHART_MISMATCHES:
-                if self._try_early_phase_relock(relative_time_s):
-                    return
                 self.disabled_for_run = True
                 self.disable_reason = (
                     f"{MAX_CONSECUTIVE_VISUAL_CHART_MISMATCHES} same-direction "
@@ -1606,7 +1610,10 @@ class ChartPredictor:
                 state._chart_hold_release_at[action.contact] = (
                     action.timestamp + tail.time_s - head_song_time
                 )
-                if path is not None and len(path.points) > 2:
+                if path is not None and any(
+                    point.lane != path.points[0].lane
+                    for point in path.points[1:]
+                ):
                     state._chart_slide_path[action.contact] = tuple(
                         (point.time_s, point.lane) for point in path.points
                     )
@@ -1766,6 +1773,48 @@ class ChartPredictor:
         if not state._chart_slide_path:
             return
         song_now = self.input_song_time(now)
+
+        def suppress_conflicting_visual_moves(
+            contact: int,
+            target_x: float,
+        ) -> bool:
+            visual_moves = [
+                action
+                for action in actions
+                if (
+                    action.kind == ActionKind.MOVE
+                    and action.contact == contact
+                    and action.reason == "hold-follow"
+                )
+            ]
+            if not visual_moves:
+                return False
+            if all(
+                abs(
+                    (
+                        action.target_x
+                        if action.target_x is not None
+                        else lane_center_x(action.lane, self.judgement_y)
+                    ) - target_x
+                ) < 18
+                for action in visual_moves
+            ):
+                # The visual move agrees with the chart path and is safe to
+                # dispatch as-is; only contradictory geometry is replaced.
+                return False
+            actions[:] = [
+                action
+                for action in actions
+                if action not in visual_moves
+            ]
+            state.record_diagnostic(
+                "chart_visual_move_suppressed",
+                now,
+                contact=contact,
+                count=len(visual_moves),
+            )
+            return True
+
         for contact, path in list(state._chart_slide_path.items()):
             if contact not in state._active_hold_tail:
                 state._chart_slide_path.pop(contact, None)
@@ -1785,7 +1834,11 @@ class ChartPredictor:
                     contact,
                     lane_center_x(previous_lane, self.judgement_y),
                 )
-                if abs(previous_x - target_x) < 18:
+                visual_suppressed = suppress_conflicting_visual_moves(
+                    contact,
+                    target_x,
+                )
+                if abs(previous_x - target_x) < 18 and not visual_suppressed:
                     continue
                 target_lane = (
                     previous_lane
@@ -1813,68 +1866,46 @@ class ChartPredictor:
                     anchor_lanes=list(adjacent_anchor),
                 )
                 continue
-            if contact in state._blind_hold_contacts:
-                # A fully blind slide has no visual body between counted
-                # nodes, so retain continuous segment interpolation for it.
-                segment_index = len(path) - 2
-                for index in range(len(path) - 1):
-                    if song_now <= path[index + 1][0]:
-                        segment_index = index
-                        break
-                start_time, start_lane = path[segment_index]
-                end_time, end_lane = path[segment_index + 1]
-                duration = max(0.000001, end_time - start_time)
-                progress = min(
-                    1.0,
-                    max(0.0, (song_now - start_time) / duration),
-                )
-                target_lane = round(
-                    start_lane + (end_lane - start_lane) * progress
-                )
-                previous_lane = state._active_hold_lane.get(contact, contact)
-                if target_lane == previous_lane:
-                    continue
-                target_x = lane_center_x(target_lane, self.judgement_y)
-                actions.append(TouchAction(
-                    ActionKind.MOVE,
-                    target_lane,
-                    now,
-                    contact,
-                    "chart-slide-move",
-                    target_x=round(target_x),
-                ))
-                state._active_hold_lane[contact] = target_lane
-                state._active_hold_x[contact] = float(target_x)
-                state.record_diagnostic(
-                    "chart_slide_move",
-                    now,
-                    contact=contact,
-                    previous_lane=previous_lane,
-                    target_lane=target_lane,
-                    segment_index=segment_index,
-                    progress=round(progress, 3),
-                )
+            # Once chart identity and phase are confirmed, the chart owns the
+            # slide geometry.  Drive every segment continuously for both
+            # visible and blind holds; visual green-body fragments can wander
+            # between lanes in dense sections and must not overwrite the
+            # authoritative path.  An 18 px threshold bounds MOVE traffic at
+            # roughly every one to two 60 FPS frames on wide slides.
+            segment_index = len(path) - 2
+            for index in range(len(path) - 1):
+                if song_now <= path[index + 1][0]:
+                    segment_index = index
+                    break
+            start_time, start_lane = path[segment_index]
+            end_time, end_lane = path[segment_index + 1]
+            duration = max(0.000001, end_time - start_time)
+            progress = min(
+                1.0,
+                max(0.0, (song_now - start_time) / duration),
+            )
+            if progress <= 0.001:
+                # The DOWN already used the visible/chart head coordinate in
+                # this frame.  Avoid an immediate redundant MOVE caused only
+                # by perspective-adjusted lane-centre rounding.
                 continue
-            point_index = state._chart_slide_next_index.get(contact, 1)
-            while (
-                point_index < len(path) - 1
-                and song_now > path[point_index][0] + 0.03
-            ):
-                point_index += 1
-            state._chart_slide_next_index[contact] = point_index
-            if point_index >= len(path):
-                continue
-            point_time, point_lane = path[point_index]
-            if not point_time - 0.04 <= song_now <= point_time + 0.03:
-                continue
-            target_lane = round(point_lane)
-            target_x = lane_center_x(target_lane, self.judgement_y)
+            target_lane_value = (
+                start_lane + (end_lane - start_lane) * progress
+            )
+            target_lane = max(
+                0,
+                min(6, int(math.floor(target_lane_value + 0.5))),
+            )
+            start_x = lane_center_x(round(start_lane), self.judgement_y)
+            end_x = lane_center_x(round(end_lane), self.judgement_y)
+            target_x = start_x + (end_x - start_x) * progress
             previous_lane = state._active_hold_lane.get(contact, contact)
             previous_x = state._active_hold_x.get(contact, target_x)
-            if (
-                previous_lane == target_lane
-                and abs(previous_x - target_x) < 18
-            ):
+            visual_suppressed = suppress_conflicting_visual_moves(
+                contact,
+                target_x,
+            )
+            if abs(previous_x - target_x) < 18 and not visual_suppressed:
                 continue
             actions.append(TouchAction(
                 ActionKind.MOVE,
@@ -1892,8 +1923,8 @@ class ChartPredictor:
                 contact=contact,
                 previous_lane=previous_lane,
                 target_lane=target_lane,
-                point_index=point_index,
-                chart_time_s=round(point_time, 3),
+                segment_index=segment_index,
+                progress=round(progress, 3),
             )
 
     def update(

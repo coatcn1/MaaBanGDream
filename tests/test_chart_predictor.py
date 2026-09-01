@@ -787,6 +787,63 @@ def test_chart_blind_presses_slide_and_follows_chart_path():
     assert len(releases) == 1 and releases[0].lane == 3
 
 
+def test_chart_drives_visible_two_point_slide_smoothly_between_endpoints():
+    """A confirmed chart path owns motion even while the body is visible.
+
+    The V.I.P MONSTER Expert failure dispatched a lane-1 slide head on time,
+    but visual following left the contact near lane 2 until it jumped to lane
+    4 in the tail frame.  The game had already charged the missed slide ticks.
+    """
+    path = ChartHoldPath(
+        note_index=0,
+        note_type="Slide",
+        points=(
+            ChartPathPoint(4.0, 2.0, 1),
+            ChartPathPoint(4.8, 2.4, 4),
+        ),
+    )
+    chart = ChartTimeline(
+        [
+            ChartJudgement(2.0, 1, "hold-head", 0),
+            ChartJudgement(2.4, 4, "hold-tail", 0),
+        ],
+        bpm=120.0,
+        hold_paths=[path],
+    )
+    planner, predictor = _planner_with_press_rescue(chart)
+    anchor = 100.0
+    predictor._anchor_time = anchor
+
+    started = planner.update([
+        ObservedNote(NoteKind.HOLD, 1, 340, 500, 180, 150, anchor + 5.0),
+    ], now=anchor + 5.0)
+    assert [action.kind for action in started] == [ActionKind.DOWN]
+
+    quarter = planner.update([
+        ObservedNote(NoteKind.HOLD, 2, 490, 510, 180, 140, anchor + 5.1),
+    ], now=anchor + 5.1)
+    assert [
+        action.reason for action in quarter
+        if action.kind == ActionKind.MOVE
+    ] == ["chart-slide-move"]
+
+    halfway = planner.update([
+        ObservedNote(NoteKind.HOLD, 1, 340, 520, 180, 130, anchor + 5.2),
+    ], now=anchor + 5.2)
+    chart_moves = [
+        action for action in halfway
+        if action.reason == "chart-slide-move"
+    ]
+    assert len(chart_moves) == 1
+    assert chart_moves[0].lane == 3
+    assert chart_moves[0].target_x == round(
+        (
+            lane_center_x(1, 565)
+            + lane_center_x(4, 565)
+        ) / 2
+    )
+
+
 def test_chart_blind_slide_follows_each_connection_segment():
     judgements = [
         ChartJudgement(2.0, 0, "hold-head", 0),
@@ -1453,7 +1510,7 @@ def test_repeated_mismatch_disables_chart_and_releases_blind_hold():
     chart = ChartTimeline([
         *[
             ChartJudgement(10.0 + index, 6, "tap", index)
-            for index in range(8)
+            for index in range(10)
         ],
         ChartJudgement(100.0, 0, "hold-tail", 20),
     ], bpm=120.0)
@@ -1463,11 +1520,15 @@ def test_repeated_mismatch_disables_chart_and_releases_blind_hold():
     predictor.observe_visual_actions([
         # Action timestamps are not phase samples after chart lock.
     ])
-    for index in range(8):
+    for index in range(9):
         now = 13.1 + index - 0.5
         predictor.observe_tracks([
             _phase_track(index + 1, 6, now),
         ], now)
+    assert not predictor.disabled_for_run
+
+    now = 13.1 + 9 - 0.5
+    predictor.observe_tracks([_phase_track(10, 6, now)], now)
     assert predictor.disabled_for_run
 
     state = planner._state
@@ -1528,13 +1589,13 @@ def test_early_coherent_multilane_phase_drift_relocks_once():
 def test_second_coherent_phase_mismatch_still_disables_chart():
     predictor = ChartPredictor(ChartTimeline([
         ChartJudgement(10.0 + index, lane, "tap", index)
-        for index, lane in enumerate((0, 1, 2, 3, 4, 5, 6, 0))
+        for index, lane in enumerate((0, 1, 2, 3, 4, 5, 6, 0, 2, 4))
     ], bpm=120.0))
     predictor.calibrated = True
     predictor._calibrated_at_relative_s = 1.0
     predictor._phase_relock_count = 1
 
-    for index, lane in enumerate((0, 1, 2, 3, 4, 5, 6, 0)):
+    for index, lane in enumerate((0, 1, 2, 3, 4, 5, 6, 0, 2, 4)):
         predictor._record_phase_residual(
             -.1,
             lane,

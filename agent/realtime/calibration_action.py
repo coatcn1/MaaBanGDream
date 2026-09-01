@@ -123,7 +123,10 @@ def calibration_round_plan(
         "RealtimeLiveReturnHome": {
             "next": ["RealtimeCalibrationRoundComplete"]
         },
-        play_node: {"custom_action_param": play_params},
+        play_node: {
+            "custom_action_param": play_params,
+            "next": ["RealtimeCalibrationLifeSafetyGate"],
+        },
     }
     if song_mode == "random":
         override["RealtimeLiveRandomSong"] = {
