@@ -35,7 +35,7 @@
   "task": [
     {
       "name": "AutoLive",
-      "label": "自动演出",
+      "label": "🎶 自动演出",
       "description": "当前曲目或每轮随机选曲，按指定难度连续自动演出。",
       "entry": "AutoLive",
       "option": [
@@ -46,7 +46,7 @@
     },
     {
       "name": "RealtimeLive",
-      "label": "实时演奏",
+      "label": "🎹 实时演奏",
       "description": "机器人排练或正式演奏；正式演奏必须先完成相同环境和难度的校准。",
       "entry": "RealtimeMultiLive",
       "option": [
@@ -59,7 +59,7 @@
     },
     {
       "name": "ContinuousRealtimeLive",
-      "label": "一键实时演奏",
+      "label": "⚡ 一键实时演奏",
       "description": "持续检测演奏页面并自动演奏，不导航、不确认、不读取结算；需在最近 15 分钟内完成一次游戏视觉设置读回复核。",
       "entry": "ContinuousRealtimeLive",
       "option": [
@@ -69,7 +69,7 @@
     },
     {
       "name": "RealtimeCalibration",
-      "label": "实时演奏校准",
+      "label": "🎯 实时演奏校准",
       "description": "三次排练逐曲调整延迟，再用正式验证并自动启用 Profile。",
       "entry": "RealtimeCalibration",
       "option": [
@@ -81,7 +81,7 @@
     },
     {
       "name": "ChallengeLive",
-      "label": "挑战演出",
+      "label": "🏆 挑战演出",
       "description": "使用已校准的实时引擎演奏当前活动挑战曲。",
       "entry": "ChallengeLive",
       "option": [
@@ -93,7 +93,7 @@
     },
     {
       "name": "ManualFlowRecording",
-      "label": "手动流程录像",
+      "label": "📹 手动流程录像",
       "description": "录制任意手动操作界面；启动后直接操作模拟器，完成后点击MFA停止按钮保存。",
       "entry": "ManualFlowRecording",
       "option": [
