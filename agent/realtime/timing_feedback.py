@@ -63,6 +63,7 @@ class AdaptiveTimingController:
         initial_offset_ms: int,
         *,
         step_ms: int = 1,
+        unanimous_step_ms: int | None = None,
         minimum_samples: int = 12,
         imbalance: int = 8,
         window_size: int = 16,
@@ -72,6 +73,9 @@ class AdaptiveTimingController:
         self.initial_offset_ms = int(initial_offset_ms)
         self.current_offset_ms = int(initial_offset_ms)
         self.step_ms = int(step_ms)
+        self.unanimous_step_ms = (
+            None if unanimous_step_ms is None else int(unanimous_step_ms)
+        )
         self.minimum_samples = int(minimum_samples)
         self.imbalance = int(imbalance)
         self.maximum_live_adjustment_ms = int(maximum_live_adjustment_ms)
@@ -122,11 +126,19 @@ class AdaptiveTimingController:
             return None
 
         direction = 1 if error > 0 else -1
+        # 窗口内全部同向说明信号一致，可放大步长；混合窗口用小步长，
+        # 降低个别误检把偏移推反的风险。
+        step = self.step_ms
+        if (
+            self.unanimous_step_ms is not None
+            and abs(error) == len(self._samples)
+        ):
+            step = self.unanimous_step_ms
         lower = max(-250, self.initial_offset_ms - self.maximum_live_adjustment_ms)
         upper = min(250, self.initial_offset_ms + self.maximum_live_adjustment_ms)
         adjusted = max(
             lower,
-            min(upper, self.current_offset_ms + direction * self.step_ms),
+            min(upper, self.current_offset_ms + direction * step),
         )
         self._samples.clear()
         if adjusted == self.current_offset_ms:

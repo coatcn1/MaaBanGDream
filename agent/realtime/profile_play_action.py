@@ -1510,11 +1510,12 @@ class RealtimeProfilePlay(CustomAction):
                             # 判定条修复后信号更可信，Hard+ 需要更快修正会话级
                             # 输入延迟漂移（观测到逐局 10-30ms 摆动）。
                             "step_ms": 4,
-                            "minimum_samples": 6,
-                            "imbalance": 4,
-                            "window_size": 10,
-                            "adjustment_cooldown_seconds": 0.8,
-                            "maximum_live_adjustment_ms": 30,
+                            "unanimous_step_ms": 10,
+                            "minimum_samples": 3,
+                            "imbalance": 2,
+                            "window_size": 5,
+                            "adjustment_cooldown_seconds": 0.6,
+                            "maximum_live_adjustment_ms": 35,
                         }
                         if sliding_holds_enabled(
                             str(params.get("difficulty", "Easy"))

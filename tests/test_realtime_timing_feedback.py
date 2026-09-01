@@ -87,6 +87,41 @@ def test_controller_reverses_for_fast_and_clamps_live_adjustment():
     assert controller.fast_samples == 12
 
 
+def test_controller_unanimous_window_uses_larger_step():
+    controller = AdaptiveTimingController(
+        0,
+        step_ms=4,
+        unanimous_step_ms=10,
+        minimum_samples=3,
+        imbalance=2,
+        window_size=5,
+        adjustment_cooldown_seconds=0,
+    )
+    for sample in range(3):
+        controller.update(None, sample)
+        controller.update(TimingFeedback.SLOW, sample + .1)
+    assert controller.current_offset_ms == 10
+
+
+def test_controller_mixed_window_uses_small_step():
+    controller = AdaptiveTimingController(
+        0,
+        step_ms=4,
+        unanimous_step_ms=10,
+        minimum_samples=3,
+        imbalance=1,
+        window_size=5,
+        adjustment_cooldown_seconds=0,
+    )
+    controller.update(None, 0)
+    controller.update(TimingFeedback.FAST, 0.1)
+    controller.update(None, 1)
+    controller.update(TimingFeedback.SLOW, 1.1)
+    controller.update(None, 2)
+    controller.update(TimingFeedback.SLOW, 2.1)
+    assert controller.current_offset_ms == 4
+
+
 def test_default_controller_never_moves_more_than_twelve_ms():
     controller = AdaptiveTimingController(20)
 
