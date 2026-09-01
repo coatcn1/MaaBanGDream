@@ -3,8 +3,8 @@
   "interface_version": 2,
   "name": "MaaBanGDream",
   "label": "BanG Dream! 自动化（MaaFramework）",
-  "version": "0.9.1-rc.3",
-  "description": "支持自动演出、机器人实时演奏、智能校准和挑战演出。",
+  "version": "1.0.0",
+  "description": "支持自动演出、单人实时演奏、多人协力演出、智能校准和挑战演出。",
   "license": "GPL-3.0-only",
   "controller": [
     {
@@ -46,7 +46,7 @@
     },
     {
       "name": "RealtimeLive",
-      "label": "🎹 实时演奏",
+      "label": "🎹 单人实时演奏",
       "description": "机器人排练或正式演奏；正式演奏必须先完成相同环境和难度的校准。",
       "entry": "RealtimeMultiLive",
       "option": [
@@ -55,6 +55,19 @@
         "RealtimeLiveDifficulty",
         "RealtimeLiveCount",
         "RealtimeLiveDebug"
+      ]
+    },
+    {
+      "name": "CooperativeLive",
+      "label": "🤝 协力演出",
+      "description": "按指定次数完成多人协力演出；支持普通房、好友邀请和私人房间号。",
+      "entry": "CooperativeLive",
+      "option": [
+        "CooperativeEntryMethod",
+        "CooperativeDifficulty",
+        "CooperativeCount",
+        "CooperativeMemberExitPolicy",
+        "CooperativeDebug"
       ]
     },
     {
@@ -104,6 +117,253 @@
     }
   ],
   "option": {
+    "CooperativeEntryMethod": {
+      "type": "select",
+      "label": "入房方式",
+      "default_case": "Normal",
+      "cases": [
+        {
+          "name": "Normal",
+          "label": "普通房间匹配",
+          "option": ["CooperativeRoomTier"],
+          "pipeline_override": {
+            "CooperativeEntryConfigure": {
+              "custom_action_param": {"reset": true, "entry_method": "normal"}
+            }
+          }
+        },
+        {
+          "name": "Friend",
+          "label": "好友邀请房间",
+          "option": ["CooperativePostLiveAction"],
+          "pipeline_override": {
+            "CooperativeEntryConfigure": {
+              "custom_action_param": {"reset": true, "entry_method": "friend"}
+            }
+          }
+        },
+        {
+          "name": "Private",
+          "label": "输入房间号",
+          "option": ["CooperativeRoomCode", "CooperativePostLiveAction"],
+          "pipeline_override": {
+            "CooperativeEntryConfigure": {
+              "custom_action_param": {"reset": true, "entry_method": "private"}
+            }
+          }
+        }
+      ]
+    },
+    "CooperativeRoomTier": {
+      "type": "select",
+      "label": "普通房间档位",
+      "description": "仅普通房间匹配使用；乐队综合能力不足时会明确结束。",
+      "default_case": "Free",
+      "cases": [
+        {
+          "name": "Free",
+          "label": "自由房间",
+          "pipeline_override": {
+            "CooperativeTierConfigure": {"custom_action_param": {"room_tier": "free"}}
+          }
+        },
+        {
+          "name": "Beginner",
+          "label": "初级房间（70000）",
+          "pipeline_override": {
+            "CooperativeTierConfigure": {"custom_action_param": {"room_tier": "beginner"}}
+          }
+        },
+        {
+          "name": "Chief",
+          "label": "首席房间（250000）",
+          "pipeline_override": {
+            "CooperativeTierConfigure": {"custom_action_param": {"room_tier": "chief"}}
+          }
+        },
+        {
+          "name": "Legend",
+          "label": "传奇房间（290000）",
+          "pipeline_override": {
+            "CooperativeTierConfigure": {"custom_action_param": {"room_tier": "legend"}}
+          }
+        }
+      ]
+    },
+    "CooperativeRoomCode": {
+      "type": "input",
+      "label": "房间号",
+      "inputs": [
+        {
+          "name": "RoomCode",
+          "label": "输入房间号（六位）",
+          "default": "",
+          "pipeline_type": "string",
+          "verify": "^(?:|[0-9]{6})$",
+          "pattern_msg": "请输入六位数字房间号。"
+        }
+      ],
+      "pipeline_override": {
+        "CooperativeCodeConfigure": {
+          "custom_action_param": {"room_code": "{RoomCode}"}
+        }
+      }
+    },
+    "CooperativeCount": {
+      "type": "input",
+      "label": "协力演出次数",
+      "inputs": [
+        {
+          "name": "Count",
+          "label": "演出次数",
+          "default": "1",
+          "pipeline_type": "int",
+          "verify": "^(?:[1-9]|[1-9][0-9])$",
+          "pattern_msg": "请输入 1 到 99 的整数。"
+        }
+      ],
+      "pipeline_override": {
+        "CooperativeCountConfigure": {
+          "custom_action_param": {"count": "{Count}"}
+        }
+      }
+    },
+    "CooperativeDifficulty": {
+      "type": "select",
+      "label": "协力难度",
+      "default_case": "Expert",
+      "cases": [
+        {
+          "name": "Easy",
+          "label": "Easy",
+          "pipeline_override": {
+            "CooperativeDifficultyConfigure": {"custom_action_param": {"difficulty": "Easy"}}
+          }
+        },
+        {
+          "name": "Normal",
+          "label": "Normal",
+          "pipeline_override": {
+            "CooperativeDifficultyConfigure": {"custom_action_param": {"difficulty": "Normal"}}
+          }
+        },
+        {
+          "name": "Hard",
+          "label": "Hard",
+          "pipeline_override": {
+            "CooperativeDifficultyConfigure": {"custom_action_param": {"difficulty": "Hard"}}
+          }
+        },
+        {
+          "name": "Expert",
+          "label": "Expert",
+          "pipeline_override": {
+            "CooperativeDifficultyConfigure": {"custom_action_param": {"difficulty": "Expert"}}
+          }
+        },
+        {
+          "name": "Special",
+          "label": "Special",
+          "pipeline_override": {
+            "CooperativeDifficultyConfigure": {"custom_action_param": {"difficulty": "Special"}}
+          }
+        }
+      ]
+    },
+    "CooperativePostLiveAction": {
+      "type": "select",
+      "label": "演出结束后",
+      "description": "留在房间仅适用于好友邀请房间和房间号入房。",
+      "default_case": "Exit",
+      "cases": [
+        {
+          "name": "Exit",
+          "label": "退出房间并返回主页",
+          "pipeline_override": {
+            "CooperativePostLiveConfigure": {
+              "custom_action_param": {"post_live_action": "exit"}
+            }
+          }
+        },
+        {
+          "name": "Stay",
+          "label": "留在当前房间",
+          "pipeline_override": {
+            "CooperativePostLiveConfigure": {
+              "custom_action_param": {"post_live_action": "stay"}
+            }
+          }
+        }
+      ]
+    },
+    "CooperativeMemberExitPolicy": {
+      "type": "select",
+      "label": "成员退出处理",
+      "default_case": "Fail",
+      "cases": [
+        {
+          "name": "Fail",
+          "label": "确认后报错结束",
+          "pipeline_override": {
+            "CooperativeMemberExitConfigure": {
+              "custom_action_param": {"member_exit_policy": "fail", "max_reconnects": 3}
+            }
+          }
+        },
+        {
+          "name": "Reconnect",
+          "label": "不报错并重新入房",
+          "pipeline_override": {
+            "CooperativeMemberExitConfigure": {
+              "custom_action_param": {"member_exit_policy": "reconnect", "max_reconnects": 3}
+            }
+          }
+        }
+      ]
+    },
+    "CooperativeDebug": {
+      "type": "select",
+      "label": "诊断记录",
+      "default_case": "Light",
+      "cases": [
+        {
+          "name": "Light",
+          "label": "轻量 Trace（推荐）",
+          "pipeline_override": {
+            "CooperativeDebugConfigure": {
+              "custom_action_param": {
+                "debug_recording": false,
+                "diagnostic_trace": true
+              }
+            }
+          }
+        },
+        {
+          "name": "Off",
+          "label": "完全关闭（只保存结果）",
+          "pipeline_override": {
+            "CooperativeDebugConfigure": {
+              "custom_action_param": {
+                "debug_recording": false,
+                "diagnostic_trace": false
+              }
+            }
+          }
+        },
+        {
+          "name": "Full",
+          "label": "完整录像（MKV + Trace，大文件）",
+          "pipeline_override": {
+            "CooperativeDebugConfigure": {
+              "custom_action_param": {
+                "debug_recording": true,
+                "diagnostic_trace": true
+              }
+            }
+          }
+        }
+      ]
+    },
     "ManualFlowRecordingQuality": {
       "type": "select",
       "label": "录像流畅度",
@@ -999,7 +1259,7 @@
           "max_hit": "{Count}",
           "custom_action_param": {
             "task_name": "RealtimeLive",
-            "label": "实时演奏",
+            "label": "单人实时演奏",
             "total": "{Count}",
             "phase": "start"
           }

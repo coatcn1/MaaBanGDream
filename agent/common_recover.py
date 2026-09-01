@@ -213,6 +213,14 @@ class CommonRecover(CustomAction):
         back_only_click_nodes = [
             str(node) for node in params.get("back_only_click_nodes", [])
         ]
+        back_acceleration_click_point = params.get(
+            "back_acceleration_click_point"
+        )
+        if not (
+            isinstance(back_acceleration_click_point, (list, tuple))
+            and len(back_acceleration_click_point) == 2
+        ):
+            back_acceleration_click_point = None
         login_start_node = str(params.get("login_start_node", ""))
         login_start_target = params.get("login_start_target")
         login_tap_target = params.get("login_tap_target")
@@ -430,7 +438,20 @@ class CommonRecover(CustomAction):
                 if (back_only and restart_round == 0) or login_recovery_active:
                     if context.tasker.stopping:
                         return True
+                    accelerate_back = (
+                        back_only
+                        and restart_round == 0
+                        and back_acceleration_click_point is not None
+                    )
+                    if accelerate_back:
+                        x, y = (
+                            int(value)
+                            for value in back_acceleration_click_point
+                        )
+                        controller.post_click(x, y).wait()
                     controller.post_click_key(4).wait()
+                    if accelerate_back:
+                        controller.post_click(x, y).wait()
                     escape_count += 1
                     if not _wait_unless_stopping(context, interval):
                         return True

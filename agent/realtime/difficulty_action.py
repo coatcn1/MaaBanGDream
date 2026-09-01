@@ -20,7 +20,7 @@ from maa.custom_action import CustomAction
 
 from .chart_repository import ChartResolution, LocalChartRepository
 from .live_session import reset_live_run, update_live_run
-from .song_identity import identify_song
+from .song_identity import SongIdentity, UNKNOWN_SONG_ID, identify_song
 from .song_title_ocr import recognize_song_title
 
 
@@ -115,11 +115,14 @@ def _digit_shape_scores(glyph: np.ndarray) -> list[tuple[float, int]]:
     return sorted(scores)
 
 
-def read_song_level(image) -> int | None:
+def read_song_level(
+    image,
+    roi: tuple[int, int, int, int] = SONG_LEVEL_ROI,
+) -> int | None:
     """Read the selected chart level using a strict local shape classifier."""
     if not isinstance(image, np.ndarray) or image.ndim != 3:
         return None
-    x, y, width, height = SONG_LEVEL_ROI
+    x, y, width, height = map(int, roi)
     if image.shape[0] < y + height or image.shape[1] < x + width:
         return None
     gray = cv2.cvtColor(image[y:y + height, x:x + width], cv2.COLOR_BGR2GRAY)
@@ -199,11 +202,14 @@ def _should_retry_song_identity(resolution: ChartResolution) -> bool:
     )
 
 
-def selected_difficulty(image) -> str | None:
+def selected_difficulty(
+    image,
+    targets: dict[str, tuple[int, int]] = DIFFICULTY_TARGETS,
+) -> str | None:
     """Return the coloured difficulty button on the 1280x720 song screen."""
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     scores = {}
-    for name, (x, y) in DIFFICULTY_TARGETS.items():
+    for name, (x, y) in targets.items():
         roi = hsv[max(0, y - 30):y + 20, max(0, x - 25):x + 25]
         scores[name] = float(roi[:, :, 1].mean()) if roi.size else 0.0
     winner = max(scores, key=scores.get)
@@ -231,7 +237,24 @@ class RealtimeDifficultySelect(CustomAction):
                 debug_recording=bool(params.get("debug_recording", False)),
             )
             controller = context.tasker.controller
-            target = DIFFICULTY_TARGETS[requested]
+            configured_targets = params.get("difficulty_targets", DIFFICULTY_TARGETS)
+            targets = {
+                str(name): tuple(int(value) for value in point)
+                for name, point in configured_targets.items()
+            }
+            if requested not in targets:
+                raise ValueError(f"missing difficulty target: {requested}")
+            target = targets[requested]
+            level_roi = tuple(
+                int(value)
+                for value in params.get("song_level_roi", SONG_LEVEL_ROI)
+            )
+            title_roi_value = params.get("song_title_roi")
+            title_roi = (
+                tuple(int(value) for value in title_roi_value)
+                if title_roi_value is not None else None
+            )
+            use_song_identity = bool(params.get("song_identity", True))
             for attempt in range(1, attempts + 1):
                 if context.tasker.stopping:
                     return True
@@ -239,7 +262,7 @@ class RealtimeDifficultySelect(CustomAction):
                 controller.post_click(*target).wait()
                 time.sleep(float(params.get("verify_delay_seconds", 0.35)))
                 image = controller.post_screencap().wait().get()
-                recognized = selected_difficulty(image)
+                recognized = selected_difficulty(image, targets)
                 print(
                     f"RealtimeDifficultySelect requested={requested} "
                     f"target={target} attempt={attempt}/{attempts} "
@@ -260,11 +283,18 @@ class RealtimeDifficultySelect(CustomAction):
                     identity_image = image
                     best_reading = None
                     for identity_attempt in range(1, identity_attempts + 1):
-                        identity = identify_song(identity_image)
-                        song_level = read_song_level(identity_image)
+                        identity = (
+                            identify_song(identity_image)
+                            if use_song_identity
+                            else SongIdentity(UNKNOWN_SONG_ID, "unknown")
+                        )
+                        song_level = read_song_level(identity_image, level_roi)
                         title_reading = None
                         try:
-                            title_reading = recognize_song_title(identity_image)
+                            title_reading = recognize_song_title(
+                                identity_image,
+                                **({"roi": title_roi} if title_roi is not None else {}),
+                            )
                         except (OSError, ValueError, RuntimeError) as exc:
                             print(
                                 "RealtimeDifficultySelect title_ocr=unavailable "

@@ -659,6 +659,7 @@
         "AutoLiveStoryMenu"
       ],
       "back_only": true,
+      "back_acceleration_click_point": [1279, 719],
       "escape_interval_ms": 500,
       "escape_timeout_ms": 60000,
       "restart_limit": 1,

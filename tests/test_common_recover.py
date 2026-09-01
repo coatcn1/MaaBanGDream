@@ -522,6 +522,27 @@ def test_back_only_recovery_never_clicks_recognized_nodes(monkeypatch):
     assert context.tasker.controller.keys == [4]
 
 
+def test_back_only_recovery_can_accelerate_each_back_with_safe_corner_clicks(
+    monkeypatch,
+):
+    context = Context({"HomeMarker": [False, True]})
+    ticks = iter(value / 1000 for value in range(1000))
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(common_recover.time, "sleep", lambda _seconds: None)
+
+    assert common_recover.CommonRecover().run(
+        context,
+        argv(
+            escape_interval_ms=0,
+            escape_timeout_ms=100,
+            back_only=True,
+            back_acceleration_click_point=[1260, 710],
+        ),
+    )
+    assert context.tasker.controller.clicks == [(1260, 710), (1260, 710)]
+    assert context.tasker.controller.keys == [4]
+
+
 def test_back_only_recovery_clicks_only_explicit_safe_story_nodes(monkeypatch):
     context = Context({
         "HomeMarker": [False, False, True],

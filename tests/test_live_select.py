@@ -144,6 +144,22 @@ def test_color_fallback_finds_current_free_live_card():
     assert context.tasker.controller.clicks == [(807, 363)]
 
 
+def test_color_fallback_finds_default_cooperative_live_card():
+    context = Context()
+    context.tasker.controller.image[202:524, 927:1140] = (70, 70, 235)
+
+    assert live_select.LiveSelectFind().run(
+        context,
+        argv(
+            expected="协力演出",
+            template_node="CooperativeLiveEntryTemplate",
+            click=True,
+        ),
+    )
+
+    assert context.tasker.controller.clicks == [(1033, 363)]
+
+
 def test_missing_challenge_is_failure_and_never_clicks(capsys):
     context = Context()
 

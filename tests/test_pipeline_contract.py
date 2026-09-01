@@ -23,11 +23,22 @@ def test_all_pipeline_clicks_use_the_foreground_guard():
 def test_interface_references_existing_entry_and_resource():
     interface = load(ROOT / "interface.json")
     assert interface["interface_version"] == 2
-    assert interface["version"] == "0.9.1-rc.3"
+    assert interface["version"] == "1.0.0"
     assert [task["name"] for task in interface["task"]] == [
-        "AutoLive", "RealtimeLive", "ContinuousRealtimeLive",
+        "AutoLive", "RealtimeLive", "CooperativeLive", "ContinuousRealtimeLive",
         "RealtimeCalibration", "ChallengeLive", "ManualFlowRecording",
     ]
+    assert {
+        task["name"]: task["label"] for task in interface["task"]
+    } == {
+        "AutoLive": "🎶 自动演出",
+        "RealtimeLive": "🎹 单人实时演奏",
+        "CooperativeLive": "🤝 协力演出",
+        "ContinuousRealtimeLive": "⚡ 一键实时演奏",
+        "RealtimeCalibration": "🎯 实时演奏校准",
+        "ChallengeLive": "🏆 挑战演出",
+        "ManualFlowRecording": "📹 手动流程录像",
+    }
     assert interface["resource"][0]["path"] == ["./resource"]
     nodes = {}
     for path in (ROOT / "resource/pipeline").glob("*.json"):
@@ -57,6 +68,7 @@ def test_all_home_live_click_markers_use_the_validated_threshold():
         "minimal_navigation.json",
         "auto_live.json",
         "realtime_multi_live.json",
+        "cooperative_live.json",
         "challenge_live.json",
     )):
         nodes = json.loads(path.read_text(encoding="utf-8"))
@@ -182,6 +194,7 @@ def test_auto_live_safety_and_timeout_contract():
     )
     result_recover = nodes["AutoLiveResult"]["custom_action_param"]
     assert result_recover["back_only"] is True
+    assert result_recover["back_acceleration_click_point"] == [1279, 719]
     assert result_recover["click_nodes"] == []
     assert result_recover["back_only_click_nodes"] == [
         "AutoLiveStorySkipConfirmLarge",
@@ -429,6 +442,7 @@ def test_realtime_multi_live_contract_and_options():
     assert nodes["RealtimeLiveReturnHome"]["next"] == ["RealtimeLiveRoundCompleted"]
     return_home = nodes["RealtimeLiveReturnHome"]["custom_action_param"]
     assert return_home["back_only"] is True
+    assert return_home["back_acceleration_click_point"] == [1279, 719]
     assert return_home["click_nodes"] == []
     assert return_home["back_only_click_nodes"] == [
         "AutoLiveStorySkipConfirmLarge",
@@ -445,6 +459,7 @@ def test_realtime_multi_live_contract_and_options():
     challenge = load(ROOT / "resource/pipeline/challenge_live.json")
     challenge_return = challenge["ChallengeReturnHome"]["custom_action_param"]
     assert challenge_return["back_only"] is True
+    assert challenge_return["back_acceleration_click_point"] == [1279, 719]
     assert challenge_return["click_nodes"] == []
     assert challenge_return["back_only_click_nodes"] == [
         "AutoLiveStorySkipConfirmLarge",
@@ -675,6 +690,13 @@ def test_task_entries_bootstrap_before_round_execution():
             "RealtimeLiveProcessConflictGuard",
             "RealtimeLiveRecover",
             "RealtimeLiveEffectSettingsGate",
+        ),
+        (
+            "cooperative_live.json",
+            "CooperativeLive",
+            "CooperativeProcessConflictGuard",
+            "CooperativeRecover",
+            "CooperativeEntryConfigure",
         ),
         (
             "realtime_calibration.json",
