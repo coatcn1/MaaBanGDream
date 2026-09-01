@@ -11,3 +11,7 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+/agent/realtime/native/*.pyd
+/agent/realtime/native/*.lib
+/agent/realtime/native/*.pdb
+/native/realtime/build/
