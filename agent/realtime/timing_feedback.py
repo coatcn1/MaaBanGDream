@@ -22,7 +22,7 @@ class TimingFeedbackDetector:
     MIN_COLOURED_PIXELS = 600
     # 过线音符在条区域只停留 1-3 帧，判定条则持续约 10-20 帧。
     # 要求信号连续存在足够帧数，避免把运动音符误报为判定条。
-    PERSISTENCE_FRAMES = 4
+    PERSISTENCE_FRAMES = 3
 
     def __init__(self) -> None:
         self._streak_kind: TimingFeedback | None = None
@@ -34,10 +34,10 @@ class TimingFeedbackDetector:
         x1, y1, x2, y2 = self.ROI
         hsv = cv2.cvtColor(image[y1:y2, x1:x2], cv2.COLOR_BGR2HSV)
         slow = int(np.count_nonzero(cv2.inRange(
-            hsv, (0, 150, 180), (25, 255, 255),
+            hsv, (0, 140, 160), (25, 255, 255),
         )))
         fast = int(np.count_nonzero(cv2.inRange(
-            hsv, (95, 180, 180), (120, 255, 255),
+            hsv, (95, 160, 160), (120, 255, 255),
         )))
         kind: TimingFeedback | None = None
         if slow >= self.MIN_COLOURED_PIXELS and slow >= fast * 2:
