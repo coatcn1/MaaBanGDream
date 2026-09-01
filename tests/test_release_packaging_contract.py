@@ -18,6 +18,8 @@ def test_release_launcher_extracts_only_package_local_runtime():
     assert "Join-Path $runtimeDirectory 'python'" in launcher
     assert "Expand-Archive" in launcher
     assert "conda-unpack.exe" in launcher
+    assert "check_runtime.py" in launcher
+    assert "--portable --mfa-root $packageRoot" in launcher
     assert "Invoke-WebRequest" not in launcher
     assert "Start-Process" in launcher
 

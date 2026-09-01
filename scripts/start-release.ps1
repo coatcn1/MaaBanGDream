@@ -13,6 +13,7 @@ $interfacePath = Join-Path $packageRoot 'interface.json'
 $profileManagerPath = Join-Path $packageRoot 'profile-manager.json'
 $agent = Join-Path $packageRoot 'agent\server.py'
 $profileManager = Join-Path $packageRoot 'agent\profile_manager.py'
+$runtimeCheck = Join-Path $PSScriptRoot 'check_runtime.py'
 $chartSync = Join-Path $PSScriptRoot 'sync_bestdori_catalog.py'
 $chartRoot = Join-Path $packageRoot 'resource\charts'
 $chartManifest = Join-Path $chartRoot 'manifest.json'
@@ -23,6 +24,7 @@ foreach ($required in @(
     $interfaceTemplate,
     $agent,
     $profileManager,
+    $runtimeCheck,
     $chartSync,
     $chartManifest
 )) {
@@ -63,6 +65,11 @@ if (
         "MaaBanGDream portable Python runtime ready`r`n",
         [System.Text.UTF8Encoding]::new($false)
     )
+}
+
+& $python $runtimeCheck --portable --mfa-root $packageRoot
+if ($LASTEXITCODE -ne 0) {
+    throw "Bundled runtime compatibility check failed: $LASTEXITCODE"
 }
 
 $profiles = Join-Path $packageRoot 'profiles'

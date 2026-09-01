@@ -8,7 +8,8 @@ MaaFramework 运行库、Python Agent、本地谱面和资源文件。
 1. 完整解压 ZIP，不要直接在压缩软件里运行。
 2. 双击 `启动 MaaBanGDream.cmd`。
 3. 首次启动会在当前目录的 `runtime` 内解压随包提供的固定 Python 环境。
-4. MFA 打开后添加或选择 Android 模拟器，确认分辨率为 `1280×720`、
+4. 启动器会校验便携 Python、MaaFramework 和定制 MFA 的版本组合；不一致时拒绝启动。
+5. MFA 打开后添加或选择 Android 模拟器，确认分辨率为 `1280×720`、
    DPI 为 `240`，然后再执行任务。
 
 首次准备不下载安装器，也不要求电脑预装 Python、Miniconda、.NET 或开发工具。
