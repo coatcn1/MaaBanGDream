@@ -41,6 +41,7 @@ DEFAULT_COORDINATES = {
     "skin_tab": (750, 156),
     "settings_close": (640, 600),
     "menu_close": (640, 566),
+    "preparation_gear": (960, 650),
     "scroll_start": (700, 500),
     "scroll_end": (700, 200),
     "skin_scroll_start": (844, 320),
@@ -594,6 +595,7 @@ class RealtimeGameEffectSettingsGate(CustomAction):
         try:
             decoded = json.loads(argv.custom_action_param or "{}")
             params = decoded if isinstance(decoded, dict) else {}
+            max_attempts = max(1, min(3, int(params.get("max_attempts", 3))))
         except _StopRequested:
             print(
                 "RealtimeGameEffectSettingsGate stopped=true verified=false",
@@ -684,12 +686,20 @@ class RealtimeGameEffectSettingsGate(CustomAction):
         changed_note_skin = False
         changed_tap = False
         try:
-            _click(context, coordinates["home_menu"])
-            menu_open = True
-            _wait(context, page_delay)
-            _click(context, coordinates["options"])
-            settings_open = True
-            _wait(context, page_delay)
+            entry_mode = str(params.get("entry_mode", "home"))
+            if entry_mode == "preparation":
+                _click(context, coordinates["preparation_gear"])
+                settings_open = True
+                _wait(context, page_delay)
+            elif entry_mode == "home":
+                _click(context, coordinates["home_menu"])
+                menu_open = True
+                _wait(context, page_delay)
+                _click(context, coordinates["options"])
+                settings_open = True
+                _wait(context, page_delay)
+            else:
+                raise ValueError(f"unsupported game effect entry mode: {entry_mode}")
 
             _click(context, coordinates["performance_tab"])
             _wait(context, delay)

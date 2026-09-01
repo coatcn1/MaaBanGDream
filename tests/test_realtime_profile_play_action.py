@@ -933,6 +933,7 @@ def _completed_play_harness(
     screenshot_success=True,
     expected_success=True,
     startup_timed_out=False,
+    run_mode="formal",
 ):
     reset_live_run(
         mode="pending",
@@ -1039,6 +1040,9 @@ def _completed_play_harness(
     image = np.full((720, 1280, 3), 128, dtype=np.uint8)
 
     def fake_collect(*args, **kwargs):
+        assert kwargs["cooperative_mode"] is (run_mode == "cooperative")
+        assert kwargs["robust_navigation"] is True
+        assert kwargs["timeout_seconds"] == 180.0
         if collection_exception is not None:
             raise collection_exception
         return ResultCollectionOutcome(
@@ -1080,6 +1084,7 @@ def _completed_play_harness(
         "save_result_frame": True,
         "debug_recording": debug_recording,
         "diagnostic_trace": diagnostic_trace,
+        "run_mode": run_mode,
     }
     if calibration_report:
         params["calibration_report"] = "screencap/calibration-round.json"
@@ -1113,6 +1118,24 @@ def test_completed_without_video_writes_json_and_trace_only(tmp_path, monkeypatc
         (recorder.output_dir / "summary.json").read_text(encoding="utf-8")
     )
     assert summary["recording_mode"] == "trace-only"
+
+
+def test_completed_cooperative_play_advances_score_page_without_pggbm_parse(
+    tmp_path, monkeypatch,
+):
+    root, writes, _ = _completed_play_harness(
+        monkeypatch,
+        tmp_path,
+        debug_recording=False,
+        collection_status=ResultCollectionStatus.ADVANCED,
+        run_mode="cooperative",
+    )
+
+    report = next((root / "screencap").glob("realtime-result-*.json"))
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["result_status"] == "cooperative_result_advanced"
+    assert payload["valid"] is False
+    assert writes == []
 
 
 def test_completed_with_diagnostics_disabled_writes_result_only(

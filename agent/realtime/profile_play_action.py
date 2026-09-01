@@ -36,6 +36,13 @@ from .note_detector import NoteDetector
 from .profile_action import PROJECT_ROOT
 from .profile_store import EnvironmentSignature, RealtimeProfileStore
 from .rehearsal_action import frame_resolution
+from .result_navigation import (
+    RESULT_ANIMATION_SKIP_POINT,
+    ResultNavigationStatus,
+    accelerated_back,
+    back_then_click,
+    navigate_result_pages,
+)
 from .result_parser import LiveResult, ResultParser, adjusted_timing_offset
 from .run_reporting import (
     PreflightPerformanceSnapshot,
@@ -89,6 +96,8 @@ ACTIVITY_POINTS_CLICK_LIMIT = 2
 # stable normalised position on the 1280x720 result layout (1067, 644).
 ACTIVITY_POINTS_CONFIRM_X_RATIO = 1067 / 1280
 ACTIVITY_POINTS_CONFIRM_Y_RATIO = 644 / 720
+# Compatibility alias retained for callers/tests that imported the old name.
+COOPERATIVE_RESULT_ANIMATION_SKIP_POINT = RESULT_ANIMATION_SKIP_POINT
 # The same white "confirm" control appears throughout the result UI.  A real
 # modal acknowledgement is always centred in the lower part of the 1280x720
 # screen; score-page achievement entries live outside this region.  Template
@@ -287,6 +296,7 @@ def _result_counts(result: LiveResult) -> tuple[int, ...]:
 
 class ResultCollectionStatus(str, Enum):
     STABLE = "stable"
+    ADVANCED = "advanced"
     TIMED_OUT = "timed_out"
     STOPPED = "stopped"
     BLOCKED = "blocked"
@@ -491,13 +501,16 @@ def collect_result(
     unknown_back_limit: int = 12,
     expected_notes: int | None = None,
     maximum_notes: int = 3000,
+    cooperative_mode: bool = False,
+    robust_navigation: bool = False,
 ) -> ResultCollectionOutcome:
-    """Read result pages and navigate recognised overlays with Android Back.
+    """Reach PGGBM, read single-live counts, and advance result pages.
 
-    Reward/rank overlays support the game's Back/ESC shortcut.  The judgement
-    page itself must remain untouched while its labels and counts animate in.
-    Coordinate clicks are intentionally forbidden here: visually similar pink
-    buttons can open the achievement list instead of advancing the flow.
+    Production runs use the shared accelerated navigator for both single and
+    cooperative lives.  It never needs to name intermediate score, reward, or
+    loading pages; the safe click/Back loop continues until PGGBM is identified.
+    The older page-specific path remains available only for focused parser and
+    compatibility tests.
     """
     parser = parser or ResultParser()
     started_at = clock()
@@ -513,6 +526,80 @@ def collect_result(
     unknown_since: float | None = None
     page_state = "unknown"
     last_reason: str | None = None
+    pending_image = None
+
+    if robust_navigation or cooperative_mode:
+        # Single and cooperative lives share the same result transition.  The
+        # playfield/life-bar disappearance starts this loop, but does not prove
+        # that the network-backed first score page has loaded.  Intermediate
+        # pages are intentionally not classified: safe click -> recognise ->
+        # Back -> safe click repeats until the fully loaded PGGBM marker wins.
+        terminal_threshold = max(0.9, judgement_details_threshold)
+
+        def identify_terminal(image) -> str | None:
+            if judgement_details_template is None:
+                return None
+            marker = _template_click_point(
+                image,
+                (judgement_details_template,),
+                terminal_threshold,
+                center_region=JUDGEMENT_DETAILS_MARKER_REGION,
+            )
+            return "pggbm" if marker is not None else None
+
+        navigation = navigate_result_pages(
+            controller,
+            stopping,
+            identify_terminal,
+            before_input=before_input,
+            timeout_seconds=max(0.0, deadline - clock()),
+            clock=clock,
+            sleeper=sleeper,
+            log_prefix="RealtimeResult",
+        )
+        last_image = navigation.image
+        if navigation.status is ResultNavigationStatus.STOPPED:
+            return ResultCollectionOutcome(
+                ResultCollectionStatus.STOPPED,
+                image=navigation.image,
+                elapsed_seconds=clock() - started_at,
+                page_state=navigation.page_state,
+                reason=navigation.reason,
+            )
+        if navigation.status is ResultNavigationStatus.TIMED_OUT:
+            return ResultCollectionOutcome(
+                ResultCollectionStatus.TIMED_OUT,
+                image=navigation.image,
+                elapsed_seconds=clock() - started_at,
+                page_state="result-navigation",
+                reason=navigation.reason,
+            )
+        pending_image = navigation.image
+        if cooperative_mode:
+            # The terminal marker has been recognised.  Advance PGGBM once,
+            # then the cooperative outer flow checks the repeat-room popup
+            # after every subsequent Back.
+            back_then_click(
+                controller,
+                before_input=before_input,
+                phase="pggbm",
+                log_prefix="RealtimeResult",
+            )
+            return ResultCollectionOutcome(
+                ResultCollectionStatus.ADVANCED,
+                image=navigation.image,
+                elapsed_seconds=clock() - started_at,
+                page_state="pggbm",
+                reason=(
+                    "协力结算已循环推进至PGGBM并完成返回操作；"
+                    f"中间返回{navigation.back_attempts}次"
+                ),
+            )
+
+    def post_result_back() -> None:
+        before_input()
+        controller.post_click_key(4).wait()
+
     while clock() < deadline:
         if stopping():
             return ResultCollectionOutcome(
@@ -521,7 +608,11 @@ def collect_result(
                 page_state=page_state,
                 reason="user stopped result collection",
             )
-        image = controller.post_screencap().wait().get()
+        if pending_image is not None:
+            image = pending_image
+            pending_image = None
+        else:
+            image = controller.post_screencap().wait().get()
         last_image = image
         now = clock()
         details_marker_visible = (
@@ -558,8 +649,7 @@ def collect_result(
                         f"{achievement_close_clicks}次返回后页面仍未消失"
                     ),
                 )
-            before_input()
-            controller.post_click_key(4).wait()
+            post_result_back()
             achievement_close_clicks += 1
             unknown_since = None
             page_state = "achievement-list"
@@ -608,8 +698,7 @@ def collect_result(
             # consecutive popups with the same dedicated confirm/OK marker.
             # Dismiss each recognised popup, with a strict sequence limit that
             # also bounds retries if the emulator drops an input.
-            before_input()
-            controller.post_click_key(4).wait()
+            post_result_back()
             dismissals += 1
             unknown_since = None
             print(
@@ -662,8 +751,7 @@ def collect_result(
                         f"{activity_points_clicks}次返回推进后页面仍未消失"
                     ),
                 )
-            before_input()
-            controller.post_click_key(4).wait()
+            post_result_back()
             activity_points_clicks += 1
             unknown_since = None
             page_state = "activity-points"
@@ -691,7 +779,7 @@ def collect_result(
             _template_click_point(
                 image, (result_next_template,), result_next_threshold,
             )
-            if not details_marker_visible else None
+            if not details_marker_visible and not cooperative_mode else None
         )
         if rank_point is not None:
             if result_next_clicks >= result_next_click_limit:
@@ -705,8 +793,7 @@ def collect_result(
                         f"{result_next_clicks}次返回推进后页面仍未消失"
                     ),
                 )
-            before_input()
-            controller.post_click_key(4).wait()
+            post_result_back()
             result_next_clicks += 1
             unknown_since = None
             page_state = "rank-page"
@@ -762,8 +849,7 @@ def collect_result(
                             f"{unknown_back_presses}次返回后仍未消失"
                         ),
                     )
-                before_input()
-                controller.post_click_key(4).wait()
+                post_result_back()
                 unknown_back_presses += 1
                 print(
                     "RealtimeResult state=unknown action=back"
@@ -840,6 +926,13 @@ def collect_result(
                 and now - candidate_at >= stability_interval_seconds
                 and _result_counts(result) == _result_counts(candidate)
             ):
+                if robust_navigation:
+                    accelerated_back(
+                        controller,
+                        before_input=before_input,
+                        phase="pggbm-stable",
+                        log_prefix="RealtimeResult",
+                    )
                 return ResultCollectionOutcome(
                     ResultCollectionStatus.STABLE,
                     result=result,
@@ -1664,11 +1757,13 @@ class RealtimeProfilePlay(CustomAction):
                     controller,
                     lambda: context.tasker.stopping,
                     before_input=lambda: require_game_foreground(controller),
-                    timeout_seconds=60.0,
+                    timeout_seconds=180.0,
                     expected_notes=(
                         selected_chart.expected_notes
                         if selected_chart is not None else None
                     ),
+                    cooperative_mode=(run_mode == "cooperative"),
+                    robust_navigation=True,
                 )
             except Exception as exc:
                 reason = (
@@ -1689,6 +1784,22 @@ class RealtimeProfilePlay(CustomAction):
                 )
                 write_calibration_payload(collection_error_payload)
                 raise
+            if outcome.status is ResultCollectionStatus.ADVANCED:
+                advanced_payload = _result_report_payload(
+                    None,
+                    stats,
+                    timing_offset_ms=timing_offset_ms,
+                    suggested_timing_offset_ms=None,
+                    run_context=live_run,
+                    result_status="cooperative_result_advanced",
+                    reason=outcome.reason or "协力总分页已推进",
+                )
+                _write_json_atomic(result_report_path, advanced_payload)
+                print(
+                    "RealtimeProfilePlay cooperative_result=advanced",
+                    flush=True,
+                )
+                return True
             if outcome.status is ResultCollectionStatus.STOPPED:
                 stopped_payload = _result_report_payload(
                     None,

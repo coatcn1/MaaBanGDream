@@ -609,6 +609,141 @@ def test_result_collection_parses_only_after_judgement_identity_matches():
     assert outcome.result.total == 370
 
 
+def test_cooperative_result_cycles_unknown_pages_until_pggbm():
+    template = cv2.imread(
+        str(profile_play_action.JUDGEMENT_DETAILS_TEMPLATE)
+    )
+    unknown = np.zeros((720, 1280, 3), dtype=np.uint8)
+    pggbm = unknown.copy()
+    height, width = template.shape[:2]
+    pggbm[270:270 + height, 760:760 + width] = template
+    frames = [unknown, unknown, pggbm]
+    actions = []
+
+    class CooperativeResultController:
+        def post_screencap(self):
+            actions.append(("capture", None))
+            return Job(frames.pop(0))
+
+        def post_click(self, x, y):
+            actions.append(("click", (x, y)))
+            return Job()
+
+        def post_click_key(self, key):
+            actions.append(("key", key))
+            return Job()
+
+    class ResultParserMustNotRun:
+        def parse(self, _image):
+            raise AssertionError(
+                "the first cooperative result transition must not parse a page"
+            )
+
+    clock = Clock()
+    outcome = collect_result(
+        CooperativeResultController(),
+        lambda: False,
+        parser=ResultParserMustNotRun(),
+        cooperative_mode=True,
+        clock=clock.monotonic,
+        sleeper=clock.sleep,
+    )
+
+    assert outcome.status is ResultCollectionStatus.ADVANCED
+    assert outcome.page_state == "pggbm"
+    skip_point = profile_play_action.COOPERATIVE_RESULT_ANIMATION_SKIP_POINT
+    assert actions == [
+        ("click", skip_point),
+        ("capture", None),
+        ("key", 4),
+        ("click", skip_point),
+        ("capture", None),
+        ("key", 4),
+        ("click", skip_point),
+        ("capture", None),
+        ("key", 4),
+        ("click", skip_point),
+    ]
+
+
+def test_cooperative_result_stop_before_entry_sends_no_input():
+    class ControllerMustNotRun:
+        def post_screencap(self):
+            raise AssertionError("stopped collection must not capture")
+
+        def post_click(self, *_point):
+            raise AssertionError("stopped collection must not click")
+
+        def post_click_key(self, _key):
+            raise AssertionError("stopped collection must not press Back")
+
+    outcome = collect_result(
+        ControllerMustNotRun(),
+        lambda: True,
+        parser=Parser(),
+        cooperative_mode=True,
+    )
+
+    assert outcome.status is ResultCollectionStatus.STOPPED
+
+
+def test_single_result_uses_same_unknown_page_cycle_before_stable_pggbm():
+    template = cv2.imread(
+        str(profile_play_action.JUDGEMENT_DETAILS_TEMPLATE)
+    )
+    unknown = np.zeros((720, 1280, 3), dtype=np.uint8)
+    pggbm = unknown.copy()
+    height, width = template.shape[:2]
+    pggbm[270:270 + height, 760:760 + width] = template
+    frames = [unknown, pggbm, pggbm]
+    actions = []
+
+    class Controller:
+        def post_screencap(self):
+            actions.append(("capture", None))
+            return Job(frames.pop(0))
+
+        def post_click(self, x, y):
+            actions.append(("click", (x, y)))
+            return Job()
+
+        def post_click_key(self, key):
+            actions.append(("key", key))
+            return Job()
+
+    class DetailsParser:
+        def parse(self, _image):
+            return LiveResult(350, 18, 1, 0, 1, 8, 11, .95)
+
+    clock = Clock()
+    outcome = collect_result(
+        Controller(),
+        lambda: False,
+        parser=DetailsParser(),
+        expected_notes=370,
+        robust_navigation=True,
+        clock=clock.monotonic,
+        sleeper=clock.sleep,
+        stability_interval_seconds=1,
+    )
+
+    assert outcome.status is ResultCollectionStatus.STABLE
+    assert outcome.page_state == "judgement-details"
+    assert outcome.result is not None
+    assert outcome.result.total == 370
+    assert actions == [
+        ("click", profile_play_action.RESULT_ANIMATION_SKIP_POINT),
+        ("capture", None),
+        ("key", 4),
+        ("click", profile_play_action.RESULT_ANIMATION_SKIP_POINT),
+        ("capture", None),
+        ("capture", None),
+        ("click", profile_play_action.RESULT_ANIMATION_SKIP_POINT),
+        ("key", 4),
+        ("click", profile_play_action.RESULT_ANIMATION_SKIP_POINT),
+    ]
+
+
 def test_reward_popup_that_does_not_disappear_is_technical_failure():
     template = cv2.imread(str(profile_play_action.REWARD_CONFIRM_TEMPLATE))
     reward = np.zeros((720, 1280, 3), dtype=np.uint8)

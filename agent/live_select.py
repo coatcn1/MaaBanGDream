@@ -78,6 +78,55 @@ def _find_free_live_card(image: Any) -> _Box | None:
     return max(candidates, key=lambda item: item[0])[1]
 
 
+def _find_cooperative_live_card(image: Any) -> _Box | None:
+    """Locate the large pink cooperative card in its default state."""
+    if not isinstance(image, np.ndarray) or image.ndim != 3:
+        return None
+
+    height, width = image.shape[:2]
+    x_offset = int(width * 0.55)
+    y_offset = int(height * 0.12)
+    crop = image[y_offset:int(height * 0.88), x_offset:width]
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    hue = hsv[:, :, 0]
+    mask = (
+        (((hue <= 12) | (hue >= 165))
+         & (hsv[:, :, 1] >= 70)
+         & (hsv[:, :, 2] >= 100))
+    ).astype(np.uint8) * 255
+    mask = cv2.morphologyEx(
+        mask,
+        cv2.MORPH_CLOSE,
+        np.ones((7, 7), dtype=np.uint8),
+    )
+    count, _, stats, _ = cv2.connectedComponentsWithStats(mask)
+
+    candidates: list[tuple[int, _Box]] = []
+    for x, y, box_width, box_height, area in stats[1:count]:
+        if not (
+            width * 0.09 <= box_width <= width * 0.30
+            and height * 0.24 <= box_height <= height * 0.70
+        ):
+            continue
+        if area < box_width * box_height * 0.45:
+            continue
+        candidates.append(
+            (
+                int(area),
+                _Box(
+                    x=int(x + x_offset),
+                    y=int(y + y_offset),
+                    w=int(box_width),
+                    h=int(box_height),
+                ),
+            )
+        )
+
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item[0])[1]
+
+
 def _params(raw: Any) -> dict[str, Any]:
     if isinstance(raw, dict):
         return raw
@@ -148,6 +197,11 @@ class LiveSelectFind(CustomAction):
 
                 if box is None and expected == "自由演出":
                     box = _find_free_live_card(image)
+                    if box is not None:
+                        source = "颜色与形状"
+
+                if box is None and expected == "协力演出":
+                    box = _find_cooperative_live_card(image)
                     if box is not None:
                         source = "颜色与形状"
 
