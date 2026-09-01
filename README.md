@@ -1,48 +1,119 @@
 <p align="center">
-  <img src="docs/assets/maabangdream-logo.png" alt="MaaBanGDream Logo" width="320">
+  <img src="docs/assets/maabangdream-logo.png" alt="MaaBanGDream Logo" width="260">
 </p>
 
 <h1 align="center">MaaBanGDream</h1>
 
-基于 [MaaFramework](https://github.com/MaaAssistantArknights/MaaFramework) 的《BanG Dream! 少女乐团派对！》自动化项目。
+<p align="center">
+  <strong>BanG Dream! 自动化 · 实时演奏 · Bestdori 本地谱面辅助</strong>
+</p>
 
-当前版本 `v1.0.0` · [GitHub](https://github.com/coatcn1/MaaBanGDream)
+<p align="center">
+  基于 <a href="https://github.com/MaaXYZ/MaaFramework">MaaFramework</a> 的《BanG Dream! 少女乐团派对！》自动化项目
+</p>
 
-## 功能
+<p align="center">
+  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.0.0-ff6f9f" alt="Version"></a>
+  <img src="https://img.shields.io/badge/MaaFramework-5.10.2-4c8bf5" alt="MaaFramework">
+  <img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?logo=windows11&logoColor=white" alt="Windows">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0--only-3da639" alt="License"></a>
+</p>
 
-- **自动演出** — 当前曲目/随机选曲，五档难度，1–99 轮全自动
-- **单人实时演奏** — 机器人排练/正式演奏，触控引擎支持判定线首现补救、双押分别判定、双绿条配对与残影抑制
-- **协力演出** — 普通四档房、好友邀请或六位私人房间号入房；固定不指定歌曲，支持连续 1–99 局及同房续演
-- **本地谱面辅助** — 809 首歌曲的 Hard/Expert/Special 本地谱面；封面、标题文字和等级联合匹配，谱面主导时序并由视觉持续校准
-- **MFA 谱面同步** — 在“演出设置 → 谱面辅助”手动增量同步 Bestdori；CN 封面缺失时依次回退 JP/EN
-- **实时演奏校准** — 三排练一正式自动校准，生成 Profile 后启用
-- **挑战演出** — 四档点数、五档难度、连续轮次
-- **调试记录** — 完全关闭、轻度 Trace 或完整记录；完整模式输出 JSONL + 60 FPS MJPG/MKV
-- **手动流程录像** — 在 MFA 中录制任意活动或界面操作，点击停止后生成可逐帧定位的 MKV 和首末帧
+---
 
-## 环境要求
+## ✨ 功能
 
-| 组件 | 版本 |
+- [x] 🎮 **自动演出** — 当前曲目 / 随机选曲，五档难度，支持 1–99 轮连续执行
+- [x] 🎹 **单人实时演奏** — 支持 TAP、FLICK、HOLD、双押、长条配对、判定线补救与残影抑制
+- [x] 👥 **协力演出** — 普通四档房、好友邀请或六位私人房间号入房，支持同房续演
+- [x] 🎼 **Bestdori 本地谱面辅助** — 809 首歌曲的 Hard / Expert / Special 谱面，谱面主导时序并由视觉持续校准
+- [x] 🔄 **MFA 谱面同步** — 在“演出设置 → 谱面辅助”中手动增量同步 Bestdori，CN 封面缺失时依次回退 JP / EN
+- [x] 🎯 **实时演奏校准** — 三排练一正式自动校准，生成 Profile 后启用
+- [x] 🏆 **挑战演出** — 四档点数、五档难度、连续轮次
+- [x] 🧪 **调试记录** — 支持关闭、轻度 Trace 或完整记录；完整模式输出 JSONL + 60 FPS MJPG / MKV
+- [x] 📹 **手动流程录像** — 可在 MFA 中录制任意活动或界面操作，并生成可逐帧定位的 MKV 与首末帧
+
+## 🚀 快速开始
+
+### 普通用户
+
+1. 前往 [Releases](https://github.com/coatcn1/MaaBanGDream/releases) 下载最新的 `MaaBanGDream-v*-win-x64.zip`
+2. **完整解压**压缩包
+3. 双击 `启动 MaaBanGDream.cmd`
+4. 在 MFA 中选择需要执行的任务
+
+> [!IMPORTANT]
+> Windows 便携包已经包含定制 MFAAvalonia、MaaFramework、本地谱面、Agent、便携 Python 环境与 .NET 运行时。  
+> 普通用户不需要额外安装 Python、Miniconda、.NET 或开发工具。
+
+> [!NOTE]
+> 首次启动会在解压目录内展开固定版本的便携 Python 环境，因此第一次启动可能比之后稍慢。
+
+## 🖥️ 环境要求
+
+| 组件 | 要求 |
 | --- | --- |
-| Windows | 10/11 |
-| Miniconda 环境 (`maabangdream`) | 26.5.3-1 / Python 3.12 |
+| Windows | 10 / 11 x64 |
+| Android 画面 | 1280 × 720 |
+| DPI | 240 |
+| Python（源码开发） | 3.12 |
+| Miniconda 环境 | `maabangdream` |
 | MaaFramework | 5.10.2 |
 | MFAAvalonia | 2.12.0 |
 | .NET Desktop Runtime | 10 |
-| Android 设备 | 1280×720 / DPI 240 |
 
 精确版本组合记录在 [runtime-compatibility.json](runtime-compatibility.json)。
 
-## 普通用户安装
+## 🎼 演奏与谱面辅助
 
-前往 [Releases](https://github.com/coatcn1/MaaBanGDream/releases) 下载最新的
-`MaaBanGDream-v*-win-x64.zip`，完整解压后双击 `启动 MaaBanGDream.cmd`。
+MaaBanGDream 的实时演奏并不是简单的固定坐标点击，而是由视觉识别、触控规划与本地谱面共同完成。
 
-完整包已经包含定制 MFAAvalonia、MaaFramework、本地谱面和 Agent。首次启动
-会在解压目录内展开固定版本的便携 Python 环境；.NET 运行时也已经包含，
-不需要克隆源码，也不需要预装 Python、Miniconda、.NET 或开发工具。
+| 能力 | 作用 |
+| --- | --- |
+| 实时视觉识别 | 检测 TAP / FLICK / HOLD 等音符及演奏状态 |
+| Bestdori 本地谱面 | 提供歌曲结构、时间轴和长条 / 滑条信息 |
+| 谱面辅助 | 由谱面提供时序先验，并通过视觉持续校准 |
+| Profile 校准 | 针对当前模拟器与游戏设置生成匹配参数 |
+| FAST / SLOW 反馈 | 用于实时 Timing 调整与结果分析 |
+| 调试 Trace / 录像 | 定位掉帧、误识别、触控与时序问题 |
 
-## 源码开发
+> [!TIP]
+> 开演和实时演奏始终读取**本地谱面**。只有用户在 MFA 中主动点击“谱面同步”时才会联网更新。
+
+## ⚙️ 谱面同步
+
+启动 MFA 后进入：
+
+`设置 → 演出设置 → 谱面辅助`
+
+可以查看本地谱面清单并手动同步 Bestdori。
+
+相关设计与数据格式见：
+
+[📘 Bestdori 本地谱面仓库说明](docs/bestdori-chart-repository.md)
+
+## 📦 Windows 便携版
+
+维护者可从定制 MFAAvalonia 源码生成不包含本机配置的 Windows x64 发布包：
+
+```powershell
+.\scripts\setup.ps1
+
+& '..\.tools\Miniconda3\envs\maabangdream\python.exe' `
+  -m pip install -r .\requirements-release.txt
+
+.\scripts\build-windows-release.ps1 -Version 1.0.0
+```
+
+发布包必须保持：
+
+- 定制 MFAAvalonia 与对应 MaaFramework Core 一致
+- 不携带本机用户配置
+- 本地谱面、Agent 与运行时依赖完整
+- 便携目录内路径可迁移，不依赖开发机绝对路径
+
+## 🛠️ 源码开发
 
 源码开发需要把两个公开仓库放在同一父目录：
 
@@ -53,14 +124,17 @@ workplace/
 ```
 
 定制 MFA 源码：
-[coatcn1/MFAAvalonia](https://github.com/coatcn1/MFAAvalonia/tree/feature/performance-visual-settings)。
-不要用同版本官方 Core DLL 覆盖定制版本，否则会丢失“演出设置”和启动保护。
 
-准备开发环境：
+[coatcn1/MFAAvalonia · feature/performance-visual-settings](https://github.com/coatcn1/MFAAvalonia/tree/feature/performance-visual-settings)
+
+> [!WARNING]
+> 不要用同版本官方 Core DLL 覆盖定制版本，否则会丢失“演出设置”和启动保护。
+
+准备开发环境并运行验证：
 
 ```powershell
 .\scripts\setup.ps1
-.\scripts\verify.ps1    # 运行验证
+.\scripts\verify.ps1
 ```
 
 启动 MFAAvalonia：
@@ -69,27 +143,58 @@ workplace/
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\launch-mfa.ps1
 ```
 
-启动后可在 MFA 的“设置 → 演出设置 → 谱面辅助”查看本地清单并手动同步。
-同步只在用户点击时联网；开演和实时演奏始终只读本地谱面。
+## 🧭 Roadmap
 
-维护者可用下列命令从定制 MFA 源码生成不含本机配置的 Windows 发布包：
+- [x] Bestdori 本地谱面辅助
+- [x] Windows x64 便携发布
+- [x] 实时演奏诊断与录像
+- [ ] ⚡ Native Realtime Engine V2
+- [ ] 🔀 Pure Chart / Hybrid / Visual 多引擎模式
+- [ ] 🖥️ 进一步优化低配电脑上的实时演奏性能
+
+## 🤝 贡献
+
+欢迎提交 Issue 和 Pull Request。
+
+开发约定：
+
+- 新功能：`feature/<name>`
+- Bug 修复：`fix/<name>`
+- 不直接在 `main` 上开发
+- 提交前运行：
 
 ```powershell
-.\scripts\setup.ps1
-& '..\.tools\Miniconda3\envs\maabangdream\python.exe' `
-  -m pip install -r .\requirements-release.txt
-.\scripts\build-windows-release.ps1 -Version 1.0.0
+.\scripts\verify.ps1
+git status --short
+git diff --check
 ```
 
-## 文档
+详细规范见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
+## 📚 文档
 
 | 文档 | 说明 |
 | --- | --- |
-| [CHANGELOG.md](CHANGELOG.md) | 变更记录与项目进度 |
+| [CHANGELOG.md](CHANGELOG.md) | 版本变更与项目进度 |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献指南 |
-| [AGENTS.md](AGENTS.md) | AI 助手上手上下文 |
+| [AGENTS.md](AGENTS.md) | AI / Codex 开发上下文 |
 | [Bestdori 本地谱面仓库](docs/bestdori-chart-repository.md) | 谱面同步、格式、身份映射与离线门禁 |
+| [runtime-compatibility.json](runtime-compatibility.json) | 固定运行时版本组合 |
 
-## 许可证
+## ⚠️ 使用须知
 
-[GPL-3.0-only](LICENSE)
+- 本项目仍在持续开发，实时演奏效果会受到模拟器性能、截图延迟、游戏设置与设备负载影响
+- 使用前请确认模拟器分辨率、DPI 和项目 Profile 与当前环境一致
+- 遇到实时演奏异常时，优先保留 Trace、录像和结果报告用于定位
+- 请遵守游戏规则及相关服务条款，并自行评估自动化工具的使用风险
+
+## 📝 许可证
+
+本项目使用 [GPL-3.0-only](LICENSE) 许可证。
+
+---
+
+<p align="center">
+  <strong>MaaBanGDream</strong><br>
+  BanG Dream! automation powered by MaaFramework
+</p>
