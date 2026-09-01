@@ -28,10 +28,26 @@ def feedback_frame(kind: TimingFeedback | None) -> np.ndarray:
 
 
 def test_detector_distinguishes_fast_slow_and_no_feedback():
-    detector = TimingFeedbackDetector()
+    def sight(kind: TimingFeedback | None) -> TimingFeedback | None:
+        detector = TimingFeedbackDetector()
+        result = None
+        for _ in range(TimingFeedbackDetector.PERSISTENCE_FRAMES):
+            result = detector.detect(feedback_frame(kind))
+        return result
 
-    assert detector.detect(feedback_frame(TimingFeedback.FAST)) is TimingFeedback.FAST
-    assert detector.detect(feedback_frame(TimingFeedback.SLOW)) is TimingFeedback.SLOW
+    assert sight(TimingFeedback.FAST) is TimingFeedback.FAST
+    assert sight(TimingFeedback.SLOW) is TimingFeedback.SLOW
+    assert sight(None) is None
+
+
+def test_detector_rejects_transient_note_flicker():
+    # 过线音符在判定条区域只停留 1-3 帧；必须连续存在才上报。
+    detector = TimingFeedbackDetector()
+    detector.detect(feedback_frame(TimingFeedback.FAST))
+    detector.detect(feedback_frame(None))
+    detector.detect(feedback_frame(TimingFeedback.FAST))
+    detector.detect(feedback_frame(None))
+    assert detector.detect(feedback_frame(TimingFeedback.FAST)) is None
     assert detector.detect(feedback_frame(None)) is None
 
 

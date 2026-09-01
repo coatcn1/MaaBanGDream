@@ -34,7 +34,11 @@ from .live_session import (
 )
 from .note_detector import NoteDetector
 from .profile_action import PROJECT_ROOT
-from .profile_store import EnvironmentSignature, RealtimeProfileStore
+from .profile_store import (
+    EnvironmentSignature,
+    RealtimeProfileStore,
+    RuntimeSettings,
+)
 from .rehearsal_action import frame_resolution
 from .result_navigation import (
     RESULT_ANIMATION_SKIP_POINT,
@@ -285,6 +289,47 @@ def _write_calibration_report(
     if run_context is None:
         payload["song_id"] = str(song_id)
     _write_json_atomic(path, payload)
+
+
+def _persist_profile_timing_offset(
+    settings: RuntimeSettings,
+    offset_ms: int,
+) -> None:
+    """把结算建议的时序偏移写回已验收 Profile。
+
+    模拟器侧的输入延迟会随会话漂移 10~20ms，固定偏移会让整局落在判定窗
+    的慢/快边缘。正式演奏结算稳定后，把 bounded 建议写回同一 Profile 的
+    settings.timing_offset_ms，下一次开演即从修正后的偏移开始；使用
+    replace 原子替换以保留 accepted 状态，不产生需要重新验收的草稿。
+    任何写回失败只记录日志，绝不影响本局结果与任务状态。
+    """
+    try:
+        store = RealtimeProfileStore(PROJECT_ROOT / "profiles")
+        payload = store.load(settings.profile_path.name)
+        payload.pop("_path", None)
+        current = payload.get("settings")
+        if not isinstance(current, dict):
+            print(
+                "RealtimeProfilePlay timing_offset_persist_skipped="
+                "profile settings missing",
+                flush=True,
+            )
+            return
+        current["timing_offset_ms"] = int(offset_ms)
+        payload["settings"] = current
+        payload["modified_at"] = datetime.now().isoformat(timespec="seconds")
+        store.replace(settings.profile_path.name, payload)
+        print(
+            "RealtimeProfilePlay timing_offset_persisted="
+            f"{offset_ms} profile={settings.profile_path.name}",
+            flush=True,
+        )
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        print(
+            "RealtimeProfilePlay timing_offset_persist_failed="
+            f"{type(exc).__name__}: {exc}",
+            flush=True,
+        )
 
 
 def _result_counts(result: LiveResult) -> tuple[int, ...]:
@@ -1462,12 +1507,14 @@ class RealtimeProfilePlay(CustomAction):
                     # Normal keeps the gentler defaults.
                     **(
                         {
-                            "step_ms": 2,
-                            "minimum_samples": 8,
-                            "imbalance": 6,
-                            "window_size": 12,
-                            "adjustment_cooldown_seconds": 1.0,
-                            "maximum_live_adjustment_ms": 20,
+                            # 判定条修复后信号更可信，Hard+ 需要更快修正会话级
+                            # 输入延迟漂移（观测到逐局 10-30ms 摆动）。
+                            "step_ms": 4,
+                            "minimum_samples": 6,
+                            "imbalance": 4,
+                            "window_size": 10,
+                            "adjustment_cooldown_seconds": 0.8,
+                            "maximum_live_adjustment_ms": 30,
                         }
                         if sliding_holds_enabled(
                             str(params.get("difficulty", "Easy"))
@@ -1940,6 +1987,20 @@ class RealtimeProfilePlay(CustomAction):
                 f"->{effective_timing_offset_ms}->{suggestion}",
                 flush=True,
             )
+            # 正式演奏（非排练/校准/视觉评估）在结算稳定后把建议写回 Profile，
+            # 修正会话输入延迟漂移；下一次开演即使用修正后的起始偏移。
+            if (
+                settings is not None
+                and not is_rehearsal
+                and run_mode
+                not in {
+                    "calibration-rehearsal",
+                    "calibration-formal",
+                    "visual-evaluation",
+                }
+                and suggestion != effective_timing_offset_ms
+            ):
+                _persist_profile_timing_offset(settings, suggestion)
             calibration_report = params.get("calibration_report")
             if calibration_report:
                 from .calibration_action import current_song_id

@@ -69,6 +69,37 @@ def test_calibration_fails_closed_on_unrelated_actions():
     assert not predictor.calibrated
 
 
+def test_post_lock_phase_refinement_total_is_bounded():
+    # 密集段落视觉残差带系统性偏差；无界小步精修曾在整局漂移 40ms+。
+    # 锁定后总修正必须封顶 ±6ms。
+    chart = _synthetic_chart()
+    predictor = ChartPredictor(chart)
+    predictor.calibrated = True
+    predictor._calibrated_at_relative_s = 0.0
+    for _ in range(40):
+        for lane in (0, 1, 2, 3):
+            predictor._record_phase_residual(
+                0.040,
+                lane,
+                relative_time_s=0.0,
+            )
+    assert abs(predictor.song_offset_s) <= 0.006 + 1e-9
+
+
+def test_post_lock_phase_refinement_stops_after_window():
+    chart = _synthetic_chart()
+    predictor = ChartPredictor(chart)
+    predictor.calibrated = True
+    predictor._calibrated_at_relative_s = 0.0
+    for lane in (0, 1, 2, 3):
+        predictor._record_phase_residual(
+            0.040,
+            lane,
+            relative_time_s=60.0,
+        )
+    assert predictor.song_offset_s == 0.0
+
+
 def _phase_track(track_id, lane, now, *, crossing_in=0.5):
     note = ObservedNote(
         NoteKind.TAP, lane, 300 + lane * 100,

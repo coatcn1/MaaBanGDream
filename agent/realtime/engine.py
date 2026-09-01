@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import time
 from collections import deque
 from collections.abc import Callable
@@ -82,7 +83,7 @@ class RealtimeEngine:
         detector: NoteDetector,
         planner: RealtimePlanner,
         touch: ControllerTouchDispatcher,
-        clock: Callable[[], float] = time.monotonic,
+        clock: Callable[[], float] = time.perf_counter,
         life_detector: LifeDetector | None = None,
         life_guard: LifeGuard | None = None,
         completion_guard: PlayfieldCompletionGuard | None = None,
@@ -93,6 +94,9 @@ class RealtimeEngine:
         self.detector = detector
         self.planner = planner
         self.touch = touch
+        # 注意：默认时钟必须是 perf_counter（QPC）。本机 CPython 的
+        # time.monotonic 是 GetTickCount64，分辨率只有 15.625ms，会把
+        # 帧定速与谱面按压重新量化到 15.6ms 网格上。
         self.clock = clock
         self.life_detector = life_detector
         self.life_guard = life_guard
@@ -100,6 +104,9 @@ class RealtimeEngine:
         self.debug_recorder = debug_recorder
         self.timing_feedback_detector = timing_feedback_detector
         self.timing_controller = timing_controller
+        # 谱面按压（reason=chart-predicted）按到期时刻派发，避免绑定到 60fps
+        # 截图帧造成 ±8ms 的量化抖动；见 run() 中的等待间隙派发。
+        self._scheduled_actions: list = []
 
     def run(
         self,
@@ -124,6 +131,12 @@ class RealtimeEngine:
             raise ValueError("target_fps 必须在 15..120 之间")
         if not 1 <= startup_timeout_seconds <= 120:
             raise ValueError("startup_timeout_seconds 必须在 1..120 之间")
+        # Windows 默认计时器粒度约 15.6ms，会吞掉到期派发需要的 1~2ms 精度。
+        # 提升到 1ms 只影响本进程，是节奏类实时循环的标准做法。
+        try:
+            ctypes.windll.winmm.timeBeginPeriod(1)
+        except Exception:
+            pass
         interval = 1 / target_fps
         started_at = self.clock()
         deadline = (
@@ -171,6 +184,8 @@ class RealtimeEngine:
         )
         last_transient_action_at = float("-inf")
         hold_feedback_block_until = float("-inf")
+        scheduled_actions = self._scheduled_actions
+        scheduled_actions.clear()
 
         def record_stage_sample(stage: str, elapsed_ms: float) -> None:
             stage_samples_ms[stage].append(elapsed_ms)
@@ -369,12 +384,43 @@ class RealtimeEngine:
                     was_stopped = True
                     break
                 now = self.clock()
+                # 无论本轮是等待还是捕获，都先派发已到期的谱面按压，避免把
+                # 按压重新量化到截图帧上。
+                due_now = [
+                    action for action in scheduled_actions
+                    if action.timestamp <= now
+                ]
+                if due_now:
+                    scheduled_actions[:] = [
+                        action for action in scheduled_actions
+                        if action.timestamp > now
+                    ]
+                    self.touch.dispatch(due_now)
+                    actions_count += len(due_now)
+                    for action in due_now:
+                        kind = action.kind.value
+                        action_counts[kind] = (
+                            action_counts.get(kind, 0) + 1
+                        )
+                    if any(
+                        action.kind.value in {"tap", "flick"}
+                        for action in due_now
+                    ):
+                        last_transient_action_at = now
                 if now < next_frame:
                     # Pace BEFORE capturing. Capturing first and then
                     # discarding the frame whenever the loop is early wastes
                     # a full screenshot; once per-frame work crosses the
                     # 60 Hz budget that waste halves the effective rate.
-                    time.sleep(min(0.002, next_frame - now))
+                    # 等待目标取下一帧与最早到期按压的较小者，确保到期
+                    # 按压在计时器粒度内派发。
+                    wait_target = next_frame
+                    if scheduled_actions:
+                        wait_target = min(
+                            wait_target,
+                            scheduled_actions[0].timestamp,
+                        )
+                    time.sleep(min(0.002, wait_target - now))
                     continue
                 next_frame += interval
                 if now - next_frame > interval:
@@ -553,6 +599,26 @@ class RealtimeEngine:
                 record_stage_sample(
                     "planner", (self.clock() - stage_started) * 1000
                 )
+                # 谱面按压拆成“立即”与“到期派发”：前者维持既有帧内派发，
+                # 后者进入等待间隙按毫秒精度发送，消除帧对齐量化。
+                recorded_actions = actions
+                scheduled_now = [
+                    action for action in actions
+                    if (
+                        action.reason == "chart-predicted"
+                        and action.timestamp > now + 0.002
+                    )
+                ]
+                if scheduled_now:
+                    scheduled_ids = {id(action) for action in scheduled_now}
+                    actions = [
+                        action for action in actions
+                        if id(action) not in scheduled_ids
+                    ]
+                    scheduled_actions.extend(scheduled_now)
+                    scheduled_actions.sort(
+                        key=lambda action: action.timestamp
+                    )
                 current_processed_at = now
                 frame_interval_ms = None
                 if first_processed_at is None:
@@ -569,12 +635,16 @@ class RealtimeEngine:
                 previous_processed_at = current_processed_at
                 last_processed_at = current_processed_at
                 if any(
-                    action.kind.value in {"tap", "flick"} for action in actions
+                    action.kind.value in {"tap", "flick"}
+                    for action in recorded_actions
                 ):
                     last_transient_action_at = now
-                if any(action.kind.value == "up" for action in actions):
+                if any(
+                    action.kind.value == "up"
+                    for action in recorded_actions
+                ):
                     hold_feedback_block_until = max(
-                        hold_feedback_block_until, now + .4
+                        hold_feedback_block_until, now + .25
                     )
                 stage_started = self.clock()
                 if (
@@ -639,7 +709,7 @@ class RealtimeEngine:
                         else None
                     )
                     self.debug_recorder.record(
-                        image, now, notes, actions, life_status,
+                        image, now, notes, recorded_actions, life_status,
                         diagnostics, timing_state, life_value, touch_state,
                     )
                 record_stage_sample(
@@ -651,7 +721,7 @@ class RealtimeEngine:
                 current_frame_context = {
                     "frame": frames,
                     "notes": len(notes),
-                    "actions": len(actions),
+                    "actions": len(recorded_actions),
                     "active_contacts": active_contacts,
                 }
                 if frame_interval_ms is not None:
@@ -699,6 +769,8 @@ class RealtimeEngine:
                 }
                 previous_frame_context = current_frame_context
                 frames += 1
+            # 演奏已进入终态：丢弃尚未派发的谱面按压，绝不在结算/停止后补发。
+            scheduled_actions.clear()
             if was_stopped:
                 terminal_reason = "用户已停止任务"
             elif aborted_for_life:

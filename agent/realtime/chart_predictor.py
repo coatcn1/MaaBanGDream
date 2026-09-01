@@ -48,6 +48,8 @@ EARLY_PHASE_RELOCK_WINDOW_S = 12.0
 PHASE_RELOCK_MAD_LIMIT_S = 0.020
 PHASE_RELOCK_MAX_SHIFT_S = 0.200
 PHASE_RELOCK_MIN_LANES = 2
+PHASE_REFINEMENT_MAX_TOTAL_S = 0.006
+PHASE_REFINEMENT_WINDOW_S = 30.0
 HOLD_HEAD_CLAIM_WINDOW_S = 0.25
 MAX_EARLY_VISUAL_HOLD_HEAD_S = 0.08
 POST_CHART_INPUT_GRACE_S = 0.75
@@ -127,6 +129,7 @@ class ChartPredictor:
         self.disabled_for_run = False
         self.disable_reason: str | None = None
         self._phase_residuals: list[float] = []
+        self._phase_refinement_total = 0.0
         self._mismatch_streak = 0
         self._mismatch_direction: int | None = None
         self._mismatch_residuals: list[tuple[float, int]] = []
@@ -163,6 +166,7 @@ class ChartPredictor:
         self.disabled_for_run = False
         self.disable_reason = None
         self._phase_residuals = []
+        self._phase_refinement_total = 0.0
         self._mismatch_streak = 0
         self._mismatch_direction = None
         self._mismatch_residuals = []
@@ -345,10 +349,30 @@ class ChartPredictor:
         self._mismatch_residuals = []
         self._phase_residuals.append(residual)
         self._phase_residuals = self._phase_residuals[-9:]
-        if len(self._phase_residuals) >= 4:
+        # 锁定后的连续相位精修必须严格有界：视觉投影在密集段落带有
+        # 系统性偏差，无上限的小步累积曾在整局内漂移 40ms+，把中段按压
+        # 整体推到判定窗外。总修正量封顶 ±6ms，且只在锁定后 30 秒内进行；
+        # 更大的会话级误差交由游戏 FAST/SLOW 反馈回路修正按压偏移。
+        if (
+            len(self._phase_residuals) >= 4
+            and abs(self._phase_refinement_total)
+            < PHASE_REFINEMENT_MAX_TOTAL_S
+            and (
+                relative_time_s is None
+                or self._calibrated_at_relative_s is None
+                or relative_time_s - self._calibrated_at_relative_s
+                <= PHASE_REFINEMENT_WINDOW_S
+            )
+        ):
             median = statistics.median(self._phase_residuals)
             adjustment = max(-0.002, min(0.002, median * 0.25))
+            remaining = (
+                PHASE_REFINEMENT_MAX_TOTAL_S
+                - abs(self._phase_refinement_total)
+            )
+            adjustment = max(-remaining, min(remaining, adjustment))
             self.song_offset_s += adjustment
+            self._phase_refinement_total += adjustment
 
     def observe_tracks(
         self,
@@ -1246,7 +1270,7 @@ class ChartPredictor:
                 continue
             target = next_judgement.time_s + self.press_bias_s
             lead = target - song_now
-            if not -0.12 <= lead <= 0.018:
+            if not -0.12 <= lead <= 0.040:
                 continue
             # Only skip when a recent press on this lane already covered the
             # chart note.  Junk presses far from the chart time (or from a
@@ -1319,7 +1343,7 @@ class ChartPredictor:
                 actions.append(TouchAction(
                     action_kind,
                     lane,
-                    now,
+                    now + lead if lead > 0 else now,
                     reason="chart-predicted",
                     flick_direction=next_judgement.direction,
                 ))
@@ -1355,6 +1379,7 @@ class ChartPredictor:
                     state,
                     holds,
                     song_now,
+                    press_at=now + lead if lead > 0 else now,
                 )
                 if next_judgement.note_index in self._claimed_hold_note_indices:
                     self._consumed_judgements.add((
@@ -1371,6 +1396,7 @@ class ChartPredictor:
         state: PlannerState,
         holds: HoldPipeline,
         song_now: float,
+        press_at: float | None = None,
     ) -> None:
         """Press a hold head at the chart time when the detector cannot.
 
@@ -1466,7 +1492,7 @@ class ChartPredictor:
         actions.append(TouchAction(
             ActionKind.DOWN,
             lane,
-            now,
+            now if press_at is None else press_at,
             contact,
             "chart-predicted",
             target_x=max(120, min(1160, round(body.x))),

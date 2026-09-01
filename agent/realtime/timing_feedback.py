@@ -15,8 +15,18 @@ class TimingFeedback(str, Enum):
 class TimingFeedbackDetector:
     """Read the coloured FAST/SLOW bar below the centred judgement text."""
 
-    ROI = (555, 525, 725, 570)
-    MIN_COLOURED_PIXELS = 1000
+    # 判定条实测几何：位于判定文字正下方（GREAT 下方约 y 514-556），
+    # FAST 为亮天蓝（H≈102-110, S≈220），SLOW 为亮橙（H≈11, S≈247）。
+    # 旧 ROI 过宽且 FAST 饱和度上限 150，把过线蓝音符当成判定条。
+    ROI = (570, 514, 710, 556)
+    MIN_COLOURED_PIXELS = 600
+    # 过线音符在条区域只停留 1-3 帧，判定条则持续约 10-20 帧。
+    # 要求信号连续存在足够帧数，避免把运动音符误报为判定条。
+    PERSISTENCE_FRAMES = 4
+
+    def __init__(self) -> None:
+        self._streak_kind: TimingFeedback | None = None
+        self._streak = 0
 
     def detect(self, image: np.ndarray) -> TimingFeedback | None:
         if not isinstance(image, np.ndarray) or image.shape[:2] != (720, 1280):
@@ -24,15 +34,24 @@ class TimingFeedbackDetector:
         x1, y1, x2, y2 = self.ROI
         hsv = cv2.cvtColor(image[y1:y2, x1:x2], cv2.COLOR_BGR2HSV)
         slow = int(np.count_nonzero(cv2.inRange(
-            hsv, (3, 140, 140), (25, 255, 255),
+            hsv, (0, 150, 180), (25, 255, 255),
         )))
         fast = int(np.count_nonzero(cv2.inRange(
-            hsv, (95, 100, 150), (115, 255, 255),
+            hsv, (95, 180, 180), (120, 255, 255),
         )))
-        if slow >= self.MIN_COLOURED_PIXELS and slow > fast:
-            return TimingFeedback.SLOW
-        if fast >= self.MIN_COLOURED_PIXELS and fast > slow:
-            return TimingFeedback.FAST
+        kind: TimingFeedback | None = None
+        if slow >= self.MIN_COLOURED_PIXELS and slow >= fast * 2:
+            kind = TimingFeedback.SLOW
+        elif fast >= self.MIN_COLOURED_PIXELS and fast >= slow * 2:
+            kind = TimingFeedback.FAST
+        if kind != self._streak_kind:
+            self._streak_kind = kind
+            self._streak = 1
+        else:
+            self._streak += 1
+        # 只在信号首次达到持续帧数时返回一次，避免同一判定条重复计数。
+        if kind is not None and self._streak == self.PERSISTENCE_FRAMES:
+            return kind
         return None
 
 
