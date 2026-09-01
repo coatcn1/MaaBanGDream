@@ -245,11 +245,13 @@ def test_chart_tail_releases_hold_whose_body_vanished():
 
     # Body vanishes.  Before the chart tail time the hold must stay down.
     before = planner.update([], anchor + 7.35)
-    assert not [a for a in before if a.kind == ActionKind.UP]
+    early = [a for a in before if a.kind == ActionKind.UP]
+    assert len(early) == 1
+    assert early[0].reason == "chart-tail"
+    # 释放提前发出但携带精确到期时间（引擎 anchor + 7.375）。
+    assert abs(early[0].timestamp - (anchor + 7.375)) < 1e-6
     released = planner.update([], anchor + 7.42)
-    assert [(a.kind, a.reason) for a in released] == [
-        (ActionKind.UP, "chart-tail")
-    ]
+    assert released == []
 
 
 def test_chart_tail_releases_visible_body_at_chart_time():
@@ -273,11 +275,12 @@ def test_chart_tail_releases_visible_body_at_chart_time():
             NoteKind.HOLD, 5, 940, 490, 100, 190, anchor + 7.36,
         )
     ], anchor + 7.36)
-    assert not [a for a in before if a.kind == ActionKind.UP]
+    early = [a for a in before if a.kind == ActionKind.UP]
+    assert len(early) == 1
+    assert early[0].reason == "chart-tail"
+    assert abs(early[0].timestamp - (anchor + 7.375)) < 1e-6
     at_tail = planner.update([], anchor + 7.42)
-    assert [(a.kind, a.reason) for a in at_tail] == [
-        (ActionKind.UP, "chart-tail")
-    ]
+    assert at_tail == []
 
 
 def test_chart_slide_tail_release_emits_flick_without_visual_marker():
@@ -782,11 +785,12 @@ def test_chart_presses_occluded_straight_hold_head_without_body():
     assert downs[0].reason == "chart-predicted"
 
     before_tail = planner.update([], anchor + 7.35)
-    assert not [a for a in before_tail if a.kind == ActionKind.UP]
+    early = [a for a in before_tail if a.kind == ActionKind.UP]
+    assert len(early) == 1
+    assert early[0].reason == "chart-tail"
+    assert abs(early[0].timestamp - (anchor + 7.375)) < 1e-6
     at_tail = planner.update([], anchor + 7.42)
-    assert [(a.kind, a.reason) for a in at_tail] == [
-        (ActionKind.UP, "chart-tail"),
-    ]
+    assert at_tail == []
 
 
 def test_chart_blind_presses_slide_and_follows_chart_path():
@@ -1196,13 +1200,14 @@ def test_short_chart_hold_is_not_freed_as_its_own_due_head():
     ] == [(ActionKind.DOWN, "chart-predicted")]
 
     before_tail = planner.update([], now=anchor + 5.047)
-    assert not [
+    early = [
         action for action in before_tail if action.kind == ActionKind.UP
     ]
+    assert len(early) == 1
+    assert early[0].reason == "chart-tail"
+    assert abs(early[0].timestamp - (anchor + 5.075)) < 1e-6
     at_tail = planner.update([], now=anchor + 5.08)
-    assert [
-        (action.kind, action.reason) for action in at_tail
-    ] == [(ActionKind.UP, "chart-tail")]
+    assert at_tail == []
 
 
 def test_chart_suppresses_visual_hold_182ms_early_and_represses_on_time():

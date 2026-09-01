@@ -1696,7 +1696,7 @@ class ChartPredictor:
                 state._chart_slide_next_index.pop(contact, None)
                 state._chart_hold_release_at.pop(contact, None)
                 continue
-            if song_now < tail_time - 0.015:
+            if song_now < tail_time - 0.035:
                 continue
             lane = state._active_hold_lane.get(contact, contact)
             if lane != tail_lane:
@@ -1753,6 +1753,8 @@ class ChartPredictor:
                     # chart tail and final lane.
                     state._hold_chord_partner.pop(contact, None)
                     state._hold_chord_partner.pop(partner, None)
+            release_at = now + max(0.0, tail_time - song_now)
+            action_count_before = len(actions)
             holds._release_hold(
                 contact,
                 lane,
@@ -1760,6 +1762,19 @@ class ChartPredictor:
                 "chart-tail",
                 actions,
             )
+            if len(actions) > action_count_before:
+                # 把尾部释放的派发时间改成精确到期时刻：释放也按谱面时间
+                # 毫秒级发送，不再绑定截图帧（帧量化会把尾判定推成 BAD）。
+                for index in range(action_count_before, len(actions)):
+                    action = actions[index]
+                    if (
+                        action.kind in {ActionKind.UP, ActionKind.FLICK}
+                        and action.reason == "chart-tail"
+                    ):
+                        actions[index] = replace(
+                            action,
+                            timestamp=release_at,
+                        )
             self.predicted_releases += 1
             self.expected_hold_tail.pop(contact, None)
             state._blind_hold_contacts.discard(contact)

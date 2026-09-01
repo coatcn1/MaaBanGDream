@@ -605,7 +605,7 @@ class RealtimeEngine:
                 scheduled_now = [
                     action for action in actions
                     if (
-                        action.reason == "chart-predicted"
+                        action.reason in {"chart-predicted", "chart-tail"}
                         and action.timestamp > now + 0.002
                     )
                 ]
