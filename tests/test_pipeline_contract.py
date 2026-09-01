@@ -23,11 +23,22 @@ def test_all_pipeline_clicks_use_the_foreground_guard():
 def test_interface_references_existing_entry_and_resource():
     interface = load(ROOT / "interface.json")
     assert interface["interface_version"] == 2
-    assert interface["version"] == "0.9.1-rc.3"
+    assert interface["version"] == "1.0.0"
     assert [task["name"] for task in interface["task"]] == [
         "AutoLive", "RealtimeLive", "CooperativeLive", "ContinuousRealtimeLive",
         "RealtimeCalibration", "ChallengeLive", "ManualFlowRecording",
     ]
+    assert {
+        task["name"]: task["label"] for task in interface["task"]
+    } == {
+        "AutoLive": "🎶 自动演出",
+        "RealtimeLive": "🎹 单人实时演奏",
+        "CooperativeLive": "🤝 协力演出",
+        "ContinuousRealtimeLive": "⚡ 一键实时演奏",
+        "RealtimeCalibration": "🎯 实时演奏校准",
+        "ChallengeLive": "🏆 挑战演出",
+        "ManualFlowRecording": "📹 手动流程录像",
+    }
     assert interface["resource"][0]["path"] == ["./resource"]
     nodes = {}
     for path in (ROOT / "resource/pipeline").glob("*.json"):

@@ -3,8 +3,8 @@
   "interface_version": 2,
   "name": "MaaBanGDream",
   "label": "BanG Dream! 自动化（MaaFramework）",
-  "version": "0.9.1-rc.3",
-  "description": "支持自动演出、机器人实时演奏、智能校准和挑战演出。",
+  "version": "1.0.0",
+  "description": "支持自动演出、单人实时演奏、多人协力演出、智能校准和挑战演出。",
   "license": "GPL-3.0-only",
   "controller": [
     {
@@ -46,7 +46,7 @@
     },
     {
       "name": "RealtimeLive",
-      "label": "🎹 实时演奏",
+      "label": "🎹 单人实时演奏",
       "description": "机器人排练或正式演奏；正式演奏必须先完成相同环境和难度的校准。",
       "entry": "RealtimeMultiLive",
       "option": [
@@ -59,7 +59,7 @@
     },
     {
       "name": "CooperativeLive",
-      "label": "协力演出",
+      "label": "🤝 协力演出",
       "description": "按指定次数完成多人协力演出；支持普通房、好友邀请和私人房间号。",
       "entry": "CooperativeLive",
       "option": [
@@ -1259,7 +1259,7 @@
           "max_hit": "{Count}",
           "custom_action_param": {
             "task_name": "RealtimeLive",
-            "label": "实时演奏",
+            "label": "单人实时演奏",
             "total": "{Count}",
             "phase": "start"
           }

@@ -18,7 +18,7 @@ def test_count_overrides_update_max_hit_and_progress_total_together():
         "RealtimeLiveCount": (
             "RealtimeLiveRoundGate",
             "RealtimeLive",
-            "实时演奏",
+            "单人实时演奏",
         ),
         "ChallengeCount": (
             "ChallengeRoundGate",

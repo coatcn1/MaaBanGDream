@@ -181,7 +181,7 @@
     "custom_action": "TaskProgress",
     "custom_action_param": {
       "task_name": "RealtimeLive",
-      "label": "实时演奏",
+      "label": "单人实时演奏",
       "total": 1,
       "phase": "start"
     },
@@ -196,7 +196,7 @@
     "custom_action": "TaskOutcome",
     "custom_action_param": {
       "task_name": "RealtimeLive",
-      "label": "实时演奏",
+      "label": "单人实时演奏",
       "status": "success"
     },
     "focus": {
@@ -1392,14 +1392,14 @@
     "custom_action": "TaskOutcome",
     "custom_action_param": {
       "task_name": "RealtimeLive",
-      "label": "实时演奏",
+      "label": "单人实时演奏",
       "status": "failure",
-      "reason": "实时演奏流程未完成",
+      "reason": "单人实时演奏流程未完成",
       "reason_source": "latest"
     },
     "focus": {
       "Node.Action.Failed": {
-        "content": "❌ 实时演奏流程未完成",
+        "content": "❌ 单人实时演奏流程未完成",
         "display": [
           "log"
         ]
@@ -1463,7 +1463,7 @@
     "custom_action": "TaskProgress",
     "custom_action_param": {
       "task_name": "RealtimeLive",
-      "label": "实时演奏",
+      "label": "单人实时演奏",
       "phase": "completed"
     },
     "next": [
