@@ -109,6 +109,25 @@ def static_versions() -> dict[str, str | int]:
     }
 
 
+def expected_versions(
+    locked: dict[str, Any],
+    *,
+    portable: bool = False,
+    prefix: Path | None = None,
+) -> dict[str, Any]:
+    expected = dict(locked)
+    if not portable:
+        return expected
+    runtime_prefix = prefix or Path(sys.prefix)
+    ready_marker = runtime_prefix / ".maabangdream-ready"
+    if runtime_prefix.name != "python" or not ready_marker.is_file():
+        raise RuntimeError(
+            "portable runtime must be the prepared package-local runtime/python"
+        )
+    expected["conda_environment"] = "python"
+    return expected
+
+
 def mfa_versions(mfa_root: Path) -> dict[str, str]:
     deps_path = mfa_root / "MFAAvalonia.deps.json"
     if not deps_path.is_file():
@@ -141,9 +160,17 @@ def main() -> None:
         default=os.environ.get("MFAA_ROOT"),
         help="MFAAvalonia directory; defaults to MFAA_ROOT",
     )
+    parser.add_argument(
+        "--portable",
+        action="store_true",
+        help="verify the prepared package-local runtime/python environment",
+    )
     args = parser.parse_args()
 
-    expected = load_json(LOCK_PATH)
+    expected = expected_versions(
+        load_json(LOCK_PATH),
+        portable=args.portable,
+    )
     actual = static_versions()
     if args.mfa_root:
         actual.update(mfa_versions(args.mfa_root.resolve()))

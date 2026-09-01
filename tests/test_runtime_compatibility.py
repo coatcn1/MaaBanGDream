@@ -66,3 +66,25 @@ def test_repository_lock_matches_project_files():
     interface = check_runtime.load_json(check_runtime.INTERFACE_PATH)
     assert check_runtime.required_maafw_version(requirements) == expected["maafw_python"]
     assert interface["interface_version"] == expected["project_interface"]
+
+
+def test_portable_runtime_requires_the_prepared_package_local_python(tmp_path):
+    locked = {"conda_environment": "maabangdream"}
+    portable = tmp_path / "python"
+    portable.mkdir()
+    (portable / ".maabangdream-ready").write_text("ready", encoding="utf-8")
+
+    expected = check_runtime.expected_versions(
+        locked,
+        portable=True,
+        prefix=portable,
+    )
+
+    assert expected["conda_environment"] == "python"
+    assert locked["conda_environment"] == "maabangdream"
+    with pytest.raises(RuntimeError, match="package-local runtime/python"):
+        check_runtime.expected_versions(
+            locked,
+            portable=True,
+            prefix=tmp_path / "not-prepared",
+        )
