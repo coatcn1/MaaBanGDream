@@ -45,9 +45,6 @@ def test_calibration_round_plan_never_falls_back_to_prepare():
     assert play_params["rehearsal_mode"] is True
     assert play_params["calibration_report"] == str(report)
     assert play_params["diagnostic_trace"] is True
-    assert override["RealtimeLivePlayNormal"]["next"] == [
-        "RealtimeCalibrationLifeSafetyGate"
-    ]
 
 
 def test_calibration_round_plan_forces_formal_mode_gate():

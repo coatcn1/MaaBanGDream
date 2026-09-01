@@ -169,9 +169,6 @@ class CommonRecover(CustomAction):
         package = str(params.get("package", "com.bilibili.star.bili"))
         restart_limit = int(params.get("restart_limit", 2))
         restart_wait = int(params.get("restart_wait_ms", 5000)) / 1000
-        restart_before_recovery = bool(
-            params.get("restart_before_recovery", False)
-        )
         reboot_emulator_on_failure = bool(
             params.get("reboot_emulator_on_failure", False)
         )
@@ -253,22 +250,6 @@ class CommonRecover(CustomAction):
             if context.tasker.stopping:
                 return True
             return False
-        if restart_before_recovery:
-            if context.tasker.stopping:
-                return True
-            controller.post_stop_app(package).wait()
-            if context.tasker.stopping:
-                return True
-            controller.post_start_app(package).wait()
-            app_started = True
-            log_task(
-                "游戏启动",
-                "重启",
-                "WARN",
-                "已知演出终止页面无法安全返回，先重启游戏再执行登录恢复",
-            )
-            if not _wait_unless_stopping(context, restart_wait):
-                return True
 
         emulator_rebooted = False
         restart = 0

@@ -214,7 +214,7 @@
       130,
       130
     ],
-    "threshold": 0.84,
+    "threshold": 0.9,
     "action": "DoNothing"
   },
   "AutoLiveLoginTap": {

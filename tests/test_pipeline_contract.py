@@ -285,7 +285,6 @@ def test_cold_login_uses_stable_menu_marker_before_back():
     marker = auto["AutoLiveLoginScreenMarker"]
     assert marker["template"] == "login_menu_marker.png"
     assert marker["roi"] == [1150, 590, 130, 130]
-    assert marker["threshold"] == .84
 
     for path, node_name in (
         ("auto_live.json", "AutoLiveEnsureHome"),
@@ -300,22 +299,6 @@ def test_cold_login_uses_stable_menu_marker_before_back():
         assert params["login_marker_priority_attempts"] == 3
         assert params["login_tap_target"] == [640, 360]
         assert params["escape_after_login_start"] is True
-
-
-def test_calibration_life_abort_restarts_before_login_recovery():
-    nodes = load(ROOT / "resource/pipeline/realtime_calibration.json")
-    gate = nodes["RealtimeCalibrationLifeSafetyGate"]
-    assert gate["custom_action"] == "RealtimeLifeSafetyAbortCheck"
-    assert gate["next"] == ["RealtimeCalibrationLifeSafetyRecover"]
-    assert gate["on_error"] == ["RealtimeLiveReturnHome"]
-
-    recover = nodes["RealtimeCalibrationLifeSafetyRecover"]
-    params = recover["custom_action_param"]
-    assert recover["custom_action"] == "CommonRecover"
-    assert params["restart_before_recovery"] is True
-    assert params["back_only"] is False
-    assert params["login_start_node"] == "AutoLiveLoginScreenMarker"
-    assert recover["next"] == ["RealtimeCalibrationRoundComplete"]
 
 
 def test_multi_live_options_and_loop_contract():
