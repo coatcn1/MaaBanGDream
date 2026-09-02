@@ -1,4 +1,4 @@
-# 构建 Native Realtime Engine V2。
+﻿# 构建 Native Realtime Engine V2。
 #
 # 优先使用 MSVC（vswhere + vcvars64），没有时回退到 conda 环境内的 zig
 # 便携工具链（zig 0.16 捆绑 mingw-w64 头文件与 libc++，已验证产出的
