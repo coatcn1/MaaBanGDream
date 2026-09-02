@@ -408,16 +408,21 @@ PYBIND11_MODULE(maabangdream_realtime, module) {
         .def(py::init<>())
         .def("connect",
             [](MinitouchClient& self, const std::string& host, int port) {
+                py::gil_scoped_release release;
                 return self.connect(host, port);
             },
             py::arg("host"), py::arg("port"))
         .def("publish",
             [](MinitouchClient& self, const std::string& bytes) {
+                py::gil_scoped_release release;
                 return self.publish(bytes);
             },
             py::arg("bytes"))
         .def("receive",
             [](MinitouchClient& self, std::size_t max_bytes, int timeout_ms) {
+                // recv 可能阻塞到 SO_RCVTIMEO（最长 timeout_ms），必须
+                // 释放 GIL，否则后台回读线程会饿死引擎实时循环。
+                py::gil_scoped_release release;
                 return self.receive(max_bytes, timeout_ms);
             },
             py::arg("max_bytes"), py::arg("timeout_ms") = 500)
