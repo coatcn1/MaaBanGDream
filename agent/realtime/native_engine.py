@@ -83,13 +83,14 @@ def compile_touch_script(
     *,
     song_offset_s: float = 0.0,
     press_bias_ms: int = 0,
-    offsets: dict[str, int] | None = None,
+    offsets: dict[str, float] | None = None,
     start_engine_time: float = 0.0,
 ) -> list[str]:
     """用 C++ 把整曲动作编译成定时 minitouch 脚本。
 
     时间敏感的脚本生成、分类型延迟补偿与取整损失补偿全部在 C++ 完成；
-    返回的每一行都是 minitouch v1 命令（w/d/m/u/c）。
+    每个 w 前自动插入 c 冲刷触点，返回的每一行都是 minitouch v1 命令
+    （w/d/m/u/c）。
     """
     if not _load():
         raise RuntimeError(
@@ -97,11 +98,11 @@ def compile_touch_script(
         )
     latency = offsets or {}
     native_offsets = _module.TouchLatencyOffsets(
-        int(latency.get("down_ms", 0)),
-        int(latency.get("up_ms", 0)),
-        int(latency.get("move_ms", 0)),
-        int(latency.get("tap_ms", 0)),
-        int(latency.get("flick_ms", 0)),
+        float(latency.get("down_ms", 0.0)),
+        float(latency.get("up_ms", 0.0)),
+        float(latency.get("move_ms", 0.0)),
+        float(latency.get("wait_ms", 0.0)),
+        float(latency.get("interval_ms", 0.0)),
     )
     config = {
         "song_offset_s": float(song_offset_s),
@@ -121,6 +122,24 @@ def minitouch_client() -> Any:
             f"Native 模块不可用：{_import_error or 'unknown error'}"
         )
     return _module.MinitouchClient()
+
+
+def parse_minitouch_log(line: str) -> dict[str, object] | None:
+    """解析设备端 jlog 回读行；握手行返回 None。"""
+    if not _load():
+        raise RuntimeError(
+            f"Native 模块不可用：{_import_error or 'unknown error'}"
+        )
+    return _module.parse_minitouch_log(line)
+
+
+def latency_calibrator() -> Any:
+    """C++ 分类型延迟统计器：消费 jlog，产出下一切片的分类型 offset。"""
+    if not _load():
+        raise RuntimeError(
+            f"Native 模块不可用：{_import_error or 'unknown error'}"
+        )
+    return _module.LatencyCalibrator()
 
 
 class NativeRealtimeEngine:

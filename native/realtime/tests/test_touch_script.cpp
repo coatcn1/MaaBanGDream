@@ -1,5 +1,5 @@
 // TouchScriptCompiler 的 C++ 单元测试：验证定时脚本的毫秒时序、
-// 分类型延迟补偿、取整损失补偿与瞬态触点避让。
+// commit-before-wait、分类型延迟补偿与取整损失补偿。
 
 #include <cmath>
 #include <cstdlib>
@@ -42,6 +42,16 @@ int sum_waits(const std::vector<std::string>& lines) {
     return total;
 }
 
+int count_wait_lines(const std::vector<std::string>& lines) {
+    int total = 0;
+    for (const std::string& item : lines) {
+        if (item.rfind("w ", 0) == 0) {
+            ++total;
+        }
+    }
+    return total;
+}
+
 void test_basic_hold_lifecycle_ordering() {
     TouchScriptCompiler compiler;
     EngineConfig config;
@@ -61,17 +71,40 @@ void test_basic_hold_lifecycle_ordering() {
     CHECK(text.find("\nd 7 ") != std::string::npos);
 }
 
-void test_per_type_offset_shifts_due_earlier() {
+void test_commit_precedes_every_wait() {
+    TouchScriptCompiler compiler;
+    EngineConfig config;
+    std::vector<ScheduledAction> actions = {
+        action(ActionKind::Down, 0, 0.1, 1),
+        action(ActionKind::Tap, 3, 1.0),
+    };
+    auto script = compiler.compile(actions, config, 0.0);
+    const std::string text = join(script);
+    // 每个 w 行前都必须有 c 行：minitouch 在睡眠前冲刷触点状态，
+    // 否则按压会被推迟到下一个 commit 才写入设备。
+    size_t pos = 0;
+    while ((pos = text.find("\nw ", pos)) != std::string::npos) {
+        CHECK(pos > 0 && text[pos - 1] == 'c');
+        ++pos;
+    }
+    CHECK(count_wait_lines(script) > 0);
+}
+
+void test_per_type_offset_shortens_waits_with_clamp() {
     TouchLatencyOffsets offsets;
-    offsets.down_ms = 5;
+    offsets.down_ms = 5.0;
     TouchScriptCompiler compiler(offsets);
     EngineConfig config;
     std::vector<ScheduledAction> actions = {
-        action(ActionKind::Down, 1, 1.0, 3),
+        action(ActionKind::Down, 0, 0.5, 1),
+        action(ActionKind::Down, 1, 1.0, 2),
+        action(ActionKind::Down, 2, 1.5, 3),
     };
     auto script = compiler.compile(actions, config, 0.0);
-    // down 提前 5ms：首条 wait 应为 995。
-    CHECK(script[0] == "w 995\n");
+    const std::string text = join(script);
+    // down 5ms 按 ±1ms 上限缩短后续 w：第二段 500ms 变 499ms。
+    CHECK(text.find("w 499\n") != std::string::npos);
+    CHECK(sum_waits(script) == 1499);
 }
 
 void test_rounding_loss_is_compensated_and_bounded() {
@@ -113,8 +146,9 @@ void test_song_offset_and_press_bias_map_to_engine_time() {
         action(ActionKind::Tap, 1, 2.0),
     };
     auto script = compiler.compile(actions, config, 0.0);
-    // 2.0 - 0.5 - 0.004 = 1.496s -> 1496ms。
-    CHECK(script[0] == "w 1496\n");
+    // 2.0 - 0.5 - 0.004 = 1.496s -> 1496ms；w 前必有 c 行。
+    const std::string text = join(script);
+    CHECK(text.find("w 1496\n") != std::string::npos);
 }
 
 void test_flick_emits_down_move_up_swipe() {
@@ -133,7 +167,8 @@ void test_flick_emits_down_move_up_swipe() {
 
 int run_touch_script_tests() {
     test_basic_hold_lifecycle_ordering();
-    test_per_type_offset_shifts_due_earlier();
+    test_commit_precedes_every_wait();
+    test_per_type_offset_shortens_waits_with_clamp();
     test_rounding_loss_is_compensated_and_bounded();
     test_transient_contact_avoids_active_hold();
     test_song_offset_and_press_bias_map_to_engine_time();

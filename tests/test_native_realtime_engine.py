@@ -87,12 +87,12 @@ def test_touch_script_compiler_covers_full_song_duration():
     actions = timeline.compile_actions({})
     script = native_engine.compile_touch_script(
         actions,
-        offsets={"down_ms": 3, "tap_ms": -2},
         start_engine_time=0.0,
     )
     waits = [int(line[2:]) for line in script if line.startswith("w ")]
     total_ms = sum(waits)
-    assert script and script[0].startswith("w ")
+    # 补偿模型要求每个 w 前有 c 冲刷触点；脚本首行因此是 c。
+    assert script and script[0] == "c\n"
     assert total_ms == pytest.approx(timeline.end_time_s * 1000.0, abs=3.0)
 
 

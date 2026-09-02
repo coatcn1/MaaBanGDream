@@ -2,35 +2,19 @@
 
 #include <algorithm>
 #include <cmath>
-#include <set>
 #include <sstream>
 
 namespace mbdr {
 namespace {
 
 constexpr double kMillis = 1000.0;
+constexpr double kMaxOffsetPerWaitMs = 1.0;
 constexpr double kMaxLossMs = 2.0;
 
 double engine_due(const ScheduledAction& action, const EngineConfig& config) {
     // press_bias_ms 正值 = 提前输入，沿用 types.hpp 的换算约定。
     return action.due_s - config.song_offset_s
         - config.press_bias_ms / kMillis;
-}
-
-int latency_offset_ms(ActionKind kind, const TouchLatencyOffsets& offsets) {
-    switch (kind) {
-        case ActionKind::Down:
-            return offsets.down_ms;
-        case ActionKind::Up:
-            return offsets.up_ms;
-        case ActionKind::Move:
-            return offsets.move_ms;
-        case ActionKind::Tap:
-            return offsets.tap_ms;
-        case ActionKind::Flick:
-            return offsets.flick_ms;
-    }
-    return 0;
 }
 
 int rounded_x(float target_x, uint8_t lane, const EngineConfig& config) {
@@ -50,12 +34,16 @@ std::string line(std::initializer_list<std::string> parts) {
     return out.str();
 }
 
+double clamp(double value, double lo, double hi) {
+    return std::max(lo, std::min(hi, value));
+}
+
 }  // namespace
 
 std::vector<std::string> TouchScriptCompiler::compile(
     std::vector<ScheduledAction> actions,
     const EngineConfig& config,
-    double start_engine_time) const {
+    double start_engine_time) {
     struct Timed {
         ScheduledAction action;
         double due = 0.0;
@@ -64,11 +52,7 @@ std::vector<std::string> TouchScriptCompiler::compile(
     std::vector<Timed> timed;
     timed.reserve(actions.size());
     for (ScheduledAction& action : actions) {
-        timed.push_back(Timed{
-            action,
-            engine_due(action, config)
-                - latency_offset_ms(action.kind, offsets_) / kMillis,
-        });
+        timed.push_back(Timed{action, engine_due(action, config)});
     }
     std::stable_sort(timed.begin(), timed.end(),
         [](const Timed& left, const Timed& right) {
@@ -113,7 +97,41 @@ std::vector<std::string> TouchScriptCompiler::compile(
     std::vector<std::string> script;
     script.reserve(timed.size() * 3);
     double cursor = start_engine_time;
-    double loss_ms = 0.0;
+    // 未清偿补偿与取整损失是编译器跨切片状态：同一次分片发布过程中必须
+    // 跨 compile() 调用保留，否则切片边界会丢补偿精度。
+    double& residual = residual_offset_ms_;
+    double& loss = rounding_loss_ms_;
+
+    // 每条命令前累加 interval + 类型 offset；每次 w 前先 commit 冲刷触点，
+    // 再按残差缩短 w（每次最多 ±1ms），未清偿部分留给后续 w。
+    auto account = [&](double type_offset_ms) {
+        residual += offsets_.interval_ms + type_offset_ms;
+    };
+    auto emit_wait = [&](double wait_s) {
+        if (wait_s <= 0.0) {
+            return;
+        }
+        account(offsets_.wait_ms);
+        double wait_ms = wait_s * kMillis;
+        const double offset_adjust = clamp(residual, -kMaxOffsetPerWaitMs,
+            kMaxOffsetPerWaitMs);
+        wait_ms -= offset_adjust;
+        residual -= offset_adjust;
+        const double loss_adjust = clamp(loss, -kMaxLossMs, kMaxLossMs);
+        wait_ms -= loss_adjust;
+        loss -= loss_adjust;
+        wait_ms = std::max(0.0, wait_ms);
+        const long rounded = std::lround(wait_ms);
+        loss -= wait_ms - static_cast<double>(rounded);
+        script.push_back("c\n");
+        if (rounded > 0) {
+            script.push_back(line({"w ", std::to_string(rounded)}));
+            cursor += static_cast<double>(rounded) / kMillis;
+        }
+    };
+    auto emit_command = [&](const std::string& text) {
+        script.push_back(text);
+    };
 
     for (Timed& item : timed) {
         ScheduledAction& action = item.action;
@@ -132,68 +150,56 @@ std::vector<std::string> TouchScriptCompiler::compile(
             transient_cursor = (transient_cursor + 1) % kMaxContacts;
         }
 
-        const double wait_s = std::max(0.0, item.due - cursor);
-        const double compensated_ms = wait_s * kMillis + loss_ms;
-        long wait_ms = std::lround(compensated_ms);
-        if (wait_ms < 0) {
-            wait_ms = 0;
-        }
-        loss_ms = std::max(-kMaxLossMs,
-            std::min(kMaxLossMs, compensated_ms - static_cast<double>(wait_ms)));
-        cursor += static_cast<double>(wait_ms) / kMillis;
-        if (wait_ms > 0) {
-            script.push_back(line({"w ", std::to_string(wait_ms)}));
-        }
+        emit_wait(item.due - cursor);
 
         const int x = rounded_x(action.target_x, action.lane, config);
         const int y = static_cast<int>(std::lround(config.judgement_y));
         const std::string contact = std::to_string(action.contact);
         switch (action.kind) {
             case ActionKind::Tap:
-                script.push_back(line({"d ", contact, " ", std::to_string(x),
+                account(offsets_.down_ms);
+                emit_command(line({"d ", contact, " ", std::to_string(x),
                     " ", std::to_string(y), " 50"}));
-                script.push_back(line({"c"}));
-                script.push_back(line({"w 12"}));
-                cursor += 12.0 / kMillis;
-                script.push_back(line({"u ", contact}));
-                script.push_back(line({"c"}));
+                emit_wait(12.0 / kMillis);
+                account(offsets_.up_ms);
+                emit_command(line({"u ", contact}));
                 break;
             case ActionKind::Flick: {
                 const int swipe_x = action.flick_direction == -1
                     ? x - 120
                     : (action.flick_direction == 1 ? x + 120 : x);
                 const int swipe_y = action.flick_direction == 0 ? y - 120 : y + 8;
-                script.push_back(line({"d ", contact, " ", std::to_string(x),
+                account(offsets_.down_ms);
+                emit_command(line({"d ", contact, " ", std::to_string(x),
                     " ", std::to_string(y), " 50"}));
-                script.push_back(line({"c"}));
-                script.push_back(line({"w 8"}));
-                cursor += 8.0 / kMillis;
-                script.push_back(line({"m ", contact, " ",
+                emit_wait(8.0 / kMillis);
+                account(offsets_.move_ms);
+                emit_command(line({"m ", contact, " ",
                     std::to_string(swipe_x), " ", std::to_string(swipe_y),
                     " 50"}));
-                script.push_back(line({"c"}));
-                script.push_back(line({"w 8"}));
-                cursor += 8.0 / kMillis;
-                script.push_back(line({"u ", contact}));
-                script.push_back(line({"c"}));
+                emit_wait(8.0 / kMillis);
+                account(offsets_.up_ms);
+                emit_command(line({"u ", contact}));
                 break;
             }
             case ActionKind::Down:
-                script.push_back(line({"d ", contact, " ", std::to_string(x),
+                account(offsets_.down_ms);
+                emit_command(line({"d ", contact, " ", std::to_string(x),
                     " ", std::to_string(y), " 50"}));
-                script.push_back(line({"c"}));
                 break;
             case ActionKind::Move:
-                script.push_back(line({"m ", contact, " ", std::to_string(x),
+                account(offsets_.move_ms);
+                emit_command(line({"m ", contact, " ", std::to_string(x),
                     " ", std::to_string(y), " 50"}));
-                script.push_back(line({"c"}));
                 break;
             case ActionKind::Up:
-                script.push_back(line({"u ", contact}));
-                script.push_back(line({"c"}));
+                account(offsets_.up_ms);
+                emit_command(line({"u ", contact}));
                 break;
         }
     }
+    // 切片末尾 commit，冲刷最后一批触点状态。
+    script.push_back("c\n");
     return script;
 }
 

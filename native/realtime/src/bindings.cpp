@@ -6,6 +6,7 @@
 
 #include "maabangdream/chart_timeline.hpp"
 #include "maabangdream/minitouch_client.hpp"
+#include "maabangdream/minitouch_log.hpp"
 #include "maabangdream/pure_chart.hpp"
 #include "maabangdream/scheduler.hpp"
 #include "maabangdream/song_clock.hpp"
@@ -347,33 +348,38 @@ PYBIND11_MODULE(maabangdream_realtime, module) {
             });
 
     py::class_<TouchLatencyOffsets>(module, "TouchLatencyOffsets")
-        .def(py::init([](int down_ms, int up_ms, int move_ms, int tap_ms,
-                         int flick_ms) {
+        .def(py::init([](double down_ms, double up_ms, double move_ms,
+                         double wait_ms, double interval_ms) {
             TouchLatencyOffsets offsets;
             offsets.down_ms = down_ms;
             offsets.up_ms = up_ms;
             offsets.move_ms = move_ms;
-            offsets.tap_ms = tap_ms;
-            offsets.flick_ms = flick_ms;
+            offsets.wait_ms = wait_ms;
+            offsets.interval_ms = interval_ms;
             return offsets;
         }),
         py::arg("down_ms") = 0,
         py::arg("up_ms") = 0,
         py::arg("move_ms") = 0,
-        py::arg("tap_ms") = 0,
-        py::arg("flick_ms") = 0)
+        py::arg("wait_ms") = 0,
+        py::arg("interval_ms") = 0)
         .def_readwrite("down_ms", &TouchLatencyOffsets::down_ms)
         .def_readwrite("up_ms", &TouchLatencyOffsets::up_ms)
         .def_readwrite("move_ms", &TouchLatencyOffsets::move_ms)
-        .def_readwrite("tap_ms", &TouchLatencyOffsets::tap_ms)
-        .def_readwrite("flick_ms", &TouchLatencyOffsets::flick_ms);
+        .def_readwrite("wait_ms", &TouchLatencyOffsets::wait_ms)
+        .def_readwrite("interval_ms", &TouchLatencyOffsets::interval_ms);
 
     py::class_<TouchScriptCompiler>(module, "TouchScriptCompiler")
         .def(py::init([](const TouchLatencyOffsets& offsets) {
             return std::make_unique<TouchScriptCompiler>(offsets);
         }), py::arg("offsets") = TouchLatencyOffsets{})
+        .def("set_offsets", &TouchScriptCompiler::set_offsets,
+            py::arg("offsets"))
+        .def_property_readonly("offsets", &TouchScriptCompiler::offsets)
+        .def("add_residual_ms", &TouchScriptCompiler::add_residual_ms,
+            py::arg("ms"))
         .def("compile",
-            [](const TouchScriptCompiler& self, py::list actions,
+            [](TouchScriptCompiler& self, py::list actions,
                py::dict config_dict, double start_engine_time) {
                 std::vector<ScheduledAction> parsed;
                 parsed.reserve(actions.size());
@@ -415,6 +421,41 @@ PYBIND11_MODULE(maabangdream_realtime, module) {
         .def("close", &MinitouchClient::close)
         .def_property_readonly("connected",
             [](const MinitouchClient& self) { return self.connected(); });
+
+    module.def("parse_minitouch_log",
+        [](const std::string& line) {
+            MinitouchLogEvent event;
+            if (!parse_minitouch_log(line, &event)) {
+                return py::object(py::none());
+            }
+            py::dict result;
+            result["start_ms"] = event.start_ms;
+            result["end_ms"] = event.end_ms;
+            result["cost_ms"] = event.cost_ms;
+            result["command"] = event.command;
+            return py::object(result);
+        },
+        py::arg("line"));
+
+    py::class_<LatencyCalibrator>(module, "LatencyCalibrator")
+        .def(py::init<>())
+        .def("observe",
+            [](LatencyCalibrator& self, py::dict event_dict) {
+                MinitouchLogEvent event;
+                event.start_ms =
+                    event_dict["start_ms"].cast<double>();
+                event.end_ms = event_dict["end_ms"].cast<double>();
+                event.cost_ms = event_dict["cost_ms"].cast<double>();
+                event.command =
+                    py::str(event_dict["command"]).cast<std::string>();
+                self.observe(event);
+            },
+            py::arg("event"))
+        .def_property_readonly("offsets", &LatencyCalibrator::offsets)
+        .def("correction_ms", &LatencyCalibrator::correction_ms,
+            py::arg("previous"))
+        .def("reset", &LatencyCalibrator::reset)
+        .def_property_readonly("event_count", &LatencyCalibrator::event_count);
 
     py::register_exception<ChartParseError>(module, "ChartParseError",
         PyExc_ValueError);
