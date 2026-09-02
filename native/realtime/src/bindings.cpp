@@ -8,6 +8,7 @@
 #include "maabangdream/pure_chart.hpp"
 #include "maabangdream/scheduler.hpp"
 #include "maabangdream/song_clock.hpp"
+#include "maabangdream/touch_script.hpp"
 #include "maabangdream/types.hpp"
 #include "maabangdream/version.hpp"
 
@@ -59,6 +60,37 @@ py::dict config_to_dict(const EngineConfig& config) {
     }
     result["lane_centers"] = centers;
     return result;
+}
+
+ScheduledAction action_from_dict(const py::dict& item) {
+    ScheduledAction action;
+    const std::string kind = item["kind"].cast<std::string>();
+    if (kind == "tap") {
+        action.kind = ActionKind::Tap;
+    } else if (kind == "flick") {
+        action.kind = ActionKind::Flick;
+    } else if (kind == "down") {
+        action.kind = ActionKind::Down;
+    } else if (kind == "move") {
+        action.kind = ActionKind::Move;
+    } else if (kind == "up") {
+        action.kind = ActionKind::Up;
+    } else {
+        throw std::invalid_argument("unknown action kind: " + kind);
+    }
+    action.lane = static_cast<uint8_t>(item["lane"].cast<int>());
+    action.contact = static_cast<int8_t>(item["contact"].cast<int>());
+    action.target_x = item["target_x"].cast<float>();
+    action.due_s = item["due_s"].cast<double>();
+    if (item.contains("note_index")) {
+        action.note_index = item["note_index"].cast<int>();
+    }
+    const py::object direction = item["flick_direction"];
+    if (!direction.is_none()) {
+        const std::string text = direction.cast<std::string>();
+        action.flick_direction = static_cast<int8_t>(text == "Left" ? -1 : 1);
+    }
+    return action;
 }
 
 EngineConfig config_from_dict(const py::dict& source) {
@@ -236,37 +268,8 @@ PYBIND11_MODULE(maabangdream_realtime, module) {
             std::vector<ScheduledAction> parsed;
             parsed.reserve(actions.size());
             for (const auto handle : actions) {
-                const py::dict item = handle.cast<py::dict>();
-                ScheduledAction action;
-                const std::string kind = item["kind"].cast<std::string>();
-                if (kind == "tap") {
-                    action.kind = ActionKind::Tap;
-                } else if (kind == "flick") {
-                    action.kind = ActionKind::Flick;
-                } else if (kind == "down") {
-                    action.kind = ActionKind::Down;
-                } else if (kind == "move") {
-                    action.kind = ActionKind::Move;
-                } else if (kind == "up") {
-                    action.kind = ActionKind::Up;
-                } else {
-                    throw std::invalid_argument("unknown action kind: " + kind);
-                }
-                action.lane = static_cast<uint8_t>(item["lane"].cast<int>());
-                action.contact =
-                    static_cast<int8_t>(item["contact"].cast<int>());
-                action.target_x = item["target_x"].cast<float>();
-                action.due_s = item["due_s"].cast<double>();
-                if (item.contains("note_index")) {
-                    action.note_index = item["note_index"].cast<int>();
-                }
-                const py::object direction = item["flick_direction"];
-                if (!direction.is_none()) {
-                    const std::string text = direction.cast<std::string>();
-                    action.flick_direction =
-                        static_cast<int8_t>(text == "Left" ? -1 : 1);
-                }
-                parsed.push_back(action);
+                parsed.push_back(action_from_dict(
+                    handle.cast<py::dict>()));
             }
             return std::make_unique<ActionScheduler>(
                 std::move(parsed), std::move(config));
@@ -341,6 +344,55 @@ PYBIND11_MODULE(maabangdream_realtime, module) {
             [](const SongClockSynchronizer& self) {
                 return sync_state_to_dict(self.state());
             });
+
+    py::class_<TouchLatencyOffsets>(module, "TouchLatencyOffsets")
+        .def(py::init([](int down_ms, int up_ms, int move_ms, int tap_ms,
+                         int flick_ms) {
+            TouchLatencyOffsets offsets;
+            offsets.down_ms = down_ms;
+            offsets.up_ms = up_ms;
+            offsets.move_ms = move_ms;
+            offsets.tap_ms = tap_ms;
+            offsets.flick_ms = flick_ms;
+            return offsets;
+        }),
+        py::arg("down_ms") = 0,
+        py::arg("up_ms") = 0,
+        py::arg("move_ms") = 0,
+        py::arg("tap_ms") = 0,
+        py::arg("flick_ms") = 0)
+        .def_readwrite("down_ms", &TouchLatencyOffsets::down_ms)
+        .def_readwrite("up_ms", &TouchLatencyOffsets::up_ms)
+        .def_readwrite("move_ms", &TouchLatencyOffsets::move_ms)
+        .def_readwrite("tap_ms", &TouchLatencyOffsets::tap_ms)
+        .def_readwrite("flick_ms", &TouchLatencyOffsets::flick_ms);
+
+    py::class_<TouchScriptCompiler>(module, "TouchScriptCompiler")
+        .def(py::init([](const TouchLatencyOffsets& offsets) {
+            return std::make_unique<TouchScriptCompiler>(offsets);
+        }), py::arg("offsets") = TouchLatencyOffsets{})
+        .def("compile",
+            [](const TouchScriptCompiler& self, py::list actions,
+               py::dict config_dict, double start_engine_time) {
+                std::vector<ScheduledAction> parsed;
+                parsed.reserve(actions.size());
+                for (const auto handle : actions) {
+                    parsed.push_back(action_from_dict(
+                        handle.cast<py::dict>()));
+                }
+                const std::vector<std::string> lines = self.compile(
+                    std::move(parsed),
+                    config_from_dict(config_dict),
+                    start_engine_time);
+                py::list result;
+                for (const std::string& text : lines) {
+                    result.append(text);
+                }
+                return result;
+            },
+            py::arg("actions"),
+            py::arg("config") = py::dict(),
+            py::arg("start_engine_time") = 0.0);
 
     py::register_exception<ChartParseError>(module, "ChartParseError",
         PyExc_ValueError);
