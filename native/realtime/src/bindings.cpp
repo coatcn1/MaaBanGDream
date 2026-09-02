@@ -5,6 +5,7 @@
 #include <string>
 
 #include "maabangdream/chart_timeline.hpp"
+#include "maabangdream/minitouch_client.hpp"
 #include "maabangdream/pure_chart.hpp"
 #include "maabangdream/scheduler.hpp"
 #include "maabangdream/song_clock.hpp"
@@ -393,6 +394,22 @@ PYBIND11_MODULE(maabangdream_realtime, module) {
             py::arg("actions"),
             py::arg("config") = py::dict(),
             py::arg("start_engine_time") = 0.0);
+
+    py::class_<MinitouchClient>(module, "MinitouchClient")
+        .def(py::init<>())
+        .def("connect",
+            [](MinitouchClient& self, const std::string& host, int port) {
+                return self.connect(host, port);
+            },
+            py::arg("host"), py::arg("port"))
+        .def("publish",
+            [](MinitouchClient& self, const std::string& bytes) {
+                return self.publish(bytes);
+            },
+            py::arg("bytes"))
+        .def("close", &MinitouchClient::close)
+        .def_property_readonly("connected",
+            [](const MinitouchClient& self) { return self.connected(); });
 
     py::register_exception<ChartParseError>(module, "ChartParseError",
         PyExc_ValueError);

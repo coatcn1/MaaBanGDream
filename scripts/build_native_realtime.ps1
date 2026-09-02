@@ -101,7 +101,7 @@ if ($vcvars) {
         "-std=c++17", "-DNDEBUG",
         "-Wno-nullability-completeness"
     ) + $includeArgs + $sourceArgs + @(
-        "-o", $pydPath, "-L$pythonLibs", "-l$pythonLibName"
+        "-o", $pydPath, "-L$pythonLibs", "-l$pythonLibName", "-lws2_32"
     )
     Write-Host "[build] zig c++ $($compileArgs.Count) arguments"
     & $zig @compileArgs
@@ -119,7 +119,7 @@ if ($vcvars) {
         @($testSources | ForEach-Object { $_.FullName }) +
         @($sources | Where-Object { $_.Name -ne "bindings.cpp" } |
             ForEach-Object { $_.FullName }) +
-        @("-o", (Join-Path $buildRoot "mbdr_tests.exe"))
+        @("-o", (Join-Path $buildRoot "mbdr_tests.exe"), "-lws2_32")
     & $zig @testCompileArgs
     if ($LASTEXITCODE -ne 0) {
         throw "zig test build failed with exit code $LASTEXITCODE"

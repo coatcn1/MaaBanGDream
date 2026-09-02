@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import json
+import socket
+import threading
 import sys
 from pathlib import Path
 
@@ -77,6 +79,50 @@ def test_diff_tool_reports_zero_mismatches():
     report = diff_chart(CHART_64)
     assert report["mismatches"] == 0
     assert report["reference_actions"] == report["native_actions"] > 0
+
+
+@requires_native
+def test_touch_script_compiler_covers_full_song_duration():
+    timeline = native_engine.compile_chart(CHART_64)
+    actions = timeline.compile_actions({})
+    script = native_engine.compile_touch_script(
+        actions,
+        offsets={"down_ms": 3, "tap_ms": -2},
+        start_engine_time=0.0,
+    )
+    waits = [int(line[2:]) for line in script if line.startswith("w ")]
+    total_ms = sum(waits)
+    assert script and script[0].startswith("w ")
+    assert total_ms == pytest.approx(timeline.end_time_s * 1000.0, abs=3.0)
+
+
+@requires_native
+def test_native_minitouch_client_publishes_exact_bytes():
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    received: list[bytes] = []
+
+    def accept_loop() -> None:
+        connection, _ = listener.accept()
+        while True:
+            chunk = connection.recv(65536)
+            if not chunk:
+                break
+            received.append(chunk)
+        connection.close()
+
+    worker = threading.Thread(target=accept_loop, daemon=True)
+    worker.start()
+    payload = "d 0 10 20 50\nc\nw 12\nu 0\nc\n"
+    client = native_engine.minitouch_client()
+    assert client.connect("127.0.0.1", port)
+    assert client.publish(payload)
+    client.close()
+    worker.join(timeout=3)
+    listener.close()
+    assert b"".join(received).decode() == payload
 
 
 @requires_native

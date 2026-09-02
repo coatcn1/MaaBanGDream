@@ -1,8 +1,9 @@
-"""Native Realtime Engine V2 的 Python 适配层（第一阶段：离线 + 守护）。
+"""Native Realtime Engine V2 的 Python 适配层。
 
 边界（见交接文档）：
 - Native 默认关闭，任何 import / 编译 / 同步失败都回退 Python Legacy；
-- 第一阶段 Native 只产出动作批次，真实触控仍由 ControllerTouchDispatcher 派发；
+- 谱面编译、动作调度、相位同步与定时 minitouch 脚本编译都在 C++ 完成；
+- 脚本的 TCP 发布端也在 C++（MinitouchClient），Python 只做设备进程编排；
 - 本模块不接管用户默认真实演奏，只在显式开启且 Native 可用时被上层选择。
 """
 
@@ -75,6 +76,51 @@ def compile_chart(chart_path: str | Path) -> Any:
             f"Native 模块不可用：{_import_error or 'unknown error'}"
         )
     return _module.ChartTimeline.from_file(str(chart_path))
+
+
+def compile_touch_script(
+    actions: list[dict[str, object]],
+    *,
+    song_offset_s: float = 0.0,
+    press_bias_ms: int = 0,
+    offsets: dict[str, int] | None = None,
+    start_engine_time: float = 0.0,
+) -> list[str]:
+    """用 C++ 把整曲动作编译成定时 minitouch 脚本。
+
+    时间敏感的脚本生成、分类型延迟补偿与取整损失补偿全部在 C++ 完成；
+    返回的每一行都是 minitouch v1 命令（w/d/m/u/c）。
+    """
+    if not _load():
+        raise RuntimeError(
+            f"Native 模块不可用：{_import_error or 'unknown error'}"
+        )
+    latency = offsets or {}
+    native_offsets = _module.TouchLatencyOffsets(
+        int(latency.get("down_ms", 0)),
+        int(latency.get("up_ms", 0)),
+        int(latency.get("move_ms", 0)),
+        int(latency.get("tap_ms", 0)),
+        int(latency.get("flick_ms", 0)),
+    )
+    config = {
+        "song_offset_s": float(song_offset_s),
+        "press_bias_ms": int(press_bias_ms),
+        "lane_centers": list(LANE_CENTERS),
+    }
+    compiler = _module.TouchScriptCompiler(native_offsets)
+    return list(
+        compiler.compile(list(actions), config, float(start_engine_time))
+    )
+
+
+def minitouch_client() -> Any:
+    """C++ 实现的 minitouch 脚本 TCP 发布端（传输不参与时序）。"""
+    if not _load():
+        raise RuntimeError(
+            f"Native 模块不可用：{_import_error or 'unknown error'}"
+        )
+    return _module.MinitouchClient()
 
 
 class NativeRealtimeEngine:
