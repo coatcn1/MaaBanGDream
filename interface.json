@@ -83,7 +83,7 @@
     {
       "name": "RealtimeCalibration",
       "label": "🎯 实时演奏校准",
-      "description": "三次排练逐曲调整延迟，再用正式验证并自动启用 Profile。",
+      "description": "一次排练快速确定延迟，再用正式验证并自动启用 Profile。",
       "entry": "RealtimeCalibration",
       "option": [
         "CalibrationDifficulty",

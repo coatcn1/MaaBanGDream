@@ -18,7 +18,10 @@ from uuid import uuid4
 from .profile_store import EnvironmentSignature, RealtimeProfileStore
 
 
-REHEARSAL_STAGES = ("rehearsal-1", "rehearsal-2", "rehearsal-3")
+# 局内 FAST/SLOW 自适应控制已能在一首歌内收敛（实测 0→35ms），且结算后
+# 会把收敛结果写回 Profile。排练只需要给新环境定一个起始偏移，保留一首
+# 排练 + 一首正式验证即可，不再需要三首排练逐曲平均。
+REHEARSAL_STAGES = ("rehearsal-1",)
 FORMAL_STAGE = "formal-validation"
 CALIBRATION_STAGES = (*REHEARSAL_STAGES, FORMAL_STAGE)
 

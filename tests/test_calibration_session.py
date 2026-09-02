@@ -77,7 +77,7 @@ def test_each_round_begin_and_end_is_atomically_persisted(tmp_path):
     )
     on_disk = json.loads(Path(session["_path"]).read_text(encoding="utf-8"))
     assert on_disk["attempts"][-1]["status"] == "completed"
-    assert on_disk["next_stage"] == REHEARSAL_STAGES[1]
+    assert on_disk["next_stage"] == FORMAL_STAGE
 
 
 def test_technical_failure_pauses_without_consuming_or_adding_a_round(tmp_path):
@@ -105,25 +105,25 @@ def test_technical_failure_pauses_without_consuming_or_adding_a_round(tmp_path):
     assert resumed["next_stage"] == REHEARSAL_STAGES[0]
 
 
-def test_resume_after_two_rehearsals_starts_at_third(tmp_path):
+def test_resume_after_rehearsal_starts_at_formal(tmp_path):
     store = create_store(tmp_path)
     session = store.start(
         difficulty="Hard", song_mode="current",
         environment=signature(), initial_offset_ms=0,
         current_song_id="song-a",
     )
-    for index, stage in enumerate(REHEARSAL_STAGES[:2]):
-        session = store.begin_round(session, stage, index)
-        session = store.finish_round(
-            session, stage, result("song-a"), suggested_offset_ms=index + 1,
-        )
+    session = store.begin_round(session, REHEARSAL_STAGES[0], 0)
+    session = store.finish_round(
+        session, REHEARSAL_STAGES[0], result("song-a"),
+        suggested_offset_ms=1,
+    )
 
     resumed = store.start(
         difficulty="Hard", song_mode="current",
         environment=signature(), initial_offset_ms=0,
         current_song_id="song-a", resume_mode="auto",
     )
-    assert resumed["next_stage"] == REHEARSAL_STAGES[2]
+    assert resumed["next_stage"] == FORMAL_STAGE
 
 
 def test_restart_preserves_old_session_and_creates_new_candidate(tmp_path):
