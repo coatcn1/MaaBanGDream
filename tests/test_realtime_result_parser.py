@@ -245,6 +245,14 @@ def test_timing_adjustment_step_uses_wider_bounds():
     assert adjusted_timing_offset(0, extreme) == -12
 
 
+def test_timing_adjustment_uses_small_step_for_sparse_feedback():
+    sparse_slow = LiveResult(760, 6, 0, 0, 0, 0, 7)
+    sparse_fast = LiveResult(760, 6, 0, 0, 0, 6, 0)
+
+    assert adjusted_timing_offset(39, sparse_slow) == 42
+    assert adjusted_timing_offset(41, sparse_fast) == 38
+
+
 def test_result_parser_rejects_impossible_fast_slow_total():
     result = LiveResult(10, 0, 0, 0, 0, 8, 5)
     with pytest.raises(ValueError, match="结算统计不一致"):

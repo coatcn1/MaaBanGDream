@@ -88,6 +88,8 @@ def result_report_payload(
         "realtime_feedback_valid": stats.timing_feedback_valid,
         "realtime_feedback_ignored": stats.timing_feedback_ignored,
         "realtime_feedback_ignored_reasons": stats.timing_feedback_ignored_reasons,
+        "realtime_feedback_sightings": stats.timing_feedback_sightings,
+        "realtime_feedback_reports": stats.timing_feedback_reports,
         "filtered_adjacent_artifacts": stats.filtered_adjacent_artifacts,
         "rejected_hold_candidates": stats.rejected_hold_candidates,
         "recovered_contacts": stats.recovered_contacts,

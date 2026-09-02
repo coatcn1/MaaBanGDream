@@ -20,13 +20,14 @@ class TimingFeedbackDetector:
     # 旧 ROI 过宽且 FAST 饱和度上限 150，把过线蓝音符当成判定条。
     ROI = (570, 514, 710, 556)
     MIN_COLOURED_PIXELS = 600
-    # 过线音符在条区域只停留 1-3 帧，判定条则持续约 10-20 帧。
-    # 要求信号连续存在足够帧数，避免把运动音符误报为判定条。
-    PERSISTENCE_FRAMES = 3
+    # 判定条常只持续 2-3 帧且中间会闪断 1 帧（实测 sightings=29 时
+    # 严格连续 2 帧门禁只产出 5 次报告）。改为“最近 3 帧内同色出现
+    # ≥2 帧即报告”，既容忍闪烁，又拒绝孤立单帧的过线音符。
+    PERSISTENCE_FRAMES = 2
 
     def __init__(self) -> None:
-        self._streak_kind: TimingFeedback | None = None
-        self._streak = 0
+        self._recent: deque[TimingFeedback | None] = deque(maxlen=3)
+        self._armed = False
         # 观测计数：sightings = 任一帧出现过判定条信号；reports = 通过
         # 持续帧数门禁后实际上报的次数。用于诊断实机检测覆盖率。
         self.sightings = 0
@@ -48,17 +49,22 @@ class TimingFeedbackDetector:
             kind = TimingFeedback.SLOW
         elif fast >= self.MIN_COLOURED_PIXELS and fast >= slow * 2:
             kind = TimingFeedback.FAST
-        if kind != self._streak_kind:
-            self._streak_kind = kind
-            self._streak = 1
-        else:
-            self._streak += 1
+        self._recent.append(kind)
         if kind is not None:
             self.sightings += 1
-        # 只在信号首次达到持续帧数时返回一次，避免同一判定条重复计数。
-        if kind is not None and self._streak == self.PERSISTENCE_FRAMES:
+        same = [seen for seen in self._recent if seen == kind and kind is not None]
+        # 每个判定条周期只上报一次（armed）；条彻底消失（窗口全空）后
+        # 才允许下一次上报，避免同一判定条重复计数。
+        if (
+            kind is not None
+            and not self._armed
+            and len(same) >= self.PERSISTENCE_FRAMES
+        ):
+            self._armed = True
             self.reports += 1
             return kind
+        if kind is None and not any(self._recent):
+            self._armed = False
         return None
 
 

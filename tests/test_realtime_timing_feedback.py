@@ -51,6 +51,23 @@ def test_detector_rejects_transient_note_flicker():
     assert detector.detect(feedback_frame(None)) is None
 
 
+def test_detector_reports_two_of_three_window_and_rearms_after_gap():
+    # 3 帧窗口内同色 ≥2 帧才上报；同一条内不重复；条消失后重新布防。
+    detector = TimingFeedbackDetector()
+    assert detector.detect(feedback_frame(TimingFeedback.FAST)) is None
+    assert detector.detect(feedback_frame(None)) is None
+    assert detector.detect(
+        feedback_frame(TimingFeedback.FAST)
+    ) is TimingFeedback.FAST
+    assert detector.detect(feedback_frame(TimingFeedback.FAST)) is None
+    for _ in range(3):
+        detector.detect(feedback_frame(None))
+    assert detector.detect(feedback_frame(TimingFeedback.FAST)) is None
+    assert detector.detect(
+        feedback_frame(TimingFeedback.FAST)
+    ) is TimingFeedback.FAST
+
+
 def test_controller_counts_one_visible_label_once_and_adjusts_after_a_streak():
     controller = AdaptiveTimingController(
         10, minimum_samples=5, imbalance=4, adjustment_cooldown_seconds=0,

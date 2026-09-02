@@ -1187,8 +1187,13 @@ def test_engine_applies_live_timing_feedback_to_the_planner():
     assert stats.timing_feedback_slow == 25
 
 
-def test_engine_ignores_feedback_while_a_hold_is_active():
-    from agent.realtime.timing_feedback import AdaptiveTimingController
+def test_engine_accepts_feedback_while_a_hold_is_active():
+    # hold 常驻时普通 TAP 的判定条仍是有效漂移证据，不能整段丢弃；
+    # 只有 hold 释放后 / 无近期瞬态输入的时间窗继续屏蔽。
+    from agent.realtime.timing_feedback import (
+        AdaptiveTimingController,
+        TimingFeedback,
+    )
 
     engine, _, planner, _, capture = build()
     planner.has_active_holds = True
@@ -1199,7 +1204,7 @@ def test_engine_ignores_feedback_while_a_hold_is_active():
 
         def detect(self, image):
             self.index += 1
-            return "slow" if self.index % 2 else None
+            return TimingFeedback.SLOW if self.index % 2 else None
 
     engine.timing_feedback_detector = FeedbackDetector()
     engine.timing_controller = AdaptiveTimingController(
@@ -1211,7 +1216,8 @@ def test_engine_ignores_feedback_while_a_hold_is_active():
 
     stats = engine.run(capture, lambda: False, duration_seconds=1, target_fps=60)
 
-    assert planner.offset_changes == []
-    assert stats.timing_feedback_valid == 0
-    assert stats.timing_feedback_ignored == 25
-    assert stats.timing_feedback_ignored_reasons == {"active_hold": 25}
+    assert stats.timing_feedback_valid == 25
+    assert stats.timing_feedback_ignored == 0
+    assert stats.timing_feedback_ignored_reasons == {}
+    # 每 3 个同向样本 +1ms，25 个样本共 8 次调整。
+    assert planner.offset_changes == [1, 2, 3, 4, 5, 6, 7, 8]

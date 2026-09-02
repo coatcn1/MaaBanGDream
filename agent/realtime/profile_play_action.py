@@ -1507,14 +1507,15 @@ class RealtimeProfilePlay(CustomAction):
                     # Normal keeps the gentler defaults.
                     **(
                         {
-                            # 判定条修复后信号更可信，Hard+ 需要更快修正会话级
-                            # 输入延迟漂移（观测到逐局 10-30ms 摆动）。
-                            "step_ms": 4,
-                            "unanimous_step_ms": 10,
-                            "minimum_samples": 2,
-                            "imbalance": 2,
+                            # 判定条 2/3 窗口检测后信号可信；单局常只有 3-4 个
+                            # 非 PERFECT 判定，首个判定条即小幅修正，同向持续
+                            # 再加大步长，尽早跟上逐局 10-30ms 的输入延迟漂移。
+                            "step_ms": 2,
+                            "unanimous_step_ms": 4,
+                            "minimum_samples": 1,
+                            "imbalance": 1,
                             "window_size": 4,
-                            "adjustment_cooldown_seconds": 0.6,
+                            "adjustment_cooldown_seconds": 0.5,
                             "maximum_live_adjustment_ms": 35,
                         }
                         if sliding_holds_enabled(
@@ -1999,7 +2000,7 @@ class RealtimeProfilePlay(CustomAction):
                     "calibration-formal",
                     "visual-evaluation",
                 }
-                and suggestion != effective_timing_offset_ms
+                and suggestion != timing_offset_ms
             ):
                 _persist_profile_timing_offset(settings, suggestion)
             calibration_report = params.get("calibration_report")

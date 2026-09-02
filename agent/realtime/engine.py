@@ -52,6 +52,8 @@ class EngineStats:
     timing_feedback_valid: int = 0
     timing_feedback_ignored: int = 0
     timing_feedback_ignored_reasons: dict[str, int] = field(default_factory=dict)
+    timing_feedback_sightings: int = 0
+    timing_feedback_reports: int = 0
     filtered_adjacent_artifacts: int = 0
     rejected_hold_candidates: int = 0
     terminal_reason: str = ""
@@ -329,6 +331,12 @@ class RealtimeEngine:
                 timing_feedback_ignored_reasons=(
                     self.timing_controller.ignored_reasons
                     if self.timing_controller is not None else {}
+                ),
+                timing_feedback_sightings=int(
+                    getattr(self.timing_feedback_detector, "sightings", 0)
+                ),
+                timing_feedback_reports=int(
+                    getattr(self.timing_feedback_detector, "reports", 0)
                 ),
                 filtered_adjacent_artifacts=int(
                     getattr(self.planner, "filtered_adjacent_artifacts", 0)
@@ -649,7 +657,7 @@ class RealtimeEngine:
                     for action in recorded_actions
                 ):
                     hold_feedback_block_until = max(
-                        hold_feedback_block_until, now + .25
+                        hold_feedback_block_until, now + .15
                     )
                 stage_started = self.clock()
                 if (
@@ -657,10 +665,11 @@ class RealtimeEngine:
                     and self.timing_controller is not None
                 ):
                     feedback = self.timing_feedback_detector.detect(image)
-                    if self.planner.has_active_holds:
-                        eligible = False
-                        ignored_reason = "active_hold"
-                    elif now < hold_feedback_block_until:
+                    # hold 常驻期间普通 TAP 的 FAST/SLOW 判定条仍是有效信号；
+                    # 整段丢弃会让 drift 完全失去局内修正（实机曾出现 10 个
+                    # FAST 全程 valid=0）。hold 尾判定假信号由下方
+                    # recent_hold_release 窗口单独屏蔽。
+                    if now < hold_feedback_block_until:
                         eligible = False
                         ignored_reason = "recent_hold_release"
                     elif now - last_transient_action_at > .6:
