@@ -39,14 +39,20 @@ void test_loopback_publish_delivers_exact_bytes() {
     CHECK(client.connect("127.0.0.1", port));
     CHECK(client.connected());
 
-    const std::string payload = "d 0 10 20 50\nc\nw 12\nu 0\nc\n";
-    CHECK(client.publish(payload));
-
     timeval timeout{2, 0};
     setsockopt(listener, SOL_SOCKET, SO_RCVTIMEO,
                reinterpret_cast<const char*>(&timeout), sizeof(timeout));
     const SOCKET accepted = accept(listener, nullptr, nullptr);
     CHECK(accepted != INVALID_SOCKET);
+    // 真实 minitouch 在连接建立后立即下发握手头，客户端必须先读头再发脚本。
+    const std::string header = "v 1\n^ 10 1280 720 255\n$ 1234\n";
+    CHECK(send(accepted, header.data(), static_cast<int>(header.size()), 0)
+          == static_cast<int>(header.size()));
+    CHECK_EQ(client.receive(64, 500), header);
+
+    const std::string payload = "d 0 10 20 50\nc\nw 12\nu 0\nc\n";
+    CHECK(client.publish(payload));
+
     std::string received(payload.size(), '\0');
     int total = 0;
     while (total < static_cast<int>(payload.size())) {

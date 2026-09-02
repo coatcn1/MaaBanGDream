@@ -407,6 +407,11 @@ PYBIND11_MODULE(maabangdream_realtime, module) {
                 return self.publish(bytes);
             },
             py::arg("bytes"))
+        .def("receive",
+            [](MinitouchClient& self, std::size_t max_bytes, int timeout_ms) {
+                return self.receive(max_bytes, timeout_ms);
+            },
+            py::arg("max_bytes"), py::arg("timeout_ms") = 500)
         .def("close", &MinitouchClient::close)
         .def_property_readonly("connected",
             [](const MinitouchClient& self) { return self.connected(); });

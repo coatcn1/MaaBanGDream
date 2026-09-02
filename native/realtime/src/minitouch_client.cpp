@@ -89,6 +89,25 @@ bool MinitouchClient::publish(std::string_view bytes) {
     return true;
 }
 
+std::string MinitouchClient::receive(std::size_t max_bytes, int timeout_ms) {
+    if (!connected()) {
+        return {};
+    }
+    const auto handle = reinterpret_cast<SOCKET>(socket_);
+    const DWORD timeout = timeout_ms < 0 ? 0 : static_cast<DWORD>(timeout_ms);
+    setsockopt(handle, SOL_SOCKET, SO_RCVTIMEO,
+               reinterpret_cast<const char*>(&timeout), sizeof(timeout));
+    std::string buffer;
+    buffer.resize(max_bytes);
+    const int count = recv(handle, buffer.data(),
+                           static_cast<int>(max_bytes), 0);
+    if (count <= 0) {
+        return {};
+    }
+    buffer.resize(static_cast<std::size_t>(count));
+    return buffer;
+}
+
 void MinitouchClient::close() noexcept {
     if (socket_ != kInvalidSocket) {
         closesocket(reinterpret_cast<SOCKET>(socket_));

@@ -23,6 +23,9 @@ public:
     bool connect(const std::string& host, int port);
     // 一次性写入全部脚本字节；失败返回 false 并断开连接。
     bool publish(std::string_view bytes);
+    // 读取最多 max_bytes；timeout_ms 内无数据返回空串。用于读取 minitouch
+    // 连接后的握手头（v/^/$ 行）。
+    std::string receive(std::size_t max_bytes, int timeout_ms);
     void close() noexcept;
     bool connected() const noexcept { return socket_ != kInvalidSocket; }
 
