@@ -78,6 +78,9 @@ class NativeMinitouchBackend:
         self._publish_error: str | None = None
         self._device_thread: threading.Thread | None = None
         self._device_error: str | None = None
+        self._last_calib_log_at = 0.0
+        self._logged_offset_ms: float | None = None
+        self._logged_lead_wait = False
 
     @property
     def active(self) -> bool:
@@ -130,6 +133,20 @@ class NativeMinitouchBackend:
                     estimate = min(0.015, max(0.001, round_trip / 2))
                     self._first_read_delay_s = estimate
                     self._probe_published_at = None
+            elif (
+                self._triggered
+                and not self._logged_lead_wait
+                and event["command"].startswith("w ")
+            ):
+                nominal = float(event["command"].split()[1])
+                if nominal >= 100:
+                    self._logged_lead_wait = True
+                    print(
+                        "NativeMinitouch lead_wait "
+                        f"nominal={nominal:.0f}ms "
+                        f"cost={event['cost_ms']:.3f}ms",
+                        flush=True,
+                    )
             self._calibrator.observe(event)
 
     def _start_device(self) -> None:
@@ -139,9 +156,20 @@ class NativeMinitouchBackend:
             # 单程延迟，用它对齐整曲脚本的绝对起点。
             self._probe_published_at = self._clock()
             self._device.publish("c\nw 0\nc\n")
+            print(
+                "NativeMinitouch device_ready "
+                f"max={self._device.max_x}x{self._device.max_y} "
+                f"contacts={self._device.max_contacts}",
+                flush=True,
+            )
         except Exception as exc:  # noqa: BLE001 - 失败回退 Legacy
             self._device_error = f"{type(exc).__name__}: {exc}"
             self._device.stop()
+            print(
+                "NativeMinitouch device_start_failed "
+                f"reason={self._device_error}",
+                flush=True,
+            )
 
     def frame(self, now: float, planner: Any) -> None:
         """每帧由引擎调用：驱动设备启动、谱面触发与 jlog 归集。"""
@@ -159,6 +187,10 @@ class NativeMinitouchBackend:
             if self._device_error is not None:
                 self._publish_error = self._device_error
                 self._state = "finished"
+                print(
+                    f"NativeMinitouch disabled reason={self._device_error}",
+                    flush=True,
+                )
                 return
             if not self._device.connected:
                 self._publish_error = "minitouch 未连接"
@@ -170,14 +202,29 @@ class NativeMinitouchBackend:
             return
         if self._state == "ready":
             if not bool(getattr(planner, "chart_calibrated", False)):
+                if now - self._last_calib_log_at > 3.0:
+                    self._last_calib_log_at = now
+                    print(
+                        "NativeMinitouch waiting_calibration "
+                        f"chart_calibrated=False "
+                        f"disable_reason={getattr(planner, 'chart_disable_reason', None)}",
+                        flush=True,
+                    )
                 return
             offset_ms = float(
                 getattr(planner, "chart_song_offset_ms", None) or 0.0
             )
             self._song_offset_s = offset_ms / 1000.0
+            # 时间域换算：引擎 now 是 perf_counter 绝对值，而 C++ 编译器把
+            # due_s - song_offset_s 视为“相对锚点的引擎秒”。统一换算到相对
+            # 域，否则绝对时间戳会与谱面秒相减，把所有动作都判成已过期。
+            song_now = getattr(planner, "song_time_s")(now)
+            if song_now is None:
+                return
+            relative_now = song_now - self._song_offset_s
             # 锁定可能晚于首音：只编译尚未来得及演奏的动作，已过去的
             # 判定交给 Legacy 已派发的输入，避免脚本补按造成双按。
-            cutoff = now + 0.05
+            cutoff = relative_now + 0.05
             future = [
                 action
                 for action in self._actions
@@ -185,16 +232,41 @@ class NativeMinitouchBackend:
             ]
             if not future:
                 self._state = "finished"
+                print(
+                    "NativeMinitouch no_future_actions "
+                    f"offset_ms={offset_ms:.3f} "
+                    f"song_now={song_now:.3f}",
+                    flush=True,
+                )
                 return
             first_due = (
                 float(future[0]["due_s"]) - self._song_offset_s
             )
+            if self._logged_offset_ms != offset_ms:
+                self._logged_offset_ms = offset_ms
+                print(
+                    "NativeMinitouch calibrated "
+                    f"offset_ms={offset_ms:.3f} "
+                    f"future={len(future)}/{len(self._actions)} "
+                    f"first_due_s={first_due:.3f} "
+                    f"relative_now={relative_now:.3f} "
+                    f"lead_ms={(first_due - relative_now) * 1000:.1f}",
+                    flush=True,
+                )
             # 触发窗口：临近首音时立即整曲下发；脚本内的首段 w 吸收剩余
             # 等待，设备端执行不受 PC 帧率影响。
-            lead = first_due - now
+            lead = first_due - relative_now
             if lead > 1.2:
+                if now - self._last_calib_log_at > 2.0:
+                    self._last_calib_log_at = now
+                    print(
+                        "NativeMinitouch armed "
+                        f"lead_ms={lead * 1000:.1f} "
+                        f"song_offset_ms={offset_ms:.3f}",
+                        flush=True,
+                    )
                 return
-            start_engine_time = now + self._first_read_delay_s
+            start_engine_time = relative_now + self._first_read_delay_s
             try:
                 script = self._compiler.compile(
                     future,
@@ -206,6 +278,11 @@ class NativeMinitouchBackend:
             except Exception as exc:  # noqa: BLE001 - 失败回退 Legacy
                 self._publish_error = f"{type(exc).__name__}: {exc}"
                 self._state = "finished"
+                print(
+                    "NativeMinitouch trigger_failed "
+                    f"reason={self._publish_error}",
+                    flush=True,
+                )
                 return
             self._triggered = True
             self._state = "triggered"
@@ -223,12 +300,29 @@ class NativeMinitouchBackend:
             )
             return
         if self._state == "triggered":
-            if self._finished_at_s is not None and now >= self._finished_at_s:
-                self._state = "finished"
+            if self._finished_at_s is not None:
+                song_now = getattr(planner, "song_time_s")(now)
+                if (
+                    song_now is not None
+                    and song_now - self._song_offset_s >= self._finished_at_s
+                ):
+                    self._state = "finished"
             return
 
     def stop(self) -> None:
         """停止/异常/终态清理：r 释放触点并拆除设备端进程。"""
+        offsets = self._calibrator.offsets
+        print(
+            "NativeMinitouch session_stats "
+            f"triggered={self._triggered} "
+            f"jlog_events={self._calibrator.event_count} "
+            f"down={offsets.down_ms:.3f} up={offsets.up_ms:.3f} "
+            f"move={offsets.move_ms:.3f} wait={offsets.wait_ms:.3f} "
+            f"interval={offsets.interval_ms:.3f} "
+            f"first_read_delay_ms={self.first_read_delay_ms:.3f} "
+            f"publish_error={self._publish_error}",
+            flush=True,
+        )
         try:
             self._device.stop()
         finally:
