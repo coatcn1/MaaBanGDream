@@ -1442,6 +1442,7 @@ class RealtimeProfilePlay(CustomAction):
             )
         touch = None
         recorder = None
+        native_backend = None
         try:
             require_game_foreground(controller)
             # Foreground verification is intentionally outside the realtime
@@ -1471,6 +1472,45 @@ class RealtimeProfilePlay(CustomAction):
                     f"mode={'video' if debug_recording else 'trace-only'}",
                     flush=True,
                 )
+            if (
+                bool(runtime_options.get("native_realtime_enabled", False))
+                and chart_timeline is not None
+                and selected_chart is not None
+            ):
+                try:
+                    from .native_play import NativeMinitouchBackend
+
+                    adb_info: dict = {}
+                    try:
+                        adb_info = dict(controller.info or {})
+                    except Exception:
+                        adb_info = {}
+                    native_backend = NativeMinitouchBackend(
+                        selected_chart.path,
+                        adb_path=str(
+                            adb_info.get(
+                                "adb_path", "E:/leidian/mrfz/adb.exe"
+                            )
+                        ),
+                        serial=str(
+                            adb_info.get("adb_serial", "emulator-7554")
+                        ),
+                        judgement_y=565,
+                        press_bias_ms=timing_offset_ms,
+                    )
+                    print(
+                        "RealtimeProfilePlay native_minitouch=on "
+                        f"chart={selected_chart.path} "
+                        f"press_bias_ms={timing_offset_ms}",
+                        flush=True,
+                    )
+                except Exception as exc:
+                    print(
+                        "RealtimeProfilePlay native_minitouch=off "
+                        f"reason={type(exc).__name__}: {exc}",
+                        flush=True,
+                    )
+                    native_backend = None
             engine = RealtimeEngine(
                 NoteDetector(),
                 RealtimePlanner(
@@ -1524,6 +1564,7 @@ class RealtimeProfilePlay(CustomAction):
                         else {}
                     ),
                 ),
+                native_backend=native_backend,
             )
         except Exception as setup_error:
             cleanup_errors = []
@@ -1541,6 +1582,14 @@ class RealtimeProfilePlay(CustomAction):
                 except Exception as cleanup_error:
                     cleanup_errors.append(
                         f"touch_close={type(cleanup_error).__name__}: {cleanup_error}"
+                    )
+            if native_backend is not None:
+                try:
+                    native_backend.stop()
+                except Exception as cleanup_error:
+                    cleanup_errors.append(
+                        "native_backend_stop="
+                        f"{type(cleanup_error).__name__}: {cleanup_error}"
                     )
             reason = f"preflight error: {type(setup_error).__name__}: {setup_error}"
             preflight_stats = EngineStats(

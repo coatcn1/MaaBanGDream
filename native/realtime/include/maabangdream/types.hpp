@@ -137,6 +137,9 @@ struct EngineConfig {
     double judgement_y = 565.0;
     // 正值 = 提前输入（沿用 Python 约定：press_bias_s = -ms/1000）。
     int press_bias_ms = 0;
+    // 单个 w 命令的最大等待毫秒。更长的等待会被切分成多段 w+c，
+    // 把停止/异常时 `r`（panic reset）的生效延迟限制在这个上限内。
+    int max_wait_ms = 250;
     double song_offset_s = 0.0;
     std::array<float, kLaneCount> lane_centers = {
         190.0F, 340.0F, 490.0F, 640.0F, 790.0F, 940.0F, 1090.0F,

@@ -63,10 +63,12 @@ void test_basic_hold_lifecycle_ordering() {
     auto script = compiler.compile(actions, config, 0.0);
     std::string text = join(script);
 
-    CHECK(text.find("w 1000\nd 2") != std::string::npos);
-    CHECK(text.find("w 500\nd ") != std::string::npos);
-    // tap 按下 12ms 计入时间线，up 的 wait 相应缩短为 488ms。
-    CHECK(text.find("w 488\nu 2") != std::string::npos);
+    // 长等待被切成 250ms 段：1000ms = 4×250，500ms = 2×250。
+    CHECK(text.find("w 250\nd 2") != std::string::npos);
+    CHECK(text.find("w 250\nd ") != std::string::npos);
+    // tap 按下 12ms 计入时间线，up 的 wait 相应缩短为 488ms，
+    // 再按 250ms 分段为 250 + 238。
+    CHECK(text.find("w 238\nu 2") != std::string::npos);
     // tap 使用轮转触点 7，不与 hold 触点 2 冲突。
     CHECK(text.find("\nd 7 ") != std::string::npos);
 }
@@ -102,8 +104,9 @@ void test_per_type_offset_shortens_waits_with_clamp() {
     };
     auto script = compiler.compile(actions, config, 0.0);
     const std::string text = join(script);
-    // down 5ms 按 ±1ms 上限缩短后续 w：第二段 500ms 变 499ms。
-    CHECK(text.find("w 499\n") != std::string::npos);
+    // down 5ms 按 ±1ms 上限缩短后续 w：第二段 500ms 变 499ms，
+    // 切段后呈现为 250 + 249。
+    CHECK(text.find("w 249\n") != std::string::npos);
     CHECK(sum_waits(script) == 1499);
 }
 
@@ -134,7 +137,7 @@ void test_transient_contact_avoids_active_hold() {
     auto script = compiler.compile(actions, config, 0.0);
     std::string text = join(script);
     // 触点 7 被 hold 占用，tap 必须落到 8。
-    CHECK(text.find("w 900\nd 8 ") != std::string::npos);
+    CHECK(text.find("w 150\nd 8 ") != std::string::npos);
 }
 
 void test_song_offset_and_press_bias_map_to_engine_time() {
@@ -148,7 +151,9 @@ void test_song_offset_and_press_bias_map_to_engine_time() {
     auto script = compiler.compile(actions, config, 0.0);
     // 2.0 - 0.5 - 0.004 = 1.496s -> 1496ms；w 前必有 c 行。
     const std::string text = join(script);
-    CHECK(text.find("w 1496\n") != std::string::npos);
+    CHECK(text.find("w 246\n") != std::string::npos);
+    // 1496ms 前导 + tap 内部 12ms 按压 = 1508ms。
+    CHECK(sum_waits(script) == 1508);
 }
 
 void test_flick_emits_down_move_up_swipe() {

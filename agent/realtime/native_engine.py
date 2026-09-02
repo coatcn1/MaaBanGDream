@@ -115,6 +115,25 @@ def compile_touch_script(
     )
 
 
+def touch_script_compiler(
+    offsets: dict[str, float] | None = None,
+) -> Any:
+    """构造带跨切片状态（残差/取整损失）的 C++ 脚本编译器。"""
+    if not _load():
+        raise RuntimeError(
+            f"Native 模块不可用：{_import_error or 'unknown error'}"
+        )
+    latency = offsets or {}
+    native_offsets = _module.TouchLatencyOffsets(
+        float(latency.get("down_ms", 0.0)),
+        float(latency.get("up_ms", 0.0)),
+        float(latency.get("move_ms", 0.0)),
+        float(latency.get("wait_ms", 0.0)),
+        float(latency.get("interval_ms", 0.0)),
+    )
+    return _module.TouchScriptCompiler(native_offsets)
+
+
 def minitouch_client() -> Any:
     """C++ 实现的 minitouch 脚本 TCP 发布端（传输不参与时序）。"""
     if not _load():

@@ -121,12 +121,24 @@ std::vector<std::string> TouchScriptCompiler::compile(
         wait_ms -= loss_adjust;
         loss -= loss_adjust;
         wait_ms = std::max(0.0, wait_ms);
-        const long rounded = std::lround(wait_ms);
-        loss -= wait_ms - static_cast<double>(rounded);
-        script.push_back("c\n");
-        if (rounded > 0) {
-            script.push_back(line({"w ", std::to_string(rounded)}));
-            cursor += static_cast<double>(rounded) / kMillis;
+        // 分段等待：单个 w 阻塞设备端读循环，切小段可把停止/异常时
+        // panic reset（r）的生效延迟限制在 max_wait_ms 内。
+        const double chunk_ms = std::max(1, config.max_wait_ms);
+        while (wait_ms > 0.0) {
+            const double piece = std::min(wait_ms, chunk_ms);
+            const long rounded = std::lround(piece);
+            if (rounded > 0) {
+                loss -= piece - static_cast<double>(rounded);
+                script.push_back("c\n");
+                script.push_back(line({"w ", std::to_string(rounded)}));
+                cursor += static_cast<double>(rounded) / kMillis;
+                wait_ms -= piece;
+            } else {
+                // piece < 0.5ms 取整为 0：直接丢弃该余量，损失记入
+                // rounding_loss 由下一个 w 补偿，避免死循环。
+                loss -= piece;
+                wait_ms = 0.0;
+            }
         }
     };
     auto emit_command = [&](const std::string& text) {

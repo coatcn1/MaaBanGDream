@@ -21,6 +21,7 @@ _HOT_PATH_STAGES = (
     "life",
     "detector",
     "planner",
+    "native_backend",
     "timing_feedback",
     "dispatch",
     "recorder_enqueue",
@@ -92,6 +93,7 @@ class RealtimeEngine:
         debug_recorder: DebugRecorder | None = None,
         timing_feedback_detector: TimingFeedbackDetector | None = None,
         timing_controller: AdaptiveTimingController | None = None,
+        native_backend: object | None = None,
     ) -> None:
         self.detector = detector
         self.planner = planner
@@ -106,9 +108,19 @@ class RealtimeEngine:
         self.debug_recorder = debug_recorder
         self.timing_feedback_detector = timing_feedback_detector
         self.timing_controller = timing_controller
+        # Native minitouch 整曲后端（默认关闭）。激活期间谱面触控全部由
+        # 设备端脚本接管，本引擎只保留视觉检测、生命/结算与收尾职责。
+        self.native_backend = native_backend
         # 谱面按压（reason=chart-predicted）按到期时刻派发，避免绑定到 60fps
         # 截图帧造成 ±8ms 的量化抖动；见 run() 中的等待间隙派发。
         self._scheduled_actions: list = []
+
+    def native_backend_takeover(self) -> bool:
+        """Native 后端是否已接管谱面触控（触发后保持接管直至结束）。"""
+        backend = self.native_backend
+        return bool(
+            backend is not None and getattr(backend, "takeover", False)
+        )
 
     def run(
         self,
@@ -188,6 +200,7 @@ class RealtimeEngine:
         hold_feedback_block_until = float("-inf")
         scheduled_actions = self._scheduled_actions
         scheduled_actions.clear()
+        native_took_over = False
 
         def record_stage_sample(stage: str, elapsed_ms: float) -> None:
             stage_samples_ms[stage].append(elapsed_ms)
@@ -298,6 +311,7 @@ class RealtimeEngine:
                     ),
                 }
                 for stage, samples in stage_samples_ms.items()
+                if samples
             }
             return EngineStats(
                 processed_frames=frames,
@@ -403,18 +417,19 @@ class RealtimeEngine:
                         action for action in scheduled_actions
                         if action.timestamp > now
                     ]
-                    self.touch.dispatch(due_now)
-                    actions_count += len(due_now)
-                    for action in due_now:
-                        kind = action.kind.value
-                        action_counts[kind] = (
-                            action_counts.get(kind, 0) + 1
-                        )
-                    if any(
-                        action.kind.value in {"tap", "flick"}
-                        for action in due_now
-                    ):
-                        last_transient_action_at = now
+                    if not self.native_backend_takeover():
+                        self.touch.dispatch(due_now)
+                        actions_count += len(due_now)
+                        for action in due_now:
+                            kind = action.kind.value
+                            action_counts[kind] = (
+                                action_counts.get(kind, 0) + 1
+                            )
+                        if any(
+                            action.kind.value in {"tap", "flick"}
+                            for action in due_now
+                        ):
+                            last_transient_action_at = now
                 if now < next_frame:
                     # Pace BEFORE capturing. Capturing first and then
                     # discarding the frame whenever the loop is early wastes
@@ -607,6 +622,44 @@ class RealtimeEngine:
                 record_stage_sample(
                     "planner", (self.clock() - stage_started) * 1000
                 )
+                # Native minitouch 整曲后端：谱面锁定后一次性下发脚本，
+                # 触发后本引擎停止派发谱面触控，只保留视觉/生命/结算职责。
+                if self.native_backend is not None:
+                    stage_started = self.clock()
+                    try:
+                        self.native_backend.frame(now, self.planner)
+                    except Exception as exc:  # noqa: BLE001 - 后端异常回退 Legacy
+                        print(
+                            "RealtimeNativeBackend "
+                            f"error={type(exc).__name__}: {exc}",
+                            flush=True,
+                        )
+                    # 仅后端存在时统计该阶段，保持 Legacy 阶段集合不变。
+                    record_stage_sample(
+                        "native_backend",
+                        (self.clock() - stage_started) * 1000,
+                    )
+                if self.native_backend_takeover():
+                    # 谱面触控已由设备端脚本接管：丢弃本帧谱面动作与排期。
+                    scheduled_actions.clear()
+                    actions = []
+                    if not native_took_over:
+                        # 接管瞬间先释放 Legacy 触点，避免脚本与旧 hold
+                        # 在同一个物理触点槽上冲突。
+                        native_took_over = True
+                        synchronize_touch = getattr(
+                            self.touch, "synchronize", None
+                        )
+                        if synchronize_touch is not None:
+                            try:
+                                synchronize_touch()
+                            except Exception as exc:  # noqa: BLE001
+                                print(
+                                    "RealtimeNativeBackend "
+                                    f"legacy_release_failed="
+                                    f"{type(exc).__name__}: {exc}",
+                                    flush=True,
+                                )
                 # 谱面动作拆成“立即”与“到期派发”。DOWN/MOVE 必须立即派发
                 # 以维持 hold 触点生命周期与视觉跟随 MOVE 的因果顺序；
                 # TAP/FLICK/UP 按到期时刻毫秒级发送，消除帧对齐量化。
@@ -690,7 +743,7 @@ class RealtimeEngine:
                     "timing_feedback", (self.clock() - stage_started) * 1000
                 )
                 stage_started = self.clock()
-                if actions:
+                if actions and not self.native_backend_takeover():
                     self.touch.dispatch(actions)
                     actions_count += len(actions)
                     for action in actions:
@@ -779,7 +832,7 @@ class RealtimeEngine:
                 previous_tail_stage_ms = {
                     stage: stage_samples_ms[stage][-1]
                     for stage in _HOT_PATH_STAGES
-                    if stage != "capture"
+                    if stage != "capture" and stage_samples_ms[stage]
                 }
                 previous_frame_context = current_frame_context
                 frames += 1
@@ -831,6 +884,13 @@ class RealtimeEngine:
                 cleanup_errors.append(
                     f"touch_close={type(exc).__name__}: {exc}"
                 )
+            if self.native_backend is not None:
+                try:
+                    self.native_backend.stop()
+                except Exception as exc:
+                    cleanup_errors.append(
+                        f"native_backend_stop={type(exc).__name__}: {exc}"
+                    )
             if on_life_safety is not None and safety_reading is not None:
                 try:
                     on_life_safety(safety_reading)

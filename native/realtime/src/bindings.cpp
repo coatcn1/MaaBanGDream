@@ -103,6 +103,9 @@ EngineConfig config_from_dict(const py::dict& source) {
     if (source.contains("press_bias_ms")) {
         config.press_bias_ms = source["press_bias_ms"].cast<int>();
     }
+    if (source.contains("max_wait_ms")) {
+        config.max_wait_ms = source["max_wait_ms"].cast<int>();
+    }
     if (source.contains("song_offset_s")) {
         config.song_offset_s = source["song_offset_s"].cast<double>();
     }
