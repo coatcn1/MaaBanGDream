@@ -87,7 +87,7 @@ class NativeMinitouchDevice:
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=20,
+            timeout=10,
         )
         if check and completed.returncode != 0:
             raise MinitouchStartError(
@@ -278,6 +278,14 @@ class NativeMinitouchDevice:
             except Exception:  # noqa: BLE001
                 pass
             self._client = None
+        if self._process is not None:
+            # 先断开本地 adb shell 客户端：设备端 minitouch 随之退出，
+            # 不依赖可能被 LDPlayer adb 串行化的远程 kill 命令。
+            try:
+                self._process.kill()
+            except Exception:  # noqa: BLE001
+                pass
+            self._process = None
         if self._port:
             self._run_adb(
                 "forward", "--remove", f"tcp:{self._port}", check=False
@@ -286,12 +294,3 @@ class NativeMinitouchDevice:
         if self._pid is not None:
             self._run_adb("shell", "kill", "-9", str(self._pid), check=False)
             self._pid = None
-        self._run_adb(
-            "shell", "pkill", "-9", "-f", "minitouch_maabangdream", check=False
-        )
-        if self._process is not None:
-            try:
-                self._process.kill()
-            except Exception:  # noqa: BLE001
-                pass
-            self._process = None

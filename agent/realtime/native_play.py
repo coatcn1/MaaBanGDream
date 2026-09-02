@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import time
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
@@ -75,6 +76,8 @@ class NativeMinitouchBackend:
         self._seen_logs: set[str] = set()
         self._probe_published_at: float | None = None
         self._publish_error: str | None = None
+        self._device_thread: threading.Thread | None = None
+        self._device_error: str | None = None
 
     @property
     def active(self) -> bool:
@@ -130,22 +133,40 @@ class NativeMinitouchBackend:
             self._calibrator.observe(event)
 
     def _start_device(self) -> None:
-        self._device.start()
-        # 首读延迟探测：发一条 w 0，回读 jlog 估计 publish->设备读取的
-        # 单程延迟，用它对齐整曲脚本的绝对起点。
-        self._probe_published_at = self._clock()
-        self._device.publish("c\nw 0\nc\n")
-        self._state = "ready"
+        try:
+            self._device.start()
+            # 首读延迟探测：发一条 w 0，回读 jlog 估计 publish->设备读取的
+            # 单程延迟，用它对齐整曲脚本的绝对起点。
+            self._probe_published_at = self._clock()
+            self._device.publish("c\nw 0\nc\n")
+        except Exception as exc:  # noqa: BLE001 - 失败回退 Legacy
+            self._device_error = f"{type(exc).__name__}: {exc}"
+            self._device.stop()
 
     def frame(self, now: float, planner: Any) -> None:
         """每帧由引擎调用：驱动设备启动、谱面触发与 jlog 归集。"""
         self._observe_new_logs()
         if self._state == "idle":
-            try:
-                self._start_device()
-            except Exception as exc:  # noqa: BLE001 - 失败回退 Legacy
-                self._publish_error = f"{type(exc).__name__}: {exc}"
+            if self._device_thread is None:
+                # 设备启动可能阻塞数秒（push/握手），绝不能在引擎热循环里
+                # 同步执行，否则会吞掉整个前奏与谱面锁定窗口。
+                self._device_thread = threading.Thread(
+                    target=self._start_device, daemon=True
+                )
+                self._device_thread.start()
+            if self._device_thread.is_alive():
+                return
+            if self._device_error is not None:
+                self._publish_error = self._device_error
                 self._state = "finished"
+                return
+            if not self._device.connected:
+                self._publish_error = "minitouch 未连接"
+                self._state = "finished"
+                return
+            self._state = "ready"
+            return
+        if self._state == "finished":
             return
         if self._state == "ready":
             if not bool(getattr(planner, "chart_calibrated", False)):
