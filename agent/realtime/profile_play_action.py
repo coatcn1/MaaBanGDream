@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 import traceback
 from dataclasses import dataclass, replace
@@ -59,6 +60,12 @@ from .touch_planner import RealtimePlanner, sliding_holds_enabled
 from .runtime_options import debug_enabled, diagnostic_trace_enabled
 from .performance_settings_action import verified_settings
 from .chart_repository import ChartResolution, LocalChartRepository
+from .native_prearm import (
+    consume_prearmed_backend,
+    controller_adb_endpoint,
+    discard_prearmed_backend,
+    resolve_confirmed_chart,
+)
 
 
 REWARD_CONFIRM_TEMPLATE = PROJECT_ROOT / "resource" / "image" / "result_reward_confirm.png"
@@ -116,25 +123,86 @@ ACHIEVEMENT_LIST_CLOSE_REGION = (0.40, 0.80, 0.60, 0.94)
 _LAST_LIFE_SAFETY_ABORT = False
 
 
+def _native_adb_endpoint(controller) -> tuple[str, str]:
+    """从当前 Maa controller 取 Native 设备端点，缺失时禁止猜测本机路径。"""
+    return controller_adb_endpoint(controller)
+
+
+def _completion_missing_frames(
+    configured_frames: int,
+    *,
+    native: bool,
+    target_fps: int,
+) -> int:
+    """Native 降至 5Hz 后保持结算缺帧门槛的原有时长。"""
+    frames = max(1, int(configured_frames))
+    if not native:
+        return frames
+    return max(1, math.ceil(frames * 5.0 / max(1, int(target_fps))))
+
+
+def _native_execution_gate_failures(
+    native_report: dict[str, object],
+) -> list[str]:
+    """返回 Native 完整性门禁失败项；空列表才允许进入结算解析。"""
+    planned = int(native_report.get("planned", 0))
+    sent = int(native_report.get("sent", 0))
+    executed = int(native_report.get("executed", 0))
+    underflows = int(native_report.get("underflows", 0))
+    failures = []
+    state = str(native_report.get("state") or "<missing>").lower()
+    session_state = str(
+        native_report.get("session_state") or "<missing>"
+    ).lower()
+    if state != "finished" or session_state != "finished":
+        failures.append(
+            f"terminal_state={state} session_state={session_state}"
+        )
+    if planned <= 0 or sent != planned or executed != planned:
+        failures.append(
+            f"planned/sent/executed={planned}/{sent}/{executed}"
+        )
+    if not bool(native_report.get("executed_observation_complete", False)):
+        failures.append(
+            "device evidence incomplete: "
+            + str(native_report.get("executed_observation_reason", "unknown"))
+        )
+    if underflows != 0:
+        failures.append(f"queue_underflows={underflows}")
+    for field in (
+        "publisher_error",
+        "publish_error",
+        "device_error",
+        "observation_error",
+        "release_error",
+    ):
+        value = native_report.get(field)
+        if value:
+            failures.append(f"{field}={value}")
+    if native_report.get("release_confirmed") is not True:
+        failures.append("release_confirmed=false")
+    try:
+        stop_latency_ms = float(native_report["stop_latency_ms"])
+    except (KeyError, TypeError, ValueError):
+        failures.append("stop_latency_ms=invalid")
+    else:
+        if not math.isfinite(stop_latency_ms) or stop_latency_ms > 500.0:
+            failures.append(f"stop_latency_ms={stop_latency_ms}")
+    return failures
+
+
 def resolve_local_chart_for_run(
     live_run: LiveRunContext | None,
     difficulty: str,
     *,
     repository: LocalChartRepository | None = None,
 ) -> ChartResolution:
-    """Fail closed unless the prepared screen identity matches this run."""
-    if live_run is None or not live_run.prepared_for_play:
-        return ChartResolution(None, "no fresh song/difficulty identity")
-    if live_run.difficulty.strip().lower() != str(difficulty).strip().lower():
-        return ChartResolution(None, "no fresh song/difficulty identity")
-    repository = repository or LocalChartRepository(
-        PROJECT_ROOT / "resource" / "charts"
-    )
-    return repository.resolve(
-        live_run.song_id,
+    """只解析本轮准备页已经确认过的本地谱面。"""
+    return resolve_confirmed_chart(
+        live_run,
         difficulty,
-        level=getattr(live_run, "song_level", None),
-        title=getattr(live_run, "song_title", None),
+        repository=repository,
+        project_root=PROJECT_ROOT,
     )
 
 
@@ -1248,25 +1316,65 @@ class RealtimeProfilePlay(CustomAction):
             chart_predict_presses = bool(
                 runtime_options.get("chart_predict_presses", False)
             )
+            native_requested = bool(
+                runtime_options.get("native_realtime_enabled", False)
+            )
             chart_timeline = None
             selected_chart = None
-            if chart_prediction_enabled:
+            if chart_prediction_enabled or native_requested:
                 live_run = current_live_run()
                 try:
                     resolution = resolve_local_chart_for_run(
                         live_run,
                         difficulty,
                     )
+                except Exception as exc:
+                    if native_requested:
+                        discard_prearmed_backend(
+                            "profile-chart-resolution-failed"
+                        )
+                        raise RuntimeError(
+                            "Native 已显式启用，但本地谱面解析失败："
+                            f"{type(exc).__name__}: {exc}"
+                        ) from exc
+                    if not isinstance(
+                        exc,
+                        (OSError, ValueError, KeyError, TypeError),
+                    ):
+                        raise
+                    chart_prediction_enabled = False
+                    print(
+                        "RealtimeProfilePlay chart_prediction=off "
+                        f"reason=local chart repository invalid: {exc}",
+                        flush=True,
+                    )
+                else:
                     chart_reason = resolution.reason
                     if resolution.selection is not None:
                         selected_chart = resolution.selection
                         chart_timeline = selected_chart.timeline
-                        print(
-                            "RealtimeProfilePlay chart_prediction=on "
-                            f"bestdori_song_id={selected_chart.bestdori_song_id} "
-                            f"difficulty={selected_chart.difficulty} "
-                            f"song={live_run.song_id}",
-                            flush=True,
+                        if chart_prediction_enabled:
+                            print(
+                                "RealtimeProfilePlay chart_prediction=on "
+                                "bestdori_song_id="
+                                f"{selected_chart.bestdori_song_id} "
+                                f"difficulty={selected_chart.difficulty} "
+                                f"song={live_run.song_id}",
+                                flush=True,
+                            )
+                        elif native_requested:
+                            print(
+                                "RealtimeProfilePlay native_chart=resolved "
+                                f"chart={selected_chart.path}",
+                                flush=True,
+                            )
+                    elif native_requested:
+                        discard_prearmed_backend(
+                            "profile-chart-resolution-missing"
+                        )
+                        raise RuntimeError(
+                            "Native 已显式启用，但当前歌曲没有经过确认的"
+                            f"本地谱面：{chart_reason}"
                         )
                     else:
                         chart_prediction_enabled = False
@@ -1275,13 +1383,6 @@ class RealtimeProfilePlay(CustomAction):
                             f"reason={chart_reason}",
                             flush=True,
                         )
-                except (OSError, ValueError, KeyError, TypeError) as exc:
-                    chart_prediction_enabled = False
-                    print(
-                        "RealtimeProfilePlay chart_prediction=off "
-                        f"reason=local chart repository invalid: {exc}",
-                        flush=True,
-                    )
             (
                 is_rehearsal,
                 continue_after_depleted,
@@ -1444,6 +1545,30 @@ class RealtimeProfilePlay(CustomAction):
         recorder = None
         native_backend = None
         try:
+            if native_requested:
+                if selected_chart is None:
+                    discard_prearmed_backend("profile-native-chart-missing")
+                    raise RuntimeError(
+                        "Native 已显式启用，但当前歌曲没有经过确认的本地谱面"
+                    )
+                try:
+                    native_backend = consume_prearmed_backend(
+                        live_run.run_id,
+                        selected_chart.path,
+                    )
+                    native_backend.configure_timing_offset(timing_offset_ms)
+                    print(
+                        "RealtimeProfilePlay native_prearmed=consumed "
+                        f"chart={selected_chart.path} "
+                        f"timing_offset_ms={timing_offset_ms}",
+                        flush=True,
+                    )
+                except Exception as exc:
+                    raise RuntimeError(
+                        "Native 预武装消费失败；已禁止回退 Legacy，"
+                        "且禁止开演后重新构造："
+                        f"{type(exc).__name__}: {exc}"
+                    ) from exc
             require_game_foreground(controller)
             # Foreground verification is intentionally outside the realtime
             # touch hot path. A dumpsys query before every down/move/up blocks
@@ -1472,45 +1597,6 @@ class RealtimeProfilePlay(CustomAction):
                     f"mode={'video' if debug_recording else 'trace-only'}",
                     flush=True,
                 )
-            if (
-                bool(runtime_options.get("native_realtime_enabled", False))
-                and chart_timeline is not None
-                and selected_chart is not None
-            ):
-                try:
-                    from .native_play import NativeMinitouchBackend
-
-                    adb_info: dict = {}
-                    try:
-                        adb_info = dict(controller.info or {})
-                    except Exception:
-                        adb_info = {}
-                    native_backend = NativeMinitouchBackend(
-                        selected_chart.path,
-                        adb_path=str(
-                            adb_info.get(
-                                "adb_path", "E:/leidian/mrfz/adb.exe"
-                            )
-                        ),
-                        serial=str(
-                            adb_info.get("adb_serial", "emulator-7554")
-                        ),
-                        judgement_y=565,
-                        press_bias_ms=timing_offset_ms,
-                    )
-                    print(
-                        "RealtimeProfilePlay native_minitouch=on "
-                        f"chart={selected_chart.path} "
-                        f"press_bias_ms={timing_offset_ms}",
-                        flush=True,
-                    )
-                except Exception as exc:
-                    print(
-                        "RealtimeProfilePlay native_minitouch=off "
-                        f"reason={type(exc).__name__}: {exc}",
-                        flush=True,
-                    )
-                    native_backend = None
             engine = RealtimeEngine(
                 NoteDetector(),
                 RealtimePlanner(
@@ -1532,7 +1618,11 @@ class RealtimeProfilePlay(CustomAction):
                 life_guard=LifeGuard(),
                 completion_guard=(
                     PlayfieldCompletionGuard(
-                        int(params.get("completion_missing_frames", 120))
+                        _completion_missing_frames(
+                            int(params.get("completion_missing_frames", 120)),
+                            native=native_requested,
+                            target_fps=target_fps,
+                        )
                     )
                     if params.get("wait_for_completion")
                     else None
@@ -1602,6 +1692,7 @@ class RealtimeProfilePlay(CustomAction):
                 cleanup_failed=bool(cleanup_errors),
                 cleanup_errors=tuple(cleanup_errors),
                 recorder_error=recorder_error,
+                engine_mode="native" if native_requested else "legacy",
             )
             try:
                 write_failure_artifacts(
@@ -1674,6 +1765,18 @@ class RealtimeProfilePlay(CustomAction):
                 ),
                 startup_timeout_seconds=startup_timeout_seconds,
             )
+            if native_requested and not stats.stopped:
+                native_report = dict(stats.native_report)
+                native_failures = _native_execution_gate_failures(
+                    native_report
+                )
+                if native_failures:
+                    native_error = RuntimeError(
+                        "Native 演奏未通过完整性门禁："
+                        + "; ".join(native_failures)
+                    )
+                    native_error.realtime_stats = stats
+                    raise native_error
         except Exception as exc:
             error_stats = getattr(exc, "realtime_stats", None)
             if error_stats is not None and context.tasker.stopping:
@@ -1718,6 +1821,7 @@ class RealtimeProfilePlay(CustomAction):
                     cleanup_failed=bool(cleanup_errors),
                     cleanup_errors=tuple(cleanup_errors),
                     recorder_error=recorder_error,
+                    engine_mode="native" if native_requested else "legacy",
                 )
                 status = "preflight_error"
             else:
@@ -2004,8 +2108,12 @@ class RealtimeProfilePlay(CustomAction):
                         f"{type(exc).__name__}: {exc}"
                     )
             effective_timing_offset_ms = stats.final_timing_offset_ms
-            suggestion = adjusted_timing_offset(
-                effective_timing_offset_ms, result_data,
+            suggestion = (
+                effective_timing_offset_ms
+                if stats.engine_mode == "native"
+                else adjusted_timing_offset(
+                    effective_timing_offset_ms, result_data,
+                )
             )
             stable_payload = _result_report_payload(
                 result_data,
@@ -2042,6 +2150,7 @@ class RealtimeProfilePlay(CustomAction):
             # 修正会话输入延迟漂移；下一次开演即使用修正后的起始偏移。
             if (
                 settings is not None
+                and stats.engine_mode != "native"
                 and not is_rehearsal
                 and run_mode
                 not in {

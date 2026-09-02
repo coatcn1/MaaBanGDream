@@ -1,7 +1,7 @@
 """Native Realtime Engine V2 的 Python 适配层。
 
 边界（见交接文档）：
-- Native 默认关闭，任何 import / 编译 / 同步失败都回退 Python Legacy；
+- Native 默认关闭；一旦显式开启，任何 import / 编译 / 设备失败都 fail-closed；
 - 谱面编译、动作调度、相位同步与定时 minitouch 脚本编译都在 C++ 完成；
 - 脚本的 TCP 发布端也在 C++（MinitouchClient），Python 只做设备进程编排；
 - 本模块不接管用户默认真实演奏，只在显式开启且 Native 可用时被上层选择。
@@ -46,7 +46,7 @@ def _load() -> bool:
         if str(_NATIVE_DIR) not in sys.path:
             sys.path.insert(0, str(_NATIVE_DIR))
         import maabangdream_realtime  # noqa: PLC0415
-    except Exception as exc:  # noqa: BLE001 - 任何导入失败都回退 Legacy
+    except Exception as exc:  # noqa: BLE001 - 由显式选择点决定是否失败
         _import_error = f"{type(exc).__name__}: {exc}"
         return False
     _module = maabangdream_realtime
@@ -70,7 +70,7 @@ def native_version() -> str | None:
 
 
 def compile_chart(chart_path: str | Path) -> Any:
-    """用 Native 编译谱面时间轴；失败抛异常由上层回退 Legacy。"""
+    """用 Native 编译谱面时间轴；失败由本局选择点按独占策略处理。"""
     if not _load():
         raise RuntimeError(
             f"Native 模块不可用：{_import_error or 'unknown error'}"
@@ -161,8 +161,30 @@ def latency_calibrator() -> Any:
     return _module.LatencyCalibrator()
 
 
+def playback_session(
+    *,
+    publish: Any,
+    request_reset: Any = None,
+    fallback_stop: Any = None,
+    clock: Any = None,
+    config: dict[str, object] | None = None,
+) -> Any:
+    """构造 C++ 滚动分块演奏会话。"""
+    if not _load():
+        raise RuntimeError(
+            f"Native 模块不可用：{_import_error or 'unknown error'}"
+        )
+    return _module.PlaybackSession(
+        publish=publish,
+        request_reset=request_reset,
+        fallback_stop=fallback_stop,
+        clock=clock,
+        config=dict(config or {}),
+    )
+
+
 class NativeRealtimeEngine:
-    """第一阶段引擎外观：谱面编译 + 截止时间调度 + 相位同步（全部离线可测）。"""
+    """离线诊断外观：谱面编译、逐 tick 调度与视觉相位同步。"""
 
     def __init__(
         self,
@@ -228,10 +250,15 @@ def resolve_engine(
     *,
     chart_available: bool,
 ) -> str:
-    """上层引擎决策：默认 legacy；Native 需要显式开启 + 可用 + 可靠谱面。"""
+    """上层引擎决策：默认 Legacy；显式 Native 选择必须 fail-closed。"""
     settings = options or {}
     if not bool(settings.get("native_realtime_enabled", False)):
         return "legacy"
     if not chart_available:
-        return "legacy"
-    return "native" if available() else "legacy"
+        raise RuntimeError("Native 已显式启用，但未找到可靠的本地谱面")
+    if not available():
+        raise RuntimeError(
+            "Native 已显式启用，但模块不可用："
+            f"{unavailable_reason() or 'unknown error'}"
+        )
+    return "native"

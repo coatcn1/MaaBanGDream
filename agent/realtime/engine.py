@@ -76,6 +76,8 @@ class EngineStats:
     cleanup_errors: tuple[str, ...] = ()
     recorder_error: str | None = None
     startup_timed_out: bool = False
+    engine_mode: str = "legacy"
+    native_report: dict[str, object] = field(default_factory=dict)
 
 
 class RealtimeEngine:
@@ -116,10 +118,14 @@ class RealtimeEngine:
         self._scheduled_actions: list = []
 
     def native_backend_takeover(self) -> bool:
-        """Native 后端是否已接管谱面触控（触发后保持接管直至结束）。"""
+        """Native 后端是否独占谱面触控。"""
         backend = self.native_backend
         return bool(
-            backend is not None and getattr(backend, "takeover", False)
+            backend is not None
+            and (
+                getattr(backend, "exclusive", False)
+                or getattr(backend, "takeover", False)
+            )
         )
 
     def run(
@@ -200,7 +206,8 @@ class RealtimeEngine:
         hold_feedback_block_until = float("-inf")
         scheduled_actions = self._scheduled_actions
         scheduled_actions.clear()
-        native_took_over = False
+        native_exclusive = self.native_backend_takeover()
+        native_started = False
 
         def record_stage_sample(stage: str, elapsed_ms: float) -> None:
             stage_samples_ms[stage].append(elapsed_ms)
@@ -330,7 +337,9 @@ class RealtimeEngine:
                 ),
                 initial_timing_offset_ms=initial_timing_offset_ms,
                 final_timing_offset_ms=(
-                    self.timing_controller.current_offset_ms
+                    initial_timing_offset_ms
+                    if native_exclusive
+                    else self.timing_controller.current_offset_ms
                     if self.timing_controller is not None
                     else int(getattr(self.planner, "timing_offset_ms", 0))
                 ),
@@ -395,12 +404,18 @@ class RealtimeEngine:
                 stage_timings_ms=stage_timings_ms,
                 frame_interval_outliers=tuple(frame_interval_outliers),
                 startup_timed_out=startup_timed_out,
+                engine_mode="native" if native_exclusive else "legacy",
             )
 
         synchronize_touch = getattr(self.touch, "synchronize", None)
-        if synchronize_touch is not None:
-            synchronize_touch()
         try:
+            if native_exclusive:
+                arm_native = getattr(self.native_backend, "arm", None)
+                if arm_native is None:
+                    raise RuntimeError("Native 后端缺少 arm() 会话接口")
+                arm_native()
+            elif synchronize_touch is not None:
+                synchronize_touch()
             while self.clock() < deadline:
                 if stopping():
                     was_stopped = True
@@ -417,7 +432,7 @@ class RealtimeEngine:
                         action for action in scheduled_actions
                         if action.timestamp > now
                     ]
-                    if not self.native_backend_takeover():
+                    if not native_exclusive:
                         self.touch.dispatch(due_now)
                         actions_count += len(due_now)
                         for action in due_now:
@@ -445,9 +460,12 @@ class RealtimeEngine:
                         )
                     time.sleep(min(0.002, wait_target - now))
                     continue
-                next_frame += interval
-                if now - next_frame > interval:
-                    next_frame = now + interval
+                capture_interval = (
+                    0.2 if native_exclusive and native_started else interval
+                )
+                next_frame += capture_interval
+                if now - next_frame > capture_interval:
+                    next_frame = now + capture_interval
                 stage_started = self.clock()
                 image = capture()
                 now = self.clock()
@@ -455,11 +473,40 @@ class RealtimeEngine:
                 if stopping():
                     was_stopped = True
                     break
+                if native_exclusive and not native_started:
+                    observe_start = getattr(
+                        self.native_backend, "observe_start_frame", None
+                    )
+                    if observe_start is None:
+                        raise RuntimeError(
+                            "Native 后端缺少 observe_start_frame() photogate 接口"
+                        )
+                    first_action_anchor = observe_start(image, now)
+                    if first_action_anchor is None:
+                        frames += 1
+                        if now - started_at >= startup_timeout_seconds:
+                            startup_timed_out = True
+                            record_startup_timeout_frame(
+                                image,
+                                now,
+                                life_status=LifeStatus.UNKNOWN.value,
+                            )
+                            break
+                        # 触发前保持目标高帧率，只做截图和 photogate；不得
+                        # 启动 Legacy detector/planner/touch 或生命监控。
+                        continue
+                    start_native = getattr(self.native_backend, "start", None)
+                    if start_native is None:
+                        raise RuntimeError("Native 后端缺少 start() 会话接口")
+                    start_native(float(first_action_anchor))
+                    native_started = True
+                    # 首拍之后截图只服务生命和终态识别，固定降到约 5Hz。
+                    next_frame = now + 0.2
                 # Flick gestures span several game frames. Progress them here
                 # so input never sleeps inside dispatch and blocks capture.
                 advance_touch = getattr(self.touch, "advance", None)
                 stage_started = self.clock()
-                if advance_touch is not None:
+                if advance_touch is not None and not native_exclusive:
                     advance_touch(now)
                 record_stage_sample(
                     "touch_advance", (self.clock() - stage_started) * 1000
@@ -545,11 +592,22 @@ class RealtimeEngine:
                     record_stage_sample(
                         "life", (self.clock() - stage_started) * 1000
                     )
+                if native_exclusive and native_started:
+                    poll_native = getattr(self.native_backend, "poll", None)
+                    if poll_native is None:
+                        raise RuntimeError("Native 后端缺少 poll() 会话接口")
+                    stage_started = self.clock()
+                    poll_native(now)
+                    record_stage_sample(
+                        "native_backend",
+                        (self.clock() - stage_started) * 1000,
+                    )
+
                 diagnostics: list[dict[str, object]] = []
                 reset_touch = getattr(
                     self.touch, "emergency_release_all", None
                 )
-                if reset_touch is not None:
+                if reset_touch is not None and not native_exclusive:
                     has_live_touches = getattr(
                         self.touch,
                         "has_active_or_pending_contacts",
@@ -611,55 +669,23 @@ class RealtimeEngine:
                             + f" recent_peak={recent_peak_life}",
                             flush=True,
                         )
-                stage_started = self.clock()
-                notes = self.detector.detect(image, now)
-                record_stage_sample(
-                    "detector", (self.clock() - stage_started) * 1000
-                )
-                stage_started = self.clock()
-                actions = self.planner.update(notes, now)
-                diagnostics.extend(self.planner.drain_diagnostics())
-                record_stage_sample(
-                    "planner", (self.clock() - stage_started) * 1000
-                )
-                # Native minitouch 整曲后端：谱面锁定后一次性下发脚本，
-                # 触发后本引擎停止派发谱面触控，只保留视觉/生命/结算职责。
-                if self.native_backend is not None:
-                    stage_started = self.clock()
-                    try:
-                        self.native_backend.frame(now, self.planner)
-                    except Exception as exc:  # noqa: BLE001 - 后端异常回退 Legacy
-                        print(
-                            "RealtimeNativeBackend "
-                            f"error={type(exc).__name__}: {exc}",
-                            flush=True,
-                        )
-                    # 仅后端存在时统计该阶段，保持 Legacy 阶段集合不变。
-                    record_stage_sample(
-                        "native_backend",
-                        (self.clock() - stage_started) * 1000,
-                    )
-                if self.native_backend_takeover():
-                    # 谱面触控已由设备端脚本接管：丢弃本帧谱面动作与排期。
-                    scheduled_actions.clear()
+                if native_exclusive:
+                    # Native 从第 0 帧独占输入；Python 只保留生命与终态监控。
+                    notes = []
                     actions = []
-                    if not native_took_over:
-                        # 接管瞬间先释放 Legacy 触点，避免脚本与旧 hold
-                        # 在同一个物理触点槽上冲突。
-                        native_took_over = True
-                        synchronize_touch = getattr(
-                            self.touch, "synchronize", None
-                        )
-                        if synchronize_touch is not None:
-                            try:
-                                synchronize_touch()
-                            except Exception as exc:  # noqa: BLE001
-                                print(
-                                    "RealtimeNativeBackend "
-                                    f"legacy_release_failed="
-                                    f"{type(exc).__name__}: {exc}",
-                                    flush=True,
-                                )
+                    scheduled_actions.clear()
+                else:
+                    stage_started = self.clock()
+                    notes = self.detector.detect(image, now)
+                    record_stage_sample(
+                        "detector", (self.clock() - stage_started) * 1000
+                    )
+                    stage_started = self.clock()
+                    actions = self.planner.update(notes, now)
+                    diagnostics.extend(self.planner.drain_diagnostics())
+                    record_stage_sample(
+                        "planner", (self.clock() - stage_started) * 1000
+                    )
                 # 谱面动作拆成“立即”与“到期派发”。DOWN/MOVE 必须立即派发
                 # 以维持 hold 触点生命周期与视觉跟随 MOVE 的因果顺序；
                 # TAP/FLICK/UP 按到期时刻毫秒级发送，消除帧对齐量化。
@@ -714,6 +740,8 @@ class RealtimeEngine:
                     )
                 stage_started = self.clock()
                 if (
+                    not native_exclusive
+                    and
                     self.timing_feedback_detector is not None
                     and self.timing_controller is not None
                 ):
@@ -743,7 +771,7 @@ class RealtimeEngine:
                     "timing_feedback", (self.clock() - stage_started) * 1000
                 )
                 stage_started = self.clock()
-                if actions and not self.native_backend_takeover():
+                if actions and not native_exclusive:
                     self.touch.dispatch(actions)
                     actions_count += len(actions)
                     for action in actions:
@@ -864,33 +892,39 @@ class RealtimeEngine:
                 f"{type(exc).__name__}: {exc}"
             )
         finally:
-            try:
-                cleanup = self.planner.reset(self.clock())
-            except Exception as exc:
-                cleanup = []
-                cleanup_errors.append(
-                    f"planner_reset={type(exc).__name__}: {exc}"
-                )
-            try:
-                if cleanup:
-                    self.touch.dispatch(cleanup)
-            except Exception as exc:
-                cleanup_errors.append(
-                    f"cleanup_dispatch={type(exc).__name__}: {exc}"
-                )
+            if not native_exclusive:
+                try:
+                    cleanup = self.planner.reset(self.clock())
+                except Exception as exc:
+                    cleanup = []
+                    cleanup_errors.append(
+                        f"planner_reset={type(exc).__name__}: {exc}"
+                    )
+                try:
+                    if cleanup:
+                        self.touch.dispatch(cleanup)
+                except Exception as exc:
+                    cleanup_errors.append(
+                        f"cleanup_dispatch={type(exc).__name__}: {exc}"
+                    )
+            if self.native_backend is not None:
+                try:
+                    set_terminal_reason = getattr(
+                        self.native_backend, "set_terminal_reason", None
+                    )
+                    if set_terminal_reason is not None and base_stats is not None:
+                        set_terminal_reason(base_stats.terminal_reason)
+                    self.native_backend.stop()
+                except Exception as exc:
+                    cleanup_errors.append(
+                        f"native_backend_stop={type(exc).__name__}: {exc}"
+                    )
             try:
                 self.touch.close()
             except Exception as exc:
                 cleanup_errors.append(
                     f"touch_close={type(exc).__name__}: {exc}"
                 )
-            if self.native_backend is not None:
-                try:
-                    self.native_backend.stop()
-                except Exception as exc:
-                    cleanup_errors.append(
-                        f"native_backend_stop={type(exc).__name__}: {exc}"
-                    )
             if on_life_safety is not None and safety_reading is not None:
                 try:
                     on_life_safety(safety_reading)
@@ -917,17 +951,34 @@ class RealtimeEngine:
                 if terminal_reason
                 else f"实时触控收尾失败: {detail}"
             )
+        native_report: dict[str, object] = {}
+        if native_exclusive and self.native_backend is not None:
+            try:
+                native_report = dict(self.native_backend.report())
+            except Exception as exc:
+                cleanup_errors.append(
+                    f"native_backend_report={type(exc).__name__}: {exc}"
+                )
         final_stats = replace(
             base_stats,
             terminal_reason=terminal_reason,
             cleanup_failed=bool(cleanup_errors),
             cleanup_errors=tuple(cleanup_errors),
             recorder_error=recorder_error,
+            dispatched_actions=(
+                int(native_report.get("sent", 0))
+                if native_exclusive else base_stats.dispatched_actions
+            ),
+            action_counts=(
+                dict(native_report.get("action_counts", {}))
+                if native_exclusive else base_stats.action_counts
+            ),
+            native_report=native_report,
         )
         if run_error is not None:
             run_error.realtime_stats = final_stats
             raise run_error
-        if self.timing_feedback_detector is not None:
+        if self.timing_feedback_detector is not None and not native_exclusive:
             detector = self.timing_feedback_detector
             print(
                 "RealtimeTimingFeedback "
