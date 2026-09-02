@@ -27,6 +27,10 @@ class TimingFeedbackDetector:
     def __init__(self) -> None:
         self._streak_kind: TimingFeedback | None = None
         self._streak = 0
+        # 观测计数：sightings = 任一帧出现过判定条信号；reports = 通过
+        # 持续帧数门禁后实际上报的次数。用于诊断实机检测覆盖率。
+        self.sightings = 0
+        self.reports = 0
 
     def detect(self, image: np.ndarray) -> TimingFeedback | None:
         if not isinstance(image, np.ndarray) or image.shape[:2] != (720, 1280):
@@ -49,8 +53,11 @@ class TimingFeedbackDetector:
             self._streak = 1
         else:
             self._streak += 1
+        if kind is not None:
+            self.sightings += 1
         # 只在信号首次达到持续帧数时返回一次，避免同一判定条重复计数。
         if kind is not None and self._streak == self.PERSISTENCE_FRAMES:
+            self.reports += 1
             return kind
         return None
 

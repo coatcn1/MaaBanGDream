@@ -853,4 +853,12 @@ class RealtimeEngine:
         if run_error is not None:
             run_error.realtime_stats = final_stats
             raise run_error
+        if self.timing_feedback_detector is not None:
+            detector = self.timing_feedback_detector
+            print(
+                "RealtimeTimingFeedback "
+                f"sightings={getattr(detector, 'sightings', -1)} "
+                f"reports={getattr(detector, 'reports', -1)}",
+                flush=True,
+            )
         return final_stats

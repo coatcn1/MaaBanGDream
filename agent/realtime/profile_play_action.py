@@ -1511,9 +1511,9 @@ class RealtimeProfilePlay(CustomAction):
                             # 输入延迟漂移（观测到逐局 10-30ms 摆动）。
                             "step_ms": 4,
                             "unanimous_step_ms": 10,
-                            "minimum_samples": 3,
+                            "minimum_samples": 2,
                             "imbalance": 2,
-                            "window_size": 5,
+                            "window_size": 4,
                             "adjustment_cooldown_seconds": 0.6,
                             "maximum_live_adjustment_ms": 35,
                         }
