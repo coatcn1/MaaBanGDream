@@ -115,6 +115,11 @@ class ChartPredictor:
         self.song_offset_s = 0.0
         self.calibration_samples: list[tuple[float, int, str, float]] = []
         self.expected_hold_tail: dict[int, tuple[float, int]] = {}
+        # 视觉管线在非尾部 lane 提前释放跨轨 Slide 后，记录的尾部补按救援：
+        # contact -> (tail_time, tail_lane, tail_flick, direction)。
+        self._pending_tail_rescue: dict[
+            int, tuple[float, int, bool, str | None]
+        ] = {}
         self.predicted_presses = 0
         self.predicted_releases = 0
         self.calibration_failed = False
@@ -154,6 +159,7 @@ class ChartPredictor:
         self.song_offset_s = 0.0
         self.calibration_samples = []
         self.expected_hold_tail = {}
+        self._pending_tail_rescue = {}
         self.predicted_presses = 0
         self.predicted_releases = 0
         self.calibration_failed = False
@@ -187,6 +193,7 @@ class ChartPredictor:
     def recover_touch_state(self) -> None:
         """Forget chart contacts released outside the normal planner flow."""
         self.expected_hold_tail.clear()
+        self._pending_tail_rescue.clear()
 
     def _relative(self, engine_time: float) -> float:
         """Convert an absolute monotonic engine time to song-relative time."""
@@ -1094,6 +1101,7 @@ class ChartPredictor:
                 actions,
             )
         self.expected_hold_tail.clear()
+        self._pending_tail_rescue.clear()
         state._blind_hold_contacts.clear()
         state._chart_tail_lane.clear()
         state._chart_hold_lanes.clear()
@@ -1673,13 +1681,48 @@ class ChartPredictor:
             expected = self.expected_hold_tail.pop(action.contact, None)
             if expected is None:
                 continue
+            tail_time, tail_lane = expected
+            song_now = (
+                self._relative(action.timestamp) + self.song_offset_s
+            )
+            if action.lane != tail_lane and song_now < tail_time - 0.02:
+                # 视觉管线在错误 lane 上提前释放了跨轨 Slide（例如 3→4→6
+                # 的超短滑条被在 5 上放掉）。此时退休 chart 尾判定会让游戏
+                # 在真实尾部 lane 判 MISS。改为记录补按救援：到期在正确
+                # lane 重新按下，让尾判定落在真实位置。
+                tail = next(
+                    (
+                        judgement for judgement in self.chart.judgements
+                        if (
+                            judgement.kind == "hold-tail"
+                            and abs(judgement.time_s - tail_time) < 1e-6
+                            and judgement.lane == tail_lane
+                        )
+                    ),
+                    None,
+                )
+                self._pending_tail_rescue[action.contact] = (
+                    tail_time,
+                    tail_lane,
+                    bool(tail.tail_flick) if tail is not None else False,
+                    tail.direction if tail is not None else None,
+                )
+                state.record_diagnostic(
+                    "chart_tail_rescue_scheduled",
+                    action.timestamp,
+                    contact=action.contact,
+                    visual_lane=action.lane,
+                    tail_lane=tail_lane,
+                    chart_time_s=round(tail_time, 3),
+                )
+                continue
             state.record_diagnostic(
                 "chart_visual_tail_retired",
                 action.timestamp,
                 contact=action.contact,
                 release_reason=action.reason,
-                chart_time_s=round(expected[0], 3),
-                tail_lane=expected[1],
+                chart_time_s=round(tail_time, 3),
+                tail_lane=tail_lane,
             )
 
     def _release_due_holds(
@@ -1690,6 +1733,41 @@ class ChartPredictor:
         holds: HoldPipeline,
     ) -> None:
         song_now = self.input_song_time(now)
+        # 尾部补按救援：视觉管线曾把跨轨 Slide 提前放掉，chart 到期在正确
+        # lane 重新按下（FLICK 尾部带方向），尾判定按精确到期时刻派发。
+        for contact, rescue in list(self._pending_tail_rescue.items()):
+            tail_time, tail_lane, tail_flick, direction = rescue
+            if song_now < tail_time - 0.035:
+                continue
+            press_at = now + max(0.0, tail_time - song_now)
+            action_kind = (
+                ActionKind.FLICK if tail_flick else ActionKind.TAP
+            )
+            actions.append(TouchAction(
+                action_kind,
+                tail_lane,
+                press_at,
+                reason="chart-predicted",
+                flick_direction=direction,
+            ))
+            self.predicted_presses += 1
+            self._last_predicted[tail_lane] = press_at
+            self._last_predicted_judgement[tail_lane] = (
+                -1,
+                "hold-tail",
+                press_at,
+            )
+            state._last_trigger[tail_lane] = press_at
+            state._last_trigger_action_kind[tail_lane] = action_kind
+            self._pending_tail_rescue.pop(contact, None)
+            state.record_diagnostic(
+                "chart_tail_rescued",
+                now,
+                contact=contact,
+                lane=tail_lane,
+                chart_time_s=round(tail_time, 3),
+                flick=tail_flick,
+            )
         for contact, (tail_time, tail_lane) in list(
             self.expected_hold_tail.items()
         ):

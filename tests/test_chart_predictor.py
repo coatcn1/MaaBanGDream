@@ -100,6 +100,36 @@ def test_post_lock_phase_refinement_stops_after_window():
     assert predictor.song_offset_s == 0.0
 
 
+def test_visual_release_on_wrong_lane_schedules_tail_rescue():
+    # 超短跨轨 Slide（L3→L6）：视觉管线在错误 lane 提前放掉时，chart 必须
+    # 到期在正确尾部 lane 补按，否则尾判定 MISS。
+    from agent.realtime.touch_planner.state import PlannerState
+
+    chart = ChartTimeline([
+        ChartJudgement(2.0, 3, "hold-head", 0),
+        ChartJudgement(2.156, 6, "hold-tail", 0),
+    ], bpm=192.0)
+    predictor = ChartPredictor(chart)
+    predictor.calibrated = True
+    predictor.song_offset_s = -3.0
+    predictor._anchor_time = 100.0
+    predictor.expected_hold_tail[5] = (2.156, 6)
+    state = PlannerState()
+
+    released = [TouchAction(ActionKind.UP, 5, 105.10, 5, "tail-ring")]
+    predictor._retire_visually_released_holds(released, state)
+    assert 5 in predictor._pending_tail_rescue
+
+    rescued: list[TouchAction] = []
+    predictor._release_due_holds(105.20, rescued, state, None)
+    assert rescued
+    action = rescued[0]
+    assert action.kind is ActionKind.TAP
+    assert action.lane == 6
+    assert action.reason == "chart-predicted"
+    assert 5 not in predictor._pending_tail_rescue
+
+
 def _phase_track(track_id, lane, now, *, crossing_in=0.5):
     note = ObservedNote(
         NoteKind.TAP, lane, 300 + lane * 100,
