@@ -1270,7 +1270,13 @@ class ChartPredictor:
                 continue
             target = next_judgement.time_s + self.press_bias_s
             lead = target - song_now
-            if not -0.12 <= lead <= 0.040:
+            # 瞬态按压（tap/flick）允许提前 40ms 排期精确派发；hold 头必须
+            # 保持 18ms 发射窗并立即派发，否则视觉 hold 跟随 MOVE 会抢在
+            # 排期 DOWN 之前发出，触点尚未激活被丢弃，整条 hold 失联。
+            max_lead = (
+                0.040 if next_judgement.kind == "tap" else 0.018
+            )
+            if not -0.12 <= lead <= max_lead:
                 continue
             # Only skip when a recent press on this lane already covered the
             # chart note.  Junk presses far from the chart time (or from a

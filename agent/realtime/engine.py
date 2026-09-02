@@ -12,7 +12,7 @@ from .controller_touch import ControllerTouchDispatcher
 from .note_detector import NoteDetector
 from .life_monitor import LifeDetector, LifeGuard, LifeStatus, PlayfieldCompletionGuard
 from .timing_feedback import AdaptiveTimingController, TimingFeedbackDetector
-from .touch_planner import RealtimePlanner
+from .touch_planner import ActionKind, RealtimePlanner
 
 
 _HOT_PATH_STAGES = (
@@ -599,13 +599,18 @@ class RealtimeEngine:
                 record_stage_sample(
                     "planner", (self.clock() - stage_started) * 1000
                 )
-                # 谱面按压拆成“立即”与“到期派发”：前者维持既有帧内派发，
-                # 后者进入等待间隙按毫秒精度发送，消除帧对齐量化。
+                # 谱面动作拆成“立即”与“到期派发”。DOWN/MOVE 必须立即派发
+                # 以维持 hold 触点生命周期与视觉跟随 MOVE 的因果顺序；
+                # TAP/FLICK/UP 按到期时刻毫秒级发送，消除帧对齐量化。
                 recorded_actions = actions
                 scheduled_now = [
                     action for action in actions
                     if (
                         action.reason in {"chart-predicted", "chart-tail"}
+                        and action.kind not in {
+                            ActionKind.DOWN,
+                            ActionKind.MOVE,
+                        }
                         and action.timestamp > now + 0.002
                     )
                 ]
