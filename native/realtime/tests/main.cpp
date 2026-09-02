@@ -14,6 +14,7 @@ int run_song_clock_tests();
 int run_touch_script_tests();
 int run_minitouch_client_tests();
 int run_minitouch_log_tests();
+int run_playback_session_tests();
 
 namespace {
 
@@ -37,6 +38,7 @@ int main() {
     run_group("touch_script", run_touch_script_tests);
     run_group("minitouch_client", run_minitouch_client_tests);
     run_group("minitouch_log", run_minitouch_log_tests);
+    run_group("playback_session", run_playback_session_tests);
     if (mbdr_test::g_failures == 0) {
         std::printf("ok: %d checks passed\n", mbdr_test::g_checks);
         return 0;

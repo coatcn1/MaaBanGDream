@@ -20,6 +20,16 @@ struct MinitouchLogEvent {
 // 从一行文本解析 jlog；握手行（v/^/$ 等）不是 jlog，返回 false。
 bool parse_minitouch_log(std::string_view line, MinitouchLogEvent* out);
 
+// 各延迟均值当前实际拥有的样本数。调用方必须只更新有新样本的类型，
+// 避免短切片把未出现命令的既有 offset 错误覆盖为 0。
+struct TouchLatencySampleCounts {
+    int down = 0;
+    int up = 0;
+    int move = 0;
+    int wait = 0;
+    int interval = 0;
+};
+
 // 分类型延迟统计器。归因模型与 autodori 的 mnt_callback/_adjust_offset 一致：
 // - interval：相邻命令 start 与上一条 end 的间隙（PC 侧传输/派发间隙）；
 // - w：实际耗时 - 名义毫秒（等待超出的执行开销）；
@@ -33,6 +43,7 @@ class LatencyCalibrator {
 public:
     void observe(const MinitouchLogEvent& event);
     TouchLatencyOffsets offsets() const;
+    TouchLatencySampleCounts sample_counts() const noexcept;
     double correction_ms(const TouchLatencyOffsets& previous) const;
     void reset();
     int event_count() const noexcept { return event_count_; }

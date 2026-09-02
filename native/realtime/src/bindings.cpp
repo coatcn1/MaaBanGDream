@@ -1,12 +1,15 @@
 #include <pybind11/pybind11.h>
+#include <pybind11/functional.h>
 #include <pybind11/stl.h>
 
+#include <limits>
 #include <sstream>
 #include <string>
 
 #include "maabangdream/chart_timeline.hpp"
 #include "maabangdream/minitouch_client.hpp"
 #include "maabangdream/minitouch_log.hpp"
+#include "maabangdream/playback_session.hpp"
 #include "maabangdream/pure_chart.hpp"
 #include "maabangdream/scheduler.hpp"
 #include "maabangdream/song_clock.hpp"
@@ -55,6 +58,10 @@ py::dict config_to_dict(const EngineConfig& config) {
     py::dict result;
     result["judgement_y"] = config.judgement_y;
     result["press_bias_ms"] = config.press_bias_ms;
+    result["max_wait_ms"] = config.max_wait_ms;
+    result["tap_duration_ms"] = config.tap_duration_ms;
+    result["flick_duration_ms"] = config.flick_duration_ms;
+    result["slide_step_s"] = config.slide_step_s;
     result["song_offset_s"] = config.song_offset_s;
     py::list centers;
     for (const float center : config.lane_centers) {
@@ -105,6 +112,16 @@ EngineConfig config_from_dict(const py::dict& source) {
     }
     if (source.contains("max_wait_ms")) {
         config.max_wait_ms = source["max_wait_ms"].cast<int>();
+    }
+    if (source.contains("tap_duration_ms")) {
+        config.tap_duration_ms = source["tap_duration_ms"].cast<int>();
+    }
+    if (source.contains("flick_duration_ms")) {
+        config.flick_duration_ms =
+            source["flick_duration_ms"].cast<int>();
+    }
+    if (source.contains("slide_step_s")) {
+        config.slide_step_s = source["slide_step_s"].cast<double>();
     }
     if (source.contains("song_offset_s")) {
         config.song_offset_s = source["song_offset_s"].cast<double>();
@@ -209,6 +226,136 @@ py::dict sync_state_to_dict(const SyncState& state) {
     result["second_matches"] = state.second_matches;
     result["reason"] = state.reason;
     return result;
+}
+
+PlaybackSessionConfig playback_config_from_dict(const py::dict& source) {
+    PlaybackSessionConfig config;
+    if (source.contains("lookahead_s")) {
+        config.lookahead_s = source["lookahead_s"].cast<double>();
+    }
+    if (source.contains("low_water_s")) {
+        config.low_water_s = source["low_water_s"].cast<double>();
+    }
+    if (source.contains("max_queue_s")) {
+        config.max_queue_s = source["max_queue_s"].cast<double>();
+    }
+    if (source.contains("reset_timeout_s")) {
+        config.reset_timeout_s =
+            source["reset_timeout_s"].cast<double>();
+    }
+    if (source.contains("cancel_deadline_s")) {
+        config.cancel_deadline_s =
+            source["cancel_deadline_s"].cast<double>();
+    }
+    return config;
+}
+
+py::dict playback_chunk_to_dict(const PlaybackChunk& chunk) {
+    py::dict result;
+    result["sequence"] = chunk.sequence;
+    result["window_start_s"] = chunk.window_start_s;
+    result["window_end_s"] = chunk.window_end_s;
+    result["final_chunk"] = chunk.final_chunk;
+    result["touch_config"] = config_to_dict(chunk.touch_config);
+    py::list actions;
+    for (const TimedPlaybackAction& timed : chunk.actions) {
+        py::dict entry;
+        entry["action"] = action_to_dict(timed.action);
+        entry["engine_due_s"] = timed.engine_due_s;
+        actions.append(std::move(entry));
+    }
+    result["actions"] = std::move(actions);
+    py::list reservations;
+    for (const TimedPlaybackAction& timed
+         : chunk.future_down_reservations) {
+        py::dict entry;
+        entry["action"] = action_to_dict(timed.action);
+        entry["engine_due_s"] = timed.engine_due_s;
+        reservations.append(std::move(entry));
+    }
+    result["future_down_reservations"] = std::move(reservations);
+    return result;
+}
+
+const char* playback_state_name(PlaybackState state) noexcept {
+    switch (state) {
+        case PlaybackState::Idle:
+            return "idle";
+        case PlaybackState::Armed:
+            return "armed";
+        case PlaybackState::Running:
+            return "running";
+        case PlaybackState::Cancelling:
+            return "cancelling";
+        case PlaybackState::Finished:
+            return "finished";
+        case PlaybackState::Cancelled:
+            return "cancelled";
+        case PlaybackState::Failed:
+            return "failed";
+    }
+    return "unknown";
+}
+
+py::dict playback_report_to_dict(const PlaybackReport& report) {
+    py::dict result;
+    result["planned"] = report.planned_actions;
+    result["sent"] = report.sent_actions;
+    result["executed"] = report.executed_actions;
+    result["chunks"] = report.chunks;
+    result["underflows"] = report.queue_underflows;
+    result["tap_actions"] = report.tap_actions;
+    result["flick_actions"] = report.flick_actions;
+    result["hold_starts"] = report.hold_starts;
+    result["hold_moves"] = report.hold_moves;
+    result["hold_releases"] = report.hold_releases;
+    result["chord_groups"] = report.chord_groups;
+    result["probe_events"] = report.probe_events;
+    result["chart_first_due_s"] = report.chart_first_due_s;
+    result["first_action_engine_s"] = report.first_action_engine_s;
+    result["max_queue_depth_ms"] = report.max_queue_depth_ms;
+    result["drift_p50_ms"] = report.drift_p50_ms;
+    result["drift_p95_ms"] = report.drift_p95_ms;
+    result["drift_max_ms"] = report.drift_max_ms;
+    result["stop_latency_ms"] = report.stop_latency_ms;
+    result["fallback_used"] = report.fallback_used;
+    result["reason"] = report.terminal_reason;
+    return result;
+}
+
+const char* touch_command_name(TouchCommandKind command) noexcept {
+    switch (command) {
+        case TouchCommandKind::Down:
+            return "d";
+        case TouchCommandKind::Move:
+            return "m";
+        case TouchCommandKind::Up:
+            return "u";
+    }
+    return "";
+}
+
+py::list execution_receipts_to_list(const TouchScriptCompiler& compiler) {
+    py::list result;
+    for (const TouchExecutionReceipt& receipt
+         : compiler.last_execution_receipts()) {
+        py::dict item;
+        item["line_index"] = receipt.line_index;
+        item["planned_engine_s"] = receipt.planned_engine_s;
+        item["action_token"] = receipt.action_token;
+        item["command"] = touch_command_name(receipt.command);
+        result.append(std::move(item));
+    }
+    return result;
+}
+
+MinitouchLogEvent log_event_from_dict(const py::dict& event_dict) {
+    MinitouchLogEvent event;
+    event.start_ms = event_dict["start_ms"].cast<double>();
+    event.end_ms = event_dict["end_ms"].cast<double>();
+    event.cost_ms = event_dict["cost_ms"].cast<double>();
+    event.command = py::str(event_dict["command"]).cast<std::string>();
+    return event;
 }
 
 }  // namespace
@@ -381,19 +528,33 @@ PYBIND11_MODULE(maabangdream_realtime, module) {
         .def_property_readonly("offsets", &TouchScriptCompiler::offsets)
         .def("add_residual_ms", &TouchScriptCompiler::add_residual_ms,
             py::arg("ms"))
+        .def("reset_contacts", &TouchScriptCompiler::reset_contacts)
+        .def("execution_receipts", &execution_receipts_to_list)
+        .def("last_execution_receipts", &execution_receipts_to_list)
         .def("compile",
             [](TouchScriptCompiler& self, py::list actions,
-               py::dict config_dict, double start_engine_time) {
+               py::dict config_dict, double start_engine_time,
+               bool final_chunk, double end_engine_time,
+               py::list future_down_reservations) {
                 std::vector<ScheduledAction> parsed;
                 parsed.reserve(actions.size());
                 for (const auto handle : actions) {
                     parsed.push_back(action_from_dict(
                         handle.cast<py::dict>()));
                 }
+                std::vector<ScheduledAction> reservations;
+                reservations.reserve(future_down_reservations.size());
+                for (const auto handle : future_down_reservations) {
+                    reservations.push_back(action_from_dict(
+                        handle.cast<py::dict>()));
+                }
                 const std::vector<std::string> lines = self.compile(
                     std::move(parsed),
                     config_from_dict(config_dict),
-                    start_engine_time);
+                    start_engine_time,
+                    final_chunk,
+                    end_engine_time,
+                    std::move(reservations));
                 py::list result;
                 for (const std::string& text : lines) {
                     result.append(text);
@@ -402,7 +563,112 @@ PYBIND11_MODULE(maabangdream_realtime, module) {
             },
             py::arg("actions"),
             py::arg("config") = py::dict(),
-            py::arg("start_engine_time") = 0.0);
+            py::arg("start_engine_time") = 0.0,
+            py::arg("final_chunk") = true,
+            py::arg("end_engine_time") =
+                std::numeric_limits<double>::quiet_NaN(),
+            py::arg("future_down_reservations") = py::list());
+
+    py::class_<PlaybackSession>(module, "PlaybackSession")
+        .def(py::init([](py::function publish,
+                         py::object request_reset,
+                         py::object fallback_stop,
+                         py::object clock,
+                         py::dict config_dict) {
+            PlaybackCallbacks callbacks;
+            callbacks.publish =
+                [callback = std::move(publish)](
+                    const PlaybackChunk& chunk) -> bool {
+                    py::gil_scoped_acquire acquire;
+                    return callback(playback_chunk_to_dict(chunk))
+                        .cast<bool>();
+                };
+            if (!request_reset.is_none()) {
+                py::function callback = request_reset.cast<py::function>();
+                callbacks.request_reset =
+                    [callback = std::move(callback)]() -> bool {
+                        py::gil_scoped_acquire acquire;
+                        return callback().cast<bool>();
+                    };
+            }
+            if (!fallback_stop.is_none()) {
+                py::function callback = fallback_stop.cast<py::function>();
+                callbacks.fallback_stop =
+                    [callback = std::move(callback)]() -> bool {
+                        py::gil_scoped_acquire acquire;
+                        return callback().cast<bool>();
+                    };
+            }
+            if (!clock.is_none()) {
+                py::function callback = clock.cast<py::function>();
+                callbacks.clock =
+                    [callback = std::move(callback)]() -> double {
+                        py::gil_scoped_acquire acquire;
+                        return callback().cast<double>();
+                    };
+            }
+            return std::make_unique<PlaybackSession>(
+                std::move(callbacks),
+                playback_config_from_dict(config_dict));
+        }),
+        py::arg("publish"),
+        py::arg("request_reset") = py::none(),
+        py::arg("fallback_stop") = py::none(),
+        py::arg("clock") = py::none(),
+        py::arg("config") = py::dict())
+        .def("arm",
+            [](PlaybackSession& self, py::list actions,
+               py::dict config_dict) {
+                std::vector<ScheduledAction> parsed;
+                parsed.reserve(actions.size());
+                for (const auto handle : actions) {
+                    parsed.push_back(action_from_dict(
+                        handle.cast<py::dict>()));
+                }
+                return self.arm(
+                    std::move(parsed),
+                    config_from_dict(config_dict));
+            },
+            py::arg("actions"),
+            py::arg("engine_config") = py::dict())
+        .def("start", &PlaybackSession::start,
+            py::arg("first_action_engine_s"))
+        .def("publish", &PlaybackSession::publish)
+        .def("poll",
+            [](PlaybackSession& self) {
+                return std::string(playback_state_name(self.poll()));
+            })
+        .def("cancel", &PlaybackSession::cancel,
+            py::arg("reason") = "cancelled")
+        .def("acknowledge_reset", &PlaybackSession::acknowledge_reset)
+        .def("finish", &PlaybackSession::finish,
+            py::arg("reason") = "finished")
+        .def("observe_minitouch_log",
+            [](PlaybackSession& self, py::dict event_dict) {
+                self.observe_minitouch_log(
+                    log_event_from_dict(event_dict));
+            },
+            py::arg("event"))
+        .def("observe_execution", &PlaybackSession::observe_execution,
+            py::arg("planned_engine_s"),
+            py::arg("actual_engine_s"),
+            py::arg("count") = 1)
+        .def("state",
+            [](const PlaybackSession& self) {
+                return std::string(playback_state_name(self.state()));
+            })
+        .def("report",
+            [](const PlaybackSession& self) {
+                return playback_report_to_dict(self.report());
+            })
+        .def("latency_offsets", &PlaybackSession::latency_offsets)
+        .def("latency_correction_ms",
+            &PlaybackSession::latency_correction_ms,
+            py::arg("previous"))
+        .def("calibration_event_count",
+            &PlaybackSession::calibration_event_count)
+        .def("reset_calibration",
+            &PlaybackSession::reset_calibration_window);
 
     py::class_<MinitouchClient>(module, "MinitouchClient")
         .def(py::init<>())
@@ -460,6 +726,18 @@ PYBIND11_MODULE(maabangdream_realtime, module) {
             },
             py::arg("event"))
         .def_property_readonly("offsets", &LatencyCalibrator::offsets)
+        .def_property_readonly("sample_counts",
+            [](const LatencyCalibrator& self) {
+                const TouchLatencySampleCounts counts =
+                    self.sample_counts();
+                py::dict result;
+                result["down"] = counts.down;
+                result["up"] = counts.up;
+                result["move"] = counts.move;
+                result["wait"] = counts.wait;
+                result["interval"] = counts.interval;
+                return result;
+            })
         .def("correction_ms", &LatencyCalibrator::correction_ms,
             py::arg("previous"))
         .def("reset", &LatencyCalibrator::reset)

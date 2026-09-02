@@ -22,15 +22,16 @@ bool ensure_wsa() {
 }  // namespace
 
 MinitouchClient::MinitouchClient(MinitouchClient&& other) noexcept
-    : socket_(other.socket_) {
-    other.socket_ = kInvalidSocket;
-}
+    : socket_(other.socket_.exchange(
+          kInvalidSocket, std::memory_order_acq_rel)) {}
 
 MinitouchClient& MinitouchClient::operator=(MinitouchClient&& other) noexcept {
     if (this != &other) {
         close();
-        socket_ = other.socket_;
-        other.socket_ = kInvalidSocket;
+        socket_.store(
+            other.socket_.exchange(
+                kInvalidSocket, std::memory_order_acq_rel),
+            std::memory_order_release);
     }
     return *this;
 }
@@ -67,7 +68,18 @@ bool MinitouchClient::connect(const std::string& host, int port) {
         closesocket(descriptor);
         return false;
     }
-    socket_ = static_cast<std::uintptr_t>(descriptor);
+    // localhost/adb forward 正常发送应立即完成；100ms 上限确保 panic reset
+    // 不会因对端停读而把 500ms 停止门槛无限拖长。
+    const DWORD send_timeout_ms = 100;
+    if (setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO,
+                   reinterpret_cast<const char*>(&send_timeout_ms),
+                   sizeof(send_timeout_ms)) != 0) {
+        closesocket(descriptor);
+        return false;
+    }
+    socket_.store(
+        static_cast<std::uintptr_t>(descriptor),
+        std::memory_order_release);
     return true;
 }
 
@@ -75,7 +87,8 @@ bool MinitouchClient::publish(std::string_view bytes) {
     if (!connected()) {
         return false;
     }
-    const auto handle = reinterpret_cast<SOCKET>(socket_);
+    const auto handle = reinterpret_cast<SOCKET>(
+        socket_.load(std::memory_order_acquire));
     std::size_t sent = 0;
     while (sent < bytes.size()) {
         const int chunk = send(handle, bytes.data() + sent,
@@ -93,7 +106,8 @@ std::string MinitouchClient::receive(std::size_t max_bytes, int timeout_ms) {
     if (!connected()) {
         return {};
     }
-    const auto handle = reinterpret_cast<SOCKET>(socket_);
+    const auto handle = reinterpret_cast<SOCKET>(
+        socket_.load(std::memory_order_acquire));
     const DWORD timeout = timeout_ms < 0 ? 0 : static_cast<DWORD>(timeout_ms);
     setsockopt(handle, SOL_SOCKET, SO_RCVTIMEO,
                reinterpret_cast<const char*>(&timeout), sizeof(timeout));
@@ -109,9 +123,10 @@ std::string MinitouchClient::receive(std::size_t max_bytes, int timeout_ms) {
 }
 
 void MinitouchClient::close() noexcept {
-    if (socket_ != kInvalidSocket) {
-        closesocket(reinterpret_cast<SOCKET>(socket_));
-        socket_ = kInvalidSocket;
+    const std::uintptr_t previous = socket_.exchange(
+        kInvalidSocket, std::memory_order_acq_rel);
+    if (previous != kInvalidSocket) {
+        closesocket(reinterpret_cast<SOCKET>(previous));
     }
 }
 

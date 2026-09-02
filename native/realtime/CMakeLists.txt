@@ -30,6 +30,8 @@ set(REALTIME_SOURCES
     src/song_clock.cpp
     src/touch_script.cpp
     src/minitouch_client.cpp
+    src/minitouch_log.cpp
+    src/playback_session.cpp
 )
 
 pybind11_add_module(maabangdream_realtime ${REALTIME_SOURCES})
@@ -60,12 +62,16 @@ add_executable(mbdr_tests
     tests/test_song_clock.cpp
     tests/test_touch_script.cpp
     tests/test_minitouch_client.cpp
+    tests/test_minitouch_log.cpp
+    tests/test_playback_session.cpp
     src/chart_timeline.cpp
     src/pure_chart.cpp
     src/scheduler.cpp
     src/song_clock.cpp
     src/touch_script.cpp
     src/minitouch_client.cpp
+    src/minitouch_log.cpp
+    src/playback_session.cpp
 )
 target_include_directories(mbdr_tests PRIVATE
     include

@@ -104,6 +104,16 @@ TouchLatencyOffsets LatencyCalibrator::offsets() const {
     return result;
 }
 
+TouchLatencySampleCounts LatencyCalibrator::sample_counts() const noexcept {
+    return TouchLatencySampleCounts{
+        down_.count,
+        up_.count,
+        move_.count,
+        wait_.count,
+        interval_.count,
+    };
+}
+
 double LatencyCalibrator::correction_ms(
     const TouchLatencyOffsets& previous) const {
     double total = 0.0;

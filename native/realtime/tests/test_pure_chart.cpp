@@ -61,11 +61,14 @@ void test_taps_flicks_and_double_press() {
 
 void test_hold_lifecycle_and_tail_flick() {
     const ChartTimeline timeline = make_chart();
-    const auto actions = compile_pure_chart_actions(timeline, EngineConfig{});
+    EngineConfig config;
+    const auto actions = compile_pure_chart_actions(timeline, config);
     int downs = 0;
     int ups = 0;
     int tail_flicks = 0;
     int moves = 0;
+    bool reached_slide_tail = false;
+    bool tail_move_precedes_up = false;
     for (const ScheduledAction& action : actions) {
         if (action.kind == ActionKind::Down) {
             ++downs;
@@ -79,12 +82,32 @@ void test_hold_lifecycle_and_tail_flick() {
         }
         if (action.kind == ActionKind::Move) {
             ++moves;
+            if (action.note_index == 5 &&
+                std::abs(action.due_s - 7.0) < 1e-12 &&
+                std::abs(action.target_x - config.lane_centers[3]) < 1e-6F) {
+                reached_slide_tail = true;
+            }
         }
     }
     CHECK_EQ(downs, 2);
     CHECK_EQ(ups, 1);         // Slide 尾普通 UP。
     CHECK_EQ(tail_flicks, 1); // Long 尾 FLICK。
-    CHECK_EQ(moves, 1);       // Slide 仅一个内部 lane 变化连接点。
+    // lane 5→4 用 1 秒、lane 4→3 用 2 秒；10ms 插值应生成 300 个 MOVE，
+    // 最后一项必须精确落在最终尾点，而不是停在倒数连接点。
+    CHECK_EQ(moves, 300);
+    CHECK(reached_slide_tail);
+
+    for (std::size_t index = 1; index < actions.size(); ++index) {
+        if (actions[index].note_index == 5 &&
+            actions[index].kind == ActionKind::Up &&
+            std::abs(actions[index].due_s - 7.0) < 1e-12) {
+            tail_move_precedes_up =
+                actions[index - 1].note_index == 5 &&
+                actions[index - 1].kind == ActionKind::Move &&
+                std::abs(actions[index - 1].due_s - 7.0) < 1e-12;
+        }
+    }
+    CHECK(tail_move_precedes_up);
 
     // hold 触点确定性：Long 先占 0，Slide 后占 1。
     int long_contact = -1;
@@ -99,6 +122,19 @@ void test_hold_lifecycle_and_tail_flick() {
     }
     CHECK_EQ(long_contact, 0);
     CHECK_EQ(slide_contact, 1);
+}
+
+void test_slide_step_is_configurable() {
+    EngineConfig config;
+    config.slide_step_s = 0.25;
+    const auto actions = compile_pure_chart_actions(make_chart(), config);
+    int slide_moves = 0;
+    for (const ScheduledAction& item : actions) {
+        if (item.note_index == 5 && item.kind == ActionKind::Move) {
+            ++slide_moves;
+        }
+    }
+    CHECK_EQ(slide_moves, 12);  // 1 秒四段 + 2 秒八段。
 }
 
 void test_contact_reuse_and_exhaustion() {
@@ -172,6 +208,7 @@ void test_determinism() {
 int run_pure_chart_tests() {
     test_taps_flicks_and_double_press();
     test_hold_lifecycle_and_tail_flick();
+    test_slide_step_is_configurable();
     test_contact_reuse_and_exhaustion();
     test_determinism();
     return 0;

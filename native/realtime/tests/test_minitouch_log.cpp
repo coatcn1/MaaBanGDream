@@ -68,6 +68,29 @@ void test_correction_uses_old_average_delta() {
     CHECK(std::abs(calibrator.correction_ms(previous) - 1.4) < 1e-9);
 }
 
+void test_sample_counts_are_independent_and_resettable() {
+    LatencyCalibrator calibrator;
+    calibrator.observe(event(100.0, 100.3, 0.3, "d 0 10 20 50"));
+    calibrator.observe(event(100.5, 101.4, 0.9, "c"));
+    calibrator.observe(event(102.0, 122.7, 20.7, "w 20"));
+    calibrator.observe(event(122.8, 123.0, 0.2, "u 0"));
+
+    const TouchLatencySampleCounts counts = calibrator.sample_counts();
+    CHECK_EQ(counts.down, 1);
+    CHECK_EQ(counts.up, 1);
+    CHECK_EQ(counts.move, 0);
+    CHECK_EQ(counts.wait, 1);
+    CHECK_EQ(counts.interval, 3);
+
+    calibrator.reset();
+    const TouchLatencySampleCounts reset_counts = calibrator.sample_counts();
+    CHECK_EQ(reset_counts.down, 0);
+    CHECK_EQ(reset_counts.up, 0);
+    CHECK_EQ(reset_counts.move, 0);
+    CHECK_EQ(reset_counts.wait, 0);
+    CHECK_EQ(reset_counts.interval, 0);
+}
+
 }  // namespace
 
 int run_minitouch_log_tests() {
@@ -75,5 +98,6 @@ int run_minitouch_log_tests() {
     test_parse_extracts_fields();
     test_calibrator_attributes_commit_to_uncommitted_actions();
     test_correction_uses_old_average_delta();
+    test_sample_counts_are_independent_and_resettable();
     return 0;
 }

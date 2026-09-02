@@ -34,7 +34,7 @@ enum class JudgementKind : uint8_t {
     HoldTail = 2,
 };
 
-// 触控动作类型。Flick 与 Tap 是瞬态动作，由 Python 触点分配；
+// 触控动作类型。Flick 与 Tap 是瞬态动作，由 Native 脚本编译器分配触点；
 // Down/Move/Up 属于 hold 生命周期，必须携带确定性 contact。
 enum class ActionKind : uint8_t {
     Tap = 0,
@@ -122,7 +122,7 @@ struct ChartTimeline {
 struct ScheduledAction {
     ActionKind kind = ActionKind::Tap;
     uint8_t lane = 0;
-    // -1 表示瞬态（TAP/FLICK），由 Python 在派发时分配触点；
+    // -1 表示瞬态（TAP/FLICK），由 Native 脚本编译器分配触点；
     // hold 生命周期动作必须携带确定性 contact（0..9）。
     int8_t contact = -1;
     // 目标 x 像素；由 lane 中心换算。
@@ -140,6 +140,11 @@ struct EngineConfig {
     // 单个 w 命令的最大等待毫秒。更长的等待会被切分成多段 w+c，
     // 把停止/异常时 `r`（panic reset）的生效延迟限制在这个上限内。
     int max_wait_ms = 250;
+    // 瞬态手势持续时间及 Slide 插值步长。默认值与已验证的 autodori
+    // 手势基线一致；验收期间由 Profile 固定，不允许运行中自适应。
+    int tap_duration_ms = 50;
+    int flick_duration_ms = 80;
+    double slide_step_s = 0.010;
     double song_offset_s = 0.0;
     std::array<float, kLaneCount> lane_centers = {
         190.0F, 340.0F, 490.0F, 640.0F, 790.0F, 940.0F, 1090.0F,
