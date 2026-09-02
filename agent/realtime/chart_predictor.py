@@ -115,6 +115,10 @@ class ChartPredictor:
         self.song_offset_s = 0.0
         self.calibration_samples: list[tuple[float, int, str, float]] = []
         self.expected_hold_tail: dict[int, tuple[float, int]] = {}
+        # 谱面为权威的尾部 flick 标记：claim 时从 tail.tail_flick 记录，
+        # chart-tail 释放前按它覆写视觉管线的 flick 锁存，避免粉色箭头
+        # 误检把非 flick 长条尾升级成 FLICK 而把尾判定推成 GOOD。
+        self._chart_tail_flick: dict[int, bool] = {}
         # 视觉管线在非尾部 lane 提前释放跨轨 Slide 后，记录的尾部补按救援：
         # contact -> (tail_time, tail_lane, tail_flick, direction)。
         self._pending_tail_rescue: dict[
@@ -159,6 +163,7 @@ class ChartPredictor:
         self.song_offset_s = 0.0
         self.calibration_samples = []
         self.expected_hold_tail = {}
+        self._chart_tail_flick = {}
         self._pending_tail_rescue = {}
         self.predicted_presses = 0
         self.predicted_releases = 0
@@ -193,6 +198,7 @@ class ChartPredictor:
     def recover_touch_state(self) -> None:
         """Forget chart contacts released outside the normal planner flow."""
         self.expected_hold_tail.clear()
+        self._chart_tail_flick.clear()
         self._pending_tail_rescue.clear()
 
     def _relative(self, engine_time: float) -> float:
@@ -1101,6 +1107,7 @@ class ChartPredictor:
                 actions,
             )
         self.expected_hold_tail.clear()
+        self._chart_tail_flick.clear()
         self._pending_tail_rescue.clear()
         state._blind_hold_contacts.clear()
         state._chart_tail_lane.clear()
@@ -1642,6 +1649,7 @@ class ChartPredictor:
                     tail.time_s,
                     tail.lane,
                 )
+                self._chart_tail_flick[action.contact] = bool(tail.tail_flick)
                 state._chart_tail_lane[action.contact] = tail.lane
                 state._chart_hold_release_at[action.contact] = (
                     action.timestamp + tail.time_s - head_song_time
@@ -1839,6 +1847,15 @@ class ChartPredictor:
                     state._hold_chord_partner.pop(partner, None)
             release_at = now + max(0.0, tail_time - song_now)
             action_count_before = len(actions)
+            # chart-tail 释放必须服从谱面的 tail_flick：视觉管线若在前面
+            # 帧把触点误锁进 flick 集合，这里按 claim 时的谱面标记拨回，
+            # 保证非 flick 尾部以 UP 释放、flick 尾部以 FLICK 释放。
+            chart_flick = self._chart_tail_flick.get(contact)
+            if chart_flick is True:
+                state._hold_tail_flick.add(contact)
+            elif chart_flick is False:
+                state._hold_tail_flick.discard(contact)
+                state._hold_tail_flick_direction.pop(contact, None)
             holds._release_hold(
                 contact,
                 lane,

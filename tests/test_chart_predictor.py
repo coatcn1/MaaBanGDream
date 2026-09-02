@@ -1183,7 +1183,35 @@ def test_visual_tail_release_then_same_frame_chart_head_reuses_contact_safely():
         (ActionKind.DOWN, 3, "chart-predicted"),
     ]
     assert predictor.expected_hold_tail[3] == (2.8, 0)
+    assert predictor._chart_tail_flick.get(3) is False
     assert 3 in planner._state._active_hold_tail
+
+
+def test_chart_tail_release_overrides_visual_flick_latch():
+    """视觉把非 flick 长条尾误锁成 flick 时，chart-tail 必须按谱面拨回 UP。"""
+    chart = ChartTimeline([
+        ChartJudgement(2.0, 1, "hold-head", 0),
+        ChartJudgement(2.5, 1, "hold-tail", 0),
+    ], bpm=192.0)
+    planner, predictor = _planner_with_press_rescue(chart)
+    anchor = 100.0
+    predictor._anchor_time = anchor
+    predictor.song_offset_s = 0.0
+    predictor.calibrated = True
+    state = planner._state
+    state._active_hold_tail[0] = 1.0
+    state._active_hold_lane[0] = 1
+    state._hold_started[0] = anchor
+    state._hold_tail_flick.add(0)
+    predictor.expected_hold_tail[0] = (2.5, 1)
+    predictor._chart_tail_flick[0] = False
+
+    actions = []
+    predictor.update([], [], anchor + 2.5, actions, state, planner._holds)
+
+    release = [action for action in actions if action.reason == "chart-tail"]
+    assert release and release[0].kind is ActionKind.UP
+    assert 0 not in state._hold_tail_flick
 
 
 def test_chart_suppresses_early_visual_hold_and_presses_exact_head():
