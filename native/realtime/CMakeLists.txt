@@ -28,6 +28,7 @@ set(REALTIME_SOURCES
     src/pure_chart.cpp
     src/scheduler.cpp
     src/song_clock.cpp
+    src/touch_script.cpp
 )
 
 pybind11_add_module(maabangdream_realtime ${REALTIME_SOURCES})
@@ -56,10 +57,12 @@ add_executable(mbdr_tests
     tests/test_pure_chart.cpp
     tests/test_scheduler.cpp
     tests/test_song_clock.cpp
+    tests/test_touch_script.cpp
     src/chart_timeline.cpp
     src/pure_chart.cpp
     src/scheduler.cpp
     src/song_clock.cpp
+    src/touch_script.cpp
 )
 target_include_directories(mbdr_tests PRIVATE
     include
