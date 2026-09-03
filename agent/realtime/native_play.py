@@ -12,12 +12,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+import cv2
+
 from . import native_engine
+from .life_monitor import LifeDetector
 from .native_minitouch import NativeMinitouchDevice
 
 
 LANE_CENTERS = (190, 340, 490, 640, 790, 940, 1090)
 TOUCH_Y = 590.0
+PHOTOGATE_LATENCY_MS = 190.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +43,7 @@ def resolve_native_start_gate_policy(run_mode: str | None) -> NativeStartGatePol
             grace_ms=500.0,
         )
     return NativeStartGatePolicy(
-        mode="single-start-transition",
+        mode="single-playfield-first-note",
         stable_duration_ms=250.0,
         grace_ms=500.0,
     )
@@ -56,6 +60,49 @@ class _ExpectedCommand:
     used_offsets: Any | None = None
 
 
+class _NativePlayfieldDetector:
+    """同时确认生命条与七轨判定标记，排除演奏场淡入前的转场。"""
+
+    _REFERENCE_WIDTH = 1280
+    _REFERENCE_HEIGHT = 720
+    _LINE_TOP = 570
+    _LINE_BOTTOM = 611
+    _LANE_HALF_WIDTH = 40
+    _MIN_WHITE_PIXELS = 200
+
+    def __init__(self) -> None:
+        self._life = LifeDetector()
+
+    def __call__(self, image: Any) -> bool:
+        if not self._life.detect(image).visible:
+            return False
+        height, width = image.shape[:2]
+        x_scale = width / self._REFERENCE_WIDTH
+        y_scale = height / self._REFERENCE_HEIGHT
+        top = max(0, min(height - 1, round(self._LINE_TOP * y_scale)))
+        bottom = max(top + 1, min(height, round(self._LINE_BOTTOM * y_scale)))
+        minimum = max(
+            50,
+            round(self._MIN_WHITE_PIXELS * x_scale * y_scale),
+        )
+        visible_lanes = 0
+        for center in LANE_CENTERS:
+            lane_x = round(center * x_scale)
+            half_width = max(1, round(self._LANE_HALF_WIDTH * x_scale))
+            left = max(0, lane_x - half_width)
+            right = min(width, lane_x + half_width + 1)
+            hsv = cv2.cvtColor(
+                image[top:bottom, left:right, :3],
+                cv2.COLOR_BGR2HSV,
+            )
+            white_pixels = int(
+                ((hsv[:, :, 1] < 70) & (hsv[:, :, 2] > 170)).sum()
+            )
+            if white_pixels >= minimum:
+                visible_lanes += 1
+        return visible_lanes >= 6
+
+
 class NativeStartPhotogate:
     """用判定线附近的整行颜色变化定位第一颗音符。"""
 
@@ -68,8 +115,9 @@ class NativeStartPhotogate:
         stable_duration_ms: float = 250.0,
         grace_ms: float = 500.0,
         change_threshold: float = 3.0,
-        latency_ms: float = 30.0,
-        mode: str = "single-start-transition",
+        latency_ms: float = PHOTOGATE_LATENCY_MS,
+        mode: str = "single-playfield-first-note",
+        playfield_detector: Callable[[Any], bool] | None = None,
     ) -> None:
         if not 0 <= from_row <= to_row < reference_height:
             raise ValueError("photogate 行范围无效")
@@ -88,6 +136,10 @@ class NativeStartPhotogate:
         self._grace_s = float(grace_ms) / 1000.0
         self._change_threshold = float(change_threshold)
         self._latency_s = float(latency_ms) / 1000.0
+        if playfield_detector is None:
+            self._playfield_detector = _NativePlayfieldDetector()
+        else:
+            self._playfield_detector = playfield_detector
         self.mode = str(mode)
         self._last_color: Any | None = None
         self._previous_change: float | None = None
@@ -103,7 +155,21 @@ class NativeStartPhotogate:
         self.trigger_source: str | None = None
         self.ignored_prelude_events = 0
         self.triggered_at_s: float | None = None
+        self.playfield_seen_at_s: float | None = None
+        self.playfield_waited_frames = 0
+        self.playfield_loss_events = 0
+        self._playfield_active = False
         self._significant_events: deque[dict[str, object]] = deque(maxlen=32)
+
+    def _reset_band_state(self) -> None:
+        """演奏场尚未成立或短暂消失时，丢弃此前加载页颜色基线。"""
+        self._last_color = None
+        self._previous_change = None
+        self._previous_frame_s = None
+        self.stable_since_s = None
+        self.frozen_at_s = None
+        self.waited_frames = 0
+        self.frozen = False
 
     def _record_event(
         self,
@@ -136,9 +202,20 @@ class NativeStartPhotogate:
             if self.frozen_at_s is not None and self.stable_since_s is not None
             else None
         )
+        playfield_wait_ms = (
+            (self.playfield_seen_at_s - self._observed_since_s) * 1000.0
+            if self.playfield_seen_at_s is not None
+            and self._observed_since_s is not None
+            else None
+        )
         return {
             "photogate_mode": self.mode,
+            "photogate_playfield_evidence": "life-and-judgement-line",
+            "photogate_latency_ms": self._latency_s * 1000.0,
             "photogate_wait_ms": wait_ms,
+            "photogate_playfield_wait_ms": playfield_wait_ms,
+            "photogate_playfield_waited_frames": self.playfield_waited_frames,
+            "photogate_playfield_loss_events": self.playfield_loss_events,
             "photogate_stable_ms": stable_ms,
             "photogate_grace_ms": self._grace_s * 1000.0,
             "photogate_waited_frames": self.waited_frames,
@@ -171,6 +248,22 @@ class NativeStartPhotogate:
         frame_s = float(now)
         if self._observed_since_s is None:
             self._observed_since_s = frame_s
+        if not bool(self._playfield_detector(image)):
+            self.playfield_waited_frames += 1
+            if self._playfield_active:
+                self.playfield_loss_events += 1
+                self._record_event("playfield-lost", frame_s, 0.0)
+            self._playfield_active = False
+            self._reset_band_state()
+            return None
+        if not self._playfield_active:
+            self._playfield_active = True
+            self.playfield_seen_at_s = frame_s
+            self._reset_band_state()
+            self._last_color = current
+            self._previous_frame_s = frame_s
+            self._record_event("playfield-visible", frame_s, 0.0)
+            return None
         if self._last_color is None:
             self._last_color = current
             self._previous_frame_s = frame_s

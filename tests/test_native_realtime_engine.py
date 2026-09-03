@@ -13,6 +13,7 @@ import sys
 import time
 from pathlib import Path
 
+import cv2
 import numpy as np
 import pytest
 
@@ -480,7 +481,7 @@ def test_native_start_photogate_maps_first_note_to_delayed_anchor():
         stable_duration_ms=250.0,
         grace_ms=0.0,
         change_threshold=3.0,
-        latency_ms=30.0,
+        playfield_detector=lambda _image: True,
     )
     stable = np.full((720, 1280, 3), 30, dtype=np.uint8)
     changed = stable.copy()
@@ -495,7 +496,8 @@ def test_native_start_photogate_maps_first_note_to_delayed_anchor():
     assert gate.frozen is True
     assert gate.waited_frames == 15
     assert gate.triggered is True
-    assert anchor == pytest.approx(16.5 / 60.0 + 0.030)
+    assert anchor == pytest.approx(16.5 / 60.0 + 0.190)
+    assert gate.report()["photogate_latency_ms"] == pytest.approx(190.0)
 
 
 def test_native_start_photogate_requires_consecutive_stability_and_abs_change():
@@ -504,6 +506,7 @@ def test_native_start_photogate_requires_consecutive_stability_and_abs_change():
         grace_ms=0.0,
         change_threshold=3.0,
         latency_ms=30.0,
+        playfield_detector=lambda _image: True,
     )
     stable = np.full((720, 1280, 3), 30, dtype=np.uint8)
     brighter = stable.copy()
@@ -533,6 +536,7 @@ def test_native_start_photogate_ignores_prelude_during_grace():
         grace_ms=500.0,
         change_threshold=3.0,
         latency_ms=30.0,
+        playfield_detector=lambda _image: True,
     )
     stable = np.full((720, 1280, 3), 30, dtype=np.uint8)
     prelude = stable.copy()
@@ -552,6 +556,7 @@ def test_native_start_photogate_ignores_prelude_during_grace():
     assert report["photogate_wait_ms"] == pytest.approx(620.0)
     assert report["photogate_grace_ms"] == 500.0
     assert [event["event"] for event in report["photogate_events"]] == [
+        "playfield-visible",
         "stable",
         "ignored-prelude",
         "ignored-prelude",
@@ -559,11 +564,48 @@ def test_native_start_photogate_ignores_prelude_during_grace():
     ]
 
 
+def test_native_start_photogate_rejects_transition_before_playfield():
+    gate = NativeStartPhotogate(
+        stable_duration_ms=100.0,
+        grace_ms=500.0,
+        change_threshold=3.0,
+        latency_ms=30.0,
+    )
+    loading = np.full((720, 1280, 3), 30, dtype=np.uint8)
+    loading_transition = loading.copy()
+    loading_transition[510:536] = 80
+
+    assert gate.observe(loading, 0.00) is None
+    assert gate.observe(loading, 0.11) is None
+    assert gate.observe(loading, 0.30) is None
+    # 加载页停稳后出现的全屏转场不能冒充首音。
+    assert gate.observe(loading_transition, 0.70) is None
+    assert gate.triggered is False
+
+    playfield = loading.copy()
+    cv2.rectangle(playfield, (942, 35), (964, 51), (80, 220, 40), -1)
+    cv2.rectangle(playfield, (968, 29), (1184, 55), (210, 210, 210), 2)
+    cv2.rectangle(playfield, (970, 32), (1181, 52), (80, 220, 40), -1)
+    for center in (190, 340, 490, 640, 790, 940, 1090):
+        cv2.circle(playfield, (center, 590), 10, (220, 220, 220), -1)
+    first_note = playfield.copy()
+    first_note[510:536] = 32
+
+    assert gate.observe(playfield, 1.00) is None
+    assert gate.observe(playfield, 1.11) is None
+    assert gate.observe(playfield, 1.40) is None
+    assert gate.observe(playfield, 1.65) is None
+    anchor = gate.observe(first_note, 1.75)
+
+    assert anchor is not None
+    assert gate.triggered is True
+
+
 def test_native_start_gate_uses_lifecycle_specific_stability_not_song_offset():
     single = resolve_native_start_gate_policy("calibration-rehearsal")
     cooperative = resolve_native_start_gate_policy("cooperative")
 
-    assert single.mode == "single-start-transition"
+    assert single.mode == "single-playfield-first-note"
     assert single.stable_duration_ms == 250.0
     assert cooperative.mode == "cooperative-playfield-confirmed"
     assert cooperative.stable_duration_ms == 120.0
@@ -991,7 +1033,9 @@ def test_native_backend_publishes_first_chunk_from_photogate_anchor(monkeypatch)
         device=device,
         session_factory=session_factory,
         photogate=NativeStartPhotogate(
-            stable_duration_ms=1.0, grace_ms=0.0
+            stable_duration_ms=1.0,
+            grace_ms=0.0,
+            playfield_detector=lambda _image: True,
         ),
         publisher_poll_ms=5,
         require_probe=True,
@@ -1009,7 +1053,7 @@ def test_native_backend_publishes_first_chunk_from_photogate_anchor(monkeypatch)
     assert backend.observe_start_frame(stable, 9.9) is None
     anchor = backend.observe_start_frame(changed, 10.0)
     # Profile 正偏移沿用既有语义（提前输入），且本局启动后保持冻结。
-    assert anchor == pytest.approx(9.962)
+    assert anchor == pytest.approx(10.122)
 
     backend.start(anchor)
     with pytest.raises(RuntimeError, match="启动前"):
@@ -1017,7 +1061,7 @@ def test_native_backend_publishes_first_chunk_from_photogate_anchor(monkeypatch)
     assert sessions[0].finished_event.wait(timeout=1)
     backend.stop()
 
-    assert sessions[0].anchor == pytest.approx(9.962)
+    assert sessions[0].anchor == pytest.approx(10.122)
     assert len(compiler_calls) == 2
     (
         compiled_actions,
@@ -1029,7 +1073,7 @@ def test_native_backend_publishes_first_chunk_from_photogate_anchor(monkeypatch)
     ) = compiler_calls[0]
     assert [item["note_index"] for item in compiled_actions] == [0, 1]
     assert [item["due_s"] for item in compiled_actions] == pytest.approx(
-        [9.962, 10.462]
+        [10.122, 10.622]
     )
     assert config["song_offset_s"] == config["press_bias_ms"] == 0
     assert start_s == 10.0
