@@ -755,15 +755,7 @@
     ],
     "on_error": [
       "RealtimeLiveRetryCheck"
-    ],
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
-        "display": [
-          "log"
-        ]
-      }
-    }
+    ]
   },
   "RealtimeLiveRehearsalSettingsGate": {
     "recognition": "DirectHit",
@@ -1055,15 +1047,7 @@
     ],
     "on_error": [
       "RealtimeLiveRetryCheck"
-    ],
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
-        "display": [
-          "log"
-        ]
-      }
-    }
+    ]
   },
   "RealtimeLivePlayNormal": {
     "recognition": "DirectHit",
@@ -1094,15 +1078,7 @@
     ],
     "on_error": [
       "RealtimeLiveRetryCheck"
-    ],
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
-        "display": [
-          "log"
-        ]
-      }
-    }
+    ]
   },
   "RealtimeLivePlayHard": {
     "recognition": "DirectHit",
@@ -1133,15 +1109,7 @@
     ],
     "on_error": [
       "RealtimeLiveRetryCheck"
-    ],
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
-        "display": [
-          "log"
-        ]
-      }
-    }
+    ]
   },
   "RealtimeLivePlayExpert": {
     "recognition": "DirectHit",
@@ -1172,15 +1140,7 @@
     ],
     "on_error": [
       "RealtimeLiveRetryCheck"
-    ],
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
-        "display": [
-          "log"
-        ]
-      }
-    }
+    ]
   },
   "RealtimeLivePlaySpecial": {
     "recognition": "DirectHit",
@@ -1211,15 +1171,7 @@
     ],
     "on_error": [
       "RealtimeLiveRetryCheck"
-    ],
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
-        "display": [
-          "log"
-        ]
-      }
-    }
+    ]
   },
   "RealtimeLiveFormalPlay": {
     "recognition": "DirectHit",
@@ -1248,15 +1200,7 @@
     ],
     "on_error": [
       "RealtimeLiveRetryCheck"
-    ],
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
-        "display": [
-          "log"
-        ]
-      }
-    }
+    ]
   },
   "RealtimeLiveFormalPlayNormal": {
     "recognition": "DirectHit",
@@ -1285,15 +1229,7 @@
     ],
     "on_error": [
       "RealtimeLiveRetryCheck"
-    ],
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
-        "display": [
-          "log"
-        ]
-      }
-    }
+    ]
   },
   "RealtimeLiveFormalPlayHard": {
     "recognition": "DirectHit",
@@ -1322,15 +1258,7 @@
     ],
     "on_error": [
       "RealtimeLiveRetryCheck"
-    ],
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
-        "display": [
-          "log"
-        ]
-      }
-    }
+    ]
   },
   "RealtimeLiveFormalPlayExpert": {
     "recognition": "DirectHit",
@@ -1359,15 +1287,7 @@
     ],
     "on_error": [
       "RealtimeLiveRetryCheck"
-    ],
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
-        "display": [
-          "log"
-        ]
-      }
-    }
+    ]
   },
   "RealtimeLiveFormalPlaySpecial": {
     "recognition": "DirectHit",
@@ -1396,15 +1316,7 @@
     ],
     "on_error": [
       "RealtimeLiveRetryCheck"
-    ],
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
-        "display": [
-          "log"
-        ]
-      }
-    }
+    ]
   },
   "RealtimeLiveReturnHome": {
     "recognition": "DirectHit",
@@ -1423,7 +1335,10 @@
         "AutoLiveStoryMenu"
       ],
       "back_only": true,
-      "back_acceleration_click_point": [1279, 719],
+      "back_acceleration_click_point": [
+        1279,
+        719
+      ],
       "escape_interval_ms": 500,
       "escape_timeout_ms": 60000,
       "restart_limit": 1,
@@ -1464,14 +1379,6 @@
       "status": "failure",
       "reason": "单人实时演奏流程未完成",
       "reason_source": "latest"
-    },
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 单人实时演奏流程未完成",
-        "display": [
-          "log"
-        ]
-      }
     }
   },
   "RealtimeLiveFreeLiveTemplate": {

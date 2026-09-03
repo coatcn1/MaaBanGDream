@@ -64,7 +64,7 @@ def test_live_select_actions_wait_for_loading_without_fixed_targets():
             assert "target" not in node
 
 
-def test_failure_focus_is_visible_and_framework_failure_is_preserved():
+def test_failure_visibility_is_single_source_and_framework_failure_is_preserved():
     names = {
         "auto_live.json": (
             "AutoLiveFailure",
@@ -85,8 +85,10 @@ def test_failure_focus_is_visible_and_framework_failure_is_preserved():
             node = nodes[node_name]
             assert node["custom_action"] == "TaskOutcome"
             assert node["custom_action_param"]["status"] == "failure"
-            display = node["focus"]["Node.Action.Failed"]["display"]
-            assert display == ["log"]
+            # TaskOutcome 自身输出唯一一条“任务失败，已完成 x/y：原因”；
+            # 节点级 Node.Action.Failed focus 会制造重复红叉，因此不得配置。
+            focus = node.get("focus") or {}
+            assert "Node.Action.Failed" not in focus
             assert "on_error" not in node
 
 

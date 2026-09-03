@@ -138,21 +138,6 @@
     "custom_action_param": {
       "timing_offset_ms": 0
     },
-    "focus": {
-      "Node.Action.Succeeded": {
-        "content": "✅ 实时演奏校准成功",
-        "display": [
-          "log",
-          "toast"
-        ]
-      },
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏校准失败：校准流程未完成",
-        "display": [
-          "log"
-        ]
-      }
-    },
     "on_error": [
       "RealtimeCalibrationFailure"
     ]
@@ -215,14 +200,6 @@
       "status": "failure",
       "reason": "实时演奏校准失败：校准流程未完成",
       "reason_source": "latest"
-    },
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏校准失败：校准流程未完成",
-        "display": [
-          "log"
-        ]
-      }
     }
   }
 }

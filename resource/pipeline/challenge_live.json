@@ -541,14 +541,6 @@
       "label": "挑战演出",
       "status": "failure",
       "reason": "挑战点数选择未能确认，准备界面仍然打开"
-    },
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 挑战点数选择未能确认，准备界面仍然打开",
-        "display": [
-          "log"
-        ]
-      }
     }
   },
   "ChallengeStart": {
@@ -600,15 +592,7 @@
     ],
     "on_error": [
       "ChallengeLifeSafetyGate"
-    ],
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
-        "display": [
-          "log"
-        ]
-      }
-    }
+    ]
   },
   "ChallengePlayNormal": {
     "recognition": "DirectHit",
@@ -637,15 +621,7 @@
     ],
     "on_error": [
       "ChallengeLifeSafetyGate"
-    ],
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
-        "display": [
-          "log"
-        ]
-      }
-    }
+    ]
   },
   "ChallengePlayHard": {
     "recognition": "DirectHit",
@@ -674,15 +650,7 @@
     ],
     "on_error": [
       "ChallengeLifeSafetyGate"
-    ],
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
-        "display": [
-          "log"
-        ]
-      }
-    }
+    ]
   },
   "ChallengePlayExpert": {
     "recognition": "DirectHit",
@@ -711,15 +679,7 @@
     ],
     "on_error": [
       "ChallengeLifeSafetyGate"
-    ],
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
-        "display": [
-          "log"
-        ]
-      }
-    }
+    ]
   },
   "ChallengePlaySpecial": {
     "recognition": "DirectHit",
@@ -748,15 +708,7 @@
     ],
     "on_error": [
       "ChallengeLifeSafetyGate"
-    ],
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
-        "display": [
-          "log"
-        ]
-      }
-    }
+    ]
   },
   "ChallengeLifeSafetyGate": {
     "recognition": "DirectHit",
@@ -778,14 +730,6 @@
       "label": "挑战演出",
       "status": "failure",
       "reason": "检测到生命值安全中止，已停止本轮挑战"
-    },
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 检测到生命值安全中止，已停止本轮挑战",
-        "display": [
-          "log"
-        ]
-      }
     }
   },
   "ChallengeReturnHome": {
@@ -805,7 +749,10 @@
         "AutoLiveStoryMenu"
       ],
       "back_only": true,
-      "back_acceleration_click_point": [1279, 719],
+      "back_acceleration_click_point": [
+        1279,
+        719
+      ],
       "escape_interval_ms": 500,
       "escape_timeout_ms": 60000,
       "restart_limit": 1,
@@ -845,14 +792,6 @@
       "label": "挑战演出",
       "status": "failure",
       "reason": "挑战演出流程未完成：未到达演出结算或主页恢复失败"
-    },
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 挑战演出流程未完成：未到达演出结算或主页恢复失败",
-        "display": [
-          "log"
-        ]
-      }
     }
   },
   "ChallengeFreeLiveTemplate": {
@@ -921,14 +860,6 @@
       "label": "挑战演出",
       "status": "failure",
       "reason": "当前没有可用的挑战演出活动"
-    },
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 当前没有可用的挑战演出活动",
-        "display": [
-          "log"
-        ]
-      }
     }
   },
   "ChallengeRoundCompleted": {
