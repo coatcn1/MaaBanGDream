@@ -289,6 +289,24 @@ class CalibrationSessionStore:
             attempt["recording_path"] = result["recording_path"]
         valid = bool(result.get("valid", True))
         completed = bool(result.get("completed", False))
+        if result.get("life_failed"):
+            # 生命归零是正式验证的确定失败，不是需要续跑的技术故障：
+            # 正式阶段直接拒绝并结束会话，排练阶段保留现场等待续跑。
+            attempt["status"] = "life-failed"
+            attempt["technical_reason"] = (
+                termination_reason or "演出失败：生命值归零"
+            )
+            if stage == FORMAL_STAGE:
+                session["status"] = "rejected"
+                session["terminal_reason"] = "formal_validation_life_failed"
+                session["next_stage"] = None
+            else:
+                session["status"] = "paused"
+                session["terminal_reason"] = attempt["technical_reason"]
+                session["next_stage"] = stage
+            self._save(session)
+            self._update_candidate(session)
+            return session
         if not valid or not completed:
             attempt["status"] = "technical-failure"
             attempt["technical_reason"] = (

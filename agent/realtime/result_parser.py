@@ -473,8 +473,10 @@ def adjusted_timing_offset(current: int, result: LiveResult) -> int:
     if feedback == 0 or abs(error) <= threshold:
         return int(current)
     # 写回步长随反馈占比自适应：反馈只占全曲极小比例时，偏差通常在
-    # 判定窗边缘的一帧以内，小步长即可；占比大才用大步长。避免局内
-    # 自适应控制已修正后，写回再按全量叠加而在判定窗两侧来回过冲。
+    # 判定窗边缘的一帧以内，小步长即可。几乎整局都落在同一侧时（例如
+    # 2026-09-04 校准排练 slow=506/fast=51），必须用大步长在正式验证前
+    # 一次追平 30~50ms 的会话延迟，否则正式验证会带着旧偏移直接死亡。
+    # 逐步回落到小步长，避免在判定窗两侧来回过冲。
     total = max(
         1,
         result.perfect
@@ -484,7 +486,14 @@ def adjusted_timing_offset(current: int, result: LiveResult) -> int:
         + result.miss,
     )
     ratio = feedback / total
-    step = 12 if ratio >= 0.02 else 3
+    if ratio >= 0.6:
+        step = 48
+    elif ratio >= 0.35:
+        step = 24
+    elif ratio >= 0.02:
+        step = 12
+    else:
+        step = 3
     delta = round(step * error / feedback)
     delta = max(-step, min(step, delta or (1 if error > 0 else -1)))
     return max(-250, min(250, int(current) + delta))

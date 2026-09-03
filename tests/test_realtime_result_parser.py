@@ -277,6 +277,15 @@ def test_timing_adjustment_uses_small_step_for_sparse_feedback():
     assert adjusted_timing_offset(41, sparse_fast) == 38
 
 
+def test_timing_adjustment_takes_large_step_for_heavy_one_sided_bias():
+    # 2026-09-04 排练实测 slow=506/fast=51：整局几乎全慢，必须一次追平
+    # 会话级延迟，不能再用 ±12ms 小步长让正式验证带着旧偏移死亡。
+    heavily_slow = LiveResult(60, 384, 169, 4, 64, 51, 506)
+    assert adjusted_timing_offset(0, heavily_slow) == 39
+    heavily_fast = LiveResult(60, 384, 169, 4, 64, 506, 51)
+    assert adjusted_timing_offset(0, heavily_fast) == -39
+
+
 def test_result_parser_rejects_impossible_fast_slow_total():
     result = LiveResult(10, 0, 0, 0, 0, 8, 5)
     with pytest.raises(ValueError, match="结算统计不一致"):

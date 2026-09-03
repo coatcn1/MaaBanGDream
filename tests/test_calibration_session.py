@@ -42,6 +42,52 @@ def create_store(tmp_path: Path) -> CalibrationSessionStore:
     return CalibrationSessionStore(tmp_path / "sessions", profiles)
 
 
+def test_formal_life_failure_rejects_session_without_pause(tmp_path):
+    store = create_store(tmp_path)
+    session = store.start(
+        difficulty="Expert",
+        song_mode="random",
+        environment=signature(),
+        initial_offset_ms=10,
+    )
+    session = store.begin_round(
+        session,
+        REHEARSAL_STAGES[0],
+        10,
+        report_path=str(tmp_path / "rehearsal.json"),
+    )
+    session = store.finish_round(
+        session,
+        REHEARSAL_STAGES[0],
+        result("song-a"),
+        suggested_offset_ms=10,
+    )
+    assert session["next_stage"] == FORMAL_STAGE
+    session = store.begin_round(
+        session,
+        FORMAL_STAGE,
+        10,
+        report_path=str(tmp_path / "round.json"),
+    )
+    session = store.finish_round(
+        session,
+        FORMAL_STAGE,
+        {
+            "valid": False,
+            "completed": False,
+            "life_failed": True,
+            "result_status": "life_failed",
+        },
+        suggested_offset_ms=10,
+        termination_reason="演出失败：生命值归零",
+    )
+    attempt = session["attempts"][-1]
+    assert attempt["status"] == "life-failed"
+    assert session["status"] == "rejected"
+    assert session["terminal_reason"] == "formal_validation_life_failed"
+    assert session["next_stage"] is None
+
+
 def test_new_session_immediately_creates_unaccepted_candidate(tmp_path):
     store = create_store(tmp_path)
     session = store.start(

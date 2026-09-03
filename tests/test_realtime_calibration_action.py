@@ -9,16 +9,48 @@ import agent.realtime.calibration_action as calibration_action_module
 from agent.realtime.calibration_action import (
     CalibrationRunner,
     RealtimeCalibration,
+    _warm_start_offset,
     calibration_round_plan,
     latest_result_report_since,
     result_report_snapshot,
 )
+from agent.realtime.profile_store import RealtimeProfileStore
 
 
 def record(song, *, hit=100, miss=0, fast=0, slow=0, survived=True):
     return {"song_id": song, "perfect": hit, "great": 0, "good": 0, "bad": 0,
             "miss": miss, "fast": fast, "slow": slow, "survived": survived,
             "completed": True, "confidence": 1.0}
+
+
+def test_warm_start_prefers_pinned_accepted_profile(tmp_path):
+    store = RealtimeProfileStore(tmp_path / "profiles")
+    created = store.write({
+        "created_at": "2026-09-04T01:00:00",
+        "difficulty": "Expert",
+        "accepted": True,
+        "accepted_at": "2026-09-04T01:05:00",
+        "environment": {
+            "resolution": [1280, 720],
+            "dpi": 240,
+            "game_fps": 60,
+            "render_quality": "standard",
+            "note_speed": 5.0,
+            "note_skin_type": 1,
+            "tap_effect": 4,
+            "judgement_assist_effect": False,
+        },
+        "settings": {"timing_offset_ms": 66},
+        "rehearsals": [],
+        "formal_attempts": [],
+    })
+    store.pin("Expert", created.name)
+    assert _warm_start_offset(store, "Expert", 0) == 66
+
+
+def test_warm_start_falls_back_when_no_accepted_profile(tmp_path):
+    store = RealtimeProfileStore(tmp_path / "profiles")
+    assert _warm_start_offset(store, "Expert", 3) == 3
 
 
 def test_calibration_round_plan_never_falls_back_to_prepare():

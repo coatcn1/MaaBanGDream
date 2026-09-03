@@ -11,9 +11,9 @@ from maa.context import Context
 from maa.custom_action import CustomAction
 
 try:
-    from ..task_reporting import record_failure_reason
+    from ..task_reporting import log_task, record_failure_reason
 except ImportError:  # AgentServer imports realtime as a top-level package.
-    from task_reporting import record_failure_reason
+    from task_reporting import log_task, record_failure_reason
 
 from .profile_action import PROJECT_ROOT
 from .profile_store import EnvironmentSignature, RealtimeProfileStore
@@ -43,6 +43,47 @@ PLAY_NODES = {
     "Special": "RealtimeLivePlaySpecial",
 }
 CALIBRATION_ROUND_ENTRY = "RealtimeCalibrationSingleLive"
+
+
+def _warm_start_offset(
+    store: RealtimeProfileStore,
+    difficulty: str,
+    fallback: int,
+) -> int:
+    """从已钉选/已接受的 Profile 热启动时序偏移，避免每次从 0 重新收敛。
+
+    模拟器输入延迟会随会话漂移 10~30ms，但很少从最优值整体跳变到 0。
+    从旧 Profile 起步后，排练结果仍会按 fast/slow 修正，因此热启动只缩短
+    收敛路径，不会固化旧值。
+    """
+    names: list[str] = []
+    pinned = store.pinned_profile(difficulty)
+    if pinned:
+        names.append(pinned)
+    names.extend(
+        profile["_path"].name
+        for profile in store.list_profiles(accepted_only=True)
+        if profile.get("difficulty") == difficulty
+    )
+    for name in names:
+        if not name:
+            continue
+        try:
+            profile = store.load(name)
+        except (OSError, ValueError):
+            continue
+        settings = profile.get("settings")
+        if isinstance(settings, dict) and isinstance(
+            settings.get("timing_offset_ms"), (int, float)
+        ):
+            offset = max(-250, min(250, int(settings["timing_offset_ms"])))
+            print(
+                f"RealtimeCalibration warm_start={offset} "
+                f"profile={name}",
+                flush=True,
+            )
+            return offset
+    return int(fallback)
 
 
 def calibration_round_plan(
@@ -297,11 +338,16 @@ class RealtimeCalibration(CustomAction):
         selected_song = current_song_id()
         if selected_song == UNKNOWN_SONG_ID:
             selected_song = None
+        initial_offset_ms = _warm_start_offset(
+            store,
+            difficulty,
+            int(params.get("timing_offset_ms", 0)),
+        )
         session = session_store.start(
             difficulty=difficulty,
             song_mode=song_mode,
             environment=signature,
-            initial_offset_ms=int(params.get("timing_offset_ms", 0)),
+            initial_offset_ms=initial_offset_ms,
             current_song_id=selected_song,
             resume_mode=resume_mode,
         )
@@ -344,6 +390,20 @@ class RealtimeCalibration(CustomAction):
             if context.tasker.stopping:
                 raise InterruptedError("校准已停止")
             if detail is None or not detail.status.succeeded:
+                # 生命归零是游戏结果而不是技术故障：先读本轮报告，命中时
+                # 直接返回，避免把死亡误判成可重试的技术失败。
+                try:
+                    if report_path.exists():
+                        report = json.loads(
+                            report_path.read_text(encoding="utf-8")
+                        )
+                        if report.get("result_status") == "life_failed":
+                            report["valid"] = False
+                            report["completed"] = False
+                            report["life_failed"] = True
+                            return report
+                except (OSError, json.JSONDecodeError):
+                    pass
                 status = None if detail is None else detail.status
                 return {
                     "valid": False,
@@ -419,6 +479,8 @@ class RealtimeCalibration(CustomAction):
                         }
                     record["play_attempt"] = play_attempt
                     record["play_attempt_limit"] = play_failure_retry_count + 1
+                    if record.get("life_failed"):
+                        break
                     if (
                         record.get("valid") is not False
                         and record.get("completed") is True
@@ -463,7 +525,7 @@ class RealtimeCalibration(CustomAction):
                     if not formal:
                         effective = int(record.get("timing_offset_ms", offset))
                         raw = adjusted_timing_offset(effective, result)
-                        suggested = max(offset - 15, min(offset + 15, raw))
+                        suggested = max(offset - 60, min(offset + 60, raw))
                 session = session_store.finish_round(
                     session,
                     stage,
@@ -508,9 +570,24 @@ class RealtimeCalibration(CustomAction):
                 ),
                 {},
             )
-            record_failure_reason(
-                "实时演奏校准正式验证未通过："
-                f"miss={formal.get('miss', '未知')}，要求 miss < 10；"
-                "候选 Profile 已保留但未接受"
+            if formal.get("life_failed"):
+                record_failure_reason(
+                    "实时演奏校准正式验证未通过：演出中生命值归零"
+                    "（打击整体偏慢），候选 Profile 已保留但未接受"
+                )
+            else:
+                record_failure_reason(
+                    "实时演奏校准正式验证未通过："
+                    f"miss={formal.get('miss', '未知')}，要求 miss < 10；"
+                    "候选 Profile 已保留但未接受"
+                )
+        else:
+            log_task(
+                "实时演奏校准",
+                "结束",
+                "SUCCESS",
+                "✅ 实时演奏校准成功：正式验证通过，Profile 已接受"
+                f"（{session.get('candidate_profile')}，"
+                f"offset={session.get('current_offset_ms')}ms）",
             )
         return accepted
