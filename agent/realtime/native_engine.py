@@ -19,6 +19,8 @@ _module: Any | None = None
 _import_error: str | None = None
 
 LANE_CENTERS = (190, 340, 490, 640, 790, 940, 1090)
+# 视觉规划在 y=565 预判过线，但设备触控必须落在游戏判定线 y=590。
+TOUCH_Y = 590.0
 
 SYNC_CONFIG_DEFAULTS = {
     "match_tol_s": 0.15,
@@ -107,6 +109,7 @@ def compile_touch_script(
     config = {
         "song_offset_s": float(song_offset_s),
         "press_bias_ms": int(press_bias_ms),
+        "judgement_y": TOUCH_Y,
         "lane_centers": list(LANE_CENTERS),
     }
     compiler = _module.TouchScriptCompiler(native_offsets)

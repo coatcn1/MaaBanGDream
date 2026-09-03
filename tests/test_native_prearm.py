@@ -266,5 +266,6 @@ def test_settings_prearm_success_arms_waits_and_caches_exact_key(tmp_path):
     assert constructed[0]["serial"] == "test-device"
     assert constructed[0]["run_id"] == "run-48"
     assert constructed[0]["start_gate_mode"] == "cooperative"
+    assert constructed[0]["judgement_y"] == 590
     assert manager.consume("run-48", chart) is backend
     assert timers.timers[0].seconds == 25

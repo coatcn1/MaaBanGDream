@@ -134,7 +134,8 @@ struct ScheduledAction {
 };
 
 struct EngineConfig {
-    double judgement_y = 565.0;
+    // 字段名为兼容既有 binding 保留；它表示设备触控落点，不是视觉预判线。
+    double judgement_y = 590.0;
     // 正值 = 提前输入（沿用 Python 约定：press_bias_s = -ms/1000）。
     int press_bias_ms = 0;
     // 单个 w 命令的最大等待毫秒。更长的等待会被切分成多段 w+c，

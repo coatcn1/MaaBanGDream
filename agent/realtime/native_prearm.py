@@ -281,7 +281,8 @@ def prepare_native_for_settings_gate(
         selection.path,
         adb_path=adb_path,
         serial=adb_serial,
-        judgement_y=565,
+        # y=565 是视觉预判线；Native 直触必须与 Legacy/上游一致落在 y=590。
+        judgement_y=590,
         press_bias_ms=0,
         start_gate_mode=str(
             getattr(live_run, "mode", None) or "realtime"

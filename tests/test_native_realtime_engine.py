@@ -105,7 +105,7 @@ def _compile_full_touch_script(actions, *, end_time_s: float) -> list[str]:
         {
             "song_offset_s": 0.0,
             "press_bias_ms": 0,
-            "judgement_y": 565.0,
+            "judgement_y": 590.0,
             "lane_centers": [190, 340, 490, 640, 790, 940, 1090],
             "max_wait_ms": 250,
             "tap_duration_ms": 50,
@@ -272,6 +272,26 @@ def test_scheduler_stop_releases_active_hold():
     assert {r["contact"] for r in releases} == {
         action["contact"] for action in active_downs
     }
+
+
+@requires_native
+def test_native_touch_script_uses_controller_touch_line_by_default():
+    script = native_engine.compile_touch_script([
+        {
+            "kind": "tap",
+            "lane": 3,
+            "contact": -1,
+            "target_x": 640.0,
+            "due_s": 0.0,
+            "note_index": 0,
+            "flick_direction": None,
+        }
+    ])
+
+    assert any(
+        line.startswith("d ") and line.split()[2:4] == ["640", "590"]
+        for line in script
+    )
 
 
 def test_engine_selection_defaults_to_legacy():
@@ -768,8 +788,8 @@ def test_native_backend_publishes_first_chunk_from_photogate_anchor(monkeypatch)
             compiled_actions = list(args[0])
             if compiled_actions:
                 script = [
-                    "d 7 340 565 50\n",
-                    "d 8 490 565 50\n",
+                    "d 7 340 590 50\n",
+                    "d 8 490 590 50\n",
                     "c\n",
                 ]
                 self._receipts = [
@@ -1021,6 +1041,7 @@ def test_native_backend_publishes_first_chunk_from_photogate_anchor(monkeypatch)
     assert compiler_calls[1][4] == 10.8
     assert device.published[-1].startswith("c\n")
     assert backend.report()["frozen_timing_offset_ms"] == 17
+    assert backend.report()["touch_y"] == 590.0
     assert backend.report()["executed_observation_supported"] is True
     assert backend.report()["executed_observation_complete"] is True
     assert backend.report()["executed"] == 2

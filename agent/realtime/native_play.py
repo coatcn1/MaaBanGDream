@@ -17,6 +17,7 @@ from .native_minitouch import NativeMinitouchDevice
 
 
 LANE_CENTERS = (190, 340, 490, 640, 790, 940, 1090)
+TOUCH_Y = 590.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,7 +258,7 @@ class NativeMinitouchBackend:
         *,
         adb_path: str,
         serial: str,
-        judgement_y: float = 565.0,
+        judgement_y: float = TOUCH_Y,
         lane_centers: tuple[float, ...] = LANE_CENTERS,
         press_bias_ms: int = 0,
         max_wait_ms: int = 250,
@@ -1368,6 +1369,9 @@ class NativeMinitouchBackend:
             "state": self._state,
             "session_state": self._session_state,
             "first_action_anchor_s": self._first_action_anchor_s,
+            "touch_y": float(
+                getattr(self, "_config", {}).get("judgement_y", TOUCH_Y)
+            ),
             "jlog_path": str(self._jlog_path) if self._jlog_path is not None else None,
             "frozen_offsets": dict(self._frozen_offsets),
             "frozen_timing_offset_ms": self._frozen_timing_offset_ms,

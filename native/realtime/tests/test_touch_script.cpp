@@ -350,7 +350,7 @@ void test_same_time_chord_shares_one_commit() {
     const std::string text = join(script);
     // 两个 DOWN 必须相邻，并由同一个 commit 同时送入内核。
     CHECK(text.find(
-        "d 7 340 565 50\nd 8 940 565 50\nc\n") != std::string::npos);
+        "d 7 340 590 50\nd 8 940 590 50\nc\n") != std::string::npos);
     CHECK(script_has_valid_contact_lifecycle(script));
 }
 
