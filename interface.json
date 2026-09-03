@@ -3,7 +3,7 @@
   "interface_version": 2,
   "name": "MaaBanGDream",
   "label": "BanG Dream! 自动化（MaaFramework）",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "支持自动演出、单人实时演奏、多人协力演出、智能校准和挑战演出。",
   "license": "GPL-3.0-only",
   "controller": [
@@ -83,7 +83,7 @@
     {
       "name": "RealtimeCalibration",
       "label": "🎯 实时演奏校准",
-      "description": "三次排练逐曲调整延迟，再用正式验证并自动启用 Profile。",
+      "description": "一次排练快速确定延迟，再用正式验证并自动启用 Profile。",
       "entry": "RealtimeCalibration",
       "option": [
         "CalibrationDifficulty",

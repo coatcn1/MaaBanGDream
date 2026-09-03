@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import time
 from collections import deque
 from collections.abc import Callable
@@ -10,16 +11,20 @@ import numpy as np
 from .controller_touch import ControllerTouchDispatcher
 from .note_detector import NoteDetector
 from .life_monitor import LifeDetector, LifeGuard, LifeStatus, PlayfieldCompletionGuard
+from .live_failed_detector import LiveFailedPopupDetector
+from .playfield_monitor import PlayfieldLifecycleMonitor
 from .timing_feedback import AdaptiveTimingController, TimingFeedbackDetector
-from .touch_planner import RealtimePlanner
+from .touch_planner import ActionKind, RealtimePlanner
 
 
 _HOT_PATH_STAGES = (
     "capture",
     "touch_advance",
     "life",
+    "playfield_monitor",
     "detector",
     "planner",
+    "native_backend",
     "timing_feedback",
     "dispatch",
     "recorder_enqueue",
@@ -44,6 +49,7 @@ class EngineStats:
     aborted_for_life: bool = False
     completed: bool = False
     life_depleted: bool = False
+    life_failed: bool = False
     timing_feedback_fast: int = 0
     timing_feedback_slow: int = 0
     initial_timing_offset_ms: int = 0
@@ -51,6 +57,8 @@ class EngineStats:
     timing_feedback_valid: int = 0
     timing_feedback_ignored: int = 0
     timing_feedback_ignored_reasons: dict[str, int] = field(default_factory=dict)
+    timing_feedback_sightings: int = 0
+    timing_feedback_reports: int = 0
     filtered_adjacent_artifacts: int = 0
     rejected_hold_candidates: int = 0
     terminal_reason: str = ""
@@ -72,6 +80,8 @@ class EngineStats:
     cleanup_errors: tuple[str, ...] = ()
     recorder_error: str | None = None
     startup_timed_out: bool = False
+    engine_mode: str = "legacy"
+    native_report: dict[str, object] = field(default_factory=dict)
 
 
 class RealtimeEngine:
@@ -82,17 +92,23 @@ class RealtimeEngine:
         detector: NoteDetector,
         planner: RealtimePlanner,
         touch: ControllerTouchDispatcher,
-        clock: Callable[[], float] = time.monotonic,
+        clock: Callable[[], float] = time.perf_counter,
         life_detector: LifeDetector | None = None,
         life_guard: LifeGuard | None = None,
         completion_guard: PlayfieldCompletionGuard | None = None,
         debug_recorder: DebugRecorder | None = None,
         timing_feedback_detector: TimingFeedbackDetector | None = None,
         timing_controller: AdaptiveTimingController | None = None,
+        native_backend: object | None = None,
+        playfield_monitor: PlayfieldLifecycleMonitor | None = None,
+        live_failed_detector: LiveFailedPopupDetector | None = None,
     ) -> None:
         self.detector = detector
         self.planner = planner
         self.touch = touch
+        # 注意：默认时钟必须是 perf_counter（QPC）。本机 CPython 的
+        # time.monotonic 是 GetTickCount64，分辨率只有 15.625ms，会把
+        # 帧定速与谱面按压重新量化到 15.6ms 网格上。
         self.clock = clock
         self.life_detector = life_detector
         self.life_guard = life_guard
@@ -100,6 +116,25 @@ class RealtimeEngine:
         self.debug_recorder = debug_recorder
         self.timing_feedback_detector = timing_feedback_detector
         self.timing_controller = timing_controller
+        # Native minitouch 整曲后端（默认关闭）。激活期间谱面触控全部由
+        # 设备端脚本接管，本引擎只保留视觉检测、生命/结算与收尾职责。
+        self.native_backend = native_backend
+        self.playfield_monitor = playfield_monitor
+        self.live_failed_detector = live_failed_detector
+        # 谱面按压（reason=chart-predicted）按到期时刻派发，避免绑定到 60fps
+        # 截图帧造成 ±8ms 的量化抖动；见 run() 中的等待间隙派发。
+        self._scheduled_actions: list = []
+
+    def native_backend_takeover(self) -> bool:
+        """Native 后端是否独占谱面触控。"""
+        backend = self.native_backend
+        return bool(
+            backend is not None
+            and (
+                getattr(backend, "exclusive", False)
+                or getattr(backend, "takeover", False)
+            )
+        )
 
     def run(
         self,
@@ -124,6 +159,12 @@ class RealtimeEngine:
             raise ValueError("target_fps 必须在 15..120 之间")
         if not 1 <= startup_timeout_seconds <= 120:
             raise ValueError("startup_timeout_seconds 必须在 1..120 之间")
+        # Windows 默认计时器粒度约 15.6ms，会吞掉到期派发需要的 1~2ms 精度。
+        # 提升到 1ms 只影响本进程，是节奏类实时循环的标准做法。
+        try:
+            ctypes.windll.winmm.timeBeginPeriod(1)
+        except Exception:
+            pass
         interval = 1 / target_fps
         started_at = self.clock()
         deadline = (
@@ -137,6 +178,7 @@ class RealtimeEngine:
         aborted_for_life = False
         completed = False
         life_depleted = False
+        life_failed = False
         startup_timed_out = False
         below_threshold_streak = 0
         touch_resets = 0
@@ -171,6 +213,15 @@ class RealtimeEngine:
         )
         last_transient_action_at = float("-inf")
         hold_feedback_block_until = float("-inf")
+        scheduled_actions = self._scheduled_actions
+        scheduled_actions.clear()
+        native_exclusive = self.native_backend_takeover()
+        native_started = False
+        startup_marker = (
+            "演奏场"
+            if self.playfield_monitor is not None
+            else "生命条"
+        )
 
         def record_stage_sample(stage: str, elapsed_ms: float) -> None:
             stage_samples_ms[stage].append(elapsed_ms)
@@ -246,7 +297,9 @@ class RealtimeEngine:
                     "event": "playfield_start_timeout",
                     "timestamp": now,
                     "timeout_seconds": startup_timeout_seconds,
-                    "reason": "life bar was never confirmed after live start",
+                    "reason": (
+                        f"{startup_marker} was never confirmed after live start"
+                    ),
                 }],
                 {},
                 None,
@@ -281,6 +334,7 @@ class RealtimeEngine:
                     ),
                 }
                 for stage, samples in stage_samples_ms.items()
+                if samples
             }
             return EngineStats(
                 processed_frames=frames,
@@ -289,6 +343,7 @@ class RealtimeEngine:
                 aborted_for_life=aborted_for_life,
                 completed=completed,
                 life_depleted=life_depleted,
+                life_failed=life_failed,
                 timing_feedback_fast=(
                     self.timing_controller.fast_samples
                     if self.timing_controller is not None else 0
@@ -299,7 +354,9 @@ class RealtimeEngine:
                 ),
                 initial_timing_offset_ms=initial_timing_offset_ms,
                 final_timing_offset_ms=(
-                    self.timing_controller.current_offset_ms
+                    initial_timing_offset_ms
+                    if native_exclusive
+                    else self.timing_controller.current_offset_ms
                     if self.timing_controller is not None
                     else int(getattr(self.planner, "timing_offset_ms", 0))
                 ),
@@ -314,6 +371,12 @@ class RealtimeEngine:
                 timing_feedback_ignored_reasons=(
                     self.timing_controller.ignored_reasons
                     if self.timing_controller is not None else {}
+                ),
+                timing_feedback_sightings=int(
+                    getattr(self.timing_feedback_detector, "sightings", 0)
+                ),
+                timing_feedback_reports=int(
+                    getattr(self.timing_feedback_detector, "reports", 0)
                 ),
                 filtered_adjacent_artifacts=int(
                     getattr(self.planner, "filtered_adjacent_artifacts", 0)
@@ -358,27 +421,68 @@ class RealtimeEngine:
                 stage_timings_ms=stage_timings_ms,
                 frame_interval_outliers=tuple(frame_interval_outliers),
                 startup_timed_out=startup_timed_out,
+                engine_mode="native" if native_exclusive else "legacy",
             )
 
         synchronize_touch = getattr(self.touch, "synchronize", None)
-        if synchronize_touch is not None:
-            synchronize_touch()
         try:
+            if native_exclusive:
+                arm_native = getattr(self.native_backend, "arm", None)
+                if arm_native is None:
+                    raise RuntimeError("Native 后端缺少 arm() 会话接口")
+                arm_native()
+            elif synchronize_touch is not None:
+                synchronize_touch()
             while self.clock() < deadline:
                 if stopping():
                     was_stopped = True
                     break
                 now = self.clock()
+                # 无论本轮是等待还是捕获，都先派发已到期的谱面按压，避免把
+                # 按压重新量化到截图帧上。
+                due_now = [
+                    action for action in scheduled_actions
+                    if action.timestamp <= now
+                ]
+                if due_now:
+                    scheduled_actions[:] = [
+                        action for action in scheduled_actions
+                        if action.timestamp > now
+                    ]
+                    if not native_exclusive:
+                        self.touch.dispatch(due_now)
+                        actions_count += len(due_now)
+                        for action in due_now:
+                            kind = action.kind.value
+                            action_counts[kind] = (
+                                action_counts.get(kind, 0) + 1
+                            )
+                        if any(
+                            action.kind.value in {"tap", "flick"}
+                            for action in due_now
+                        ):
+                            last_transient_action_at = now
                 if now < next_frame:
                     # Pace BEFORE capturing. Capturing first and then
                     # discarding the frame whenever the loop is early wastes
                     # a full screenshot; once per-frame work crosses the
                     # 60 Hz budget that waste halves the effective rate.
-                    time.sleep(min(0.002, next_frame - now))
+                    # 等待目标取下一帧与最早到期按压的较小者，确保到期
+                    # 按压在计时器粒度内派发。
+                    wait_target = next_frame
+                    if scheduled_actions:
+                        wait_target = min(
+                            wait_target,
+                            scheduled_actions[0].timestamp,
+                        )
+                    time.sleep(min(0.002, wait_target - now))
                     continue
-                next_frame += interval
-                if now - next_frame > interval:
-                    next_frame = now + interval
+                capture_interval = (
+                    0.2 if native_exclusive and native_started else interval
+                )
+                next_frame += capture_interval
+                if now - next_frame > capture_interval:
+                    next_frame = now + capture_interval
                 stage_started = self.clock()
                 image = capture()
                 now = self.clock()
@@ -386,11 +490,93 @@ class RealtimeEngine:
                 if stopping():
                     was_stopped = True
                     break
+                if native_exclusive and not native_started:
+                    observe_start = getattr(
+                        self.native_backend, "observe_start_frame", None
+                    )
+                    if observe_start is None:
+                        raise RuntimeError(
+                            "Native 后端缺少 observe_start_frame() photogate 接口"
+                        )
+                    first_action_anchor = observe_start(image, now)
+                    if first_action_anchor is None:
+                        frames += 1
+                        if now - started_at >= startup_timeout_seconds:
+                            startup_timed_out = True
+                            record_startup_timeout_frame(
+                                image,
+                                now,
+                                life_status=LifeStatus.UNKNOWN.value,
+                            )
+                            break
+                        # 触发前保持目标高帧率，只做截图和 photogate；不得
+                        # 启动 Legacy detector/planner/touch 或生命监控。
+                        continue
+                    start_native = getattr(self.native_backend, "start", None)
+                    if start_native is None:
+                        raise RuntimeError("Native 后端缺少 start() 会话接口")
+                    start_native(float(first_action_anchor))
+                    native_started = True
+                    if self.playfield_monitor is not None:
+                        self.playfield_monitor.mark_active(now)
+                    # 首拍之后截图只服务生命和终态识别，固定降到约 5Hz。
+                    next_frame = now + 0.2
+                # 死亡弹窗监控不依赖数值生命条；演奏场成立后以约 5Hz 检查
+                # “演出失败”弹窗，必须先于演奏场消失判定，否则弹窗遮挡会
+                # 被误判成“进入结算”。
+                playfield_active = (
+                    self.playfield_monitor is not None
+                    and bool(getattr(self.playfield_monitor, "active", False))
+                )
+                if (
+                    self.live_failed_detector is not None
+                    and playfield_active
+                    and self.live_failed_detector.observe(image, now)
+                ):
+                    life_failed = True
+                    life_depleted = True
+                    record_terminal_life_frame(
+                        image,
+                        now,
+                        life_status=LifeStatus.DEAD.value,
+                        life_value=0,
+                        reason="life-failed-popup",
+                    )
+                    break
+                if (
+                    self.playfield_monitor is not None
+                    and (not native_exclusive or native_started)
+                ):
+                    stage_started = self.clock()
+                    playfield_state = self.playfield_monitor.observe(image, now)
+                    record_stage_sample(
+                        "playfield_monitor",
+                        (self.clock() - stage_started) * 1000,
+                    )
+                    if playfield_state == "waiting":
+                        frames += 1
+                        if now - started_at >= startup_timeout_seconds:
+                            startup_timed_out = True
+                            record_startup_timeout_frame(
+                                image,
+                                now,
+                                life_status=LifeStatus.UNKNOWN.value,
+                            )
+                            break
+                        continue
+                    if playfield_state == "completed":
+                        completed = True
+                        break
+                    if playfield_state == "missing" and not native_exclusive:
+                        # 结算转场不得再送入 Legacy 音符检测，避免白色动画
+                        # 被误判为最后一批音符；Native 仍需继续轮询设备回执。
+                        frames += 1
+                        continue
                 # Flick gestures span several game frames. Progress them here
                 # so input never sleeps inside dispatch and blocks capture.
                 advance_touch = getattr(self.touch, "advance", None)
                 stage_started = self.clock()
-                if advance_touch is not None:
+                if advance_touch is not None and not native_exclusive:
                     advance_touch(now)
                 record_stage_sample(
                     "touch_advance", (self.clock() - stage_started) * 1000
@@ -476,11 +662,22 @@ class RealtimeEngine:
                     record_stage_sample(
                         "life", (self.clock() - stage_started) * 1000
                     )
+                if native_exclusive and native_started:
+                    poll_native = getattr(self.native_backend, "poll", None)
+                    if poll_native is None:
+                        raise RuntimeError("Native 后端缺少 poll() 会话接口")
+                    stage_started = self.clock()
+                    poll_native(now)
+                    record_stage_sample(
+                        "native_backend",
+                        (self.clock() - stage_started) * 1000,
+                    )
+
                 diagnostics: list[dict[str, object]] = []
                 reset_touch = getattr(
                     self.touch, "emergency_release_all", None
                 )
-                if reset_touch is not None:
+                if reset_touch is not None and not native_exclusive:
                     has_live_touches = getattr(
                         self.touch,
                         "has_active_or_pending_contacts",
@@ -542,17 +739,48 @@ class RealtimeEngine:
                             + f" recent_peak={recent_peak_life}",
                             flush=True,
                         )
-                stage_started = self.clock()
-                notes = self.detector.detect(image, now)
-                record_stage_sample(
-                    "detector", (self.clock() - stage_started) * 1000
-                )
-                stage_started = self.clock()
-                actions = self.planner.update(notes, now)
-                diagnostics.extend(self.planner.drain_diagnostics())
-                record_stage_sample(
-                    "planner", (self.clock() - stage_started) * 1000
-                )
+                if native_exclusive:
+                    # Native 从第 0 帧独占输入；Python 只保留生命与终态监控。
+                    notes = []
+                    actions = []
+                    scheduled_actions.clear()
+                else:
+                    stage_started = self.clock()
+                    notes = self.detector.detect(image, now)
+                    record_stage_sample(
+                        "detector", (self.clock() - stage_started) * 1000
+                    )
+                    stage_started = self.clock()
+                    actions = self.planner.update(notes, now)
+                    diagnostics.extend(self.planner.drain_diagnostics())
+                    record_stage_sample(
+                        "planner", (self.clock() - stage_started) * 1000
+                    )
+                # 谱面动作拆成“立即”与“到期派发”。DOWN/MOVE 必须立即派发
+                # 以维持 hold 触点生命周期与视觉跟随 MOVE 的因果顺序；
+                # TAP/FLICK/UP 按到期时刻毫秒级发送，消除帧对齐量化。
+                recorded_actions = actions
+                scheduled_now = [
+                    action for action in actions
+                    if (
+                        action.reason in {"chart-predicted", "chart-tail"}
+                        and action.kind not in {
+                            ActionKind.DOWN,
+                            ActionKind.MOVE,
+                        }
+                        and action.timestamp > now + 0.002
+                    )
+                ]
+                if scheduled_now:
+                    scheduled_ids = {id(action) for action in scheduled_now}
+                    actions = [
+                        action for action in actions
+                        if id(action) not in scheduled_ids
+                    ]
+                    scheduled_actions.extend(scheduled_now)
+                    scheduled_actions.sort(
+                        key=lambda action: action.timestamp
+                    )
                 current_processed_at = now
                 frame_interval_ms = None
                 if first_processed_at is None:
@@ -569,23 +797,30 @@ class RealtimeEngine:
                 previous_processed_at = current_processed_at
                 last_processed_at = current_processed_at
                 if any(
-                    action.kind.value in {"tap", "flick"} for action in actions
+                    action.kind.value in {"tap", "flick"}
+                    for action in recorded_actions
                 ):
                     last_transient_action_at = now
-                if any(action.kind.value == "up" for action in actions):
+                if any(
+                    action.kind.value == "up"
+                    for action in recorded_actions
+                ):
                     hold_feedback_block_until = max(
-                        hold_feedback_block_until, now + .4
+                        hold_feedback_block_until, now + .15
                     )
                 stage_started = self.clock()
                 if (
+                    not native_exclusive
+                    and
                     self.timing_feedback_detector is not None
                     and self.timing_controller is not None
                 ):
                     feedback = self.timing_feedback_detector.detect(image)
-                    if self.planner.has_active_holds:
-                        eligible = False
-                        ignored_reason = "active_hold"
-                    elif now < hold_feedback_block_until:
+                    # hold 常驻期间普通 TAP 的 FAST/SLOW 判定条仍是有效信号；
+                    # 整段丢弃会让 drift 完全失去局内修正（实机曾出现 10 个
+                    # FAST 全程 valid=0）。hold 尾判定假信号由下方
+                    # recent_hold_release 窗口单独屏蔽。
+                    if now < hold_feedback_block_until:
                         eligible = False
                         ignored_reason = "recent_hold_release"
                     elif now - last_transient_action_at > .6:
@@ -606,7 +841,7 @@ class RealtimeEngine:
                     "timing_feedback", (self.clock() - stage_started) * 1000
                 )
                 stage_started = self.clock()
-                if actions:
+                if actions and not native_exclusive:
                     self.touch.dispatch(actions)
                     actions_count += len(actions)
                     for action in actions:
@@ -639,7 +874,7 @@ class RealtimeEngine:
                         else None
                     )
                     self.debug_recorder.record(
-                        image, now, notes, actions, life_status,
+                        image, now, notes, recorded_actions, life_status,
                         diagnostics, timing_state, life_value, touch_state,
                     )
                 record_stage_sample(
@@ -651,7 +886,7 @@ class RealtimeEngine:
                 current_frame_context = {
                     "frame": frames,
                     "notes": len(notes),
-                    "actions": len(actions),
+                    "actions": len(recorded_actions),
                     "active_contacts": active_contacts,
                 }
                 if frame_interval_ms is not None:
@@ -695,19 +930,24 @@ class RealtimeEngine:
                 previous_tail_stage_ms = {
                     stage: stage_samples_ms[stage][-1]
                     for stage in _HOT_PATH_STAGES
-                    if stage != "capture"
+                    if stage != "capture" and stage_samples_ms[stage]
                 }
                 previous_frame_context = current_frame_context
                 frames += 1
+            # 演奏已进入终态：丢弃尚未派发的谱面按压，绝不在结算/停止后补发。
+            scheduled_actions.clear()
             if was_stopped:
                 terminal_reason = "用户已停止任务"
             elif aborted_for_life:
                 terminal_reason = "生命值触发安全停止"
+            elif life_failed:
+                terminal_reason = "演出失败：生命值归零"
             elif completed:
                 terminal_reason = "已识别演奏结束并进入结算"
             elif startup_timed_out:
                 terminal_reason = (
-                    f"开演后 {startup_timeout_seconds:g} 秒仍未识别到生命条，"
+                    f"开演后 {startup_timeout_seconds:g} 秒仍未识别到"
+                    f"{startup_marker}，"
                     "可能停留在加载页、网络弹窗或非演奏画面"
                 )
             elif duration_seconds is not None:
@@ -725,20 +965,33 @@ class RealtimeEngine:
                 f"{type(exc).__name__}: {exc}"
             )
         finally:
-            try:
-                cleanup = self.planner.reset(self.clock())
-            except Exception as exc:
-                cleanup = []
-                cleanup_errors.append(
-                    f"planner_reset={type(exc).__name__}: {exc}"
-                )
-            try:
-                if cleanup:
-                    self.touch.dispatch(cleanup)
-            except Exception as exc:
-                cleanup_errors.append(
-                    f"cleanup_dispatch={type(exc).__name__}: {exc}"
-                )
+            if not native_exclusive:
+                try:
+                    cleanup = self.planner.reset(self.clock())
+                except Exception as exc:
+                    cleanup = []
+                    cleanup_errors.append(
+                        f"planner_reset={type(exc).__name__}: {exc}"
+                    )
+                try:
+                    if cleanup:
+                        self.touch.dispatch(cleanup)
+                except Exception as exc:
+                    cleanup_errors.append(
+                        f"cleanup_dispatch={type(exc).__name__}: {exc}"
+                    )
+            if self.native_backend is not None:
+                try:
+                    set_terminal_reason = getattr(
+                        self.native_backend, "set_terminal_reason", None
+                    )
+                    if set_terminal_reason is not None and base_stats is not None:
+                        set_terminal_reason(base_stats.terminal_reason)
+                    self.native_backend.stop()
+                except Exception as exc:
+                    cleanup_errors.append(
+                        f"native_backend_stop={type(exc).__name__}: {exc}"
+                    )
             try:
                 self.touch.close()
             except Exception as exc:
@@ -771,14 +1024,39 @@ class RealtimeEngine:
                 if terminal_reason
                 else f"实时触控收尾失败: {detail}"
             )
+        native_report: dict[str, object] = {}
+        if native_exclusive and self.native_backend is not None:
+            try:
+                native_report = dict(self.native_backend.report())
+            except Exception as exc:
+                cleanup_errors.append(
+                    f"native_backend_report={type(exc).__name__}: {exc}"
+                )
         final_stats = replace(
             base_stats,
             terminal_reason=terminal_reason,
             cleanup_failed=bool(cleanup_errors),
             cleanup_errors=tuple(cleanup_errors),
             recorder_error=recorder_error,
+            dispatched_actions=(
+                int(native_report.get("sent", 0))
+                if native_exclusive else base_stats.dispatched_actions
+            ),
+            action_counts=(
+                dict(native_report.get("action_counts", {}))
+                if native_exclusive else base_stats.action_counts
+            ),
+            native_report=native_report,
         )
         if run_error is not None:
             run_error.realtime_stats = final_stats
             raise run_error
+        if self.timing_feedback_detector is not None and not native_exclusive:
+            detector = self.timing_feedback_detector
+            print(
+                "RealtimeTimingFeedback "
+                f"sightings={getattr(detector, 'sightings', -1)} "
+                f"reports={getattr(detector, 'reports', -1)}",
+                flush=True,
+            )
         return final_stats

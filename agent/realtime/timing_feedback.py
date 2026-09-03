@@ -15,8 +15,23 @@ class TimingFeedback(str, Enum):
 class TimingFeedbackDetector:
     """Read the coloured FAST/SLOW bar below the centred judgement text."""
 
-    ROI = (555, 525, 725, 570)
-    MIN_COLOURED_PIXELS = 1000
+    # 判定条实测几何：位于判定文字正下方（GREAT 下方约 y 514-556），
+    # FAST 为亮天蓝（H≈102-110, S≈220），SLOW 为亮橙（H≈11, S≈247）。
+    # 旧 ROI 过宽且 FAST 饱和度上限 150，把过线蓝音符当成判定条。
+    ROI = (570, 514, 710, 556)
+    MIN_COLOURED_PIXELS = 600
+    # 判定条常只持续 2-3 帧且中间会闪断 1 帧（实测 sightings=29 时
+    # 严格连续 2 帧门禁只产出 5 次报告）。改为“最近 3 帧内同色出现
+    # ≥2 帧即报告”，既容忍闪烁，又拒绝孤立单帧的过线音符。
+    PERSISTENCE_FRAMES = 2
+
+    def __init__(self) -> None:
+        self._recent: deque[TimingFeedback | None] = deque(maxlen=3)
+        self._armed = False
+        # 观测计数：sightings = 任一帧出现过判定条信号；reports = 通过
+        # 持续帧数门禁后实际上报的次数。用于诊断实机检测覆盖率。
+        self.sightings = 0
+        self.reports = 0
 
     def detect(self, image: np.ndarray) -> TimingFeedback | None:
         if not isinstance(image, np.ndarray) or image.shape[:2] != (720, 1280):
@@ -24,15 +39,32 @@ class TimingFeedbackDetector:
         x1, y1, x2, y2 = self.ROI
         hsv = cv2.cvtColor(image[y1:y2, x1:x2], cv2.COLOR_BGR2HSV)
         slow = int(np.count_nonzero(cv2.inRange(
-            hsv, (3, 140, 140), (25, 255, 255),
+            hsv, (0, 140, 160), (25, 255, 255),
         )))
         fast = int(np.count_nonzero(cv2.inRange(
-            hsv, (95, 100, 150), (115, 255, 255),
+            hsv, (95, 160, 160), (120, 255, 255),
         )))
-        if slow >= self.MIN_COLOURED_PIXELS and slow > fast:
-            return TimingFeedback.SLOW
-        if fast >= self.MIN_COLOURED_PIXELS and fast > slow:
-            return TimingFeedback.FAST
+        kind: TimingFeedback | None = None
+        if slow >= self.MIN_COLOURED_PIXELS and slow >= fast * 2:
+            kind = TimingFeedback.SLOW
+        elif fast >= self.MIN_COLOURED_PIXELS and fast >= slow * 2:
+            kind = TimingFeedback.FAST
+        self._recent.append(kind)
+        if kind is not None:
+            self.sightings += 1
+        same = [seen for seen in self._recent if seen == kind and kind is not None]
+        # 每个判定条周期只上报一次（armed）；条彻底消失（窗口全空）后
+        # 才允许下一次上报，避免同一判定条重复计数。
+        if (
+            kind is not None
+            and not self._armed
+            and len(same) >= self.PERSISTENCE_FRAMES
+        ):
+            self._armed = True
+            self.reports += 1
+            return kind
+        if kind is None and not any(self._recent):
+            self._armed = False
         return None
 
 
@@ -44,6 +76,7 @@ class AdaptiveTimingController:
         initial_offset_ms: int,
         *,
         step_ms: int = 1,
+        unanimous_step_ms: int | None = None,
         minimum_samples: int = 12,
         imbalance: int = 8,
         window_size: int = 16,
@@ -53,6 +86,9 @@ class AdaptiveTimingController:
         self.initial_offset_ms = int(initial_offset_ms)
         self.current_offset_ms = int(initial_offset_ms)
         self.step_ms = int(step_ms)
+        self.unanimous_step_ms = (
+            None if unanimous_step_ms is None else int(unanimous_step_ms)
+        )
         self.minimum_samples = int(minimum_samples)
         self.imbalance = int(imbalance)
         self.maximum_live_adjustment_ms = int(maximum_live_adjustment_ms)
@@ -103,11 +139,19 @@ class AdaptiveTimingController:
             return None
 
         direction = 1 if error > 0 else -1
+        # 窗口内全部同向说明信号一致，可放大步长；混合窗口用小步长，
+        # 降低个别误检把偏移推反的风险。
+        step = self.step_ms
+        if (
+            self.unanimous_step_ms is not None
+            and abs(error) == len(self._samples)
+        ):
+            step = self.unanimous_step_ms
         lower = max(-250, self.initial_offset_ms - self.maximum_live_adjustment_ms)
         upper = min(250, self.initial_offset_ms + self.maximum_live_adjustment_ms)
         adjusted = max(
             lower,
-            min(upper, self.current_offset_ms + direction * self.step_ms),
+            min(upper, self.current_offset_ms + direction * step),
         )
         self._samples.clear()
         if adjusted == self.current_offset_ms:

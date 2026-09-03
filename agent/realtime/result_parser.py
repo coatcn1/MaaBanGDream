@@ -206,8 +206,20 @@ class ResultParser:
                 label: float(np.min(distances[cls._labels == label]))
                 for label in range(10)
             }
-            nearest_labels = sorted(by_label, key=by_label.get)[:2]
-            labels = list(dict.fromkeys((selected, *nearest_labels)))
+            ordered = sorted(by_label, key=by_label.get)
+            best_distance = by_label[ordered[0]]
+            # 候选标签 = 分类结果 + 最近两个 + 距离在最近距离 3 倍以内的
+            # 所有标签。细体数字在部分卡片上会把 8 渲染得与样本距离很远
+            # （实测真值 8 排第 6 近、2.94 倍），固定 top-2 会让按谱面
+            # 总数修复的路径永远找不到正确组合，结算读数会卡到超时。
+            labels = [
+                label
+                for label in ordered
+                if (
+                    label in {selected, ordered[0], ordered[1]}
+                    or by_label[label] <= best_distance * 3.0
+                )
+            ]
             minimum_cost = min(math.log1p(value) for value in by_label.values())
             cell_options.append([
                 (
@@ -460,6 +472,28 @@ def adjusted_timing_offset(current: int, result: LiveResult) -> int:
     threshold = max(2, round(feedback * .10))
     if feedback == 0 or abs(error) <= threshold:
         return int(current)
-    delta = round(12 * error / feedback)
-    delta = max(-15, min(15, delta or (1 if error > 0 else -1)))
+    # 写回步长随反馈占比自适应：反馈只占全曲极小比例时，偏差通常在
+    # 判定窗边缘的一帧以内，小步长即可。几乎整局都落在同一侧时（例如
+    # 2026-09-04 校准排练 slow=506/fast=51），必须用大步长在正式验证前
+    # 一次追平 30~50ms 的会话延迟，否则正式验证会带着旧偏移直接死亡。
+    # 逐步回落到小步长，避免在判定窗两侧来回过冲。
+    total = max(
+        1,
+        result.perfect
+        + result.great
+        + result.good
+        + result.bad
+        + result.miss,
+    )
+    ratio = feedback / total
+    if ratio >= 0.6:
+        step = 48
+    elif ratio >= 0.35:
+        step = 24
+    elif ratio >= 0.02:
+        step = 12
+    else:
+        step = 3
+    delta = round(step * error / feedback)
+    delta = max(-step, min(step, delta or (1 if error > 0 else -1)))
     return max(-250, min(250, int(current) + delta))

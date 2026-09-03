@@ -562,14 +562,6 @@
       "label": "自动演出",
       "status": "failure",
       "reason": "自动演出次数已用尽或当前不可用"
-    },
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 自动演出次数已用尽或当前不可用",
-        "display": [
-          "log"
-        ]
-      }
     }
   },
   "AutoLiveEnabled": {
@@ -771,14 +763,6 @@
       "label": "自动演出",
       "status": "failure",
       "reason": "自动演出流程未完成：未到达演出结算或主页恢复失败"
-    },
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 自动演出流程未完成：未到达演出结算或主页恢复失败",
-        "display": [
-          "log"
-        ]
-      }
     }
   },
   "AutoLiveFreeLiveTemplate": {

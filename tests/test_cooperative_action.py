@@ -149,6 +149,8 @@ def test_cooperative_play_disables_life_abort_but_keeps_start_gate():
     assert params["require_completion"] is True
     assert params["run_mode"] == "cooperative"
     assert params["diagnostic_trace"] is False
+    assert params["confirm_final_cover"] is True
+    assert params["native_prearm_deferred"] is True
 
 
 def test_cooperative_interface_exposes_requested_modes_and_five_difficulties():
@@ -320,6 +322,57 @@ def test_member_exit_reconnect_is_bounded_and_reuses_original_route():
     assert calls == ["dismiss", "room", "dismiss", "room"]
 
 
+def test_transient_play_failure_retries_the_whole_cooperative_round():
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.settings = {
+        "entry_method": "normal",
+        "post_live_action": "exit",
+        "count": 1,
+        "member_exit_policy": "fail",
+        "max_reconnects": 3,
+        "play_failure_retry_count": 1,
+    }
+    outcomes = iter([False, True])
+    attempts = []
+    recoveries = []
+    flow.progress_callback = None
+    flow.run_attempt = lambda reuse_room=False: (
+        attempts.append(reuse_room) or next(outcomes)
+    )
+    flow.recover_after_play_failure = lambda reason: recoveries.append(reason)
+
+    assert flow.run() is True
+    assert attempts == [False, False]
+    assert len(recoveries) == 1
+
+
+def test_transient_play_exception_stops_after_retry_budget():
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.settings = {
+        "entry_method": "normal",
+        "post_live_action": "exit",
+        "count": 1,
+        "member_exit_policy": "fail",
+        "max_reconnects": 3,
+        "play_failure_retry_count": 1,
+    }
+    attempts = []
+    recoveries = []
+    flow.progress_callback = None
+
+    def fail(reuse_room=False):
+        attempts.append(reuse_room)
+        raise RuntimeError("temporary capture failure")
+
+    flow.run_attempt = fail
+    flow.recover_after_play_failure = lambda reason: recoveries.append(reason)
+
+    with pytest.raises(RuntimeError, match="temporary capture failure"):
+        flow.run()
+    assert attempts == [False, False]
+    assert len(recoveries) == 1
+
+
 def test_download_timeout_invokes_jump_instead_of_starting_engine():
     flow = object.__new__(CooperativeLiveFlow)
     flow.wait_for = lambda names, timeout, interval: (None, np.zeros((1, 1, 3)))
@@ -452,6 +505,19 @@ def test_play_uses_realtime_result_navigator_without_a_second_pggbm_wait(monkeyp
 
     assert flow.play() is True
     assert calls == ["realtime"]
+
+
+def test_run_attempt_starts_cover_observer_before_waiting_for_playfield():
+    flow = object.__new__(CooperativeLiveFlow)
+    calls = []
+    flow.enter_room = lambda: calls.append("enter")
+    flow.wait_for_preparation = lambda: calls.append("prepare-wait")
+    flow.prepare = lambda: calls.append("prepare")
+    flow.wait_for_playfield = lambda: calls.append("playfield-wait")
+    flow.play = lambda: calls.append("play") or True
+
+    assert flow.run_attempt() is True
+    assert calls == ["enter", "prepare-wait", "prepare", "play"]
 
 
 def test_stay_in_room_rechecks_repeat_popup_after_every_accelerated_back(monkeypatch):

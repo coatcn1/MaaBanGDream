@@ -360,6 +360,24 @@ def test_profile_check_failure_writes_structured_preflight_result(
     assert not list(tmp_path.rglob("summary.json"))
 
 
+def test_preflight_failure_preserves_an_existing_run_recording_path(tmp_path):
+    run = _run_context(
+        recording_path="debug/recordings/realtime-correlated"
+    )
+
+    path = run_reporting.write_preflight_terminal_result(
+        output_dir=tmp_path,
+        params={"difficulty": "Expert", "timing_offset_ms": 0},
+        terminal_stage="profile_play_preflight",
+        reason="cover resolver failed",
+        run_context=run,
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["debug_recording_path"] == run.recording_path
+    assert payload["session"]["recording_path"] == run.recording_path
+
+
 def test_profile_check_stop_during_failure_is_neutral_and_writes_nothing(
     monkeypatch, tmp_path,
 ):

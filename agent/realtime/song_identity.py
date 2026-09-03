@@ -13,6 +13,8 @@ UNKNOWN_SONG_ID = "unknown"
 # v1 accidentally hashed the scrolling list on the left, so different songs
 # on the same page could look almost identical to the chart registry.
 SONG_ID_ROI = (684, 120, 320, 320)
+# 开演前最终歌曲信息页的居中封面内部，不包含外框和下方难度标签。
+FINAL_SONG_JACKET_ROI = (476, 64, 328, 328)
 MAX_SAME_SONG_DISTANCE = 8
 
 
@@ -25,6 +27,20 @@ class SongIdentity:
 def identify_song(image: np.ndarray) -> SongIdentity:
     """Return a versioned perceptual identity of the selected song jacket."""
     x, y, width, height = SONG_ID_ROI
+    if (
+        not isinstance(image, np.ndarray)
+        or image.ndim != 3
+        or image.shape[0] < y + height
+        or image.shape[1] < x + width
+        or image.shape[2] < 3
+    ):
+        return SongIdentity(UNKNOWN_SONG_ID, "unknown")
+    return fingerprint_jacket(image[y:y + height, x:x + width])
+
+
+def identify_final_song(image: np.ndarray) -> SongIdentity:
+    """读取所有演出模式共用的最终歌曲信息页封面。"""
+    x, y, width, height = FINAL_SONG_JACKET_ROI
     if (
         not isinstance(image, np.ndarray)
         or image.ndim != 3

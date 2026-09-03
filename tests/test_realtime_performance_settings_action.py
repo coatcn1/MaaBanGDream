@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import cv2
 import numpy as np
+import pytest
 
 from agent.realtime import performance_settings_action
 from agent.realtime.live_session import reset_live_run, update_live_run
@@ -36,6 +37,20 @@ class _Screenshot:
 class _Controller:
     def post_screencap(self):
         return _Screenshot()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_native_prearm(monkeypatch):
+    monkeypatch.setattr(
+        performance_settings_action,
+        "prepare_native_for_settings_gate",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        performance_settings_action,
+        "discard_prearmed_backend",
+        lambda reason: False,
+    )
 
 
 def test_fixed_digit_template_reader_decodes_two_digit_upper_bound():
@@ -127,6 +142,7 @@ def test_visual_evaluation_uses_precheck_resolver_before_speed_read(monkeypatch)
 def test_gate_reads_current_speed_and_uses_real_half_tenth_cent_buttons(monkeypatch):
     clear_verified_settings()
     clicks = []
+    prearm_calls = []
     readings = iter([2.37, 5.0])
     monkeypatch.setattr(
         "agent.realtime.performance_settings_action._expected_speed",
@@ -145,6 +161,17 @@ def test_gate_reads_current_speed_and_uses_real_half_tenth_cent_buttons(monkeypa
         "agent.realtime.performance_settings_action.time.sleep",
         lambda seconds: None,
     )
+
+    def prepare_prearm(**kwargs):
+        # 预武装只能发生在设置弹窗确认关闭之后。
+        assert clicks[-1] == DEFAULT_COORDINATES["close"]
+        prearm_calls.append(kwargs)
+
+    monkeypatch.setattr(
+        performance_settings_action,
+        "prepare_native_for_settings_gate",
+        prepare_prearm,
+    )
     context = SimpleNamespace(
         tasker=SimpleNamespace(stopping=False, controller=_Controller()),
     )
@@ -162,10 +189,114 @@ def test_gate_reads_current_speed_and_uses_real_half_tenth_cent_buttons(monkeypa
     assert clicks.count((575, 312)) == 1  # +0.10
     assert clicks.count((513, 312)) == 3  # +0.01
     assert clicks[-1] == (640, 600)
+    assert prearm_calls[0]["difficulty"] == "Expert"
     verified = verified_settings("Expert")
     assert verified is not None
     assert verified.actual_note_speed == 5.0
     assert verified.profile == "expert.json"
+
+
+def test_gate_fails_closed_when_native_prearm_fails_after_dialog_close(
+    monkeypatch,
+):
+    clear_verified_settings()
+    closed = []
+    monkeypatch.setattr(
+        performance_settings_action,
+        "_expected_speed",
+        lambda context, params, image: (5.0, "expert.json"),
+    )
+    monkeypatch.setattr(
+        performance_settings_action,
+        "_select_first_tab_and_read",
+        lambda *args, **kwargs: 5.0,
+    )
+    monkeypatch.setattr(
+        performance_settings_action,
+        "_adjust_speed",
+        lambda *args, **kwargs: (True, 5.0),
+    )
+    monkeypatch.setattr(
+        performance_settings_action,
+        "_click",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        performance_settings_action,
+        "_close_settings_dialog",
+        lambda *args, **kwargs: closed.append(True),
+    )
+
+    def fail_prearm(**kwargs):
+        assert closed == [True]
+        raise RuntimeError("simulated prearm failure")
+
+    monkeypatch.setattr(
+        performance_settings_action,
+        "prepare_native_for_settings_gate",
+        fail_prearm,
+    )
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=_Controller()),
+    )
+
+    with pytest.raises(RuntimeError, match="simulated prearm failure"):
+        RealtimePerformanceSettingsGate()._run(
+            context,
+            {"difficulty": "Expert", "require_profile": True},
+        )
+
+
+def test_gate_can_defer_native_prearm_until_final_cover(monkeypatch):
+    clear_verified_settings()
+    monkeypatch.setattr(
+        performance_settings_action,
+        "_expected_speed",
+        lambda context, params, image: (5.0, "expert.json"),
+    )
+    monkeypatch.setattr(
+        performance_settings_action,
+        "_select_first_tab_and_read",
+        lambda *args, **kwargs: 5.0,
+    )
+    monkeypatch.setattr(
+        performance_settings_action,
+        "_adjust_speed",
+        lambda *args, **kwargs: (True, 5.0),
+    )
+    monkeypatch.setattr(
+        performance_settings_action,
+        "_click",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        performance_settings_action,
+        "_close_settings_dialog",
+        lambda *args, **kwargs: None,
+    )
+    prepared = []
+    discarded = []
+    monkeypatch.setattr(
+        performance_settings_action,
+        "prepare_native_for_settings_gate",
+        lambda **kwargs: prepared.append(kwargs),
+    )
+    monkeypatch.setattr(
+        performance_settings_action,
+        "discard_prearmed_backend",
+        discarded.append,
+    )
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=_Controller()),
+    )
+
+    assert RealtimePerformanceSettingsGate()._run(context, {
+        "difficulty": "Expert",
+        "require_profile": True,
+        "defer_native_prearm": True,
+    })
+    assert prepared == []
+    assert discarded == ["deferred-until-final-cover"]
 
 
 def test_gate_rejects_speed_outside_game_range(monkeypatch):
@@ -239,6 +370,7 @@ def test_settings_close_retries_until_speed_display_disappears(monkeypatch):
         "agent.realtime.performance_settings_action.time.sleep",
         lambda seconds: None,
     )
+
     context = SimpleNamespace(
         tasker=SimpleNamespace(stopping=False, controller=_Controller()),
     )

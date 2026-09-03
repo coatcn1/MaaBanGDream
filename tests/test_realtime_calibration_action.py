@@ -9,16 +9,48 @@ import agent.realtime.calibration_action as calibration_action_module
 from agent.realtime.calibration_action import (
     CalibrationRunner,
     RealtimeCalibration,
+    _warm_start_offset,
     calibration_round_plan,
     latest_result_report_since,
     result_report_snapshot,
 )
+from agent.realtime.profile_store import RealtimeProfileStore
 
 
 def record(song, *, hit=100, miss=0, fast=0, slow=0, survived=True):
     return {"song_id": song, "perfect": hit, "great": 0, "good": 0, "bad": 0,
             "miss": miss, "fast": fast, "slow": slow, "survived": survived,
             "completed": True, "confidence": 1.0}
+
+
+def test_warm_start_prefers_pinned_accepted_profile(tmp_path):
+    store = RealtimeProfileStore(tmp_path / "profiles")
+    created = store.write({
+        "created_at": "2026-09-04T01:00:00",
+        "difficulty": "Expert",
+        "accepted": True,
+        "accepted_at": "2026-09-04T01:05:00",
+        "environment": {
+            "resolution": [1280, 720],
+            "dpi": 240,
+            "game_fps": 60,
+            "render_quality": "standard",
+            "note_speed": 5.0,
+            "note_skin_type": 1,
+            "tap_effect": 4,
+            "judgement_assist_effect": False,
+        },
+        "settings": {"timing_offset_ms": 66},
+        "rehearsals": [],
+        "formal_attempts": [],
+    })
+    store.pin("Expert", created.name)
+    assert _warm_start_offset(store, "Expert", 0) == 66
+
+
+def test_warm_start_falls_back_when_no_accepted_profile(tmp_path):
+    store = RealtimeProfileStore(tmp_path / "profiles")
+    assert _warm_start_offset(store, "Expert", 3) == 3
 
 
 def test_calibration_round_plan_never_falls_back_to_prepare():
@@ -158,28 +190,36 @@ def test_formal_failure_returns_unaccepted_candidate():
     assert formal["passed"] is False
 
 
-def test_invalid_rehearsal_ends_invocation_without_automatic_retry():
+def test_invalid_rehearsal_retries_within_configured_budget():
     calls = []
+    records = iter([
+        {"valid": False, "completed": False},
+        record("A"),
+        record("B"),
+        record("C"),
+        record("D"),
+    ])
 
     def run_round(formal, offset):
         calls.append((formal, offset))
-        return {"valid": False, "completed": False}
+        return next(records)
 
-    runner = CalibrationRunner(run_round)
-    try:
-        runner.run()
-    except RuntimeError as exc:
-        assert "排练1" in str(exc)
-    else:
-        raise AssertionError("invalid result must end this invocation")
-    assert calls == [(False, 0)]
+    offset, rehearsals, formal = CalibrationRunner(
+        run_round,
+        max_attempts=2,
+    ).run()
+
+    assert len(rehearsals) == 3
+    assert formal["passed"] is True
+    assert calls[:2] == [(False, 0), (False, 0)]
 
 
-def test_invalid_formal_is_not_retried_in_same_invocation():
+def test_invalid_formal_retries_within_configured_budget():
     records = iter([
         record("A"),
         record("B"), record("C"),
         {"valid": False, "completed": False, "song_id": "invalid-formal"},
+        record("E"),
     ])
     calls = []
 
@@ -187,9 +227,9 @@ def test_invalid_formal_is_not_retried_in_same_invocation():
         calls.append(formal)
         return next(records)
 
-    with pytest.raises(RuntimeError, match="正式验证"):
-        CalibrationRunner(run_round).run()
-    assert calls == [False, False, False, True]
+    _, _, formal = CalibrationRunner(run_round, max_attempts=2).run()
+    assert formal["passed"] is True
+    assert calls == [False, False, False, True, True]
 
 
 def test_unknown_song_identity_still_counts_when_result_is_valid():

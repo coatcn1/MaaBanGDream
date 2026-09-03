@@ -88,12 +88,16 @@ def result_report_payload(
         "realtime_feedback_valid": stats.timing_feedback_valid,
         "realtime_feedback_ignored": stats.timing_feedback_ignored,
         "realtime_feedback_ignored_reasons": stats.timing_feedback_ignored_reasons,
+        "realtime_feedback_sightings": stats.timing_feedback_sightings,
+        "realtime_feedback_reports": stats.timing_feedback_reports,
         "filtered_adjacent_artifacts": stats.filtered_adjacent_artifacts,
         "rejected_hold_candidates": stats.rejected_hold_candidates,
         "recovered_contacts": stats.recovered_contacts,
         "processed_frames": stats.processed_frames,
         "dispatched_actions": stats.dispatched_actions,
         "action_counts": stats.action_counts,
+        "engine_mode": getattr(stats, "engine_mode", "legacy"),
+        "native": dict(getattr(stats, "native_report", {})),
         "frame_interval_p50_ms": stats.frame_interval_p50_ms,
         "frame_interval_p95_ms": stats.frame_interval_p95_ms,
         "frame_interval_max_ms": stats.frame_interval_max_ms,
@@ -134,7 +138,9 @@ def _prepare_preflight_context(
         "note_skin_type": None,
         "tap_effect": None,
         "judgement_assist": None,
-        "recording_path": None,
+        # ProfilePlay 可能已经在最终封面阶段创建证据包；失败报告必须继续
+        # 指向同一 run，不能因“preflight”分类把关联路径清空。
+        "recording_path": base.recording_path,
         "prepared_for_play": False,
     }
     if params.get("note_speed") is not None:

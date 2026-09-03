@@ -187,7 +187,75 @@
     },
     "max_hit": 1,
     "next": [
+      "RealtimeLiveRetryReset"
+    ]
+  },
+  "RealtimeLiveRetryReset": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "RealtimePlayRetryControl",
+    "custom_action_param": {
+      "operation": "reset"
+    },
+    "next": [
       "RealtimeLiveDebugGate"
+    ]
+  },
+  "RealtimeLiveRetryCheck": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "RealtimePlayRetryControl",
+    "custom_action_param": {
+      "operation": "check"
+    },
+    "next": [
+      "RealtimeLiveRetryRecover"
+    ],
+    "on_error": [
+      "RealtimeLiveFailure"
+    ]
+  },
+  "RealtimeLiveRetryRecover": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "CommonRecover",
+    "custom_action_param": {
+      "home_node": "RealtimeLiveHomeMarker",
+      "modal_cancel_nodes": [
+        "QuitConfirmCancel"
+      ],
+      "click_nodes": [
+        "AutoLiveLoginTap",
+        "AutoLiveLoginNext",
+        "AutoLiveCommonClose",
+        "AutoLiveStorySkipConfirmLarge",
+        "AutoLiveStorySkipConfirm",
+        "AutoLiveStorySkip",
+        "AutoLiveStoryMenu"
+      ],
+      "escape_interval_ms": 1500,
+      "escape_timeout_ms": 60000,
+      "restart_limit": 2,
+      "restart_wait_ms": 5000,
+      "startup_grace_ms": 12000,
+      "login_start_node": "AutoLiveLoginScreenMarker",
+      "login_start_target": [
+        640,
+        635
+      ],
+      "login_marker_priority_attempts": 3,
+      "escape_after_login_start": true,
+      "package": "com.bilibili.star.bili",
+      "login_tap_target": [
+        640,
+        360
+      ]
+    },
+    "next": [
+      "RealtimeLiveDebugGate"
+    ],
+    "on_error": [
+      "RealtimeLiveFailure"
     ]
   },
   "RealtimeLiveComplete": {
@@ -686,16 +754,8 @@
       "RealtimeLiveReturnHome"
     ],
     "on_error": [
-      "RealtimeLiveFailure"
-    ],
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
-        "display": [
-          "log"
-        ]
-      }
-    }
+      "RealtimeLiveRetryCheck"
+    ]
   },
   "RealtimeLiveRehearsalSettingsGate": {
     "recognition": "DirectHit",
@@ -986,16 +1046,8 @@
       "RealtimeLiveReturnHome"
     ],
     "on_error": [
-      "RealtimeLiveFailure"
-    ],
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
-        "display": [
-          "log"
-        ]
-      }
-    }
+      "RealtimeLiveRetryCheck"
+    ]
   },
   "RealtimeLivePlayNormal": {
     "recognition": "DirectHit",
@@ -1025,16 +1077,8 @@
       "RealtimeLiveReturnHome"
     ],
     "on_error": [
-      "RealtimeLiveFailure"
-    ],
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
-        "display": [
-          "log"
-        ]
-      }
-    }
+      "RealtimeLiveRetryCheck"
+    ]
   },
   "RealtimeLivePlayHard": {
     "recognition": "DirectHit",
@@ -1064,16 +1108,8 @@
       "RealtimeLiveReturnHome"
     ],
     "on_error": [
-      "RealtimeLiveFailure"
-    ],
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
-        "display": [
-          "log"
-        ]
-      }
-    }
+      "RealtimeLiveRetryCheck"
+    ]
   },
   "RealtimeLivePlayExpert": {
     "recognition": "DirectHit",
@@ -1103,16 +1139,8 @@
       "RealtimeLiveReturnHome"
     ],
     "on_error": [
-      "RealtimeLiveFailure"
-    ],
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
-        "display": [
-          "log"
-        ]
-      }
-    }
+      "RealtimeLiveRetryCheck"
+    ]
   },
   "RealtimeLivePlaySpecial": {
     "recognition": "DirectHit",
@@ -1142,16 +1170,8 @@
       "RealtimeLiveReturnHome"
     ],
     "on_error": [
-      "RealtimeLiveFailure"
-    ],
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
-        "display": [
-          "log"
-        ]
-      }
-    }
+      "RealtimeLiveRetryCheck"
+    ]
   },
   "RealtimeLiveFormalPlay": {
     "recognition": "DirectHit",
@@ -1179,16 +1199,8 @@
       "RealtimeLiveReturnHome"
     ],
     "on_error": [
-      "RealtimeLiveFailure"
-    ],
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
-        "display": [
-          "log"
-        ]
-      }
-    }
+      "RealtimeLiveRetryCheck"
+    ]
   },
   "RealtimeLiveFormalPlayNormal": {
     "recognition": "DirectHit",
@@ -1216,16 +1228,8 @@
       "RealtimeLiveReturnHome"
     ],
     "on_error": [
-      "RealtimeLiveFailure"
-    ],
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
-        "display": [
-          "log"
-        ]
-      }
-    }
+      "RealtimeLiveRetryCheck"
+    ]
   },
   "RealtimeLiveFormalPlayHard": {
     "recognition": "DirectHit",
@@ -1253,16 +1257,8 @@
       "RealtimeLiveReturnHome"
     ],
     "on_error": [
-      "RealtimeLiveFailure"
-    ],
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
-        "display": [
-          "log"
-        ]
-      }
-    }
+      "RealtimeLiveRetryCheck"
+    ]
   },
   "RealtimeLiveFormalPlayExpert": {
     "recognition": "DirectHit",
@@ -1290,16 +1286,8 @@
       "RealtimeLiveReturnHome"
     ],
     "on_error": [
-      "RealtimeLiveFailure"
-    ],
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
-        "display": [
-          "log"
-        ]
-      }
-    }
+      "RealtimeLiveRetryCheck"
+    ]
   },
   "RealtimeLiveFormalPlaySpecial": {
     "recognition": "DirectHit",
@@ -1327,16 +1315,8 @@
       "RealtimeLiveReturnHome"
     ],
     "on_error": [
-      "RealtimeLiveFailure"
-    ],
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 实时演奏未完成：请查看本次任务中的“实时演奏/演奏/ERROR”原因",
-        "display": [
-          "log"
-        ]
-      }
-    }
+      "RealtimeLiveRetryCheck"
+    ]
   },
   "RealtimeLiveReturnHome": {
     "recognition": "DirectHit",
@@ -1355,7 +1335,10 @@
         "AutoLiveStoryMenu"
       ],
       "back_only": true,
-      "back_acceleration_click_point": [1279, 719],
+      "back_acceleration_click_point": [
+        1279,
+        719
+      ],
       "escape_interval_ms": 500,
       "escape_timeout_ms": 60000,
       "restart_limit": 1,
@@ -1396,14 +1379,6 @@
       "status": "failure",
       "reason": "单人实时演奏流程未完成",
       "reason_source": "latest"
-    },
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 单人实时演奏流程未完成",
-        "display": [
-          "log"
-        ]
-      }
     }
   },
   "RealtimeLiveFreeLiveTemplate": {

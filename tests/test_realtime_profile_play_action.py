@@ -20,6 +20,7 @@ from agent.realtime.profile_play_action import (
     _write_calibration_report,
     collect_result,
     pause_overlay_changed,
+    resolve_life_monitor_enabled,
     resolve_life_policy,
 )
 from agent.realtime.result_parser import LiveResult
@@ -55,6 +56,85 @@ class Tasker:
         return self._controller
 
 
+def test_native_execution_gate_requires_complete_lossless_evidence():
+    valid_report = {
+        "planned": 637,
+        "sent": 637,
+        "executed": 637,
+        "underflows": 0,
+        "executed_observation_complete": True,
+        "state": "finished",
+        "session_state": "finished",
+        "release_confirmed": True,
+        "stop_latency_ms": 120.0,
+    }
+    assert profile_play_action._native_execution_gate_failures(valid_report) == []
+
+    failures = profile_play_action._native_execution_gate_failures({
+        **valid_report,
+        "planned": 637,
+        "sent": 637,
+        "executed": 636,
+        "underflows": 1,
+        "executed_observation_complete": False,
+        "executed_observation_reason": "pending=3",
+    })
+    assert any("637/637/636" in failure for failure in failures)
+    assert any("pending=3" in failure for failure in failures)
+    assert "queue_underflows=1" in failures
+
+    failed_terminal = profile_play_action._native_execution_gate_failures({
+        **valid_report,
+        "state": "failed",
+        "publisher_error": "late owner failure",
+    })
+    assert any("terminal_state=failed" in failure for failure in failed_terminal)
+    assert "publisher_error=late owner failure" in failed_terminal
+
+    missing_release = profile_play_action._native_execution_gate_failures({
+        key: value
+        for key, value in valid_report.items()
+        if key != "release_confirmed"
+    })
+    assert "release_confirmed=false" in missing_release
+
+    over_budget = profile_play_action._native_execution_gate_failures({
+        **valid_report,
+        "stop_latency_ms": float("nan"),
+    })
+    assert any("stop_latency_ms=nan" in failure for failure in over_budget)
+
+
+def test_native_execution_gate_accepts_game_terminal_life_failure():
+    cancelled = {
+        "planned": 3739,
+        "sent": 2636,
+        "executed": 2618,
+        "underflows": 0,
+        "executed_observation_complete": False,
+        "executed_observation_reason": "会话在完整设备回读前取消",
+        "state": "cancelled",
+        "session_state": "cancelling",
+        "release_confirmed": True,
+        "stop_latency_ms": 202.0,
+        "game_terminal_reason": "演出失败：生命值归零",
+    }
+    assert profile_play_action._native_execution_gate_failures(cancelled) == []
+
+    # 同样的取消状态，但没有游戏终态理由时仍必须报技术失败。
+    without_terminal = {
+        key: value
+        for key, value in cancelled.items()
+        if key != "game_terminal_reason"
+    }
+    failures = profile_play_action._native_execution_gate_failures(
+        without_terminal
+    )
+    assert any("terminal_state=cancelled" in item for item in failures)
+    assert any("3739/2636/2618" in item for item in failures)
+    assert any("device evidence incomplete" in item for item in failures)
+
+
 def test_profile_play_reuses_one_agent_controller_proxy(monkeypatch):
     tasker = Tasker()
     context = SimpleNamespace(tasker=tasker)
@@ -67,6 +147,17 @@ def test_profile_play_reuses_one_agent_controller_proxy(monkeypatch):
     monkeypatch.setattr(
         "agent.realtime.profile_play_action.RealtimeProfileStore.resolve_latest",
         lambda *args, **kwargs: settings,
+    )
+    # 本测试只验证 Controller 代理生命周期，不能读取用户当前的 Native 开关。
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.RealtimeProfileStore.runtime_options",
+        lambda _self: {
+            "chart_prediction_enabled": False,
+            "chart_predict_presses": False,
+            "native_realtime_enabled": False,
+            "life_safety_enabled": False,
+            "life_exit_threshold": 100,
+        },
     )
     foreground_checks = []
     dispatcher_options = []
@@ -85,10 +176,11 @@ def test_profile_play_reuses_one_agent_controller_proxy(monkeypatch):
     )
 
     engine_options = []
+    engine_construction_options = []
 
     class Engine:
         def __init__(self, *args, **kwargs):
-            pass
+            engine_construction_options.append(kwargs)
 
         def run(self, capture, stopping, **kwargs):
             engine_options.append(kwargs)
@@ -103,6 +195,264 @@ def test_profile_play_reuses_one_agent_controller_proxy(monkeypatch):
     assert foreground_checks == [tasker._controller]
     assert dispatcher_options == [{}]
     assert engine_options[0]["startup_timeout_seconds"] == 60.0
+    assert engine_construction_options[0]["life_detector"] is None
+    assert engine_construction_options[0]["life_guard"] is None
+
+
+def test_explicit_native_initialization_failure_never_falls_back(
+    monkeypatch,
+):
+    reset_live_run(
+        mode="formal",
+        difficulty="Expert",
+        prepared_for_play=True,
+    )
+    tasker = Tasker()
+    tasker._controller.info = {
+        "adb_path": "C:/tools/adb.exe",
+        "adb_serial": "test-device",
+    }
+    context = SimpleNamespace(tasker=tasker)
+    settings = SimpleNamespace(
+        target_fps=60,
+        timing_offset_ms=17,
+        note_speed=10.0,
+        profile_path=SimpleNamespace(name="expert.json"),
+    )
+    selection = SimpleNamespace(
+        path=Path("chart-48-expert.json"),
+        timeline=object(),
+        bestdori_song_id=48,
+        difficulty="expert",
+    )
+
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.RealtimeProfileStore.resolve_latest",
+        lambda *args, **kwargs: settings,
+    )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.RealtimeProfileStore.runtime_options",
+        lambda *args, **kwargs: {
+            # Native 必须独立解析已确认谱面，不能依赖 Legacy 谱面预测开关。
+            "chart_prediction_enabled": False,
+            "chart_predict_presses": False,
+            "native_realtime_enabled": True,
+            "life_safety_enabled": False,
+            "life_exit_threshold": 100,
+        },
+    )
+    resolution_calls = []
+
+    def resolve_chart(*args, **kwargs):
+        resolution_calls.append((args, kwargs))
+        return SimpleNamespace(selection=selection, reason="matched")
+
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.resolve_local_chart_for_run",
+        resolve_chart,
+    )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.require_game_foreground",
+        lambda controller: None,
+    )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.debug_enabled",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.diagnostic_trace_enabled",
+        lambda: False,
+    )
+
+    class Dispatcher:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def close(self):
+            pass
+
+    class ForbiddenLateNativeBackend:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("ProfilePlay 不得在 Start 后构造 Native")
+
+    consume_calls = []
+
+    def consume_prearmed(run_id, chart_path):
+        consume_calls.append((run_id, chart_path))
+        raise RuntimeError("simulated missing prearm")
+
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.ControllerTouchDispatcher",
+        Dispatcher,
+    )
+    monkeypatch.setattr(
+        "agent.realtime.native_play.NativeMinitouchBackend",
+        ForbiddenLateNativeBackend,
+    )
+    monkeypatch.setattr(
+        profile_play_action,
+        "consume_prearmed_backend",
+        consume_prearmed,
+        raising=False,
+    )
+
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Expert",
+    }))
+    with pytest.raises(RuntimeError, match="预武装.*禁止回退 Legacy"):
+        RealtimeProfilePlay()._run(context, argv)
+    assert len(resolution_calls) == 1
+    assert len(consume_calls) == 1
+    assert consume_calls[0][1] == selection.path
+
+
+def test_profile_native_consumes_and_configures_prearmed_backend(monkeypatch):
+    prepared_run = reset_live_run(
+        mode="formal",
+        difficulty="Expert",
+        prepared_for_play=True,
+    )
+    tasker = Tasker()
+    context = SimpleNamespace(tasker=tasker)
+    settings = SimpleNamespace(
+        target_fps=60,
+        timing_offset_ms=17,
+        note_speed=10.0,
+        profile_path=SimpleNamespace(name="expert.json"),
+    )
+    selection = SimpleNamespace(
+        path=Path("chart-48-expert.json"),
+        timeline=object(),
+        bestdori_song_id=48,
+        difficulty="expert",
+    )
+    monkeypatch.setattr(
+        profile_play_action.RealtimeProfileStore,
+        "resolve_latest",
+        lambda *args, **kwargs: settings,
+    )
+    monkeypatch.setattr(
+        profile_play_action.RealtimeProfileStore,
+        "runtime_options",
+        lambda *args, **kwargs: {
+            "chart_prediction_enabled": False,
+            "chart_predict_presses": False,
+            "native_realtime_enabled": True,
+            "life_safety_enabled": False,
+            "life_exit_threshold": 100,
+        },
+    )
+    monkeypatch.setattr(
+        profile_play_action,
+        "resolve_local_chart_for_run",
+        lambda *args, **kwargs: SimpleNamespace(
+            selection=selection,
+            reason="matched",
+        ),
+    )
+    monkeypatch.setattr(
+        profile_play_action,
+        "require_game_foreground",
+        lambda controller: None,
+    )
+    monkeypatch.setattr(profile_play_action, "debug_enabled", lambda: False)
+    monkeypatch.setattr(
+        profile_play_action,
+        "diagnostic_trace_enabled",
+        lambda: False,
+    )
+
+    class Dispatcher:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def close(self):
+            pass
+
+    class PrearmedBackend:
+        def __init__(self):
+            self.offsets = []
+            self.stop_calls = 0
+
+        def configure_timing_offset(self, value):
+            self.offsets.append(value)
+
+        def stop(self):
+            self.stop_calls += 1
+
+    backend = PrearmedBackend()
+    consume_calls = []
+
+    def consume(run_id, chart_path):
+        consume_calls.append((run_id, chart_path))
+        return backend
+
+    engine_backends = []
+
+    class StopAfterSetupEngine:
+        def __init__(self, *args, **kwargs):
+            engine_backends.append(kwargs["native_backend"])
+            raise RuntimeError("stop after native setup")
+
+    monkeypatch.setattr(
+        profile_play_action,
+        "ControllerTouchDispatcher",
+        Dispatcher,
+    )
+    monkeypatch.setattr(
+        profile_play_action,
+        "consume_prearmed_backend",
+        consume,
+    )
+    monkeypatch.setattr(
+        profile_play_action,
+        "RealtimeEngine",
+        StopAfterSetupEngine,
+    )
+
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Expert",
+    }))
+    with pytest.raises(RuntimeError, match="stop after native setup"):
+        RealtimeProfilePlay()._run(context, argv)
+
+    assert consume_calls == [(prepared_run.run_id, selection.path)]
+    assert backend.offsets == [17]
+    assert engine_backends == [backend]
+    assert backend.stop_calls == 1
+
+
+def test_explicit_native_requires_controller_adb_endpoint():
+    with pytest.raises(RuntimeError, match="adb_path.*adb_serial"):
+        profile_play_action._native_adb_endpoint(Controller())
+
+    controller = Controller()
+    controller.info = {
+        "adb_path": "C:/tools/adb.exe",
+        "adb_serial": "test-device",
+    }
+    assert profile_play_action._native_adb_endpoint(controller) == (
+        "C:/tools/adb.exe",
+        "test-device",
+    )
+
+
+def test_native_completion_guard_keeps_frame_threshold_time_equivalent():
+    assert profile_play_action._completion_missing_frames(
+        120,
+        native=True,
+        target_fps=60,
+    ) == 10
+    assert profile_play_action._completion_missing_frames(
+        30,
+        native=True,
+        target_fps=60,
+    ) == 3
+    assert profile_play_action._completion_missing_frames(
+        120,
+        native=False,
+        target_fps=60,
+    ) == 120
 
 
 def test_profile_play_refuses_pipeline_start_without_fresh_speed_gate(
@@ -206,6 +556,21 @@ def test_rehearsal_life_policy_can_ignore_depletion():
     )
 
     assert policy == (True, True, None)
+
+
+def test_unchecked_life_safety_disables_numeric_life_monitor():
+    assert resolve_life_monitor_enabled(
+        {},
+        {"life_safety_enabled": False},
+    ) is False
+    assert resolve_life_monitor_enabled(
+        {"use_life_safety": False},
+        {"life_safety_enabled": True},
+    ) is False
+    assert resolve_life_monitor_enabled(
+        {},
+        {"life_safety_enabled": True},
+    ) is True
 
 
 def test_rehearsal_life_policy_can_enable_normal_protection():
@@ -751,7 +1116,7 @@ def test_late_preflight_failure_preserves_verified_visual_and_speed(
     }
 
 
-def test_foreground_failure_does_not_start_debug_recorder(monkeypatch, tmp_path):
+def test_foreground_failure_still_starts_preflight_debug_recorder(monkeypatch, tmp_path):
     reset_live_run(mode="formal", difficulty="Easy")
     context = SimpleNamespace(tasker=Tasker())
     settings = SimpleNamespace(
@@ -782,10 +1147,10 @@ def test_foreground_failure_does_not_start_debug_recorder(monkeypatch, tmp_path)
     }))
 
     assert not RealtimeProfilePlay().run(context, argv)
-    assert recorder_constructions == []
+    assert recorder_constructions == [tmp_path / "debug" / "recordings"]
 
 
-def test_touch_construction_failure_does_not_start_debug_recorder(
+def test_touch_construction_failure_still_starts_preflight_debug_recorder(
     monkeypatch, tmp_path,
 ):
     reset_live_run(mode="formal", difficulty="Easy")
@@ -822,7 +1187,7 @@ def test_touch_construction_failure_does_not_start_debug_recorder(
     }))
 
     assert not RealtimeProfilePlay().run(context, argv)
-    assert recorder_constructions == []
+    assert recorder_constructions == [tmp_path / "debug" / "recordings"]
 
 
 @pytest.mark.parametrize("failure_point", ["construction", "run"])

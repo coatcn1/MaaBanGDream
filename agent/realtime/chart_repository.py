@@ -22,6 +22,10 @@ class ChartSelection:
     path: Path
     timeline: ChartTimeline
     expected_notes: int | None = None
+    level: int | None = None
+    titles: tuple[str, ...] = ()
+    fingerprints: tuple[str, ...] = ()
+    shared_jacket: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +152,12 @@ class LocalChartRepository:
                 expected_notes=(
                     int(expected_notes) if expected_notes is not None else None
                 ),
+                level=_difficulty_level(song, normalized_difficulty),
+                titles=tuple(str(value) for value in song.get("titles", ())),
+                fingerprints=tuple(
+                    str(value) for value in song.get("fingerprints", ())
+                ),
+                shared_jacket=len(fingerprint_matches) > 1,
             ),
             (
                 "confirmed local chart by song title"

@@ -48,6 +48,8 @@ EARLY_PHASE_RELOCK_WINDOW_S = 12.0
 PHASE_RELOCK_MAD_LIMIT_S = 0.020
 PHASE_RELOCK_MAX_SHIFT_S = 0.200
 PHASE_RELOCK_MIN_LANES = 2
+PHASE_REFINEMENT_MAX_TOTAL_S = 0.006
+PHASE_REFINEMENT_WINDOW_S = 30.0
 HOLD_HEAD_CLAIM_WINDOW_S = 0.25
 MAX_EARLY_VISUAL_HOLD_HEAD_S = 0.08
 POST_CHART_INPUT_GRACE_S = 0.75
@@ -113,6 +115,15 @@ class ChartPredictor:
         self.song_offset_s = 0.0
         self.calibration_samples: list[tuple[float, int, str, float]] = []
         self.expected_hold_tail: dict[int, tuple[float, int]] = {}
+        # 谱面为权威的尾部 flick 标记：claim 时从 tail.tail_flick 记录，
+        # chart-tail 释放前按它覆写视觉管线的 flick 锁存，避免粉色箭头
+        # 误检把非 flick 长条尾升级成 FLICK 而把尾判定推成 GOOD。
+        self._chart_tail_flick: dict[int, bool] = {}
+        # 视觉管线在非尾部 lane 提前释放跨轨 Slide 后，记录的尾部补按救援：
+        # contact -> (tail_time, tail_lane, tail_flick, direction)。
+        self._pending_tail_rescue: dict[
+            int, tuple[float, int, bool, str | None]
+        ] = {}
         self.predicted_presses = 0
         self.predicted_releases = 0
         self.calibration_failed = False
@@ -127,6 +138,7 @@ class ChartPredictor:
         self.disabled_for_run = False
         self.disable_reason: str | None = None
         self._phase_residuals: list[float] = []
+        self._phase_refinement_total = 0.0
         self._mismatch_streak = 0
         self._mismatch_direction: int | None = None
         self._mismatch_residuals: list[tuple[float, int]] = []
@@ -151,6 +163,8 @@ class ChartPredictor:
         self.song_offset_s = 0.0
         self.calibration_samples = []
         self.expected_hold_tail = {}
+        self._chart_tail_flick = {}
+        self._pending_tail_rescue = {}
         self.predicted_presses = 0
         self.predicted_releases = 0
         self.calibration_failed = False
@@ -163,6 +177,7 @@ class ChartPredictor:
         self.disabled_for_run = False
         self.disable_reason = None
         self._phase_residuals = []
+        self._phase_refinement_total = 0.0
         self._mismatch_streak = 0
         self._mismatch_direction = None
         self._mismatch_residuals = []
@@ -183,6 +198,8 @@ class ChartPredictor:
     def recover_touch_state(self) -> None:
         """Forget chart contacts released outside the normal planner flow."""
         self.expected_hold_tail.clear()
+        self._chart_tail_flick.clear()
+        self._pending_tail_rescue.clear()
 
     def _relative(self, engine_time: float) -> float:
         """Convert an absolute monotonic engine time to song-relative time."""
@@ -345,10 +362,30 @@ class ChartPredictor:
         self._mismatch_residuals = []
         self._phase_residuals.append(residual)
         self._phase_residuals = self._phase_residuals[-9:]
-        if len(self._phase_residuals) >= 4:
+        # 锁定后的连续相位精修必须严格有界：视觉投影在密集段落带有
+        # 系统性偏差，无上限的小步累积曾在整局内漂移 40ms+，把中段按压
+        # 整体推到判定窗外。总修正量封顶 ±6ms，且只在锁定后 30 秒内进行；
+        # 更大的会话级误差交由游戏 FAST/SLOW 反馈回路修正按压偏移。
+        if (
+            len(self._phase_residuals) >= 4
+            and abs(self._phase_refinement_total)
+            < PHASE_REFINEMENT_MAX_TOTAL_S
+            and (
+                relative_time_s is None
+                or self._calibrated_at_relative_s is None
+                or relative_time_s - self._calibrated_at_relative_s
+                <= PHASE_REFINEMENT_WINDOW_S
+            )
+        ):
             median = statistics.median(self._phase_residuals)
             adjustment = max(-0.002, min(0.002, median * 0.25))
+            remaining = (
+                PHASE_REFINEMENT_MAX_TOTAL_S
+                - abs(self._phase_refinement_total)
+            )
+            adjustment = max(-remaining, min(remaining, adjustment))
             self.song_offset_s += adjustment
+            self._phase_refinement_total += adjustment
 
     def observe_tracks(
         self,
@@ -1070,6 +1107,8 @@ class ChartPredictor:
                 actions,
             )
         self.expected_hold_tail.clear()
+        self._chart_tail_flick.clear()
+        self._pending_tail_rescue.clear()
         state._blind_hold_contacts.clear()
         state._chart_tail_lane.clear()
         state._chart_hold_lanes.clear()
@@ -1246,7 +1285,13 @@ class ChartPredictor:
                 continue
             target = next_judgement.time_s + self.press_bias_s
             lead = target - song_now
-            if not -0.12 <= lead <= 0.018:
+            # 瞬态按压（tap/flick）允许提前 40ms 排期精确派发；hold 头必须
+            # 保持 18ms 发射窗并立即派发，否则视觉 hold 跟随 MOVE 会抢在
+            # 排期 DOWN 之前发出，触点尚未激活被丢弃，整条 hold 失联。
+            max_lead = (
+                0.040 if next_judgement.kind == "tap" else 0.018
+            )
+            if not -0.12 <= lead <= max_lead:
                 continue
             # Only skip when a recent press on this lane already covered the
             # chart note.  Junk presses far from the chart time (or from a
@@ -1319,7 +1364,7 @@ class ChartPredictor:
                 actions.append(TouchAction(
                     action_kind,
                     lane,
-                    now,
+                    now + lead if lead > 0 else now,
                     reason="chart-predicted",
                     flick_direction=next_judgement.direction,
                 ))
@@ -1355,6 +1400,7 @@ class ChartPredictor:
                     state,
                     holds,
                     song_now,
+                    press_at=now + lead if lead > 0 else now,
                 )
                 if next_judgement.note_index in self._claimed_hold_note_indices:
                     self._consumed_judgements.add((
@@ -1371,6 +1417,7 @@ class ChartPredictor:
         state: PlannerState,
         holds: HoldPipeline,
         song_now: float,
+        press_at: float | None = None,
     ) -> None:
         """Press a hold head at the chart time when the detector cannot.
 
@@ -1466,7 +1513,7 @@ class ChartPredictor:
         actions.append(TouchAction(
             ActionKind.DOWN,
             lane,
-            now,
+            now if press_at is None else press_at,
             contact,
             "chart-predicted",
             target_x=max(120, min(1160, round(body.x))),
@@ -1602,6 +1649,7 @@ class ChartPredictor:
                     tail.time_s,
                     tail.lane,
                 )
+                self._chart_tail_flick[action.contact] = bool(tail.tail_flick)
                 state._chart_tail_lane[action.contact] = tail.lane
                 state._chart_hold_release_at[action.contact] = (
                     action.timestamp + tail.time_s - head_song_time
@@ -1641,13 +1689,48 @@ class ChartPredictor:
             expected = self.expected_hold_tail.pop(action.contact, None)
             if expected is None:
                 continue
+            tail_time, tail_lane = expected
+            song_now = (
+                self._relative(action.timestamp) + self.song_offset_s
+            )
+            if action.lane != tail_lane and song_now < tail_time - 0.02:
+                # 视觉管线在错误 lane 上提前释放了跨轨 Slide（例如 3→4→6
+                # 的超短滑条被在 5 上放掉）。此时退休 chart 尾判定会让游戏
+                # 在真实尾部 lane 判 MISS。改为记录补按救援：到期在正确
+                # lane 重新按下，让尾判定落在真实位置。
+                tail = next(
+                    (
+                        judgement for judgement in self.chart.judgements
+                        if (
+                            judgement.kind == "hold-tail"
+                            and abs(judgement.time_s - tail_time) < 1e-6
+                            and judgement.lane == tail_lane
+                        )
+                    ),
+                    None,
+                )
+                self._pending_tail_rescue[action.contact] = (
+                    tail_time,
+                    tail_lane,
+                    bool(tail.tail_flick) if tail is not None else False,
+                    tail.direction if tail is not None else None,
+                )
+                state.record_diagnostic(
+                    "chart_tail_rescue_scheduled",
+                    action.timestamp,
+                    contact=action.contact,
+                    visual_lane=action.lane,
+                    tail_lane=tail_lane,
+                    chart_time_s=round(tail_time, 3),
+                )
+                continue
             state.record_diagnostic(
                 "chart_visual_tail_retired",
                 action.timestamp,
                 contact=action.contact,
                 release_reason=action.reason,
-                chart_time_s=round(expected[0], 3),
-                tail_lane=expected[1],
+                chart_time_s=round(tail_time, 3),
+                tail_lane=tail_lane,
             )
 
     def _release_due_holds(
@@ -1658,6 +1741,41 @@ class ChartPredictor:
         holds: HoldPipeline,
     ) -> None:
         song_now = self.input_song_time(now)
+        # 尾部补按救援：视觉管线曾把跨轨 Slide 提前放掉，chart 到期在正确
+        # lane 重新按下（FLICK 尾部带方向），尾判定按精确到期时刻派发。
+        for contact, rescue in list(self._pending_tail_rescue.items()):
+            tail_time, tail_lane, tail_flick, direction = rescue
+            if song_now < tail_time - 0.035:
+                continue
+            press_at = now + max(0.0, tail_time - song_now)
+            action_kind = (
+                ActionKind.FLICK if tail_flick else ActionKind.TAP
+            )
+            actions.append(TouchAction(
+                action_kind,
+                tail_lane,
+                press_at,
+                reason="chart-predicted",
+                flick_direction=direction,
+            ))
+            self.predicted_presses += 1
+            self._last_predicted[tail_lane] = press_at
+            self._last_predicted_judgement[tail_lane] = (
+                -1,
+                "hold-tail",
+                press_at,
+            )
+            state._last_trigger[tail_lane] = press_at
+            state._last_trigger_action_kind[tail_lane] = action_kind
+            self._pending_tail_rescue.pop(contact, None)
+            state.record_diagnostic(
+                "chart_tail_rescued",
+                now,
+                contact=contact,
+                lane=tail_lane,
+                chart_time_s=round(tail_time, 3),
+                flick=tail_flick,
+            )
         for contact, (tail_time, tail_lane) in list(
             self.expected_hold_tail.items()
         ):
@@ -1670,7 +1788,7 @@ class ChartPredictor:
                 state._chart_slide_next_index.pop(contact, None)
                 state._chart_hold_release_at.pop(contact, None)
                 continue
-            if song_now < tail_time - 0.015:
+            if song_now < tail_time - 0.035:
                 continue
             lane = state._active_hold_lane.get(contact, contact)
             if lane != tail_lane:
@@ -1727,6 +1845,17 @@ class ChartPredictor:
                     # chart tail and final lane.
                     state._hold_chord_partner.pop(contact, None)
                     state._hold_chord_partner.pop(partner, None)
+            release_at = now + max(0.0, tail_time - song_now)
+            action_count_before = len(actions)
+            # chart-tail 释放必须服从谱面的 tail_flick：视觉管线若在前面
+            # 帧把触点误锁进 flick 集合，这里按 claim 时的谱面标记拨回，
+            # 保证非 flick 尾部以 UP 释放、flick 尾部以 FLICK 释放。
+            chart_flick = self._chart_tail_flick.get(contact)
+            if chart_flick is True:
+                state._hold_tail_flick.add(contact)
+            elif chart_flick is False:
+                state._hold_tail_flick.discard(contact)
+                state._hold_tail_flick_direction.pop(contact, None)
             holds._release_hold(
                 contact,
                 lane,
@@ -1734,6 +1863,19 @@ class ChartPredictor:
                 "chart-tail",
                 actions,
             )
+            if len(actions) > action_count_before:
+                # 把尾部释放的派发时间改成精确到期时刻：释放也按谱面时间
+                # 毫秒级发送，不再绑定截图帧（帧量化会把尾判定推成 BAD）。
+                for index in range(action_count_before, len(actions)):
+                    action = actions[index]
+                    if (
+                        action.kind in {ActionKind.UP, ActionKind.FLICK}
+                        and action.reason == "chart-tail"
+                    ):
+                        actions[index] = replace(
+                            action,
+                            timestamp=release_at,
+                        )
             self.predicted_releases += 1
             self.expected_hold_tail.pop(contact, None)
             state._blind_hold_contacts.discard(contact)

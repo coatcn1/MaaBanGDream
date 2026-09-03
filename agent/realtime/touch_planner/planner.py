@@ -353,6 +353,12 @@ class RealtimePlanner:
             return None
         return round(self._chart_predictor.song_offset_s * 1000, 3)
 
+    def song_time_s(self, now: float) -> float | None:
+        """谱面秒（chart seconds）；未锁定返回 None。"""
+        if self._chart_predictor is None or not self._chart_predictor.calibrated:
+            return None
+        return self._chart_predictor.song_time(now)
+
     @property
     def chart_disable_reason(self) -> str | None:
         return (

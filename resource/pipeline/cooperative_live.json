@@ -267,12 +267,6 @@
       "status": "failure",
       "reason": "协力演出流程未完成",
       "reason_source": "latest"
-    },
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 协力演出流程未完成",
-        "display": ["log"]
-      }
     }
   }
 }

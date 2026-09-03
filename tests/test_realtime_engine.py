@@ -6,6 +6,7 @@ import pytest
 from agent.realtime.engine import RealtimeEngine
 from agent.realtime.touch_planner import ActionKind, TouchAction
 from agent.realtime.life_monitor import LifeGuard, LifeReading, PlayfieldCompletionGuard
+from agent.realtime.playfield_monitor import PlayfieldLifecycleMonitor
 
 
 class Clock:
@@ -1114,6 +1115,31 @@ def test_engine_completes_after_confirmed_playfield_disappears():
     assert touch.closed == 1
 
 
+def test_engine_can_gate_and_complete_without_numeric_life_detection():
+    engine, _, planner, touch, capture = build()
+    states = iter([False, False, True, True, True, False, False])
+    monitor = PlayfieldLifecycleMonitor(
+        detector=lambda _image: next(states),
+        confirm_checks=2,
+        missing_checks=2,
+        active_check_interval_seconds=0,
+    )
+    engine.playfield_monitor = monitor
+    engine.life_detector = None
+    engine.life_guard = None
+
+    stats = engine.run(
+        capture,
+        lambda: False,
+        duration_seconds=10,
+        target_fps=60,
+    )
+
+    assert stats.completed
+    assert planner.updates == 2
+    assert touch.closed == 1
+
+
 def test_invisible_transition_frames_do_not_trigger_life_safety():
     engine, _, planner, touch, capture = build()
     triggered = []
@@ -1187,8 +1213,13 @@ def test_engine_applies_live_timing_feedback_to_the_planner():
     assert stats.timing_feedback_slow == 25
 
 
-def test_engine_ignores_feedback_while_a_hold_is_active():
-    from agent.realtime.timing_feedback import AdaptiveTimingController
+def test_engine_accepts_feedback_while_a_hold_is_active():
+    # hold 常驻时普通 TAP 的判定条仍是有效漂移证据，不能整段丢弃；
+    # 只有 hold 释放后 / 无近期瞬态输入的时间窗继续屏蔽。
+    from agent.realtime.timing_feedback import (
+        AdaptiveTimingController,
+        TimingFeedback,
+    )
 
     engine, _, planner, _, capture = build()
     planner.has_active_holds = True
@@ -1199,7 +1230,7 @@ def test_engine_ignores_feedback_while_a_hold_is_active():
 
         def detect(self, image):
             self.index += 1
-            return "slow" if self.index % 2 else None
+            return TimingFeedback.SLOW if self.index % 2 else None
 
     engine.timing_feedback_detector = FeedbackDetector()
     engine.timing_controller = AdaptiveTimingController(
@@ -1211,7 +1242,8 @@ def test_engine_ignores_feedback_while_a_hold_is_active():
 
     stats = engine.run(capture, lambda: False, duration_seconds=1, target_fps=60)
 
-    assert planner.offset_changes == []
-    assert stats.timing_feedback_valid == 0
-    assert stats.timing_feedback_ignored == 25
-    assert stats.timing_feedback_ignored_reasons == {"active_hold": 25}
+    assert stats.timing_feedback_valid == 25
+    assert stats.timing_feedback_ignored == 0
+    assert stats.timing_feedback_ignored_reasons == {}
+    # 每 3 个同向样本 +1ms，25 个样本共 8 次调整。
+    assert planner.offset_changes == [1, 2, 3, 4, 5, 6, 7, 8]

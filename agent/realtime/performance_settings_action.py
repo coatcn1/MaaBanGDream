@@ -25,6 +25,10 @@ from .profile_action import PROJECT_ROOT
 from .profile_store import EnvironmentSignature, RealtimeProfileStore
 from .rehearsal_action import frame_resolution
 from .live_session import current_live_run
+from .native_prearm import (
+    discard_prearmed_backend,
+    prepare_native_for_settings_gate,
+)
 from .run_reporting import (
     PreflightPerformanceSnapshot,
     write_preflight_terminal_result,
@@ -549,7 +553,6 @@ class RealtimePerformanceSettingsGate(CustomAction):
                 flush=True,
             )
             verified_successfully = True
-            return True
         finally:
             if opened:
                 try:
@@ -572,3 +575,29 @@ class RealtimePerformanceSettingsGate(CustomAction):
                     traceback.print_exc()
                     if verified_successfully:
                         raise
+        if context.tasker.stopping:
+            return True
+        if bool(params.get("defer_native_prearm", False)):
+            discard_prearmed_backend("deferred-until-final-cover")
+            print(
+                "RealtimePerformanceSettingsGate native_prearm=deferred "
+                "reason=wait-final-cover",
+                flush=True,
+            )
+        else:
+            prepare_native_for_settings_gate(
+                controller=controller,
+                live_run=current_live_run(),
+                difficulty=difficulty,
+                project_root=PROJECT_ROOT,
+                ready_timeout_s=float(
+                    params.get(
+                        "native_ready_timeout_seconds",
+                        10.0,
+                    )
+                ),
+                ttl_s=float(params.get("native_prearm_ttl_seconds", 30.0)),
+            )
+        if context.tasker.stopping:
+            discard_prearmed_backend("user-stopped-after-prearm")
+        return True

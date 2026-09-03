@@ -43,15 +43,6 @@
       "status": "failure",
       "reason": "一键实时演奏流程未完成",
       "reason_source": "latest"
-    },
-    "focus": {
-      "Node.Action.Starting": {
-        "content": "❌ 一键实时演奏未完成，请查看实时演奏错误原因",
-        "display": [
-          "log",
-          "toast"
-        ]
-      }
     }
   }
 }

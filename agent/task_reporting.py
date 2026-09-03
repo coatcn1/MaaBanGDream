@@ -80,6 +80,11 @@ def record_failure_reason(reason: str) -> None:
     _latest_failure_reason = str(reason).strip()
 
 
+def latest_failure_reason() -> str:
+    """只读返回最近失败原因，供恢复策略分类，不提前消费终态信息。"""
+    return _latest_failure_reason
+
+
 def _take_failure_reason() -> str:
     global _latest_failure_reason
     reason = _latest_failure_reason

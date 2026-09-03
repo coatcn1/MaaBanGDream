@@ -69,6 +69,67 @@ def test_calibration_fails_closed_on_unrelated_actions():
     assert not predictor.calibrated
 
 
+def test_post_lock_phase_refinement_total_is_bounded():
+    # 密集段落视觉残差带系统性偏差；无界小步精修曾在整局漂移 40ms+。
+    # 锁定后总修正必须封顶 ±6ms。
+    chart = _synthetic_chart()
+    predictor = ChartPredictor(chart)
+    predictor.calibrated = True
+    predictor._calibrated_at_relative_s = 0.0
+    for _ in range(40):
+        for lane in (0, 1, 2, 3):
+            predictor._record_phase_residual(
+                0.040,
+                lane,
+                relative_time_s=0.0,
+            )
+    assert abs(predictor.song_offset_s) <= 0.006 + 1e-9
+
+
+def test_post_lock_phase_refinement_stops_after_window():
+    chart = _synthetic_chart()
+    predictor = ChartPredictor(chart)
+    predictor.calibrated = True
+    predictor._calibrated_at_relative_s = 0.0
+    for lane in (0, 1, 2, 3):
+        predictor._record_phase_residual(
+            0.040,
+            lane,
+            relative_time_s=60.0,
+        )
+    assert predictor.song_offset_s == 0.0
+
+
+def test_visual_release_on_wrong_lane_schedules_tail_rescue():
+    # 超短跨轨 Slide（L3→L6）：视觉管线在错误 lane 提前放掉时，chart 必须
+    # 到期在正确尾部 lane 补按，否则尾判定 MISS。
+    from agent.realtime.touch_planner.state import PlannerState
+
+    chart = ChartTimeline([
+        ChartJudgement(2.0, 3, "hold-head", 0),
+        ChartJudgement(2.156, 6, "hold-tail", 0),
+    ], bpm=192.0)
+    predictor = ChartPredictor(chart)
+    predictor.calibrated = True
+    predictor.song_offset_s = -3.0
+    predictor._anchor_time = 100.0
+    predictor.expected_hold_tail[5] = (2.156, 6)
+    state = PlannerState()
+
+    released = [TouchAction(ActionKind.UP, 5, 105.10, 5, "tail-ring")]
+    predictor._retire_visually_released_holds(released, state)
+    assert 5 in predictor._pending_tail_rescue
+
+    rescued: list[TouchAction] = []
+    predictor._release_due_holds(105.20, rescued, state, None)
+    assert rescued
+    action = rescued[0]
+    assert action.kind is ActionKind.TAP
+    assert action.lane == 6
+    assert action.reason == "chart-predicted"
+    assert 5 not in predictor._pending_tail_rescue
+
+
 def _phase_track(track_id, lane, now, *, crossing_in=0.5):
     note = ObservedNote(
         NoteKind.TAP, lane, 300 + lane * 100,
@@ -214,11 +275,13 @@ def test_chart_tail_releases_hold_whose_body_vanished():
 
     # Body vanishes.  Before the chart tail time the hold must stay down.
     before = planner.update([], anchor + 7.35)
-    assert not [a for a in before if a.kind == ActionKind.UP]
+    early = [a for a in before if a.kind == ActionKind.UP]
+    assert len(early) == 1
+    assert early[0].reason == "chart-tail"
+    # 释放提前发出但携带精确到期时间（引擎 anchor + 7.375）。
+    assert abs(early[0].timestamp - (anchor + 7.375)) < 1e-6
     released = planner.update([], anchor + 7.42)
-    assert [(a.kind, a.reason) for a in released] == [
-        (ActionKind.UP, "chart-tail")
-    ]
+    assert released == []
 
 
 def test_chart_tail_releases_visible_body_at_chart_time():
@@ -242,11 +305,12 @@ def test_chart_tail_releases_visible_body_at_chart_time():
             NoteKind.HOLD, 5, 940, 490, 100, 190, anchor + 7.36,
         )
     ], anchor + 7.36)
-    assert not [a for a in before if a.kind == ActionKind.UP]
+    early = [a for a in before if a.kind == ActionKind.UP]
+    assert len(early) == 1
+    assert early[0].reason == "chart-tail"
+    assert abs(early[0].timestamp - (anchor + 7.375)) < 1e-6
     at_tail = planner.update([], anchor + 7.42)
-    assert [(a.kind, a.reason) for a in at_tail] == [
-        (ActionKind.UP, "chart-tail")
-    ]
+    assert at_tail == []
 
 
 def test_chart_slide_tail_release_emits_flick_without_visual_marker():
@@ -751,11 +815,12 @@ def test_chart_presses_occluded_straight_hold_head_without_body():
     assert downs[0].reason == "chart-predicted"
 
     before_tail = planner.update([], anchor + 7.35)
-    assert not [a for a in before_tail if a.kind == ActionKind.UP]
+    early = [a for a in before_tail if a.kind == ActionKind.UP]
+    assert len(early) == 1
+    assert early[0].reason == "chart-tail"
+    assert abs(early[0].timestamp - (anchor + 7.375)) < 1e-6
     at_tail = planner.update([], anchor + 7.42)
-    assert [(a.kind, a.reason) for a in at_tail] == [
-        (ActionKind.UP, "chart-tail"),
-    ]
+    assert at_tail == []
 
 
 def test_chart_blind_presses_slide_and_follows_chart_path():
@@ -1118,7 +1183,35 @@ def test_visual_tail_release_then_same_frame_chart_head_reuses_contact_safely():
         (ActionKind.DOWN, 3, "chart-predicted"),
     ]
     assert predictor.expected_hold_tail[3] == (2.8, 0)
+    assert predictor._chart_tail_flick.get(3) is False
     assert 3 in planner._state._active_hold_tail
+
+
+def test_chart_tail_release_overrides_visual_flick_latch():
+    """视觉把非 flick 长条尾误锁成 flick 时，chart-tail 必须按谱面拨回 UP。"""
+    chart = ChartTimeline([
+        ChartJudgement(2.0, 1, "hold-head", 0),
+        ChartJudgement(2.5, 1, "hold-tail", 0),
+    ], bpm=192.0)
+    planner, predictor = _planner_with_press_rescue(chart)
+    anchor = 100.0
+    predictor._anchor_time = anchor
+    predictor.song_offset_s = 0.0
+    predictor.calibrated = True
+    state = planner._state
+    state._active_hold_tail[0] = 1.0
+    state._active_hold_lane[0] = 1
+    state._hold_started[0] = anchor
+    state._hold_tail_flick.add(0)
+    predictor.expected_hold_tail[0] = (2.5, 1)
+    predictor._chart_tail_flick[0] = False
+
+    actions = []
+    predictor.update([], [], anchor + 2.5, actions, state, planner._holds)
+
+    release = [action for action in actions if action.reason == "chart-tail"]
+    assert release and release[0].kind is ActionKind.UP
+    assert 0 not in state._hold_tail_flick
 
 
 def test_chart_suppresses_early_visual_hold_and_presses_exact_head():
@@ -1165,13 +1258,14 @@ def test_short_chart_hold_is_not_freed_as_its_own_due_head():
     ] == [(ActionKind.DOWN, "chart-predicted")]
 
     before_tail = planner.update([], now=anchor + 5.047)
-    assert not [
+    early = [
         action for action in before_tail if action.kind == ActionKind.UP
     ]
+    assert len(early) == 1
+    assert early[0].reason == "chart-tail"
+    assert abs(early[0].timestamp - (anchor + 5.075)) < 1e-6
     at_tail = planner.update([], now=anchor + 5.08)
-    assert [
-        (action.kind, action.reason) for action in at_tail
-    ] == [(ActionKind.UP, "chart-tail")]
+    assert at_tail == []
 
 
 def test_chart_suppresses_visual_hold_182ms_early_and_represses_on_time():

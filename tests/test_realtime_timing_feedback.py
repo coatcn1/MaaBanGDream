@@ -28,11 +28,44 @@ def feedback_frame(kind: TimingFeedback | None) -> np.ndarray:
 
 
 def test_detector_distinguishes_fast_slow_and_no_feedback():
-    detector = TimingFeedbackDetector()
+    def sight(kind: TimingFeedback | None) -> TimingFeedback | None:
+        detector = TimingFeedbackDetector()
+        result = None
+        for _ in range(TimingFeedbackDetector.PERSISTENCE_FRAMES):
+            result = detector.detect(feedback_frame(kind))
+        return result
 
-    assert detector.detect(feedback_frame(TimingFeedback.FAST)) is TimingFeedback.FAST
-    assert detector.detect(feedback_frame(TimingFeedback.SLOW)) is TimingFeedback.SLOW
+    assert sight(TimingFeedback.FAST) is TimingFeedback.FAST
+    assert sight(TimingFeedback.SLOW) is TimingFeedback.SLOW
+    assert sight(None) is None
+
+
+def test_detector_rejects_transient_note_flicker():
+    # 过线音符在判定条区域只停留 1-3 帧；必须连续存在才上报。
+    detector = TimingFeedbackDetector()
+    detector.detect(feedback_frame(TimingFeedback.FAST))
+    detector.detect(feedback_frame(None))
+    detector.detect(feedback_frame(TimingFeedback.FAST))
+    detector.detect(feedback_frame(None))
+    assert detector.detect(feedback_frame(TimingFeedback.FAST)) is None
     assert detector.detect(feedback_frame(None)) is None
+
+
+def test_detector_reports_two_of_three_window_and_rearms_after_gap():
+    # 3 帧窗口内同色 ≥2 帧才上报；同一条内不重复；条消失后重新布防。
+    detector = TimingFeedbackDetector()
+    assert detector.detect(feedback_frame(TimingFeedback.FAST)) is None
+    assert detector.detect(feedback_frame(None)) is None
+    assert detector.detect(
+        feedback_frame(TimingFeedback.FAST)
+    ) is TimingFeedback.FAST
+    assert detector.detect(feedback_frame(TimingFeedback.FAST)) is None
+    for _ in range(3):
+        detector.detect(feedback_frame(None))
+    assert detector.detect(feedback_frame(TimingFeedback.FAST)) is None
+    assert detector.detect(
+        feedback_frame(TimingFeedback.FAST)
+    ) is TimingFeedback.FAST
 
 
 def test_controller_counts_one_visible_label_once_and_adjusts_after_a_streak():
@@ -69,6 +102,41 @@ def test_controller_reverses_for_fast_and_clamps_live_adjustment():
 
     assert controller.current_offset_ms == -10
     assert controller.fast_samples == 12
+
+
+def test_controller_unanimous_window_uses_larger_step():
+    controller = AdaptiveTimingController(
+        0,
+        step_ms=4,
+        unanimous_step_ms=10,
+        minimum_samples=3,
+        imbalance=2,
+        window_size=5,
+        adjustment_cooldown_seconds=0,
+    )
+    for sample in range(3):
+        controller.update(None, sample)
+        controller.update(TimingFeedback.SLOW, sample + .1)
+    assert controller.current_offset_ms == 10
+
+
+def test_controller_mixed_window_uses_small_step():
+    controller = AdaptiveTimingController(
+        0,
+        step_ms=4,
+        unanimous_step_ms=10,
+        minimum_samples=3,
+        imbalance=1,
+        window_size=5,
+        adjustment_cooldown_seconds=0,
+    )
+    controller.update(None, 0)
+    controller.update(TimingFeedback.FAST, 0.1)
+    controller.update(None, 1)
+    controller.update(TimingFeedback.SLOW, 1.1)
+    controller.update(None, 2)
+    controller.update(TimingFeedback.SLOW, 2.1)
+    assert controller.current_offset_ms == 4
 
 
 def test_default_controller_never_moves_more_than_twelve_ms():
