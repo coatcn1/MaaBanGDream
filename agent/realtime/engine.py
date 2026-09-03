@@ -11,6 +11,7 @@ import numpy as np
 from .controller_touch import ControllerTouchDispatcher
 from .note_detector import NoteDetector
 from .life_monitor import LifeDetector, LifeGuard, LifeStatus, PlayfieldCompletionGuard
+from .live_failed_detector import LiveFailedPopupDetector
 from .playfield_monitor import PlayfieldLifecycleMonitor
 from .timing_feedback import AdaptiveTimingController, TimingFeedbackDetector
 from .touch_planner import ActionKind, RealtimePlanner
@@ -48,6 +49,7 @@ class EngineStats:
     aborted_for_life: bool = False
     completed: bool = False
     life_depleted: bool = False
+    life_failed: bool = False
     timing_feedback_fast: int = 0
     timing_feedback_slow: int = 0
     initial_timing_offset_ms: int = 0
@@ -99,6 +101,7 @@ class RealtimeEngine:
         timing_controller: AdaptiveTimingController | None = None,
         native_backend: object | None = None,
         playfield_monitor: PlayfieldLifecycleMonitor | None = None,
+        live_failed_detector: LiveFailedPopupDetector | None = None,
     ) -> None:
         self.detector = detector
         self.planner = planner
@@ -117,6 +120,7 @@ class RealtimeEngine:
         # 设备端脚本接管，本引擎只保留视觉检测、生命/结算与收尾职责。
         self.native_backend = native_backend
         self.playfield_monitor = playfield_monitor
+        self.live_failed_detector = live_failed_detector
         # 谱面按压（reason=chart-predicted）按到期时刻派发，避免绑定到 60fps
         # 截图帧造成 ±8ms 的量化抖动；见 run() 中的等待间隙派发。
         self._scheduled_actions: list = []
@@ -174,6 +178,7 @@ class RealtimeEngine:
         aborted_for_life = False
         completed = False
         life_depleted = False
+        life_failed = False
         startup_timed_out = False
         below_threshold_streak = 0
         touch_resets = 0
@@ -338,6 +343,7 @@ class RealtimeEngine:
                 aborted_for_life=aborted_for_life,
                 completed=completed,
                 life_depleted=life_depleted,
+                life_failed=life_failed,
                 timing_feedback_fast=(
                     self.timing_controller.fast_samples
                     if self.timing_controller is not None else 0
@@ -515,6 +521,28 @@ class RealtimeEngine:
                         self.playfield_monitor.mark_active(now)
                     # 首拍之后截图只服务生命和终态识别，固定降到约 5Hz。
                     next_frame = now + 0.2
+                # 死亡弹窗监控不依赖数值生命条；演奏场成立后以约 5Hz 检查
+                # “演出失败”弹窗，必须先于演奏场消失判定，否则弹窗遮挡会
+                # 被误判成“进入结算”。
+                playfield_active = (
+                    self.playfield_monitor is not None
+                    and bool(getattr(self.playfield_monitor, "active", False))
+                )
+                if (
+                    self.live_failed_detector is not None
+                    and playfield_active
+                    and self.live_failed_detector.observe(image, now)
+                ):
+                    life_failed = True
+                    life_depleted = True
+                    record_terminal_life_frame(
+                        image,
+                        now,
+                        life_status=LifeStatus.DEAD.value,
+                        life_value=0,
+                        reason="life-failed-popup",
+                    )
+                    break
                 if (
                     self.playfield_monitor is not None
                     and (not native_exclusive or native_started)
@@ -912,6 +940,8 @@ class RealtimeEngine:
                 terminal_reason = "用户已停止任务"
             elif aborted_for_life:
                 terminal_reason = "生命值触发安全停止"
+            elif life_failed:
+                terminal_reason = "演出失败：生命值归零"
             elif completed:
                 terminal_reason = "已识别演奏结束并进入结算"
             elif startup_timed_out:

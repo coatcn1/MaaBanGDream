@@ -209,6 +209,15 @@ class CommonRecover(CustomAction):
         modal_cancel_nodes = [
             str(node) for node in params.get("modal_cancel_nodes", [])
         ]
+        live_failed_continue_node = str(
+            params.get("live_failed_continue_node", "LiveFailedContinue")
+        )
+        live_failed_exit_node = str(
+            params.get("live_failed_exit_node", "LiveFailedExit")
+        )
+        quit_confirm_exit_node = str(
+            params.get("quit_confirm_exit_node", "QuitConfirmExit")
+        )
         back_only = bool(params.get("back_only", False))
         back_only_click_nodes = [
             str(node) for node in params.get("back_only_click_nodes", [])
@@ -264,6 +273,7 @@ class CommonRecover(CustomAction):
             resource_download_clicked = False
             resource_download_visible = False
             resource_download_deadline: float | None = None
+            exiting_failed_live = False
             iteration_grace = max(startup_grace, 30.0) if app_started else startup_grace
             grace_deadline = time.monotonic() + iteration_grace
             deadline = time.monotonic() + timeout
@@ -287,26 +297,77 @@ class CommonRecover(CustomAction):
                         continue
                     print(f"CommonRecover {exc}", flush=True)
                     return False
-                modal_dismissed = False
-                for node in modal_cancel_nodes:
-                    result = context.run_recognition(node, image)
-                    if not result or not result.hit or not result.box:
-                        continue
-                    if context.tasker.stopping:
-                        return True
-                    box = result.box
-                    controller.post_click(
-                        box.x + box.w // 2,
-                        box.y + box.h // 2,
-                    ).wait()
-                    modal_dismissed = True
-                    log_task(
-                        "游戏启动",
-                        "弹窗",
-                        "INFO",
-                        f"检测到模态弹窗，已点击取消：{node}",
+                # 生命归零的“演出失败”弹窗必须先点“退出”再确认退出，否则
+                # ESC 会在弹窗与退出确认框之间来回切换，形成死循环。
+                if not exiting_failed_live:
+                    failed_confirm = context.run_recognition(
+                        live_failed_continue_node, image
                     )
-                    break
+                    if failed_confirm and failed_confirm.hit:
+                        failed_exit = context.run_recognition(
+                            live_failed_exit_node, image
+                        )
+                        if failed_exit and failed_exit.hit and failed_exit.box:
+                            if context.tasker.stopping:
+                                return True
+                            box = failed_exit.box
+                            controller.post_click(
+                                box.x + box.w // 2,
+                                box.y + box.h // 2,
+                            ).wait()
+                            exiting_failed_live = True
+                            log_task(
+                                "游戏启动",
+                                "演出失败",
+                                "INFO",
+                                "检测到演出失败弹窗，已点击退出",
+                            )
+                            if not _wait_unless_stopping(context, interval):
+                                return True
+                            continue
+                if exiting_failed_live:
+                    quit_exit = context.run_recognition(
+                        quit_confirm_exit_node, image
+                    )
+                    if quit_exit and quit_exit.hit and quit_exit.box:
+                        if context.tasker.stopping:
+                            return True
+                        box = quit_exit.box
+                        controller.post_click(
+                            box.x + box.w // 2,
+                            box.y + box.h // 2,
+                        ).wait()
+                        exiting_failed_live = False
+                        log_task(
+                            "游戏启动",
+                            "演出失败",
+                            "INFO",
+                            "已确认退出失败演出，正在返回主页",
+                        )
+                        if not _wait_unless_stopping(context, interval):
+                            return True
+                        continue
+                modal_dismissed = False
+                if not exiting_failed_live:
+                    for node in modal_cancel_nodes:
+                        result = context.run_recognition(node, image)
+                        if not result or not result.hit or not result.box:
+                            continue
+                        if context.tasker.stopping:
+                            return True
+                        box = result.box
+                        controller.post_click(
+                            box.x + box.w // 2,
+                            box.y + box.h // 2,
+                        ).wait()
+                        modal_dismissed = True
+                        log_task(
+                            "游戏启动",
+                            "弹窗",
+                            "INFO",
+                            f"检测到模态弹窗，已点击取消：{node}",
+                        )
+                        break
                 if modal_dismissed:
                     if not _wait_unless_stopping(context, interval):
                         return True

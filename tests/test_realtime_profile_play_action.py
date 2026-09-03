@@ -105,6 +105,36 @@ def test_native_execution_gate_requires_complete_lossless_evidence():
     assert any("stop_latency_ms=nan" in failure for failure in over_budget)
 
 
+def test_native_execution_gate_accepts_game_terminal_life_failure():
+    cancelled = {
+        "planned": 3739,
+        "sent": 2636,
+        "executed": 2618,
+        "underflows": 0,
+        "executed_observation_complete": False,
+        "executed_observation_reason": "会话在完整设备回读前取消",
+        "state": "cancelled",
+        "session_state": "cancelling",
+        "release_confirmed": True,
+        "stop_latency_ms": 202.0,
+        "game_terminal_reason": "演出失败：生命值归零",
+    }
+    assert profile_play_action._native_execution_gate_failures(cancelled) == []
+
+    # 同样的取消状态，但没有游戏终态理由时仍必须报技术失败。
+    without_terminal = {
+        key: value
+        for key, value in cancelled.items()
+        if key != "game_terminal_reason"
+    }
+    failures = profile_play_action._native_execution_gate_failures(
+        without_terminal
+    )
+    assert any("terminal_state=cancelled" in item for item in failures)
+    assert any("3739/2636/2618" in item for item in failures)
+    assert any("device evidence incomplete" in item for item in failures)
+
+
 def test_profile_play_reuses_one_agent_controller_proxy(monkeypatch):
     tasker = Tasker()
     context = SimpleNamespace(tasker=tasker)

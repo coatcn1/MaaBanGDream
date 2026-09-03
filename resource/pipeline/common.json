@@ -147,6 +147,42 @@
     "threshold": 0.9,
     "action": "DoNothing"
   },
+  "LiveFailedContinue": {
+    "recognition": "TemplateMatch",
+    "template": "live_failed_continue.png",
+    "roi": [
+      740,
+      390,
+      340,
+      130
+    ],
+    "threshold": 0.9,
+    "action": "DoNothing"
+  },
+  "LiveFailedExit": {
+    "recognition": "TemplateMatch",
+    "template": "live_failed_exit.png",
+    "roi": [
+      240,
+      390,
+      280,
+      130
+    ],
+    "threshold": 0.9,
+    "action": "DoNothing"
+  },
+  "QuitConfirmExit": {
+    "recognition": "TemplateMatch",
+    "template": "quit_confirm_exit.png",
+    "roi": [
+      600,
+      390,
+      320,
+      130
+    ],
+    "threshold": 0.9,
+    "action": "DoNothing"
+  },
   "CommonRecover": {
     "recognition": "DirectHit",
     "action": "Custom",

@@ -40,6 +40,7 @@ _NON_RETRYABLE_MARKERS = (
     "不支持的难度",
     "profile 检查失败",
     "没有可用的已接受 profile",
+    "演出失败",
 )
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 

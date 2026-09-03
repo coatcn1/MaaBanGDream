@@ -28,6 +28,10 @@ from .engine import EngineStats, RealtimeEngine
 from .final_cover import FinalCoverResolution, FinalCoverResolver
 from .game_effect_settings_action import verified_game_visual_settings
 from .life_monitor import LifeDetector, LifeGuard, PlayfieldCompletionGuard
+from .live_failed_detector import (
+    LiveFailedPopupDetector,
+    exit_failed_live,
+)
 from .live_session import (
     LiveRunContext,
     current_live_run,
@@ -157,15 +161,30 @@ def _native_execution_gate_failures(
     session_state = str(
         native_report.get("session_state") or "<missing>"
     ).lower()
-    if state != "finished" or session_state != "finished":
+    game_terminal = str(
+        native_report.get("game_terminal_reason") or ""
+    )
+    # 生命归零是游戏自身的终态：弹窗出现后引擎主动取消会话，剩余谱面动作
+    # 不会、也不应继续派发。此时 cancelled 会话与不完整的设备回读是预期，
+    # 只要触点已确认释放且无传输/设备错误，就不算技术失败。
+    life_failed_stop = "演出失败" in game_terminal
+    if (
+        (state != "finished" or session_state != "finished")
+        and not life_failed_stop
+    ):
         failures.append(
             f"terminal_state={state} session_state={session_state}"
         )
-    if planned <= 0 or sent != planned or executed != planned:
+    if (
+        planned <= 0 or sent != planned or executed != planned
+    ) and not life_failed_stop:
         failures.append(
             f"planned/sent/executed={planned}/{sent}/{executed}"
         )
-    if not bool(native_report.get("executed_observation_complete", False)):
+    if (
+        not bool(native_report.get("executed_observation_complete", False))
+        and not life_failed_stop
+    ):
         failures.append(
             "device evidence incomplete: "
             + str(native_report.get("executed_observation_reason", "unknown"))
@@ -2065,6 +2084,7 @@ class RealtimeProfilePlay(CustomAction):
                 ),
                 native_backend=native_backend,
                 playfield_monitor=playfield_monitor,
+                live_failed_detector=LiveFailedPopupDetector(),
             )
         except Exception as setup_error:
             cleanup_errors = []
@@ -2302,6 +2322,7 @@ class RealtimeProfilePlay(CustomAction):
             f"frames={stats.processed_frames} actions={stats.dispatched_actions} "
             f"stopped={stats.stopped} life_abort={stats.aborted_for_life} "
             f"life_depleted={stats.life_depleted} completed={stats.completed} "
+            f"life_failed={stats.life_failed} "
             f"feedback_fast={stats.timing_feedback_fast} "
             f"feedback_slow={stats.timing_feedback_slow} "
             f"feedback_valid={stats.timing_feedback_valid} "
@@ -2355,6 +2376,50 @@ class RealtimeProfilePlay(CustomAction):
                 "survived": not stats.life_depleted,
                 "completed": bool(stats.completed),
             })
+
+        if save_result and stats.life_failed and not stats.stopped:
+            # 生命归零：先把失败现场落盘，再有界退出到主页。退出导航失败时
+            # 不掩盖“演出失败”这一真实原因，后续 CommonRecover 仍可兜底。
+            reason = "演出失败：生命值归零"
+            record_failure_reason(reason)
+            failed_payload = _result_report_payload(
+                None,
+                stats,
+                timing_offset_ms=timing_offset_ms,
+                suggested_timing_offset_ms=None,
+                run_context=live_run,
+                result_status="life_failed",
+                reason=reason,
+            )
+            _write_json_atomic(result_report_path, failed_payload)
+            write_calibration_payload(failed_payload)
+            if recorder is not None and stall_safe_capture.last_image is not None:
+                _recorder_checkpoint(
+                    recorder,
+                    stall_safe_capture.last_image,
+                    "result",
+                    "life-failed",
+                    details={"reason": reason},
+                )
+            navigation_ok = False
+            try:
+                navigation_ok = exit_failed_live(context)
+            except Exception as nav_error:
+                print(
+                    "RealtimeProfilePlay life_failed_exit_error="
+                    f"{type(nav_error).__name__}: {nav_error}",
+                    flush=True,
+                )
+            print(
+                "RealtimeProfilePlay life_failed "
+                f"exit_navigation={'ok' if navigation_ok else 'failed'}",
+                flush=True,
+            )
+            print(
+                f"[任务][实时演奏][演奏][ERROR] {reason}",
+                flush=True,
+            )
+            return False
 
         if save_result and stats.stopped:
             result_output.mkdir(parents=True, exist_ok=True)
