@@ -106,6 +106,9 @@ def cooperative_play_params(settings: dict[str, object]) -> dict[str, object]:
         "use_life_safety": False,
         "continue_after_life_depleted": True,
         "run_mode": "cooperative",
+        "confirm_final_cover": True,
+        "final_cover_timeout_seconds": MEMBER_DOWNLOAD_TIMEOUT_SECONDS,
+        "native_prearm_deferred": True,
     }
 
 
@@ -493,6 +496,7 @@ class CooperativeLiveFlow:
             "game_fps": 60,
             "render_quality": "standard",
             "coordinates": {"gear": (946, 650)},
+            "defer_native_prearm": True,
         }
         if not RealtimePerformanceSettingsGate().run(
             self.context, self.action_argv(performance_params)
@@ -746,7 +750,6 @@ class CooperativeLiveFlow:
                 self.enter_room()
             self.wait_for_preparation()
             self.prepare()
-            self.wait_for_playfield()
             return self.play()
         except (InterruptedError, MemberExited):
             raise

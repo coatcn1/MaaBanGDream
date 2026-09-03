@@ -11,6 +11,7 @@ import numpy as np
 from .controller_touch import ControllerTouchDispatcher
 from .note_detector import NoteDetector
 from .life_monitor import LifeDetector, LifeGuard, LifeStatus, PlayfieldCompletionGuard
+from .playfield_monitor import PlayfieldLifecycleMonitor
 from .timing_feedback import AdaptiveTimingController, TimingFeedbackDetector
 from .touch_planner import ActionKind, RealtimePlanner
 
@@ -19,6 +20,7 @@ _HOT_PATH_STAGES = (
     "capture",
     "touch_advance",
     "life",
+    "playfield_monitor",
     "detector",
     "planner",
     "native_backend",
@@ -96,6 +98,7 @@ class RealtimeEngine:
         timing_feedback_detector: TimingFeedbackDetector | None = None,
         timing_controller: AdaptiveTimingController | None = None,
         native_backend: object | None = None,
+        playfield_monitor: PlayfieldLifecycleMonitor | None = None,
     ) -> None:
         self.detector = detector
         self.planner = planner
@@ -113,6 +116,7 @@ class RealtimeEngine:
         # Native minitouch 整曲后端（默认关闭）。激活期间谱面触控全部由
         # 设备端脚本接管，本引擎只保留视觉检测、生命/结算与收尾职责。
         self.native_backend = native_backend
+        self.playfield_monitor = playfield_monitor
         # 谱面按压（reason=chart-predicted）按到期时刻派发，避免绑定到 60fps
         # 截图帧造成 ±8ms 的量化抖动；见 run() 中的等待间隙派发。
         self._scheduled_actions: list = []
@@ -208,6 +212,11 @@ class RealtimeEngine:
         scheduled_actions.clear()
         native_exclusive = self.native_backend_takeover()
         native_started = False
+        startup_marker = (
+            "演奏场"
+            if self.playfield_monitor is not None
+            else "生命条"
+        )
 
         def record_stage_sample(stage: str, elapsed_ms: float) -> None:
             stage_samples_ms[stage].append(elapsed_ms)
@@ -283,7 +292,9 @@ class RealtimeEngine:
                     "event": "playfield_start_timeout",
                     "timestamp": now,
                     "timeout_seconds": startup_timeout_seconds,
-                    "reason": "life bar was never confirmed after live start",
+                    "reason": (
+                        f"{startup_marker} was never confirmed after live start"
+                    ),
                 }],
                 {},
                 None,
@@ -500,8 +511,39 @@ class RealtimeEngine:
                         raise RuntimeError("Native 后端缺少 start() 会话接口")
                     start_native(float(first_action_anchor))
                     native_started = True
+                    if self.playfield_monitor is not None:
+                        self.playfield_monitor.mark_active(now)
                     # 首拍之后截图只服务生命和终态识别，固定降到约 5Hz。
                     next_frame = now + 0.2
+                if (
+                    self.playfield_monitor is not None
+                    and (not native_exclusive or native_started)
+                ):
+                    stage_started = self.clock()
+                    playfield_state = self.playfield_monitor.observe(image, now)
+                    record_stage_sample(
+                        "playfield_monitor",
+                        (self.clock() - stage_started) * 1000,
+                    )
+                    if playfield_state == "waiting":
+                        frames += 1
+                        if now - started_at >= startup_timeout_seconds:
+                            startup_timed_out = True
+                            record_startup_timeout_frame(
+                                image,
+                                now,
+                                life_status=LifeStatus.UNKNOWN.value,
+                            )
+                            break
+                        continue
+                    if playfield_state == "completed":
+                        completed = True
+                        break
+                    if playfield_state == "missing" and not native_exclusive:
+                        # 结算转场不得再送入 Legacy 音符检测，避免白色动画
+                        # 被误判为最后一批音符；Native 仍需继续轮询设备回执。
+                        frames += 1
+                        continue
                 # Flick gestures span several game frames. Progress them here
                 # so input never sleeps inside dispatch and blocks capture.
                 advance_touch = getattr(self.touch, "advance", None)
@@ -874,7 +916,8 @@ class RealtimeEngine:
                 terminal_reason = "已识别演奏结束并进入结算"
             elif startup_timed_out:
                 terminal_reason = (
-                    f"开演后 {startup_timeout_seconds:g} 秒仍未识别到生命条，"
+                    f"开演后 {startup_timeout_seconds:g} 秒仍未识别到"
+                    f"{startup_marker}，"
                     "可能停留在加载页、网络弹窗或非演奏画面"
                 )
             elif duration_seconds is not None:

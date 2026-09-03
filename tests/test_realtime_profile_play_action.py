@@ -20,6 +20,7 @@ from agent.realtime.profile_play_action import (
     _write_calibration_report,
     collect_result,
     pause_overlay_changed,
+    resolve_life_monitor_enabled,
     resolve_life_policy,
 )
 from agent.realtime.result_parser import LiveResult
@@ -145,10 +146,11 @@ def test_profile_play_reuses_one_agent_controller_proxy(monkeypatch):
     )
 
     engine_options = []
+    engine_construction_options = []
 
     class Engine:
         def __init__(self, *args, **kwargs):
-            pass
+            engine_construction_options.append(kwargs)
 
         def run(self, capture, stopping, **kwargs):
             engine_options.append(kwargs)
@@ -163,6 +165,8 @@ def test_profile_play_reuses_one_agent_controller_proxy(monkeypatch):
     assert foreground_checks == [tasker._controller]
     assert dispatcher_options == [{}]
     assert engine_options[0]["startup_timeout_seconds"] == 60.0
+    assert engine_construction_options[0]["life_detector"] is None
+    assert engine_construction_options[0]["life_guard"] is None
 
 
 def test_explicit_native_initialization_failure_never_falls_back(
@@ -522,6 +526,21 @@ def test_rehearsal_life_policy_can_ignore_depletion():
     )
 
     assert policy == (True, True, None)
+
+
+def test_unchecked_life_safety_disables_numeric_life_monitor():
+    assert resolve_life_monitor_enabled(
+        {},
+        {"life_safety_enabled": False},
+    ) is False
+    assert resolve_life_monitor_enabled(
+        {"use_life_safety": False},
+        {"life_safety_enabled": True},
+    ) is False
+    assert resolve_life_monitor_enabled(
+        {},
+        {"life_safety_enabled": True},
+    ) is True
 
 
 def test_rehearsal_life_policy_can_enable_normal_protection():

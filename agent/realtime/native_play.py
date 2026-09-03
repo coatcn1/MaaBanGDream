@@ -12,14 +12,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-import cv2
-
 from . import native_engine
-from .life_monitor import LifeDetector
 from .native_minitouch import NativeMinitouchDevice
+from .playfield_monitor import LANE_CENTERS, PlayfieldDetector
 
 
-LANE_CENTERS = (190, 340, 490, 640, 790, 940, 1090)
 TOUCH_Y = 590.0
 PHOTOGATE_LATENCY_MS = 190.0
 
@@ -60,49 +57,6 @@ class _ExpectedCommand:
     used_offsets: Any | None = None
 
 
-class _NativePlayfieldDetector:
-    """同时确认生命条与七轨判定标记，排除演奏场淡入前的转场。"""
-
-    _REFERENCE_WIDTH = 1280
-    _REFERENCE_HEIGHT = 720
-    _LINE_TOP = 570
-    _LINE_BOTTOM = 611
-    _LANE_HALF_WIDTH = 40
-    _MIN_WHITE_PIXELS = 200
-
-    def __init__(self) -> None:
-        self._life = LifeDetector()
-
-    def __call__(self, image: Any) -> bool:
-        if not self._life.detect(image).visible:
-            return False
-        height, width = image.shape[:2]
-        x_scale = width / self._REFERENCE_WIDTH
-        y_scale = height / self._REFERENCE_HEIGHT
-        top = max(0, min(height - 1, round(self._LINE_TOP * y_scale)))
-        bottom = max(top + 1, min(height, round(self._LINE_BOTTOM * y_scale)))
-        minimum = max(
-            50,
-            round(self._MIN_WHITE_PIXELS * x_scale * y_scale),
-        )
-        visible_lanes = 0
-        for center in LANE_CENTERS:
-            lane_x = round(center * x_scale)
-            half_width = max(1, round(self._LANE_HALF_WIDTH * x_scale))
-            left = max(0, lane_x - half_width)
-            right = min(width, lane_x + half_width + 1)
-            hsv = cv2.cvtColor(
-                image[top:bottom, left:right, :3],
-                cv2.COLOR_BGR2HSV,
-            )
-            white_pixels = int(
-                ((hsv[:, :, 1] < 70) & (hsv[:, :, 2] > 170)).sum()
-            )
-            if white_pixels >= minimum:
-                visible_lanes += 1
-        return visible_lanes >= 6
-
-
 class NativeStartPhotogate:
     """用判定线附近的整行颜色变化定位第一颗音符。"""
 
@@ -137,7 +91,7 @@ class NativeStartPhotogate:
         self._change_threshold = float(change_threshold)
         self._latency_s = float(latency_ms) / 1000.0
         if playfield_detector is None:
-            self._playfield_detector = _NativePlayfieldDetector()
+            self._playfield_detector = PlayfieldDetector()
         else:
             self._playfield_detector = playfield_detector
         self.mode = str(mode)

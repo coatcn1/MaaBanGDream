@@ -577,19 +577,27 @@ class RealtimePerformanceSettingsGate(CustomAction):
                         raise
         if context.tasker.stopping:
             return True
-        prepare_native_for_settings_gate(
-            controller=controller,
-            live_run=current_live_run(),
-            difficulty=difficulty,
-            project_root=PROJECT_ROOT,
-            ready_timeout_s=float(
-                params.get(
-                    "native_ready_timeout_seconds",
-                    10.0,
-                )
-            ),
-            ttl_s=float(params.get("native_prearm_ttl_seconds", 30.0)),
-        )
+        if bool(params.get("defer_native_prearm", False)):
+            discard_prearmed_backend("deferred-until-final-cover")
+            print(
+                "RealtimePerformanceSettingsGate native_prearm=deferred "
+                "reason=wait-final-cover",
+                flush=True,
+            )
+        else:
+            prepare_native_for_settings_gate(
+                controller=controller,
+                live_run=current_live_run(),
+                difficulty=difficulty,
+                project_root=PROJECT_ROOT,
+                ready_timeout_s=float(
+                    params.get(
+                        "native_ready_timeout_seconds",
+                        10.0,
+                    )
+                ),
+                ttl_s=float(params.get("native_prearm_ttl_seconds", 30.0)),
+            )
         if context.tasker.stopping:
             discard_prearmed_backend("user-stopped-after-prearm")
         return True

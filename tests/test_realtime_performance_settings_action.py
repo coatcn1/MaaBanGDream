@@ -247,6 +247,58 @@ def test_gate_fails_closed_when_native_prearm_fails_after_dialog_close(
         )
 
 
+def test_gate_can_defer_native_prearm_until_final_cover(monkeypatch):
+    clear_verified_settings()
+    monkeypatch.setattr(
+        performance_settings_action,
+        "_expected_speed",
+        lambda context, params, image: (5.0, "expert.json"),
+    )
+    monkeypatch.setattr(
+        performance_settings_action,
+        "_select_first_tab_and_read",
+        lambda *args, **kwargs: 5.0,
+    )
+    monkeypatch.setattr(
+        performance_settings_action,
+        "_adjust_speed",
+        lambda *args, **kwargs: (True, 5.0),
+    )
+    monkeypatch.setattr(
+        performance_settings_action,
+        "_click",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        performance_settings_action,
+        "_close_settings_dialog",
+        lambda *args, **kwargs: None,
+    )
+    prepared = []
+    discarded = []
+    monkeypatch.setattr(
+        performance_settings_action,
+        "prepare_native_for_settings_gate",
+        lambda **kwargs: prepared.append(kwargs),
+    )
+    monkeypatch.setattr(
+        performance_settings_action,
+        "discard_prearmed_backend",
+        discarded.append,
+    )
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=_Controller()),
+    )
+
+    assert RealtimePerformanceSettingsGate()._run(context, {
+        "difficulty": "Expert",
+        "require_profile": True,
+        "defer_native_prearm": True,
+    })
+    assert prepared == []
+    assert discarded == ["deferred-until-final-cover"]
+
+
 def test_gate_rejects_speed_outside_game_range(monkeypatch):
     monkeypatch.setattr(
         "agent.realtime.performance_settings_action._expected_speed",

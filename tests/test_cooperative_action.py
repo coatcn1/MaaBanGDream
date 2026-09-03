@@ -149,6 +149,8 @@ def test_cooperative_play_disables_life_abort_but_keeps_start_gate():
     assert params["require_completion"] is True
     assert params["run_mode"] == "cooperative"
     assert params["diagnostic_trace"] is False
+    assert params["confirm_final_cover"] is True
+    assert params["native_prearm_deferred"] is True
 
 
 def test_cooperative_interface_exposes_requested_modes_and_five_difficulties():
@@ -452,6 +454,19 @@ def test_play_uses_realtime_result_navigator_without_a_second_pggbm_wait(monkeyp
 
     assert flow.play() is True
     assert calls == ["realtime"]
+
+
+def test_run_attempt_starts_cover_observer_before_waiting_for_playfield():
+    flow = object.__new__(CooperativeLiveFlow)
+    calls = []
+    flow.enter_room = lambda: calls.append("enter")
+    flow.wait_for_preparation = lambda: calls.append("prepare-wait")
+    flow.prepare = lambda: calls.append("prepare")
+    flow.wait_for_playfield = lambda: calls.append("playfield-wait")
+    flow.play = lambda: calls.append("play") or True
+
+    assert flow.run_attempt() is True
+    assert calls == ["enter", "prepare-wait", "prepare", "play"]
 
 
 def test_stay_in_room_rechecks_repeat_popup_after_every_accelerated_back(monkeypatch):

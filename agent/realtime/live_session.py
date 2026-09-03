@@ -27,6 +27,8 @@ class LiveRunContext:
     judgement_assist: bool | None = None
     debug_recording: bool = False
     recording_path: str | None = None
+    final_cover_confirmed: bool = False
+    final_cover_song_id: str | None = None
     # Internal one-shot handoff from a verified difficulty screen to Play.
     # Deliberately omitted from serialized session metadata.
     prepared_for_play: bool = False
@@ -52,6 +54,10 @@ class LiveRunContext:
             },
             "debug_recording": self.debug_recording,
             "recording_path": self.recording_path,
+            "final_cover": {
+                "confirmed": self.final_cover_confirmed,
+                "song_id": self.final_cover_song_id,
+            },
         }
 
 

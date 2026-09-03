@@ -21,20 +21,44 @@ class LifeReading:
     value: int = 0
 
 
+class LifePresenceDetector:
+    """只确认生命条控件存在，不读取或估算具体生命值。"""
+
+    ROI = (965, 24, 1190, 82)
+
+    def detect(self, image: np.ndarray) -> bool:
+        x1, y1, x2, y2 = self.ROI
+        if (
+            not isinstance(image, np.ndarray)
+            or image.ndim != 3
+            or image.shape[0] < y2
+            or image.shape[1] < x2
+            or image.shape[2] < 3
+        ):
+            return False
+        roi = image[y1:y2, x1:x2]
+        icon = image[29:58, 936:970]
+        icon_hsv = cv2.cvtColor(icon, cv2.COLOR_BGR2HSV)
+        icon_pixels = np.count_nonzero(
+            cv2.inRange(icon_hsv, (35, 70, 55), (95, 255, 255))
+        )
+        if icon_pixels < 30:
+            return False
+        return bool(
+            np.count_nonzero(cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY) > 160)
+            >= 100
+        )
+
+
 class LifeDetector:
     ROI = (965, 24, 1190, 82)
     BAR = (970, 32, 1182, 53)
 
+    def __init__(self) -> None:
+        self._presence = LifePresenceDetector()
+
     def detect(self, image: np.ndarray) -> LifeReading:
-        x1, y1, x2, y2 = self.ROI
-        if image.shape[0] < y2 or image.shape[1] < x2:
-            return LifeReading(False)
-        roi = image[y1:y2, x1:x2]
-        icon = image[29:58, 936:970]
-        icon_hsv = cv2.cvtColor(icon, cv2.COLOR_BGR2HSV)
-        if np.count_nonzero(cv2.inRange(icon_hsv, (35, 70, 55), (95, 255, 255))) < 30:
-            return LifeReading(False)
-        if np.count_nonzero(cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY) > 160) < 100:
+        if not self._presence.detect(image):
             return LifeReading(False)
         bx1, by1, bx2, by2 = self.BAR
         bar = image[by1:by2, bx1:bx2]

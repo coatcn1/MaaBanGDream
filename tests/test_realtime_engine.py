@@ -6,6 +6,7 @@ import pytest
 from agent.realtime.engine import RealtimeEngine
 from agent.realtime.touch_planner import ActionKind, TouchAction
 from agent.realtime.life_monitor import LifeGuard, LifeReading, PlayfieldCompletionGuard
+from agent.realtime.playfield_monitor import PlayfieldLifecycleMonitor
 
 
 class Clock:
@@ -1111,6 +1112,31 @@ def test_engine_completes_after_confirmed_playfield_disappears():
     assert stats.completed
     assert not stats.aborted_for_life
     assert planner.resets == 1
+    assert touch.closed == 1
+
+
+def test_engine_can_gate_and_complete_without_numeric_life_detection():
+    engine, _, planner, touch, capture = build()
+    states = iter([False, False, True, True, True, False, False])
+    monitor = PlayfieldLifecycleMonitor(
+        detector=lambda _image: next(states),
+        confirm_checks=2,
+        missing_checks=2,
+        active_check_interval_seconds=0,
+    )
+    engine.playfield_monitor = monitor
+    engine.life_detector = None
+    engine.life_guard = None
+
+    stats = engine.run(
+        capture,
+        lambda: False,
+        duration_seconds=10,
+        target_fps=60,
+    )
+
+    assert stats.completed
+    assert planner.updates == 2
     assert touch.closed == 1
 
 
