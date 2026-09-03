@@ -164,8 +164,8 @@ def test_watchdog_start_failure_keeps_previous_cache_and_stops_new_backend(
     assert manager.consume("run-old", old_chart) is old_backend
 
 
-def _confirmed_run() -> SimpleNamespace:
-    return SimpleNamespace(
+def _confirmed_run(*, mode: str | None = None) -> SimpleNamespace:
+    values = dict(
         run_id="run-48",
         prepared_for_play=True,
         difficulty="Expert",
@@ -173,6 +173,9 @@ def _confirmed_run() -> SimpleNamespace:
         song_level=26,
         song_title="test song",
     )
+    if mode is not None:
+        values["mode"] = mode
+    return SimpleNamespace(**values)
 
 
 def _repository(chart: Path):
@@ -245,7 +248,7 @@ def test_settings_prearm_success_arms_waits_and_caches_exact_key(tmp_path):
             "adb_path": "C:/tools/adb.exe",
             "adb_serial": "test-device",
         }),
-        live_run=_confirmed_run(),
+        live_run=_confirmed_run(mode="cooperative"),
         difficulty="Expert",
         project_root=tmp_path,
         runtime_options={"native_realtime_enabled": True},
@@ -262,5 +265,6 @@ def test_settings_prearm_success_arms_waits_and_caches_exact_key(tmp_path):
     assert constructed[0]["adb_path"] == "C:/tools/adb.exe"
     assert constructed[0]["serial"] == "test-device"
     assert constructed[0]["run_id"] == "run-48"
+    assert constructed[0]["start_gate_mode"] == "cooperative"
     assert manager.consume("run-48", chart) is backend
     assert timers.timers[0].seconds == 25

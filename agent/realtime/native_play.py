@@ -19,6 +19,31 @@ from .native_minitouch import NativeMinitouchDevice
 LANE_CENTERS = (190, 340, 490, 640, 790, 940, 1090)
 
 
+@dataclass(frozen=True, slots=True)
+class NativeStartGatePolicy:
+    """首音门控只区分进入阶段，不引入按模式变化的歌曲偏移。"""
+
+    mode: str
+    stable_duration_ms: float
+    grace_ms: float
+
+
+def resolve_native_start_gate_policy(run_mode: str | None) -> NativeStartGatePolicy:
+    """协力已确认生命条出现，因此只需要更短的基线稳定窗口。"""
+    normalized = str(run_mode or "realtime").strip().lower()
+    if normalized == "cooperative":
+        return NativeStartGatePolicy(
+            mode="cooperative-playfield-confirmed",
+            stable_duration_ms=120.0,
+            grace_ms=500.0,
+        )
+    return NativeStartGatePolicy(
+        mode="single-start-transition",
+        stable_duration_ms=250.0,
+        grace_ms=500.0,
+    )
+
+
 @dataclass(slots=True)
 class _ExpectedCommand:
     """一条已发布命令及其可选高层动作回执。"""
@@ -39,27 +64,89 @@ class NativeStartPhotogate:
         from_row: int = 510,
         to_row: int = 535,
         reference_height: int = 720,
-        stable_frames: int = 200,
+        stable_duration_ms: float = 250.0,
+        grace_ms: float = 500.0,
         change_threshold: float = 3.0,
         latency_ms: float = 30.0,
+        mode: str = "single-start-transition",
     ) -> None:
         if not 0 <= from_row <= to_row < reference_height:
             raise ValueError("photogate 行范围无效")
-        if stable_frames < 1:
-            raise ValueError("stable_frames 必须至少为 1")
+        if stable_duration_ms < 0:
+            raise ValueError("stable_duration_ms 不能为负数")
+        if grace_ms < 0:
+            raise ValueError("grace_ms 不能为负数")
+        if change_threshold <= 0:
+            raise ValueError("change_threshold 必须大于 0")
         if latency_ms < 0:
             raise ValueError("latency_ms 不能为负数")
         self._from_row = int(from_row)
         self._to_row = int(to_row)
         self._reference_height = int(reference_height)
-        self._stable_frames = int(stable_frames)
+        self._stable_duration_s = float(stable_duration_ms) / 1000.0
+        self._grace_s = float(grace_ms) / 1000.0
         self._change_threshold = float(change_threshold)
         self._latency_s = float(latency_ms) / 1000.0
+        self.mode = str(mode)
         self._last_color: Any | None = None
+        self._previous_change: float | None = None
+        self._previous_frame_s: float | None = None
+        self._observed_since_s: float | None = None
+        self.stable_since_s: float | None = None
+        self.frozen_at_s: float | None = None
         self.waited_frames = 0
         self.frozen = False
         self.triggered = False
         self.last_change_score: float | None = None
+        self.trigger_score: float | None = None
+        self.trigger_source: str | None = None
+        self.ignored_prelude_events = 0
+        self.triggered_at_s: float | None = None
+        self._significant_events: deque[dict[str, object]] = deque(maxlen=32)
+
+    def _record_event(
+        self,
+        event: str,
+        frame_s: float,
+        change_score: float,
+    ) -> None:
+        """只保留有界关键事件，避免逐帧日志反过来干扰实时路径。"""
+        elapsed_ms = (
+            (frame_s - self._observed_since_s) * 1000.0
+            if self._observed_since_s is not None
+            else 0.0
+        )
+        self._significant_events.append({
+            "event": event,
+            "elapsed_ms": elapsed_ms,
+            "change_score": change_score,
+        })
+
+    def report(self) -> dict[str, object]:
+        """输出足够复盘首音误触发或漏触发的状态。"""
+        wait_ms = (
+            (self.triggered_at_s - self._observed_since_s) * 1000.0
+            if self.triggered_at_s is not None
+            and self._observed_since_s is not None
+            else None
+        )
+        stable_ms = (
+            (self.frozen_at_s - self.stable_since_s) * 1000.0
+            if self.frozen_at_s is not None and self.stable_since_s is not None
+            else None
+        )
+        return {
+            "photogate_mode": self.mode,
+            "photogate_wait_ms": wait_ms,
+            "photogate_stable_ms": stable_ms,
+            "photogate_grace_ms": self._grace_s * 1000.0,
+            "photogate_waited_frames": self.waited_frames,
+            "photogate_ignored_prelude_events": self.ignored_prelude_events,
+            "photogate_trigger_score": self.trigger_score,
+            "photogate_trigger_source": self.trigger_source,
+            "photogate_last_change_score": self.last_change_score,
+            "photogate_events": list(self._significant_events),
+        }
 
     def observe(self, image: Any, now: float) -> float | None:
         """返回第一颗音符的绝对执行时刻；未触发时返回 ``None``。"""
@@ -80,18 +167,81 @@ class NativeStartPhotogate:
         current = image[from_row : to_row + 1, :, :3].astype("float64").mean(
             axis=(0, 1)
         )
+        frame_s = float(now)
+        if self._observed_since_s is None:
+            self._observed_since_s = frame_s
         if self._last_color is None:
             self._last_color = current
+            self._previous_frame_s = frame_s
             return None
-        change_score = float((current - self._last_color).sum())
+        change_score = float(abs(current - self._last_color).sum())
         self.last_change_score = change_score
-        if self.frozen and change_score > self._change_threshold:
+
+        if not self.frozen:
+            if change_score <= self._change_threshold:
+                if self.stable_since_s is None:
+                    self.stable_since_s = (
+                        self._previous_frame_s
+                        if self._previous_frame_s is not None
+                        else frame_s
+                    )
+                    self.waited_frames = 1
+                else:
+                    self.waited_frames += 1
+                if frame_s - self.stable_since_s >= self._stable_duration_s:
+                    self.frozen = True
+                    self.frozen_at_s = frame_s
+                    self._record_event("stable", frame_s, change_score)
+            else:
+                # 必须连续稳定；开场动画的任一显著变化都会重新计时。
+                self._record_event("stability-reset", frame_s, change_score)
+                self.stable_since_s = None
+                self.waited_frames = 0
+            self._previous_change = change_score
+            self._previous_frame_s = frame_s
+            self._last_color = current
+            return None
+
+        assert self.frozen_at_s is not None
+        if frame_s - self.frozen_at_s < self._grace_s:
+            if change_score >= self._change_threshold:
+                self.ignored_prelude_events += 1
+                self._record_event("ignored-prelude", frame_s, change_score)
+            self._previous_change = change_score
+            self._previous_frame_s = frame_s
+            self._last_color = current
+            return None
+
+        trigger_s: float | None = None
+        trigger_source: str | None = None
+        if (
+            self._previous_change is not None
+            and self._previous_change < self._change_threshold <= change_score
+            and self._previous_frame_s is not None
+        ):
+            fraction = (
+                (self._change_threshold - self._previous_change)
+                / max(change_score - self._previous_change, 1e-9)
+            )
+            trigger_s = self._previous_frame_s + fraction * (
+                frame_s - self._previous_frame_s
+            )
+            trigger_source = "interpolated-threshold-crossing"
+        elif change_score >= self._change_threshold:
+            trigger_s = frame_s
+            trigger_source = "direct-threshold"
+
+        if trigger_s is not None:
             self.triggered = True
-            return float(now) + self._latency_s
-        if not self.frozen and change_score <= self._change_threshold:
-            self.waited_frames += 1
-            if self.waited_frames >= self._stable_frames:
-                self.frozen = True
+            self.triggered_at_s = frame_s
+            self.trigger_score = change_score
+            self.trigger_source = trigger_source
+            self._record_event("trigger", frame_s, change_score)
+            self._last_color = current
+            return trigger_s + self._latency_s
+
+        self._previous_change = change_score
+        self._previous_frame_s = frame_s
         self._last_color = current
         return None
 
@@ -114,6 +264,7 @@ class NativeMinitouchBackend:
         clock: Callable[[], float] = time.perf_counter,
         initial_offsets: dict[str, float] | None = None,
         photogate: NativeStartPhotogate | None = None,
+        start_gate_mode: str = "realtime",
         device: NativeMinitouchDevice | None = None,
         session_factory: Callable[..., Any] | None = None,
         run_id: str | None = None,
@@ -167,7 +318,12 @@ class NativeMinitouchBackend:
         self._require_probe = (
             device is None if require_probe is None else bool(require_probe)
         )
-        self._photogate = photogate or NativeStartPhotogate()
+        start_policy = resolve_native_start_gate_policy(start_gate_mode)
+        self._photogate = photogate or NativeStartPhotogate(
+            stable_duration_ms=start_policy.stable_duration_ms,
+            grace_ms=start_policy.grace_ms,
+            mode=start_policy.mode,
+        )
         self._session_factory = session_factory or native_engine.playback_session
         self._session = self._session_factory(
             publish=self._publish_chunk,
@@ -902,7 +1058,8 @@ class NativeMinitouchBackend:
             "NativeMinitouch started "
             f"run_id={self._run_id} anchor_s={self._first_action_anchor_s:.6f} "
             f"planned={len(self._actions)} first_read_delay_ms="
-            f"{self.first_read_delay_ms:.3f}",
+            f"{self.first_read_delay_ms:.3f} "
+            f"photogate={self._photogate.report()}",
             flush=True,
         )
 
@@ -1097,6 +1254,10 @@ class NativeMinitouchBackend:
         """返回可直接写入结果 JSON 的统一 Native 会话统计。"""
         # PlaybackSession 是单 owner 对象；这里只读 worker 发布的快照。
         report = dict(self._session_report)
+        photogate = getattr(self, "_photogate", None)
+        photogate_report = (
+            photogate.report() if photogate is not None else {}
+        )
         for source, target in {
             "planned_actions": "planned",
             "sent_actions": "sent",
@@ -1247,5 +1408,6 @@ class NativeMinitouchBackend:
             "publisher_error": self._publisher_error,
             "device_error": self._device_error,
             "observation_error": self._observation_error,
+            **photogate_report,
         })
         return defaults

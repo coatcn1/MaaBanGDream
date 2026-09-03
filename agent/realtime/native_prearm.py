@@ -283,6 +283,9 @@ def prepare_native_for_settings_gate(
         serial=adb_serial,
         judgement_y=565,
         press_bias_ms=0,
+        start_gate_mode=str(
+            getattr(live_run, "mode", None) or "realtime"
+        ),
         run_id=live_run.run_id,
         jlog_path=(
             root / "debug" / "native-jlog" / f"{live_run.run_id}.jsonl"

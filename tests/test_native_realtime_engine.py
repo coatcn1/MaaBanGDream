@@ -22,7 +22,11 @@ from agent.realtime.chart_timeline import ChartTimeline
 from agent.realtime.engine import RealtimeEngine
 from agent.realtime.life_monitor import LifeGuard, LifeReading
 from agent.realtime.native_minitouch import NativeMinitouchDevice
-from agent.realtime.native_play import NativeMinitouchBackend, NativeStartPhotogate
+from agent.realtime.native_play import (
+    NativeMinitouchBackend,
+    NativeStartPhotogate,
+    resolve_native_start_gate_policy,
+)
 from agent.realtime.run_reporting import result_report_payload
 from scripts import native_sync_offline as sync_front
 
@@ -453,7 +457,8 @@ def test_native_backend_owns_input_from_first_note_and_reports_session(
 
 def test_native_start_photogate_maps_first_note_to_delayed_anchor():
     gate = NativeStartPhotogate(
-        stable_frames=200,
+        stable_duration_ms=250.0,
+        grace_ms=0.0,
         change_threshold=3.0,
         latency_ms=30.0,
     )
@@ -461,16 +466,88 @@ def test_native_start_photogate_maps_first_note_to_delayed_anchor():
     changed = stable.copy()
     changed[510:536, :, :] = 32
 
-    # 第一帧建立基线，随后累计 200 个稳定差分。
-    for index in range(201):
+    # 60 FPS 下约 250ms 即可完成稳定门控，不能再固定等待 200 帧。
+    for index in range(17):
         assert gate.observe(stable, index / 60.0) is None
 
-    anchor = gate.observe(changed, 10.0)
+    anchor = gate.observe(changed, 17 / 60.0)
 
     assert gate.frozen is True
-    assert gate.waited_frames == 200
+    assert gate.waited_frames == 15
     assert gate.triggered is True
-    assert anchor == pytest.approx(10.030)
+    assert anchor == pytest.approx(16.5 / 60.0 + 0.030)
+
+
+def test_native_start_photogate_requires_consecutive_stability_and_abs_change():
+    gate = NativeStartPhotogate(
+        stable_duration_ms=100.0,
+        grace_ms=0.0,
+        change_threshold=3.0,
+        latency_ms=30.0,
+    )
+    stable = np.full((720, 1280, 3), 30, dtype=np.uint8)
+    brighter = stable.copy()
+    brighter[510:536] = 32
+    darker = stable.copy()
+    darker[510:536] = 28
+
+    assert gate.observe(stable, 0.00) is None
+    assert gate.observe(stable, 0.05) is None
+    # 开场闪光必须打断连续稳定计时，不能累计零散的安静帧。
+    assert gate.observe(brighter, 0.08) is None
+    assert gate.stable_since_s is None
+    assert gate.observe(stable, 0.10) is None
+    assert gate.observe(stable, 0.12) is None
+    assert gate.observe(stable, 0.21) is None
+    assert gate.frozen is True
+
+    # 音符离开检测带造成的变暗同样是有效变化。
+    anchor = gate.observe(darker, 0.23)
+    assert anchor == pytest.approx(0.250)
+    assert gate.trigger_score == pytest.approx(6.0)
+
+
+def test_native_start_photogate_ignores_prelude_during_grace():
+    gate = NativeStartPhotogate(
+        stable_duration_ms=100.0,
+        grace_ms=500.0,
+        change_threshold=3.0,
+        latency_ms=30.0,
+    )
+    stable = np.full((720, 1280, 3), 30, dtype=np.uint8)
+    prelude = stable.copy()
+    prelude[510:536] = 32
+
+    assert gate.observe(stable, 0.00) is None
+    assert gate.observe(stable, 0.11) is None
+    assert gate.frozen is True
+    assert gate.observe(prelude, 0.20) is None
+    assert gate.ignored_prelude_events == 1
+    assert gate.observe(stable, 0.30) is None
+
+    anchor = gate.observe(prelude, 0.62)
+    assert anchor == pytest.approx(0.650)
+    assert gate.triggered is True
+    report = gate.report()
+    assert report["photogate_wait_ms"] == pytest.approx(620.0)
+    assert report["photogate_grace_ms"] == 500.0
+    assert [event["event"] for event in report["photogate_events"]] == [
+        "stable",
+        "ignored-prelude",
+        "ignored-prelude",
+        "trigger",
+    ]
+
+
+def test_native_start_gate_uses_lifecycle_specific_stability_not_song_offset():
+    single = resolve_native_start_gate_policy("calibration-rehearsal")
+    cooperative = resolve_native_start_gate_policy("cooperative")
+
+    assert single.mode == "single-start-transition"
+    assert single.stable_duration_ms == 250.0
+    assert cooperative.mode == "cooperative-playfield-confirmed"
+    assert cooperative.stable_duration_ms == 120.0
+    assert single.grace_ms == cooperative.grace_ms == 500.0
 
 
 def test_engine_waits_for_photogate_then_switches_to_5hz_monitor(monkeypatch):
@@ -893,7 +970,9 @@ def test_native_backend_publishes_first_chunk_from_photogate_anchor(monkeypatch)
         press_bias_ms=0,
         device=device,
         session_factory=session_factory,
-        photogate=NativeStartPhotogate(stable_frames=1),
+        photogate=NativeStartPhotogate(
+            stable_duration_ms=1.0, grace_ms=0.0
+        ),
         publisher_poll_ms=5,
         require_probe=True,
     )
@@ -910,7 +989,7 @@ def test_native_backend_publishes_first_chunk_from_photogate_anchor(monkeypatch)
     assert backend.observe_start_frame(stable, 9.9) is None
     anchor = backend.observe_start_frame(changed, 10.0)
     # Profile 正偏移沿用既有语义（提前输入），且本局启动后保持冻结。
-    assert anchor == pytest.approx(10.012)
+    assert anchor == pytest.approx(9.962)
 
     backend.start(anchor)
     with pytest.raises(RuntimeError, match="启动前"):
@@ -918,7 +997,7 @@ def test_native_backend_publishes_first_chunk_from_photogate_anchor(monkeypatch)
     assert sessions[0].finished_event.wait(timeout=1)
     backend.stop()
 
-    assert sessions[0].anchor == pytest.approx(10.012)
+    assert sessions[0].anchor == pytest.approx(9.962)
     assert len(compiler_calls) == 2
     (
         compiled_actions,
@@ -930,7 +1009,7 @@ def test_native_backend_publishes_first_chunk_from_photogate_anchor(monkeypatch)
     ) = compiler_calls[0]
     assert [item["note_index"] for item in compiled_actions] == [0, 1]
     assert [item["due_s"] for item in compiled_actions] == pytest.approx(
-        [10.012, 10.512]
+        [9.962, 10.462]
     )
     assert config["song_offset_s"] == config["press_bias_ms"] == 0
     assert start_s == 10.0
@@ -973,7 +1052,9 @@ def test_native_backend_publishes_first_chunk_from_photogate_anchor(monkeypatch)
         clock=lambda: 20.0,
         device=prearmed_device,
         session_factory=session_factory,
-        photogate=NativeStartPhotogate(stable_frames=1),
+        photogate=NativeStartPhotogate(
+            stable_duration_ms=1.0, grace_ms=0.0
+        ),
         require_probe=True,
     )
     prearmed.arm()
@@ -1003,7 +1084,9 @@ def test_native_backend_publishes_first_chunk_from_photogate_anchor(monkeypatch)
         clock=lambda: 30.0,
         device=late_device,
         session_factory=session_factory,
-        photogate=NativeStartPhotogate(stable_frames=1),
+        photogate=NativeStartPhotogate(
+            stable_duration_ms=1.0, grace_ms=0.0
+        ),
         require_probe=True,
     )
     late.arm()
@@ -1043,7 +1126,9 @@ def test_native_backend_publishes_first_chunk_from_photogate_anchor(monkeypatch)
         clock=lambda: 40.0,
         device=race_device,
         session_factory=session_factory,
-        photogate=NativeStartPhotogate(stable_frames=1),
+        photogate=NativeStartPhotogate(
+            stable_duration_ms=1.0, grace_ms=0.0
+        ),
         require_probe=True,
     )
     race.arm()

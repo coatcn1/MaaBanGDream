@@ -117,6 +117,17 @@ def test_profile_play_reuses_one_agent_controller_proxy(monkeypatch):
         "agent.realtime.profile_play_action.RealtimeProfileStore.resolve_latest",
         lambda *args, **kwargs: settings,
     )
+    # 本测试只验证 Controller 代理生命周期，不能读取用户当前的 Native 开关。
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.RealtimeProfileStore.runtime_options",
+        lambda _self: {
+            "chart_prediction_enabled": False,
+            "chart_predict_presses": False,
+            "native_realtime_enabled": False,
+            "life_safety_enabled": False,
+            "life_exit_threshold": 100,
+        },
+    )
     foreground_checks = []
     dispatcher_options = []
     monkeypatch.setattr(
