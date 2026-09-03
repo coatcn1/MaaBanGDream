@@ -125,7 +125,7 @@ def test_wait_for_final_cover_uses_the_controller_frame_stream():
         def post_screencap(self):
             return Job(next(self.frames))
 
-    resolution = wait_for_final_cover(
+    outcome = wait_for_final_cover(
         Controller(),
         SimpleNamespace(song_level=28, song_title="SAVIOR OF SONG"),
         selection(song_id),
@@ -135,8 +135,9 @@ def test_wait_for_final_cover_uses_the_controller_frame_stream():
         poll_interval_seconds=0,
     )
 
-    assert resolution.confirmation.bestdori_song_id == 306
-    assert resolution.selection.bestdori_song_id == 306
+    assert outcome.status == "confirmed"
+    assert outcome.resolution.confirmation.bestdori_song_id == 306
+    assert outcome.resolution.selection.bestdori_song_id == 306
 
 
 def test_wait_for_final_cover_can_defer_chart_resolution_until_coop_cover():
@@ -168,7 +169,7 @@ def test_wait_for_final_cover_can_defer_chart_resolution_until_coop_cover():
         def post_screencap(self):
             return Job(next(self.frames))
 
-    result = wait_for_final_cover(
+    outcome = wait_for_final_cover(
         Controller(),
         SimpleNamespace(song_level=28, song_title="乱码标题"),
         None,
@@ -179,9 +180,130 @@ def test_wait_for_final_cover_can_defer_chart_resolution_until_coop_cover():
         poll_interval_seconds=0,
     )
 
-    assert result.confirmation.song_id == song_id
-    assert result.selection is resolved
+    assert outcome.status == "confirmed"
+    assert outcome.resolution.confirmation.song_id == song_id
+    assert outcome.resolution.selection is resolved
     assert calls == [(song_id, "expert", 28, "乱码标题")]
+
+
+def test_wait_for_final_cover_degrades_to_selected_chart_when_playfield_arrives(
+    monkeypatch,
+):
+    image, expected_song_id = final_cover_frame(seed=7)
+    wrong_playfield, _ = final_cover_frame(seed=83)
+
+    class Job:
+        def wait(self):
+            return self
+
+        def get(self):
+            return wrong_playfield
+
+    class Controller:
+        def post_screencap(self):
+            return Job()
+
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.PlayfieldDetector",
+        lambda: (lambda _image: True),
+    )
+
+    outcome = wait_for_final_cover(
+        Controller(),
+        SimpleNamespace(song_level=28, song_title="SAVIOR OF SONG"),
+        selection(expected_song_id),
+        "Expert",
+        lambda: False,
+        timeout_seconds=1,
+        poll_interval_seconds=0,
+    )
+
+    assert outcome.status == "degraded-selected-chart"
+    assert outcome.resolution is None
+    assert outcome.playfield_seen is True
+    assert "does not match" in outcome.reason
+
+
+def test_wait_for_final_cover_degrades_to_visual_legacy_without_a_chart(
+    monkeypatch,
+):
+    playfield, _ = final_cover_frame(seed=83)
+
+    class Repository:
+        def resolve(self, *_args, **_kwargs):
+            return ChartResolution(None, "no matching chart")
+
+    class Job:
+        def wait(self):
+            return self
+
+        def get(self):
+            return playfield
+
+    class Controller:
+        def post_screencap(self):
+            return Job()
+
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.PlayfieldDetector",
+        lambda: (lambda _image: True),
+    )
+
+    outcome = wait_for_final_cover(
+        Controller(),
+        SimpleNamespace(song_level=28, song_title="SAVIOR OF SONG"),
+        None,
+        "Expert",
+        lambda: False,
+        repository=Repository(),
+        timeout_seconds=1,
+        poll_interval_seconds=0,
+    )
+
+    assert outcome.status == "degraded-visual-legacy"
+    assert outcome.resolution is None
+    assert outcome.playfield_seen is True
+
+
+def test_wait_for_final_cover_keeps_existing_chart_during_independent_coop_scan(
+    monkeypatch,
+):
+    playfield, _ = final_cover_frame(seed=83)
+
+    class Repository:
+        def resolve(self, *_args, **_kwargs):
+            return ChartResolution(None, "no matching chart")
+
+    class Job:
+        def wait(self):
+            return self
+
+        def get(self):
+            return playfield
+
+    class Controller:
+        def post_screencap(self):
+            return Job()
+
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.PlayfieldDetector",
+        lambda: (lambda _image: True),
+    )
+
+    outcome = wait_for_final_cover(
+        Controller(),
+        SimpleNamespace(song_level=28, song_title="SAVIOR OF SONG"),
+        None,
+        "Expert",
+        lambda: False,
+        repository=Repository(),
+        timeout_seconds=1,
+        poll_interval_seconds=0,
+        fallback_selection_available=True,
+    )
+
+    assert outcome.status == "degraded-selected-chart"
+    assert outcome.resolution is None
 
 
 def test_deferred_resolution_rejects_title_fallback_for_wrong_jacket():

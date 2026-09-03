@@ -1086,7 +1086,7 @@ def test_late_preflight_failure_preserves_verified_visual_and_speed(
     }
 
 
-def test_foreground_failure_does_not_start_debug_recorder(monkeypatch, tmp_path):
+def test_foreground_failure_still_starts_preflight_debug_recorder(monkeypatch, tmp_path):
     reset_live_run(mode="formal", difficulty="Easy")
     context = SimpleNamespace(tasker=Tasker())
     settings = SimpleNamespace(
@@ -1117,10 +1117,10 @@ def test_foreground_failure_does_not_start_debug_recorder(monkeypatch, tmp_path)
     }))
 
     assert not RealtimeProfilePlay().run(context, argv)
-    assert recorder_constructions == []
+    assert recorder_constructions == [tmp_path / "debug" / "recordings"]
 
 
-def test_touch_construction_failure_does_not_start_debug_recorder(
+def test_touch_construction_failure_still_starts_preflight_debug_recorder(
     monkeypatch, tmp_path,
 ):
     reset_live_run(mode="formal", difficulty="Easy")
@@ -1157,7 +1157,7 @@ def test_touch_construction_failure_does_not_start_debug_recorder(
     }))
 
     assert not RealtimeProfilePlay().run(context, argv)
-    assert recorder_constructions == []
+    assert recorder_constructions == [tmp_path / "debug" / "recordings"]
 
 
 @pytest.mark.parametrize("failure_point", ["construction", "run"])

@@ -21,6 +21,38 @@ from .touch_planner import TouchAction
 _SENTINEL = None
 _RECORD_QUEUE_CAPACITY = 12
 _VIDEO_QUEUE_CAPACITY = 12
+_LIFECYCLE_LOCK = threading.Lock()
+
+
+def append_lifecycle_event(
+    output_dir: Path,
+    phase: str,
+    status: str,
+    *,
+    details: Mapping[str, object] | None = None,
+) -> Path:
+    """向同一 run 的证据包追加低频生命周期决定。"""
+    output_dir = Path(output_dir)
+    if not output_dir.is_dir():
+        raise FileNotFoundError(f"调试证据目录不存在: {output_dir}")
+    path = output_dir / "lifecycle.jsonl"
+    payload = {
+        "phase": str(phase),
+        "status": str(status),
+        "wall_time": time.time(),
+        "details": deepcopy(dict(details or {})),
+    }
+    with _LIFECYCLE_LOCK:
+        with path.open("a", encoding="utf-8") as stream:
+            stream.write(
+                json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            )
+    return path
 
 
 class RealtimeDebugRecorder:
@@ -41,7 +73,8 @@ class RealtimeDebugRecorder:
         session_metadata: Mapping[str, object] | None = None,
         close_timeout_seconds: float = 2.0,
     ) -> None:
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        # 重试可能在同一秒重新建包，微秒后缀避免诊断功能反过来导致任务失败。
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         self.output_dir = root / f"realtime-{stamp}"
         self.output_dir.mkdir(parents=True, exist_ok=False)
         self.video_fps = video_fps
@@ -72,9 +105,12 @@ class RealtimeDebugRecorder:
         self._closed = False
         self._error: BaseException | None = None
         self._summary_finalizer_thread: threading.Thread | None = None
+        self._checkpoint_lock = threading.Lock()
+        self._checkpoint_count = 0
         self._event_count = 0
         self._released_at: dict[int, float] = {}
         self._diagnostic_counts: dict[str, int] = {}
+        self._phase_counts: dict[str, int] = {}
         self._last_timing_state: dict[str, object] = {}
         self._video_actual_fps: float | None = None
         self._video_duration_seconds: float | None = None
@@ -109,6 +145,105 @@ class RealtimeDebugRecorder:
             self._session_metadata = deepcopy(dict(metadata))
             self._session_metadata_set = True
 
+    def update_session_metadata(self, metadata: Mapping[str, object]) -> None:
+        """在同一 run 内用已确认的后续证据刷新会话摘要。"""
+        with self._metadata_lock:
+            if not self._session_metadata_set:
+                raise RuntimeError("session metadata has not been set")
+            incoming = deepcopy(dict(metadata))
+            previous_run_id = self._session_metadata.get("run_id")
+            incoming_run_id = incoming.get("run_id")
+            if previous_run_id != incoming_run_id:
+                raise RuntimeError("session metadata run_id cannot change")
+            self._session_metadata = incoming
+
+    def record_phase(
+        self,
+        image: np.ndarray,
+        timestamp: float,
+        phase: str,
+        *,
+        diagnostics: list[dict[str, object]] | None = None,
+    ) -> None:
+        """记录演奏热路径之外的封面、门控等阶段画面。"""
+        self.record(
+            image,
+            timestamp,
+            [],
+            [],
+            None,
+            diagnostics=diagnostics,
+            phase=phase,
+        )
+
+    def save_checkpoint(
+        self,
+        image: np.ndarray,
+        phase: str,
+        status: str,
+        *,
+        details: Mapping[str, object] | None = None,
+    ) -> Path:
+        """保存低频关键阶段现场；即使热路径录像已关闭也允许补写结算证据。"""
+        safe_phase = "".join(
+            character if character.isalnum() or character in "-_" else "-"
+            for character in str(phase)
+        ).strip("-") or "unknown"
+        safe_status = "".join(
+            character if character.isalnum() or character in "-_" else "-"
+            for character in str(status)
+        ).strip("-") or "unknown"
+        with self._checkpoint_lock:
+            index = self._checkpoint_count
+            checkpoint_dir = self.output_dir / "checkpoints"
+            checkpoint_dir.mkdir(exist_ok=True)
+            relative = Path("checkpoints") / (
+                f"{index:03d}-{safe_phase}-{safe_status}.png"
+            )
+            if not cv2.imwrite(str(self.output_dir / relative), image):
+                raise OSError("无法保存实时演奏阶段证据截图")
+            payload = {
+                "index": index,
+                "phase": str(phase),
+                "status": str(status),
+                "wall_time": time.time(),
+                "screenshot": relative.as_posix(),
+                "details": deepcopy(dict(details or {})),
+            }
+            with (self.output_dir / "checkpoints.jsonl").open(
+                "a",
+                encoding="utf-8",
+            ) as stream:
+                stream.write(
+                    json.dumps(
+                        payload,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                )
+            self._checkpoint_count += 1
+            self._refresh_checkpoint_summary()
+            return self.output_dir / relative
+
+    def _refresh_checkpoint_summary(self) -> None:
+        path = self.output_dir / "summary.json"
+        if not path.is_file():
+            return
+        with self._summary_lock:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return
+            payload["checkpoint_count"] = self._checkpoint_count
+            payload["checkpoint_index"] = "checkpoints.jsonl"
+            temporary = path.with_suffix(".json.tmp")
+            temporary.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            temporary.replace(path)
+
     def record(
         self,
         image: np.ndarray,
@@ -120,6 +255,7 @@ class RealtimeDebugRecorder:
         timing_state: dict[str, object] | None = None,
         life_value: int | None = None,
         touch_state: dict[str, object] | None = None,
+        phase: str = "engine",
     ) -> None:
         if self._closed or self._error is not None:
             self._dropped_trace_frames += 1
@@ -133,6 +269,7 @@ class RealtimeDebugRecorder:
                 (
                     image, timestamp, notes, actions, life_status,
                     diagnostics, timing_state, life_value, touch_state,
+                    str(phase),
                 )
             )
         except queue.Full:
@@ -149,10 +286,12 @@ class RealtimeDebugRecorder:
                 (
                     image, timestamp, notes, actions, life_status,
                     diagnostics, timing_state, life_value, touch_state,
+                    phase,
                 ) = item
                 self._process_record(
                     image, timestamp, notes, actions, life_status,
                     diagnostics, timing_state, life_value, touch_state,
+                    phase,
                 )
         except BaseException as exc:
             self._error = exc
@@ -224,7 +363,12 @@ class RealtimeDebugRecorder:
                 )
             ),
             "event_screenshots": self._event_count,
+            "checkpoint_count": self._checkpoint_count,
+            "checkpoint_index": (
+                "checkpoints.jsonl" if self._checkpoint_count else None
+            ),
             "diagnostic_counts": dict(self._diagnostic_counts),
+            "phase_counts": dict(self._phase_counts),
             "timing_feedback": deepcopy(self._last_timing_state),
             "session": session,
         }
@@ -301,6 +445,7 @@ class RealtimeDebugRecorder:
         timing_state: dict[str, object] | None,
         life_value: int | None = None,
         touch_state: dict[str, object] | None = None,
+        phase: str = "engine",
     ) -> None:
         diagnostics = diagnostics or []
         timing_state = timing_state or {}
@@ -310,6 +455,7 @@ class RealtimeDebugRecorder:
             "frame": trace_frame,
             "timestamp": timestamp,
             "elapsed_ms": round(elapsed_ms, 3),
+            "phase": phase,
             "life_status": life_status,
             "life_value": life_value,
             "notes": [self._serialise(note) for note in notes],
@@ -321,6 +467,7 @@ class RealtimeDebugRecorder:
         for diagnostic in diagnostics:
             event = str(diagnostic.get("event", "unknown"))
             self._diagnostic_counts[event] = self._diagnostic_counts.get(event, 0) + 1
+        self._phase_counts[phase] = self._phase_counts.get(phase, 0) + 1
         if timing_state:
             self._last_timing_state = dict(timing_state)
         for action in actions:

@@ -138,7 +138,9 @@ def _prepare_preflight_context(
         "note_skin_type": None,
         "tap_effect": None,
         "judgement_assist": None,
-        "recording_path": None,
+        # ProfilePlay 可能已经在最终封面阶段创建证据包；失败报告必须继续
+        # 指向同一 run，不能因“preflight”分类把关联路径清空。
+        "recording_path": base.recording_path,
         "prepared_for_play": False,
     }
     if params.get("note_speed") is not None:

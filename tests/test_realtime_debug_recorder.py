@@ -8,7 +8,10 @@ import time
 import numpy as np
 import pytest
 
-from agent.realtime.debug_recorder import RealtimeDebugRecorder
+from agent.realtime.debug_recorder import (
+    RealtimeDebugRecorder,
+    append_lifecycle_event,
+)
 from agent.realtime.note_detector import NoteKind, ObservedNote
 from agent.realtime.touch_planner import ActionKind, TouchAction
 
@@ -120,6 +123,98 @@ def test_trace_only_recorder_keeps_replay_evidence_without_video(tmp_path):
     assert not (recorder.output_dir / "playfield.mkv").exists()
     assert not (recorder.output_dir / "playfield.partial.mkv").exists()
     assert not (recorder.output_dir / "video_frames.jsonl").exists()
+
+
+def test_debug_recorder_marks_preflight_and_engine_phases(tmp_path):
+    recorder = RealtimeDebugRecorder(tmp_path, video_enabled=False)
+    frame = np.zeros((72, 128, 3), dtype=np.uint8)
+
+    recorder.record_phase(
+        frame,
+        1.0,
+        "final-cover",
+        diagnostics=[{"event": "cover_wait", "status": "observing"}],
+    )
+    recorder.record(frame, 1.1, [], [], "alive")
+    recorder.close()
+
+    trace = [
+        json.loads(line)
+        for line in (recorder.output_dir / "trace.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    summary = json.loads(
+        (recorder.output_dir / "summary.json").read_text(encoding="utf-8")
+    )
+
+    assert [row["phase"] for row in trace] == ["final-cover", "engine"]
+    assert summary["phase_counts"] == {"final-cover": 1, "engine": 1}
+
+
+def test_debug_recorder_can_refresh_session_metadata_before_close(tmp_path):
+    recorder = RealtimeDebugRecorder(
+        tmp_path,
+        video_enabled=False,
+        session_metadata={"run_id": "run-123", "final_cover": {"confirmed": False}},
+    )
+    recorder.update_session_metadata(
+        {"run_id": "run-123", "final_cover": {"confirmed": True}}
+    )
+    recorder.close()
+
+    summary = json.loads(
+        (recorder.output_dir / "summary.json").read_text(encoding="utf-8")
+    )
+    assert summary["session"]["final_cover"] == {"confirmed": True}
+
+
+def test_debug_recorder_checkpoints_survive_engine_recorder_close(tmp_path):
+    recorder = RealtimeDebugRecorder(tmp_path, video_enabled=False)
+    frame = np.full((72, 128, 3), 80, dtype=np.uint8)
+    recorder.save_checkpoint(
+        frame,
+        "final-cover",
+        "degraded",
+        details={"reason": "not visible"},
+    )
+    recorder.close()
+    result_path = recorder.save_checkpoint(frame, "result", "stable")
+
+    checkpoints = [
+        json.loads(line)
+        for line in (recorder.output_dir / "checkpoints.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    summary = json.loads(
+        (recorder.output_dir / "summary.json").read_text(encoding="utf-8")
+    )
+    assert result_path.is_file()
+    assert [item["phase"] for item in checkpoints] == ["final-cover", "result"]
+    assert summary["checkpoint_count"] == 2
+    assert summary["checkpoint_index"] == "checkpoints.jsonl"
+
+
+def test_lifecycle_events_can_be_appended_after_engine_close(tmp_path):
+    recorder = RealtimeDebugRecorder(tmp_path, video_enabled=False)
+    output_dir = recorder.output_dir
+    recorder.close()
+
+    path = append_lifecycle_event(
+        output_dir,
+        "retry",
+        "scheduled",
+        details={"attempt": 2, "reason": "temporary capture failure"},
+    )
+
+    events = [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert events[0]["phase"] == "retry"
+    assert events[0]["status"] == "scheduled"
+    assert events[0]["details"]["attempt"] == 2
 
 
 def test_debug_recorder_persists_one_session_and_relative_elapsed_time(tmp_path):

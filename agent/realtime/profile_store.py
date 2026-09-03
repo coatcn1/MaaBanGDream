@@ -113,6 +113,7 @@ class RealtimeProfileStore:
         "chart_prediction_enabled": True,
         "chart_predict_presses": True,
         "native_realtime_enabled": False,
+        "play_failure_retry_count": 1,
         "calibration_note_speeds": {
             "Easy": 2.0,
             "Normal": 2.0,
@@ -253,6 +254,20 @@ class RealtimeProfileStore:
         )
         if not isinstance(native_realtime_enabled, bool):
             raise ValueError("native_realtime_enabled 必须是布尔值")
+        retry_count_raw = options.get("play_failure_retry_count", 1)
+        if isinstance(retry_count_raw, bool):
+            raise ValueError("play_failure_retry_count 必须是 0..3 的整数")
+        try:
+            play_failure_retry_count = int(retry_count_raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "play_failure_retry_count 必须是 0..3 的整数"
+            ) from exc
+        if (
+            retry_count_raw != play_failure_retry_count
+            or not 0 <= play_failure_retry_count <= 3
+        ):
+            raise ValueError("play_failure_retry_count 必须是 0..3 的整数")
         try:
             threshold = int(options.get("life_exit_threshold", 200))
         except (TypeError, ValueError) as exc:
@@ -290,6 +305,7 @@ class RealtimeProfileStore:
             "chart_prediction_enabled": chart_prediction_enabled,
             "chart_predict_presses": chart_predict_presses,
             "native_realtime_enabled": native_realtime_enabled,
+            "play_failure_retry_count": play_failure_retry_count,
             "calibration_note_speeds": speeds,
         }
 

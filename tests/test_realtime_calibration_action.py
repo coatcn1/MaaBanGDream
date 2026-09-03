@@ -158,28 +158,36 @@ def test_formal_failure_returns_unaccepted_candidate():
     assert formal["passed"] is False
 
 
-def test_invalid_rehearsal_ends_invocation_without_automatic_retry():
+def test_invalid_rehearsal_retries_within_configured_budget():
     calls = []
+    records = iter([
+        {"valid": False, "completed": False},
+        record("A"),
+        record("B"),
+        record("C"),
+        record("D"),
+    ])
 
     def run_round(formal, offset):
         calls.append((formal, offset))
-        return {"valid": False, "completed": False}
+        return next(records)
 
-    runner = CalibrationRunner(run_round)
-    try:
-        runner.run()
-    except RuntimeError as exc:
-        assert "排练1" in str(exc)
-    else:
-        raise AssertionError("invalid result must end this invocation")
-    assert calls == [(False, 0)]
+    offset, rehearsals, formal = CalibrationRunner(
+        run_round,
+        max_attempts=2,
+    ).run()
+
+    assert len(rehearsals) == 3
+    assert formal["passed"] is True
+    assert calls[:2] == [(False, 0), (False, 0)]
 
 
-def test_invalid_formal_is_not_retried_in_same_invocation():
+def test_invalid_formal_retries_within_configured_budget():
     records = iter([
         record("A"),
         record("B"), record("C"),
         {"valid": False, "completed": False, "song_id": "invalid-formal"},
+        record("E"),
     ])
     calls = []
 
@@ -187,9 +195,9 @@ def test_invalid_formal_is_not_retried_in_same_invocation():
         calls.append(formal)
         return next(records)
 
-    with pytest.raises(RuntimeError, match="正式验证"):
-        CalibrationRunner(run_round).run()
-    assert calls == [False, False, False, True]
+    _, _, formal = CalibrationRunner(run_round, max_attempts=2).run()
+    assert formal["passed"] is True
+    assert calls == [False, False, False, True, True]
 
 
 def test_unknown_song_identity_still_counts_when_result_is_valid():

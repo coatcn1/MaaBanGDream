@@ -439,6 +439,24 @@ def test_realtime_multi_live_contract_and_options():
         "RealtimeLiveRoundGate"
     ]
     assert nodes["RealtimeLiveRoundGate"]["max_hit"] == 1
+    assert nodes["RealtimeLiveRoundGate"]["next"] == [
+        "RealtimeLiveRetryReset"
+    ]
+    assert nodes["RealtimeLiveRetryReset"]["custom_action"] == (
+        "RealtimePlayRetryControl"
+    )
+    assert nodes["RealtimeLiveRetryCheck"]["next"] == [
+        "RealtimeLiveRetryRecover"
+    ]
+    assert nodes["RealtimeLiveRetryCheck"]["on_error"] == [
+        "RealtimeLiveFailure"
+    ]
+    assert nodes["RealtimeLiveRetryRecover"]["next"] == [
+        "RealtimeLiveDebugGate"
+    ]
+    for node in nodes.values():
+        if node.get("custom_action") == "RealtimeProfilePlay":
+            assert node["on_error"] == ["RealtimeLiveRetryCheck"]
     assert nodes["RealtimeLiveReturnHome"]["next"] == ["RealtimeLiveRoundCompleted"]
     return_home = nodes["RealtimeLiveReturnHome"]["custom_action_param"]
     assert return_home["back_only"] is True

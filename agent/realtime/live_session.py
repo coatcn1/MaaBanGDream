@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from pathlib import Path
 from threading import RLock
 from uuid import uuid4
 
@@ -29,6 +30,8 @@ class LiveRunContext:
     recording_path: str | None = None
     final_cover_confirmed: bool = False
     final_cover_song_id: str | None = None
+    final_cover_status: str = "not-observed"
+    final_cover_reason: str | None = None
     # Internal one-shot handoff from a verified difficulty screen to Play.
     # Deliberately omitted from serialized session metadata.
     prepared_for_play: bool = False
@@ -57,6 +60,8 @@ class LiveRunContext:
             "final_cover": {
                 "confirmed": self.final_cover_confirmed,
                 "song_id": self.final_cover_song_id,
+                "status": self.final_cover_status,
+                "reason": self.final_cover_reason,
             },
         }
 
@@ -117,3 +122,27 @@ def update_live_run(**changes) -> LiveRunContext:
 def current_song_id() -> str:
     current = current_live_run()
     return UNKNOWN_SONG_ID if current is None else current.song_id
+
+
+def append_current_run_event(
+    project_root: Path,
+    phase: str,
+    status: str,
+    *,
+    details: dict[str, object] | None = None,
+) -> Path | None:
+    """把外层恢复、重试等决定关联到刚结束的演奏证据包。"""
+    current = current_live_run()
+    if current is None or not current.recording_path:
+        return None
+    output_dir = Path(current.recording_path)
+    if not output_dir.is_absolute():
+        output_dir = Path(project_root) / output_dir
+    from .debug_recorder import append_lifecycle_event
+
+    return append_lifecycle_event(
+        output_dir,
+        phase,
+        status,
+        details=details,
+    )

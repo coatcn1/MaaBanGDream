@@ -322,6 +322,57 @@ def test_member_exit_reconnect_is_bounded_and_reuses_original_route():
     assert calls == ["dismiss", "room", "dismiss", "room"]
 
 
+def test_transient_play_failure_retries_the_whole_cooperative_round():
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.settings = {
+        "entry_method": "normal",
+        "post_live_action": "exit",
+        "count": 1,
+        "member_exit_policy": "fail",
+        "max_reconnects": 3,
+        "play_failure_retry_count": 1,
+    }
+    outcomes = iter([False, True])
+    attempts = []
+    recoveries = []
+    flow.progress_callback = None
+    flow.run_attempt = lambda reuse_room=False: (
+        attempts.append(reuse_room) or next(outcomes)
+    )
+    flow.recover_after_play_failure = lambda reason: recoveries.append(reason)
+
+    assert flow.run() is True
+    assert attempts == [False, False]
+    assert len(recoveries) == 1
+
+
+def test_transient_play_exception_stops_after_retry_budget():
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.settings = {
+        "entry_method": "normal",
+        "post_live_action": "exit",
+        "count": 1,
+        "member_exit_policy": "fail",
+        "max_reconnects": 3,
+        "play_failure_retry_count": 1,
+    }
+    attempts = []
+    recoveries = []
+    flow.progress_callback = None
+
+    def fail(reuse_room=False):
+        attempts.append(reuse_room)
+        raise RuntimeError("temporary capture failure")
+
+    flow.run_attempt = fail
+    flow.recover_after_play_failure = lambda reason: recoveries.append(reason)
+
+    with pytest.raises(RuntimeError, match="temporary capture failure"):
+        flow.run()
+    assert attempts == [False, False]
+    assert len(recoveries) == 1
+
+
 def test_download_timeout_invokes_jump_instead_of_starting_engine():
     flow = object.__new__(CooperativeLiveFlow)
     flow.wait_for = lambda names, timeout, interval: (None, np.zeros((1, 1, 3)))

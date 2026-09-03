@@ -29,9 +29,12 @@ from .difficulty_action import RealtimeDifficultySelect
 from .game_effect_settings_action import RealtimeGameEffectSettingsGate
 from .game_effect_settings_action import _click as _maa_click
 from .game_effect_settings_action import _swipe as _maa_swipe
+from .live_session import append_current_run_event
 from .life_monitor import LifeDetector
 from .performance_settings_action import RealtimePerformanceSettingsGate
 from .profile_play_action import RealtimeProfilePlay
+from .profile_store import RealtimeProfileStore
+from .native_prearm import discard_prearmed_backend
 from .result_navigation import RESULT_ANIMATION_SKIP_POINT
 
 
@@ -755,12 +758,9 @@ class CooperativeLiveFlow:
             raise
         except Exception as exc:
             if isinstance(exc, OSError) and "access violation" in str(exc).lower():
-                # A second reverse-controller call can hide the original
-                # invalid-handle failure behind another access violation.
+                # 二次访问反向控制器会用新的访问冲突掩盖最初的句柄失效。
                 raise
-            # The popup can arrive between two state-loop screenshots, for
-            # example while the difficulty or speed gate is running. Convert
-            # that race back into the configured member-exit policy.
+            # 弹窗可能在任意准备步骤之间出现，统一转换为成员退出策略处理。
             try:
                 image = self.capture()
             except Exception:
@@ -768,6 +768,44 @@ class CooperativeLiveFlow:
             if self.visible(image, "member_exit_title", 0.93):
                 raise MemberExited("协力成员退出房间") from exc
             raise
+
+    def recover_after_play_failure(self, reason: str) -> None:
+        """完整清理失败单局并从主页重新进入协力，禁止在旧会话中续跑。"""
+        discard_prearmed_backend("cooperative-play-retry")
+        recovery_params = {
+            "home_node": "CooperativeHomeMarker",
+            "modal_cancel_nodes": ["QuitConfirmCancel"],
+            "click_nodes": [
+                "AutoLiveLoginTap",
+                "AutoLiveLoginNext",
+                "AutoLiveCommonClose",
+                "AutoLiveStorySkipConfirmLarge",
+                "AutoLiveStorySkipConfirm",
+                "AutoLiveStorySkip",
+                "AutoLiveStoryMenu",
+            ],
+            "escape_interval_ms": 1500,
+            "escape_timeout_ms": 60000,
+            "restart_limit": 2,
+            "restart_wait_ms": 5000,
+            "startup_grace_ms": 12000,
+            "login_start_node": "AutoLiveLoginScreenMarker",
+            "login_start_target": [640, 635],
+            "login_marker_priority_attempts": 3,
+            "escape_after_login_start": True,
+            "package": GAME_PACKAGE,
+        }
+        argv = SimpleNamespace(
+            custom_action_param=json.dumps(
+                recovery_params,
+                ensure_ascii=False,
+            )
+        )
+        if not CommonRecover().run(self.context, argv):
+            raise RuntimeError(
+                f"协力单局失败后无法恢复主页：{reason}"
+            )
+        self.navigate_to_cooperative_room_selection("home")
 
     def handle_member_exit(self, reconnects: int) -> int | None:
         policy = str(self.settings["member_exit_policy"])
@@ -797,6 +835,11 @@ class CooperativeLiveFlow:
         completed = 0
         reconnects = 0
         reuse_room = False
+        play_failures = 0
+        retry_count = max(
+            0,
+            min(3, int(self.settings.get("play_failure_retry_count", 0))),
+        )
         while completed < total:
             print(
                 f"CooperativeLive round={completed + 1}/{total} "
@@ -812,10 +855,73 @@ class CooperativeLiveFlow:
                 reconnects = next_reconnects
                 reuse_room = False
                 continue
+            except Exception as exc:
+                if play_failures >= retry_count:
+                    raise
+                play_failures += 1
+                reason = f"{type(exc).__name__}: {exc}"
+                try:
+                    append_current_run_event(
+                        PROJECT_ROOT,
+                        "retry",
+                        "scheduled",
+                        details={
+                            "mode": "cooperative",
+                            "attempt": play_failures + 1,
+                            "attempt_limit": retry_count + 1,
+                            "reason": reason,
+                        },
+                    )
+                except Exception as evidence_error:
+                    print(
+                        "CooperativeLive retry_evidence_failed="
+                        f"{type(evidence_error).__name__}: {evidence_error}",
+                        flush=True,
+                    )
+                print(
+                    "CooperativeLive play_retry=true "
+                    f"attempt={play_failures + 1}/{retry_count + 1} "
+                    f"reason={reason}",
+                    flush=True,
+                )
+                self.recover_after_play_failure(reason)
+                reuse_room = False
+                continue
             if not success:
-                return False
+                if play_failures >= retry_count:
+                    return False
+                play_failures += 1
+                reason = "RealtimeProfilePlay 返回失败"
+                try:
+                    append_current_run_event(
+                        PROJECT_ROOT,
+                        "retry",
+                        "scheduled",
+                        details={
+                            "mode": "cooperative",
+                            "attempt": play_failures + 1,
+                            "attempt_limit": retry_count + 1,
+                            "reason": reason,
+                        },
+                    )
+                except Exception as evidence_error:
+                    print(
+                        "CooperativeLive retry_evidence_failed="
+                        f"{type(evidence_error).__name__}: {evidence_error}",
+                        flush=True,
+                    )
+                print(
+                    "CooperativeLive play_retry=true "
+                    f"attempt={play_failures + 1}/{retry_count + 1} "
+                    f"reason={reason}",
+                    flush=True,
+                )
+                self.recover_after_play_failure(reason)
+                reuse_room = False
+                continue
 
             completed += 1
+            play_failures = 0
             callback = getattr(self, "progress_callback", None)
             if callback is not None:
                 callback(completed, total)
@@ -879,6 +985,11 @@ class CooperativeLiveAction(CustomAction):
             if context.tasker.stopping:
                 return True
             settings = current_cooperative_settings()
+            settings["play_failure_retry_count"] = int(
+                RealtimeProfileStore(
+                    PROJECT_ROOT / "profiles"
+                ).runtime_options().get("play_failure_retry_count", 1)
+            )
 
             def progress_argv(phase: str, total: int):
                 return SimpleNamespace(

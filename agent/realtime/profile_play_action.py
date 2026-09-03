@@ -23,7 +23,7 @@ from maa.context import Context
 from maa.custom_action import CustomAction
 
 from .controller_touch import ControllerTouchDispatcher
-from .debug_recorder import RealtimeDebugRecorder
+from .debug_recorder import RealtimeDebugRecorder, append_lifecycle_event
 from .engine import EngineStats, RealtimeEngine
 from .final_cover import FinalCoverResolution, FinalCoverResolver
 from .game_effect_settings_action import verified_game_visual_settings
@@ -209,6 +209,16 @@ def resolve_local_chart_for_run(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class FinalCoverWaitOutcome:
+    status: str
+    resolution: FinalCoverResolution | None
+    reason: str
+    frames: int
+    playfield_seen: bool
+    image: object | None = None
+
+
 def wait_for_final_cover(
     controller,
     live_run: LiveRunContext,
@@ -219,8 +229,10 @@ def wait_for_final_cover(
     repository: LocalChartRepository | None = None,
     timeout_seconds: float = 60.0,
     poll_interval_seconds: float = 0.02,
-) -> FinalCoverResolution:
-    """在进入演奏场前确认最终封面与准备页身份属于同一谱面。"""
+    observer=None,
+    fallback_selection_available: bool | None = None,
+) -> FinalCoverWaitOutcome:
+    """确认最终封面；识别缺失时保留准备页谱面或降级到视觉演奏。"""
     if not 1 <= float(timeout_seconds) <= 180:
         raise ValueError("final_cover_timeout_seconds 必须在 1..180 之间")
     resolver = FinalCoverResolver(
@@ -238,12 +250,34 @@ def wait_for_final_cover(
         raise RuntimeError(f"最终封面确认缺少准备页证据：{evidence_reason}")
     playfield_detector = PlayfieldDetector()
     playfield_streak = 0
+    last_image = None
+    can_keep_selection = (
+        selection is not None
+        if fallback_selection_available is None
+        else bool(fallback_selection_available)
+    )
     deadline = time.monotonic() + float(timeout_seconds)
     while time.monotonic() < deadline:
         if stopping():
             raise InterruptedError("用户已停止任务")
         image = controller.post_screencap().wait().get()
+        last_image = image
         resolution = resolver.observe(image)
+        playfield_streak = (
+            playfield_streak + 1 if playfield_detector(image) else 0
+        )
+        if observer is not None:
+            observer(
+                image,
+                time.monotonic(),
+                {
+                    "event": "final_cover_observation",
+                    "status": "confirmed" if resolution is not None else "observing",
+                    "frames": resolver.frames,
+                    "playfield_streak": playfield_streak,
+                    "reason": resolver.last_reason,
+                },
+            )
         if resolution is not None:
             print(
                 "RealtimeFinalCover confirmed=true "
@@ -252,20 +286,53 @@ def wait_for_final_cover(
                 f"frames={resolver.frames}",
                 flush=True,
             )
-            return resolution
-        playfield_streak = (
-            playfield_streak + 1 if playfield_detector(image) else 0
-        )
+            return FinalCoverWaitOutcome(
+                status="confirmed",
+                resolution=resolution,
+                reason="confirmed",
+                frames=resolver.frames,
+                playfield_seen=playfield_streak > 0,
+                image=image,
+            )
         if playfield_streak >= 2:
-            raise RuntimeError(
-                "演奏场已出现，但最终封面尚未确认；为避免错谱和漏掉首音已安全终止："
-                f"{resolver.last_reason}"
+            status = (
+                "degraded-selected-chart"
+                if can_keep_selection else "degraded-visual-legacy"
+            )
+            print(
+                "RealtimeFinalCover confirmed=false fallback="
+                f"{status} frames={resolver.frames} reason={resolver.last_reason}",
+                flush=True,
+            )
+            return FinalCoverWaitOutcome(
+                status=status,
+                resolution=None,
+                reason=resolver.last_reason,
+                frames=resolver.frames,
+                playfield_seen=True,
+                image=image,
             )
         if poll_interval_seconds > 0:
             time.sleep(float(poll_interval_seconds))
-    raise RuntimeError(
-        f"{float(timeout_seconds):g} 秒内未确认最终歌曲封面："
-        f"{resolver.last_reason}"
+    status = (
+        "degraded-selected-chart"
+        if can_keep_selection else "degraded-visual-legacy"
+    )
+    print(
+        "RealtimeFinalCover confirmed=false fallback="
+        f"{status} frames={resolver.frames} timeout=true reason={resolver.last_reason}",
+        flush=True,
+    )
+    return FinalCoverWaitOutcome(
+        status=status,
+        resolution=None,
+        reason=(
+            f"{float(timeout_seconds):g} 秒内未确认最终歌曲封面："
+            f"{resolver.last_reason}"
+        ),
+        frames=resolver.frames,
+        playfield_seen=False,
+        image=last_image,
     )
 
 
@@ -360,6 +427,25 @@ def _relative_artifact_path(path) -> str:
         return path.resolve().relative_to(PROJECT_ROOT.resolve()).as_posix()
     except ValueError:
         return path.resolve().as_posix()
+
+
+def _recorder_checkpoint(
+    recorder,
+    image,
+    phase: str,
+    status: str,
+    *,
+    details: dict[str, object] | None = None,
+) -> None:
+    method = getattr(recorder, "save_checkpoint", None)
+    if callable(method):
+        method(image, phase, status, details=details)
+
+
+def _recorder_update_metadata(recorder, live_run: LiveRunContext) -> None:
+    method = getattr(recorder, "update_session_metadata", None)
+    if callable(method):
+        method(live_run.to_mapping())
 
 
 def resolve_life_policy(
@@ -1348,6 +1434,7 @@ class RealtimeProfilePlay(CustomAction):
         verified = None
         settings = None
         visual = None
+        recorder = None
         try:
             controller = context.tasker.controller
             require_profile = bool(params.get("require_profile", True))
@@ -1548,13 +1635,94 @@ class RealtimeProfilePlay(CustomAction):
                 debug_recording=debug_recording,
                 recording_path=None,
             )
+            if debug_recording:
+                recorder = RealtimeDebugRecorder(
+                    PROJECT_ROOT / "debug" / "recordings"
+                )
+            elif diagnostic_trace:
+                recorder = RealtimeDebugRecorder(
+                    PROJECT_ROOT / "debug" / "recordings",
+                    video_enabled=False,
+                )
+            if recorder is not None:
+                live_run = update_live_run(
+                    recording_path=_relative_artifact_path(recorder.output_dir),
+                )
+                recorder.set_session_metadata(live_run.to_mapping())
+                append_lifecycle_event(
+                    recorder.output_dir,
+                    "preflight",
+                    "ready",
+                    details={
+                        "song_id": live_run.song_id,
+                        "song_id_method": live_run.song_id_method,
+                        "song_level": live_run.song_level,
+                        "song_title": live_run.song_title,
+                        "profile_name": live_run.profile_name,
+                        "expected_note_speed": live_run.expected_note_speed,
+                        "actual_note_speed": live_run.actual_note_speed,
+                    },
+                )
+                try:
+                    preflight_image = controller.post_screencap().wait().get()
+                    _recorder_checkpoint(
+                        recorder,
+                        preflight_image,
+                        "preflight",
+                        "ready",
+                        details={
+                            "song_id": live_run.song_id,
+                            "difficulty": live_run.difficulty,
+                        },
+                    )
+                except Exception as checkpoint_error:
+                    append_lifecycle_event(
+                        recorder.output_dir,
+                        "preflight",
+                        "checkpoint-error",
+                        details={
+                            "reason": (
+                                f"{type(checkpoint_error).__name__}: "
+                                f"{checkpoint_error}"
+                            ),
+                        },
+                    )
+                print(
+                    "RealtimeProfilePlay diagnostics="
+                    f"{recorder.output_dir} "
+                    f"mode={'video' if debug_recording else 'trace-only'}",
+                    flush=True,
+                )
             if final_cover_required:
                 # 协力准备页的歌曲身份可能受随机选曲和网络阶段影响，最终封面
                 # 必须独立解析谱面，不能被早先的候选结果锁死。
                 cover_selection = (
                     None if live_run.mode == "cooperative" else selected_chart
                 )
-                cover_resolution = wait_for_final_cover(
+                cover_checkpoint_saved = False
+
+                def observe_final_cover(image, timestamp, diagnostic) -> None:
+                    nonlocal cover_checkpoint_saved
+                    assert recorder is not None
+                    record_phase = getattr(recorder, "record_phase", None)
+                    if callable(record_phase):
+                        record_phase(
+                            image,
+                            timestamp,
+                            "final-cover",
+                            diagnostics=[diagnostic],
+                        )
+                    if not cover_checkpoint_saved:
+                        _recorder_checkpoint(
+                            recorder,
+                            image,
+                            "final-cover",
+                            "started",
+                            details=diagnostic,
+                        )
+                        cover_checkpoint_saved = True
+
+                cover_outcome = wait_for_final_cover(
                     controller,
                     live_run,
                     cover_selection,
@@ -1569,18 +1737,64 @@ class RealtimeProfilePlay(CustomAction):
                     timeout_seconds=float(
                         params.get("final_cover_timeout_seconds", 60.0)
                     ),
+                    observer=(
+                        observe_final_cover if recorder is not None else None
+                    ),
+                    fallback_selection_available=selected_chart is not None,
                 )
-                confirmation = cover_resolution.confirmation
-                selected_chart = cover_resolution.selection
-                chart_timeline = selected_chart.timeline
-                live_run = update_live_run(
-                    song_id=confirmation.song_id,
-                    song_id_method=confirmation.song_id_method,
-                    final_cover_confirmed=True,
-                    final_cover_song_id=confirmation.song_id,
-                    prepared_for_play=True,
-                )
-                if native_requested and native_prearm_deferred:
+                if recorder is not None and cover_outcome.image is not None:
+                    _recorder_checkpoint(
+                        recorder,
+                        cover_outcome.image,
+                        "final-cover",
+                        cover_outcome.status,
+                        details={
+                            "reason": cover_outcome.reason,
+                            "frames": cover_outcome.frames,
+                            "playfield_seen": cover_outcome.playfield_seen,
+                        },
+                    )
+                if cover_outcome.resolution is not None:
+                    confirmation = cover_outcome.resolution.confirmation
+                    selected_chart = cover_outcome.resolution.selection
+                    chart_timeline = selected_chart.timeline
+                    live_run = update_live_run(
+                        song_id=confirmation.song_id,
+                        song_id_method=confirmation.song_id_method,
+                        final_cover_confirmed=True,
+                        final_cover_song_id=confirmation.song_id,
+                        final_cover_status="confirmed",
+                        final_cover_reason=None,
+                        prepared_for_play=True,
+                    )
+                else:
+                    live_run = update_live_run(
+                        final_cover_confirmed=False,
+                        final_cover_song_id=None,
+                        final_cover_status=cover_outcome.status,
+                        final_cover_reason=cover_outcome.reason,
+                        prepared_for_play=selected_chart is not None,
+                    )
+                    if selected_chart is None:
+                        chart_timeline = None
+                        chart_prediction_enabled = False
+                        chart_predict_presses = False
+                        if native_requested:
+                            discard_prearmed_backend(
+                                "final-cover-visual-legacy-fallback"
+                            )
+                        native_requested = False
+                    print(
+                        "RealtimeProfilePlay cover_confirmation=degraded "
+                        f"fallback={cover_outcome.status} "
+                        f"reason={cover_outcome.reason}",
+                        flush=True,
+                    )
+                if (
+                    native_requested
+                    and native_prearm_deferred
+                    and selected_chart is not None
+                ):
                     prepared_selection = prepare_native_for_settings_gate(
                         controller=controller,
                         live_run=live_run,
@@ -1605,6 +1819,18 @@ class RealtimeProfilePlay(CustomAction):
                             "最终封面确认后的 Native 预武装谱面不一致"
                         )
                 live_run = update_live_run(prepared_for_play=False)
+                if recorder is not None:
+                    _recorder_update_metadata(recorder, live_run)
+                    append_lifecycle_event(
+                        recorder.output_dir,
+                        "final-cover",
+                        cover_outcome.status,
+                        details={
+                            "reason": cover_outcome.reason,
+                            "frames": cover_outcome.frames,
+                            "playfield_seen": cover_outcome.playfield_seen,
+                        },
+                    )
         except Exception as exc:
             if context.tasker.stopping:
                 return True
@@ -1634,6 +1860,23 @@ class RealtimeProfilePlay(CustomAction):
                     profile=settings.profile_path.name,
                 )
             try:
+                if recorder is not None:
+                    try:
+                        _recorder_update_metadata(recorder, live_run)
+                    except Exception:
+                        pass
+                    try:
+                        failure_image = controller.post_screencap().wait().get()
+                        _recorder_checkpoint(
+                            recorder,
+                            failure_image,
+                            "preflight",
+                            "error",
+                            details={"reason": reason},
+                        )
+                    except Exception:
+                        pass
+                    recorder.close()
                 write_preflight_terminal_result(
                     output_dir=PROJECT_ROOT / "screencap",
                     params=params,
@@ -1705,7 +1948,6 @@ class RealtimeProfilePlay(CustomAction):
                 flush=True,
             )
         touch = None
-        recorder = None
         native_backend = None
         try:
             if native_requested:
@@ -1740,26 +1982,6 @@ class RealtimeProfilePlay(CustomAction):
                 controller,
                 lambda: context.tasker.stopping,
             )
-            if debug_recording:
-                recorder = RealtimeDebugRecorder(
-                    PROJECT_ROOT / "debug" / "recordings"
-                )
-            elif diagnostic_trace:
-                recorder = RealtimeDebugRecorder(
-                    PROJECT_ROOT / "debug" / "recordings",
-                    video_enabled=False,
-                )
-            if recorder is not None:
-                live_run = update_live_run(
-                    recording_path=_relative_artifact_path(recorder.output_dir),
-                )
-                recorder.set_session_metadata(live_run.to_mapping())
-                print(
-                    "RealtimeProfilePlay diagnostics="
-                    f"{recorder.output_dir} "
-                    f"mode={'video' if debug_recording else 'trace-only'}",
-                    flush=True,
-                )
             playfield_monitor = None
             if final_cover_required and not numeric_life_monitor_enabled:
                 completion_missing_checks = None
@@ -1955,6 +2177,37 @@ class RealtimeProfilePlay(CustomAction):
                 ),
                 startup_timeout_seconds=startup_timeout_seconds,
             )
+            if recorder is not None and stall_safe_capture.last_image is not None:
+                _recorder_checkpoint(
+                    recorder,
+                    stall_safe_capture.last_image,
+                    "engine",
+                    "completed" if stats.completed else "incomplete",
+                    details={
+                        "processed_frames": stats.processed_frames,
+                        "dispatched_actions": stats.dispatched_actions,
+                        "terminal_reason": stats.terminal_reason,
+                    },
+                )
+                _recorder_checkpoint(
+                    recorder,
+                    stall_safe_capture.last_image,
+                    "cleanup",
+                    "failed" if stats.cleanup_failed else "completed",
+                    details={
+                        "cleanup_errors": list(stats.cleanup_errors),
+                        "stopped": stats.stopped,
+                    },
+                )
+                append_lifecycle_event(
+                    recorder.output_dir,
+                    "cleanup",
+                    "failed" if stats.cleanup_failed else "completed",
+                    details={
+                        "cleanup_errors": list(stats.cleanup_errors),
+                        "stopped": stats.stopped,
+                    },
+                )
             if native_requested and not stats.stopped:
                 native_report = dict(stats.native_report)
                 native_failures = _native_execution_gate_failures(
@@ -1968,6 +2221,23 @@ class RealtimeProfilePlay(CustomAction):
                     native_error.realtime_stats = stats
                     raise native_error
         except Exception as exc:
+            if (
+                recorder is not None
+                and "stall_safe_capture" in locals()
+                and stall_safe_capture.last_image is not None
+            ):
+                try:
+                    _recorder_checkpoint(
+                        recorder,
+                        stall_safe_capture.last_image,
+                        "engine",
+                        "error",
+                        details={
+                            "reason": f"{type(exc).__name__}: {exc}",
+                        },
+                    )
+                except Exception:
+                    pass
             error_stats = getattr(exc, "realtime_stats", None)
             if error_stats is not None and context.tasker.stopping:
                 stopped_reason = "用户已停止任务"
@@ -2157,6 +2427,17 @@ class RealtimeProfilePlay(CustomAction):
                     cooperative_mode=(run_mode == "cooperative"),
                     robust_navigation=True,
                 )
+                if recorder is not None and outcome.image is not None:
+                    _recorder_checkpoint(
+                        recorder,
+                        outcome.image,
+                        "result",
+                        outcome.status.value,
+                        details={
+                            "page_state": outcome.page_state,
+                            "reason": outcome.reason,
+                        },
+                    )
             except Exception as exc:
                 reason = (
                     "结算读取异常: "

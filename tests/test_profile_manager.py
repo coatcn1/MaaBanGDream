@@ -143,6 +143,7 @@ def test_selection_state_is_written_atomically(tmp_path):
             "chart_prediction_enabled": True,
             "chart_predict_presses": True,
             "native_realtime_enabled": False,
+            "play_failure_retry_count": 1,
             "calibration_note_speeds": {
                 "Easy": 2.0,
                 "Normal": 2.0,
@@ -175,6 +176,7 @@ def test_runtime_options_default_and_atomic_update_do_not_invalidate_profile(tmp
             "chart_prediction_enabled": True,
             "chart_predict_presses": True,
             "native_realtime_enabled": False,
+            "play_failure_retry_count": 1,
             "calibration_note_speeds": {
             "Easy": 2.0,
             "Normal": 2.0,
@@ -249,6 +251,23 @@ def test_runtime_options_reject_invalid_life_threshold(tmp_path, threshold):
             {
                 "operation": "update-runtime-options",
                 "runtime_options": {"life_safety_enabled": True, "life_exit_threshold": threshold},
+            },
+            root=tmp_path,
+        )
+
+
+@pytest.mark.parametrize("retry_count", [-1, 4, True, 1.5, "two"])
+def test_runtime_options_reject_invalid_play_failure_retry_count(
+    tmp_path,
+    retry_count,
+):
+    with pytest.raises(ValueError, match="play_failure_retry_count"):
+        handle_request(
+            {
+                "operation": "update-runtime-options",
+                "runtime_options": {
+                    "play_failure_retry_count": retry_count,
+                },
             },
             root=tmp_path,
         )
