@@ -697,6 +697,9 @@ class HoldPipeline:
                         start_reason,
                         target_x=target_x,
                     ))
+                    # 记录本轨最近一次 hold 起手时刻，供抑制器拦截同一颗
+                    # 长条头随后被误判成 TAP 的第二次按压。
+                    self._state._hold_started_at_by_lane[note.lane] = now
                 elif (
                     contact not in self._state._active_hold_tail
                     and head >= self._config.judgement_y - 5

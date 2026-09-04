@@ -1309,6 +1309,29 @@ def test_released_hold_tail_cannot_be_rescued_as_a_tap_on_the_same_lane():
     assert lingering_tail == []
 
 
+def test_hold_start_suppresses_same_lane_tap_fragment_next_frame():
+    planner = RealtimePlanner(
+        judgement_y=565, timing_offset_ms=0, rescue_first_visible=True
+    )
+    planner.update([
+        ObservedNote(NoteKind.HOLD, 4, 790, 220, 180, 380, 1.0)
+    ], now=1.0)
+    started = planner.update([
+        ObservedNote(NoteKind.HOLD, 4, 790, 325, 220, 500, 1.02)
+    ], now=1.02)
+    assert [(action.kind, action.reason) for action in started] == [
+        (ActionKind.DOWN, "rescue")
+    ]
+
+    # hold 起手后，同一轨道的头碎片不能再被 first-visible rescue 成 TAP，
+    # 否则同一颗长条会被按两次。
+    fragment = planner.update([
+        ObservedNote(NoteKind.TAP, 4, 790, 562, 100, 18, 1.05)
+    ], now=1.05)
+
+    assert fragment == []
+
+
 def test_released_hold_body_does_not_validate_new_weak_head_on_adjacent_lane():
     """TAP EFFECT 4 regression: a just-released body must not start a new hold.
 
