@@ -516,6 +516,31 @@ class RealtimePerformanceSettingsGate(CustomAction):
                 f"source=configured-values profile={profile or 'calibration-setting'}",
                 flush=True,
             )
+            # 跳过“打开游戏设置页读/改流速”不等于跳过 Native 预武装。单人
+            # 非 deferred 流程依赖这里生成预武装后端；漏掉会让开演前消费
+            # 直接报“不存在或已被消费”，整局零输入。
+            if bool(params.get("defer_native_prearm", False)):
+                discard_prearmed_backend("deferred-until-final-cover")
+                print(
+                    "RealtimePerformanceSettingsGate native_prearm=deferred "
+                    "reason=skip-game-settings",
+                    flush=True,
+                )
+            else:
+                prepare_native_for_settings_gate(
+                    controller=controller,
+                    live_run=current_live_run(),
+                    difficulty=difficulty,
+                    project_root=PROJECT_ROOT,
+                    ready_timeout_s=float(
+                        params.get("native_ready_timeout_seconds", 10.0)
+                    ),
+                    ttl_s=float(
+                        params.get("native_prearm_ttl_seconds", 30.0)
+                    ),
+                )
+            if context.tasker.stopping:
+                discard_prearmed_backend("user-stopped-after-prearm")
             return True
         coordinates = dict(DEFAULT_COORDINATES)
         coordinates.update(params.get("coordinates", {}))
