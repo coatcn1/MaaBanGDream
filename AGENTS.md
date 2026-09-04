@@ -7,7 +7,7 @@
 基于 MaaFramework 的 BanG Dream! 自动化项目。通过 MFAAvalonia GUI 加载 Python Agent，控制 Android 模拟器完成自动演出、实时触控演奏、校准和挑战演出。
 
 - 仓库：`https://github.com/coatcn1/MaaBanGDream`
-- 当前版本：`v1.0.0`
+- 当前版本：`v1.1.0`
 - 许可证：GPL-3.0-only
 
 ## MaaBanGDream 运行布局
@@ -47,7 +47,7 @@ Python:   D:\Documents\workplace\.tools\Miniconda3\envs\maabangdream\python.exe 
 
 ```
 main                                      ← 发布主线
-feature/bestdori-local-chart-repository   ← 当前 MaaBanGDream 开发分支
+feature/cooperative-safety                ← 当前统一开发分支（已合并抽卡、登录下载与协力改动）
 ```
 
 定制 MFAAvalonia 独立开发分支为 `feature/performance-visual-settings`；两个仓库必须分别提交和推送。
@@ -179,6 +179,13 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
 5. **正式演奏时限**：旧的 300 秒上限会在长曲仍演奏时强制失败。正式演奏节点当前为 600 秒，并应在超时、生命保护、用户停止、结算识别等终态记录具体原因。
 6. **禁止含糊日志**：不要写“详情见上一条日志”。终态日志必须包含当前阶段和可执行的具体原因；运行时原因通过 `TaskOutcome` 的 latest failure reason 传递。
 7. **启动恢复必须有界**：未知界面最多按 ESC 恢复 60 秒；仍无法识别主页才重启游戏。登录画面应先识别“点击任意处/开始”，登录阶段不得过早发送 ESC。
+8. **部署必须从包含所有未合并功能的分支进行**：`launch-mfa.ps1` 用当前工作树的 `interface.json` 和 Agent 覆盖运行目录。多个未合并 feature 分支并存时，从缺少某功能的旧分支部署，会把该功能从 MFA 里“部署丢”。当前统一工作分支是 `feature/cooperative-safety`。
+9. **MFA 任务列表有“用户删除记忆”**：某次部署的 interface 缺少某个任务时，MFA 会把它记进 `config/instances/default.json` 的 `CurrentTasks`（`任务名<|||>Entry` 键）当作“用户已删除”，之后 interface 恢复该任务也不会加回。恢复方法：停止 MFA，从 `CurrentTasks` 删掉对应键再启动；不要在 MFA 运行时直接改该文件（内存会覆盖）。
+10. **演出设置自动保存会覆盖用户设置**：MFA 演出设置页在读取 Profile 失败时会把界面默认值整体写回 `profiles/selection.json`，清空用户运行时选项（Native、演出特效、TAP EFFECT、判定辅助、重试次数、校准流速等）。MFA 侧已加“读取成功前禁止自动保存”的保护。新增运行时选项必须四处同步：`profile_store.py` 的 `DEFAULT_RUNTIME_OPTIONS` 与 `_validated_runtime_options`、MFA `PerformanceProfileSettingsUserControlModel.cs` 的属性/加载/Capture、AXAML 开关。
+11. **登录下载确认框会被退出确认的取消模板误命中**：下载框与退出确认框都有灰色“取消”按钮，`quit_confirm_cancel.png` 在下载框上得分 0.952（阈值 0.9）。下载确认必须先于通用模态取消处理；下载进行中用进度标记被动等待，不发送 BACK/ESC。
+12. **流速校准与演出特效设置同类**：`game_effect_settings_enabled=false` 时，开演前不打开齿轮读/改流速，直接信任声明值（`RealtimePerformanceSettingsGate` 已支持跳过）。不要把两者拆成两套开关语义。
+13. **协力准备完毕点击必须确认送达**：点“准备完毕”后要确认按钮消失，最多重试 3 次，防止触控未送达导致倒计时结束后空演奏/跳车。协力结果与一次性弹窗用“点右下角确定 + ESC”交替循环推进（用户验证过可应付大多数页面）。
+14. **抽卡任务的页面陷阱**：左侧卡池列表滑动找“每日3次免费演出招募”时，滑动起点避开列表底部的“生日纪念服装贩售”入口（否则被当成点击进商店）；9.4.3 免费单抽有“TOUCH TO CUT”剪票引导需要点一下；状态判断统一用“点免费按钮后是否出现确认弹窗”，不要用“剩余N回/尚未完成”状态模板（会互相误匹配）。协力漏键抖动只对 Native 路径生效，由 `cooperative_jitter_enabled` 开关控制。
 
 ## 修改后的最低验收
 
