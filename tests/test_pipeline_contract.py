@@ -26,7 +26,8 @@ def test_interface_references_existing_entry_and_resource():
     assert interface["version"] == "1.1.0"
     assert [task["name"] for task in interface["task"]] == [
         "AutoLive", "RealtimeLive", "CooperativeLive", "ContinuousRealtimeLive",
-        "RealtimeCalibration", "ChallengeLive", "ManualFlowRecording",
+        "RealtimeCalibration", "DailyFreeGacha", "ChallengeLive",
+        "ManualFlowRecording",
     ]
     assert {
         task["name"]: task["label"] for task in interface["task"]
@@ -36,6 +37,7 @@ def test_interface_references_existing_entry_and_resource():
         "CooperativeLive": "🤝 协力演出",
         "ContinuousRealtimeLive": "⚡ 一键实时演奏",
         "RealtimeCalibration": "🎯 实时演奏校准",
+        "DailyFreeGacha": "🎁 每日免费抽卡",
         "ChallengeLive": "🏆 挑战演出",
         "ManualFlowRecording": "📹 手动流程录像",
     }
