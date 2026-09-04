@@ -270,6 +270,17 @@ class FinalCoverWaitOutcome:
     image: object | None = None
 
 
+BLACK_BURST_SECONDS = 0.6
+
+
+def _frame_is_black(image) -> bool:
+    """识别协力进入演出前的整屏黑场转场。"""
+    if image is None or getattr(image, "ndim", 0) != 3:
+        return False
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    return bool(float(gray.mean()) < 6.0 and float(gray.std()) < 6.0)
+
+
 def wait_for_final_cover(
     controller,
     live_run: LiveRunContext,
@@ -301,6 +312,7 @@ def wait_for_final_cover(
         raise RuntimeError(f"最终封面确认缺少准备页证据：{evidence_reason}")
     playfield_detector = PlayfieldDetector()
     playfield_streak = 0
+    black_burst_until = float("-inf")
     last_image = None
     can_keep_selection = (
         selection is not None
@@ -313,6 +325,13 @@ def wait_for_final_cover(
             raise InterruptedError("用户已停止任务")
         image = controller.post_screencap().wait().get()
         last_image = image
+        now_mono = time.monotonic()
+        if _frame_is_black(image):
+            # 协力在封面出现前会先整屏黑一下，随后封面或演奏场淡入。黑场
+            # 清空演奏场计数，并进入一小段无 sleep 的密集采样窗口，给短暂
+            # 出现的封面留出匹配机会，而不是在淡入首帧就放弃。
+            playfield_streak = 0
+            black_burst_until = now_mono + BLACK_BURST_SECONDS
         resolution = resolver.observe(image)
         playfield_streak = (
             playfield_streak + 1 if playfield_detector(image) else 0
@@ -320,7 +339,7 @@ def wait_for_final_cover(
         if observer is not None:
             observer(
                 image,
-                time.monotonic(),
+                now_mono,
                 {
                     "event": "final_cover_observation",
                     "status": "confirmed" if resolution is not None else "observing",
@@ -345,7 +364,7 @@ def wait_for_final_cover(
                 playfield_seen=playfield_streak > 0,
                 image=image,
             )
-        if playfield_streak >= 2:
+        if playfield_streak >= 2 and now_mono >= black_burst_until:
             status = (
                 "degraded-selected-chart"
                 if can_keep_selection else "degraded-visual-legacy"
@@ -363,7 +382,7 @@ def wait_for_final_cover(
                 playfield_seen=True,
                 image=image,
             )
-        if poll_interval_seconds > 0:
+        if poll_interval_seconds > 0 and now_mono >= black_burst_until:
             time.sleep(float(poll_interval_seconds))
     status = (
         "degraded-selected-chart"

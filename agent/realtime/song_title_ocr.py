@@ -38,12 +38,27 @@ def normalize_song_title(value: str) -> str:
     )
 
 
+@lru_cache(maxsize=8192)
 def title_similarity(observed: str, expected: str) -> float:
     left = normalize_song_title(observed)
     right = normalize_song_title(expected)
     if not left or not right:
         return 0.0
-    return float(SequenceMatcher(None, left, right).ratio())
+    best = float(SequenceMatcher(None, left, right).ratio())
+    # 固定宽度 OCR 常把标题右/左侧的难度或提示文字一并解码（例如把省略号
+    # “…”读成“今の”），也可能裁掉首尾字符。用所有前缀/后缀与候选曲名的
+    # 最高相似度容忍这类首尾噪声，避免标题本可确认却整局回退 Legacy。
+    for end in range(1, len(left)):
+        best = max(
+            best,
+            float(SequenceMatcher(None, left[:end], right).ratio()),
+        )
+    for start in range(1, len(left)):
+        best = max(
+            best,
+            float(SequenceMatcher(None, left[start:], right).ratio()),
+        )
+    return best
 
 
 def _load_characters(path: Path) -> tuple[str, ...]:
