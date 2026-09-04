@@ -28,6 +28,7 @@ from agent.realtime.native_play import (
     NativeStartPhotogate,
     resolve_native_start_gate_policy,
 )
+from agent.realtime.prepare_popup import CooperativePreparePopupDetector
 from agent.realtime.run_reporting import result_report_payload
 from scripts import native_sync_offline as sync_front
 
@@ -610,6 +611,139 @@ def test_native_start_gate_uses_lifecycle_specific_stability_not_song_offset():
     assert cooperative.mode == "cooperative-playfield-confirmed"
     assert cooperative.stable_duration_ms == 120.0
     assert single.grace_ms == cooperative.grace_ms == 500.0
+
+
+def _synthetic_playfield() -> np.ndarray:
+    """构造可通过 PlayfieldDetector 的 720p 演奏场帧。"""
+    frame = np.full((720, 1280, 3), 28, dtype=np.uint8)
+    cv2.rectangle(frame, (942, 35), (964, 51), (80, 220, 40), -1)
+    cv2.rectangle(frame, (968, 29), (1184, 55), (210, 210, 210), 2)
+    cv2.rectangle(frame, (970, 32), (1181, 52), (80, 220, 40), -1)
+    for center in (190, 340, 490, 640, 790, 940, 1090):
+        cv2.circle(frame, (center, 590), 10, (220, 220, 220), -1)
+    return frame
+
+
+def _synthetic_prepare_popup() -> np.ndarray:
+    """构造带“其他成员正在准备中”弹窗的协力演奏场帧。"""
+    frame = _synthetic_playfield()
+    cv2.rectangle(frame, (430, 400), (850, 545), (250, 250, 250), -1)
+    # 左侧粉红八分音符图标（H=165，保证落入检测器的粉色区间）。
+    cv2.circle(frame, (475, 472), 26, (144, 59, 230), -1)
+    return frame
+
+
+def test_prepare_popup_detector_identifies_only_cooperative_popup():
+    detector = CooperativePreparePopupDetector()
+
+    assert detector(_synthetic_playfield()) is False
+    assert detector(_synthetic_prepare_popup()) is True
+
+
+def test_prepare_popup_detector_handles_scaled_popup():
+    detector = CooperativePreparePopupDetector()
+
+    # 缩放动画中弹窗可能只有完整尺寸的几成，仍必须被识别。
+    frame = _synthetic_playfield()
+    cv2.rectangle(frame, (570, 440), (710, 470), (250, 250, 250), -1)
+    cv2.circle(frame, (590, 455), 6, (144, 59, 230), -1)
+
+    assert detector(frame) is True
+
+
+def test_cooperative_photogate_ignores_prepare_popup_transitions():
+    gate = NativeStartPhotogate(
+        stable_duration_ms=120.0,
+        grace_ms=500.0,
+        latency_ms=30.0,
+        mode="cooperative-playfield-confirmed",
+    )
+    playfield = _synthetic_playfield()
+    popup = _synthetic_prepare_popup()
+
+    assert gate.observe(playfield, 0.00) is None
+    assert gate.observe(playfield, 0.13) is None
+    assert gate.frozen is True
+    # 宽限期内的变化只记忽略，不触发。
+    assert gate.observe(playfield, 0.20) is None
+    assert gate.observe(playfield, 0.65) is None
+
+    # 弹窗突然出现：必须拦截并重置基线，而不是当成第一颗音符。
+    assert gate.observe(popup, 0.70) is None
+    assert gate.triggered is False
+    assert gate.frozen is False
+    assert gate.observe(popup, 0.80) is None
+    assert gate.triggered is False
+    # 弹窗消失同样只重置基线。
+    assert gate.observe(playfield, 0.90) is None
+    assert gate.triggered is False
+
+    # 弹窗结束后重新稳定、度过宽限，真实首音才允许触发。
+    assert gate.observe(playfield, 1.03) is None
+    assert gate.observe(playfield, 1.10) is None
+    assert gate.observe(playfield, 1.60) is None
+    assert gate.frozen is True
+    first_note = playfield.copy()
+    first_note[510:536] = 32
+    anchor = gate.observe(first_note, 2.15)
+
+    assert anchor is not None
+    report = gate.report()
+    assert report["photogate_prepare_popup_enabled"] is True
+    assert report["photogate_prepare_popup_frames"] == 2
+    assert report["photogate_prepare_popup_blocked_events"] == 2
+    event_names = [
+        event["event"] for event in report["photogate_events"]
+    ]
+    assert "prepare-popup-visible" in event_names
+    assert "prepare-popup-gone" in event_names
+
+
+def test_cooperative_photogate_blocks_broad_prepare_dim():
+    gate = NativeStartPhotogate(
+        stable_duration_ms=100.0,
+        grace_ms=0.0,
+        latency_ms=30.0,
+        mode="cooperative-playfield-confirmed",
+    )
+    playfield = _synthetic_playfield()
+
+    assert gate.observe(playfield, 0.00) is None
+    assert gate.observe(playfield, 0.11) is None
+    assert gate.frozen is True
+
+    # 弹窗背景变暗会让判定带全宽变化；即使弹窗主体未被识别，也不能
+    # 把它当成第一颗音符。
+    dimmed = playfield.copy()
+    dimmed[510:536] = 60
+    assert gate.observe(dimmed, 0.20) is None
+    assert gate.triggered is False
+    assert gate.frozen is False
+
+    # 重新建立基线后，窄列音符变化仍正常触发。
+    assert gate.observe(dimmed, 0.31) is None
+    assert gate.observe(dimmed, 0.42) is None
+    assert gate.frozen is True
+    first_note = dimmed.copy()
+    first_note[510:536, 600:680] = 32
+    anchor = gate.observe(first_note, 0.50)
+
+    assert anchor is not None
+    report = gate.report()
+    event_names = [
+        event["event"] for event in report["photogate_events"]
+    ]
+    assert "broad-change-blocked" in event_names
+
+
+def test_single_photogate_does_not_enable_prepare_popup_gate():
+    gate = NativeStartPhotogate(
+        stable_duration_ms=120.0,
+        grace_ms=500.0,
+        mode="single-playfield-first-note",
+    )
+
+    assert gate.report()["photogate_prepare_popup_enabled"] is False
 
 
 def test_engine_waits_for_photogate_then_switches_to_5hz_monitor(monkeypatch):
