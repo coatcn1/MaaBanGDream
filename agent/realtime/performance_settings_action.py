@@ -496,6 +496,27 @@ class RealtimePerformanceSettingsGate(CustomAction):
                 expected_note_speed=expected,
                 profile=profile,
             ))
+        options = RealtimeProfileStore(
+            PROJECT_ROOT / "profiles"
+        ).runtime_options()
+        if not bool(options.get("game_effect_settings_enabled", True)):
+            # 流速校准与演出特效设置同属“开演前改游戏设置页”一类；用户
+            # 关闭演出特效设置后整类跳过，直接信任声明的流速，不再打开
+            # 齿轮读取或修正。下游签名仍需要完整的 actual_note_speed。
+            _VERIFIED[difficulty] = VerifiedPerformanceSettings(
+                difficulty=difficulty,
+                actual_note_speed=expected,
+                expected_note_speed=expected,
+                profile=profile,
+                verified_at=time.monotonic(),
+            )
+            print(
+                "RealtimePerformanceSettingsGate enabled=false skipped=true "
+                f"difficulty={difficulty} expected={expected:.2f} "
+                f"source=configured-values profile={profile or 'calibration-setting'}",
+                flush=True,
+            )
+            return True
         coordinates = dict(DEFAULT_COORDINATES)
         coordinates.update(params.get("coordinates", {}))
         coordinates = {

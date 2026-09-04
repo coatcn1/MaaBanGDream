@@ -505,11 +505,30 @@ class CooperativeLiveFlow:
             self.context, self.action_argv(performance_params)
         ):
             raise RuntimeError("协力准备页流速复核失败")
-        self.click((1129, 610))
+        self.ready_up_and_verify()
         print(
             f"CooperativeLive ready=true difficulty={difficulty} speed_gate=verified",
             flush=True,
         )
+
+    def ready_up_and_verify(self) -> None:
+        """点击“准备完毕”并确认按钮消失，防止触控未送达造成空演奏。"""
+        for attempt in range(3):
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
+            image = self.capture()
+            box = self.template_box(image, "ready_button", 0.90)
+            if box is None:
+                # 按钮已消失：已进入准备完毕/成员等待或加载流程。
+                print(
+                    f"CooperativeLive ready=confirmed attempt={attempt + 1}",
+                    flush=True,
+                )
+                return
+            left, top, width, height = box
+            self.click((left + width // 2, top + height // 2))
+            time.sleep(2.0)
+        raise RuntimeError("点击准备完毕后按钮仍在，触控可能未送达")
 
     def jump_after_download_timeout(self) -> None:
         require_game_foreground(self.controller)

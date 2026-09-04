@@ -51,6 +51,10 @@ def _isolate_native_prearm(monkeypatch):
         "discard_prearmed_backend",
         lambda reason: False,
     )
+    monkeypatch.setattr(
+        "agent.realtime.performance_settings_action.RealtimeProfileStore.runtime_options",
+        lambda _store: {"game_effect_settings_enabled": True},
+    )
 
 
 def test_fixed_digit_template_reader_decodes_two_digit_upper_bound():
@@ -194,6 +198,36 @@ def test_gate_reads_current_speed_and_uses_real_half_tenth_cent_buttons(monkeypa
     assert verified is not None
     assert verified.actual_note_speed == 5.0
     assert verified.profile == "expert.json"
+
+
+def test_gate_skips_speed_read_when_game_effect_settings_disabled(monkeypatch):
+    clear_verified_settings()
+    clicks = []
+    monkeypatch.setattr(
+        "agent.realtime.performance_settings_action._expected_speed",
+        lambda context, params, image: (5.0, "expert.json"),
+    )
+    monkeypatch.setattr(
+        "agent.realtime.performance_settings_action._click",
+        lambda controller, point: clicks.append(point),
+    )
+    monkeypatch.setattr(
+        "agent.realtime.performance_settings_action.RealtimeProfileStore.runtime_options",
+        lambda _store: {"game_effect_settings_enabled": False},
+    )
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=_Controller()),
+    )
+    assert RealtimePerformanceSettingsGate()._run(context, {
+        "difficulty": "Expert",
+        "require_profile": True,
+    })
+    # 关闭演出特效设置后整类跳过：不打开齿轮，不读流速。
+    assert clicks == []
+    verified = verified_settings("Expert")
+    assert verified is not None
+    assert verified.actual_note_speed == 5.0
+    assert verified.expected_note_speed == 5.0
 
 
 def test_gate_fails_closed_when_native_prearm_fails_after_dialog_close(
