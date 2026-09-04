@@ -272,14 +272,20 @@ def resolve_confirmed_chart(
     selection = resolution.selection
     mode = str(getattr(live_run, "mode", "") or "").lower()
     if selection is not None and mode == "cooperative":
-        jittered_path = _cooperative_jittered_chart(
-            selection.path,
-            str(getattr(live_run, "run_id", "")),
-            root,
-        )
-        if jittered_path != selection.path:
-            selection = replace(selection, path=jittered_path)
-            resolution = ChartResolution(selection, resolution.reason)
+        from .profile_store import RealtimeProfileStore
+
+        runtime_options = RealtimeProfileStore(
+            root / "profiles"
+        ).runtime_options()
+        if bool(runtime_options.get("cooperative_jitter_enabled", True)):
+            jittered_path = _cooperative_jittered_chart(
+                selection.path,
+                str(getattr(live_run, "run_id", "")),
+                root,
+            )
+            if jittered_path != selection.path:
+                selection = replace(selection, path=jittered_path)
+                resolution = ChartResolution(selection, resolution.reason)
     return resolution
 
 
