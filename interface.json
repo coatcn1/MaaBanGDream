@@ -93,6 +93,12 @@
       ]
     },
     {
+      "name": "DailyFreeGacha",
+      "label": "🎁 每日免费抽卡",
+      "description": "完成每日演出奖励后，自动抽取“每日3次免费 演出招募”的免费单抽；未完成或次数已耗尽时正常结束。",
+      "entry": "DailyFreeGacha"
+    },
+    {
       "name": "ChallengeLive",
       "label": "🏆 挑战演出",
       "description": "使用已校准的实时引擎演奏当前活动挑战曲。",

@@ -347,8 +347,20 @@ class CommonRecover(CustomAction):
                         if not _wait_unless_stopping(context, interval):
                             return True
                         continue
+                # 数据下载确认框与退出确认框都含灰底“取消”按钮，通用退出
+                # 确认的取消模板会误命中下载框（实测 0.952，高于 0.9 阈值），
+                # 导致机器人把下载当成退出确认而点“取消”、随后 ESC 退回
+                # 标题页。这里先只做识别：下载框在场时跳过本帧的通用取消
+                # 分支，真正的“下载”点击仍放在主页检查之后统一执行。
+                download_confirm_present = False
+                if resource_download_click_node:
+                    result = context.run_recognition(
+                        resource_download_click_node,
+                        image,
+                    )
+                    download_confirm_present = bool(result and result.hit)
                 modal_dismissed = False
-                if not exiting_failed_live:
+                if not exiting_failed_live and not download_confirm_present:
                     for node in modal_cancel_nodes:
                         result = context.run_recognition(node, image)
                         if not result or not result.hit or not result.box:
@@ -419,6 +431,8 @@ class CommonRecover(CustomAction):
                             return True
                         continue
 
+                # 数据下载进行中：识别到稳定页面标题或进度标记后被动等待，
+                # 不在下载期间发送 BACK/ESC 或点击取消。
                 download_page_visible = False
                 for resource_download_page_node in resource_download_page_nodes:
                     result = context.run_recognition(

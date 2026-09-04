@@ -25,6 +25,7 @@ import realtime.performance_settings_action  # noqa: F401 - registration happens
 import realtime.game_effect_settings_action  # noqa: F401 - registration happens at import time
 import realtime.random_song_action  # noqa: F401 - registration happens at import time
 import realtime.cooperative_action  # noqa: F401 - registration happens at import time
+import realtime.daily_free_gacha  # noqa: F401 - registration happens at import time
 
 
 def main() -> None:

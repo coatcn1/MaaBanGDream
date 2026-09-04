@@ -1,0 +1,160 @@
+{
+  "DailyFreeGacha": {
+    "recognition": "DirectHit",
+    "action": "DoNothing",
+    "next": [
+      "DailyFreeGachaProcessConflictGuard"
+    ]
+  },
+  "DailyFreeGachaProcessConflictGuard": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "ProcessConflictGuard",
+    "next": [
+      "DailyFreeGachaRecover"
+    ],
+    "on_error": [
+      "DailyFreeGachaFailure"
+    ],
+    "focus": {
+      "Node.Action.Starting": {
+        "content": "正在检测其他程序占用",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Failed": {
+        "content": "❌ 检测到其他程序占用，本次任务已安全停止",
+        "display": [
+          "log",
+          "toast"
+        ]
+      }
+    }
+  },
+  "DailyFreeGachaRecover": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "CommonRecover",
+    "custom_action_param": {
+      "home_node": "HomeMarker",
+      "modal_cancel_nodes": [
+        "QuitConfirmCancel"
+      ],
+      "click_nodes": [
+        "AutoLiveLoginTap",
+        "AutoLiveLoginNext",
+        "AutoLiveCommonClose",
+        "AutoLiveStorySkipConfirmLarge",
+        "AutoLiveStorySkipConfirm",
+        "AutoLiveStorySkip",
+        "AutoLiveStoryMenu"
+      ],
+      "escape_interval_ms": 1500,
+      "escape_timeout_ms": 60000,
+      "restart_limit": 2,
+      "restart_wait_ms": 5000,
+      "startup_grace_ms": 12000,
+      "login_start_node": "AutoLiveLoginScreenMarker",
+      "login_start_target": [
+        640,
+        635
+      ],
+      "login_marker_priority_attempts": 3,
+      "escape_after_login_start": true,
+      "package": "com.bilibili.star.bili",
+      "login_tap_target": [
+        640,
+        360
+      ]
+    },
+    "next": [
+      "DailyFreeGachaRun"
+    ],
+    "on_error": [
+      "DailyFreeGachaFailure"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 每日免费抽卡主页恢复失败",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "DailyFreeGachaRun": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "DailyFreeGachaRun",
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 每日免费抽卡未完成",
+        "display": [
+          "log"
+        ]
+      }
+    },
+    "on_error": [
+      "DailyFreeGachaFailure"
+    ]
+  },
+  "DailyFreeGachaFailure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "TaskOutcome",
+    "custom_action_param": {
+      "task_name": "DailyFreeGacha",
+      "label": "每日免费抽卡",
+      "status": "failure",
+      "reason": "每日免费抽卡流程未完成",
+      "reason_source": "latest"
+    }
+  },
+  "DailyGachaPoolEntry": {
+    "recognition": "TemplateMatch",
+    "template": "gacha_pool_free_entry.png",
+    "threshold": 0.82,
+    "action": "DoNothing"
+  },
+  "DailyGachaPopupLater": {
+    "recognition": "TemplateMatch",
+    "template": "gacha_popup_later.png",
+    "threshold": 0.85,
+    "action": "DoNothing"
+  },
+  "DailyGachaSwipe": {
+    "recognition": "DirectHit",
+    "action": "Swipe",
+    "begin": [
+      200,
+      500,
+      1,
+      1
+    ],
+    "end": [
+      [
+        200,
+        140,
+        1,
+        1
+      ]
+    ],
+    "duration": [
+      300
+    ],
+    "post_delay": 0
+  },
+  "DailyGachaConfirmYes": {
+    "recognition": "TemplateMatch",
+    "template": "gacha_confirm_yes.png",
+    "threshold": 0.85,
+    "action": "DoNothing"
+  },
+  "DailyGachaTouchCut": {
+    "recognition": "TemplateMatch",
+    "template": "gacha_touch_cut.png",
+    "threshold": 0.85,
+    "action": "DoNothing"
+  }
+}
