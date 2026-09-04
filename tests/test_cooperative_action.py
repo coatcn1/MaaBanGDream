@@ -317,9 +317,80 @@ def test_member_exit_reconnect_is_bounded_and_reuses_original_route():
 
     flow.run_attempt = run_attempt
     flow.dismiss_member_exit = lambda: calls.append("dismiss")
-    flow.ensure_room_page = lambda timeout=15.0: calls.append("room")
+    flow.return_to_room_selection = lambda: calls.append("room")
     assert flow.run() is True
     assert calls == ["dismiss", "room", "dismiss", "room"]
+
+
+def test_member_exit_reconnect_recovers_via_home_when_result_pages_stuck():
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.settings = {"member_exit_policy": "reconnect", "max_reconnects": 3}
+    attempts = iter([MemberExited(), True])
+    recoveries = []
+
+    def run_attempt(reuse_room=False):
+        outcome = next(attempts)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    flow.run_attempt = run_attempt
+    flow.dismiss_member_exit = lambda: None
+    flow.return_to_room_selection = lambda: (
+        _ for _ in ()
+    ).throw(RuntimeError("未识别协力房间选择页"))
+    flow.recover_after_play_failure = lambda reason: recoveries.append(reason)
+
+    assert flow.run() is True
+    assert len(recoveries) == 1
+    assert "未识别协力房间选择页" in recoveries[0]
+
+
+def test_post_score_navigation_failure_recovers_and_continues_next_round():
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.settings = {
+        "entry_method": "normal",
+        "post_live_action": "exit",
+        "count": 2,
+        "member_exit_policy": "fail",
+        "max_reconnects": 3,
+    }
+    attempts = []
+    recoveries = []
+    navigation_failures = iter([RuntimeError("结算后未返回房间")])
+    flow.run_attempt = lambda reuse_room=False: (
+        attempts.append(reuse_room) or True
+    )
+
+    def return_to_room_selection():
+        raise next(navigation_failures)
+
+    flow.return_to_room_selection = return_to_room_selection
+    flow.recover_after_play_failure = lambda reason: recoveries.append(reason)
+
+    assert flow.run() is True
+    assert attempts == [False, False]
+    assert len(recoveries) == 1
+
+
+def test_stay_in_room_failure_finishes_last_round_instead_of_stopping():
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.settings = {
+        "entry_method": "friend",
+        "post_live_action": "stay",
+        "count": 1,
+        "member_exit_policy": "fail",
+        "max_reconnects": 3,
+    }
+    recoveries = []
+    flow.run_attempt = lambda reuse_room=False: True
+    flow.stay_in_room = lambda: (
+        _ for _ in ()
+    ).throw(RuntimeError("未出现是否留在同一房间的提示"))
+    flow.recover_after_play_failure = lambda reason: recoveries.append(reason)
+
+    assert flow.run() is True
+    assert recoveries == []
 
 
 def test_transient_play_failure_retries_the_whole_cooperative_round():

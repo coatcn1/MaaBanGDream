@@ -846,7 +846,31 @@ class CooperativeLiveFlow:
             f"attempt={reconnects}/{reconnect_limit}",
             flush=True,
         )
-        self.ensure_room_page(timeout=15.0)
+        # 成员退出弹窗关闭后，游戏往往还停留在结算页，不能直接要求
+        # “房间选择页”出现。先把剩余结算页推进回房间/主页；仍失败则走
+        # 主页恢复再重进，避免因为识别不到房间页把整个任务报错停掉。
+        try:
+            self.return_to_room_selection()
+        except MemberExited:
+            try:
+                self.recover_after_play_failure("成员退出弹窗反复出现")
+            except Exception as recovery_error:
+                raise RuntimeError(
+                    "成员退出后恢复失败："
+                    f"{type(recovery_error).__name__}: {recovery_error}"
+                ) from recovery_error
+        except InterruptedError:
+            raise
+        except Exception as exc:
+            try:
+                self.recover_after_play_failure(
+                    f"成员退出后未回到房间：{type(exc).__name__}: {exc}"
+                )
+            except Exception as recovery_error:
+                raise RuntimeError(
+                    "成员退出后恢复失败："
+                    f"{type(recovery_error).__name__}: {recovery_error}"
+                ) from recovery_error
         return reconnects
 
     def run(self) -> bool:
@@ -967,6 +991,26 @@ class CooperativeLiveFlow:
                     reconnects = next_reconnects
                     reuse_room = False
                     continue
+                except InterruptedError:
+                    raise
+                except Exception as exc:
+                    if is_last:
+                        print(
+                            "CooperativeLive stay_skipped last_round=true "
+                            f"reason={type(exc).__name__}: {exc}",
+                            flush=True,
+                        )
+                        return True
+                    print(
+                        "CooperativeLive stay=recover "
+                        f"reason={type(exc).__name__}: {exc}",
+                        flush=True,
+                    )
+                    self.recover_after_play_failure(
+                        f"结算后未返回房间：{type(exc).__name__}: {exc}"
+                    )
+                    reuse_room = False
+                    continue
                 reuse_room = True
             elif not is_last:
                 try:
@@ -976,6 +1020,19 @@ class CooperativeLiveFlow:
                     if next_reconnects is None:
                         return False
                     reconnects = next_reconnects
+                except InterruptedError:
+                    raise
+                except Exception as exc:
+                    # 本局已经计入完成；结算页面没有走回房间时恢复主页并继续
+                    # 下一局，而不是把识别失败当成整个任务的致命错误。
+                    print(
+                        "CooperativeLive post_score=recover "
+                        f"reason={type(exc).__name__}: {exc}",
+                        flush=True,
+                    )
+                    self.recover_after_play_failure(
+                        f"结算后未返回房间：{type(exc).__name__}: {exc}"
+                    )
                 reuse_room = False
         return True
 
