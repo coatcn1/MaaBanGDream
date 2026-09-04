@@ -103,6 +103,100 @@ D:\Documents\workplace\.tools\Miniconda3\envs\maabangdream\python.exe -m pytest 
 
 pytest 临时目录固定在 `.local/pytest-<进程号>`（Git 忽略），不使用系统 AppData。
 
+## 演出类型流程
+
+任务入口定义在 `interface.json` 的 `task`，每个入口对应 `resource/pipeline/*.json`。
+所有演出任务都先经过进程互斥检查，再用 `CommonRecover` 恢复主页/登录；带次数的任务
+在每局结束回主页并由 `TaskProgress`/`TaskOutcome` 报告。单局演奏的统一核心是
+`RealtimeProfilePlay`（`agent/realtime/profile_play_action.py`）。
+
+### 0. RealtimeProfilePlay：单局演奏通用内部流程
+
+1. 解析运行时选项与 Profile，确认游戏前台，校验环境签名（分辨率/DPI/帧率/画质/流速）。
+2. 从准备页身份解析本地谱面（`resolve_confirmed_chart`）；Native 可用时消费预武装后端
+   （`consume_prearmed_backend`）。
+3. 建立 `debug/recordings/<run_id>` 证据包并保存 preflight 截图。
+4. 需要最终封面复核的模式执行 `wait_for_final_cover`：封面 pHash + 等级 + 标题；黑场转场
+   期间密集采样；失败时保留准备页谱面或降级 Legacy。
+5. Native 路径：`NativeStartPhotogate` 首音门控（生命条 + 六轨判定标记、稳定窗口、500ms
+   宽限、协力“其他成员正在准备中”弹窗拦截）→ `NativeMinitouchBackend` 启动 →
+   C++ PlaybackSession 滚动发布 → 约 5Hz 生命/终态监控。
+   Legacy 路径：`NoteDetector` + `RealtimePlanner` + `ControllerTouchDispatcher` 60FPS
+   视觉演奏，可选数值生命保护。
+6. 终态判定（结算/生命失败/用户停止/超时）→ 释放全部触点 → Native 完整性门禁 →
+   写 `screencap/realtime-result-*.json`。
+7. 结果处理：单人/挑战解析判定并回写 FAST/SLOW timing offset，协力只推进结算；失败按
+   `play_failure_retry_count` 重试。
+
+### 1. 单人实时演奏（RealtimeLive，入口 RealtimeMultiLive）
+
+1. 进程互斥 → `CommonRecover` 主页 → `RealtimeGameEffectSettingsGate` 演出特效设置
+   （`game_effect_settings_enabled=false` 时跳过）。
+2. 局循环：主页 → 演出选择（`LiveSelectFind`）→ 自由演出 → 歌曲选择标记 →
+   `RealtimeDifficultySelect`（点击目标难度并读等级/标题/封面身份，确认本地谱面）。
+3. 准备页按正式/排练分路：
+   - 正式：切到正式标记，检查必须有可用 Profile，执行 `RealtimeFormalPreflight`
+     （关闭自动演出、3D Cut-in、3D/MV 显示）和 `RealtimePerformanceSettingsGate`
+     （流速；跳过时仍执行 Native 预武装），开始后进入 `RealtimeProfilePlay`。
+   - 排练：关闭 Demo 演出显示 → 同上门禁 → 开始 → `RealtimeProfilePlay`（rehearsal 参数）。
+4. 每局结束 `CommonRecover` 回主页 → `TaskProgress` 计数 → 循环或 `TaskOutcome`。
+
+### 2. 协力演出（CooperativeLive）
+
+1. `CooperativeLiveConfigure` 依次配置：入房方式/档位/房号/难度/次数/结算动作/成员退出
+   策略/调试。
+2. 主页 → 演出选择 → 协力入口；按配置进普通房、好友邀请或私房；`verify_room_entry`
+   确认已离开房间选择页。
+3. 房间准备：等准备页 → 点难度并复核 → 演出特效/流速门禁（跳过时仍处理预武装/推迟）→
+   点“准备完毕”并确认按钮消失（最多 3 次）。
+4. `RealtimeProfilePlay`（cooperative 参数）：最终封面必确认（黑场与 5 封面准备页处理）；
+   Native deferred 预武装；首拍门控拦截“其他成员正在准备中”弹窗；
+   `cooperative_jitter_enabled` 时末尾漏 1~2 个单点。
+5. 结算：`cooperative_result=advanced`（右下角 + ESC 循环推进到 PGGBM 并返回）；之后
+   `return_to_room_selection` 回房间选择，好友/私房走 `stay_in_room`；成员退出按策略
+   确认结束或重连。
+6. 结算后识别不到房间页：先继续推进剩余结算页，仍失败走 `CommonRecover`（允许重启游戏）
+   恢复主页继续下一局，不终止任务；最后一局 stay 失败直接按完成返回。
+7. 次数循环 → `CooperativeLiveFinalize` 回主页 → `TaskOutcome`。
+
+### 3. 一键实时演奏（ContinuousRealtimeLive）
+
+1. 进程互斥；要求最近 15 分钟内有演出视觉设置读回复核（`require_recent_visual_settings`）。
+2. 被动监听：每 0.1s 截图检测生命条（数值 ≥20 连续 3 帧）；检测到歌曲开始就调用一次
+   `RealtimeProfilePlay`（`ignore_note_speed`、无生命保护、`require_completion=false`），
+   打完继续监听下一首，直到用户停止。
+3. 停止/失败保存最后一帧诊断截图到 `debug/recordings/listener-*`。
+
+### 4. 实时校准（RealtimeCalibration）
+
+1. 进程互斥 → 主页 → 演出特效门禁 → 读难度/歌曲模式/续跑模式/调试选项。
+2. `CalibrationSessionStore` 新建或续跑会话（`auto`/`restart`）；环境签名一致才复用；
+   生成 `accepted=false` 的候选 Profile。
+3. 阶段固定为 `rehearsal-1`（一首排练）→ `formal-validation`（一首正式验证）。
+4. 每局用 `calibration_round_plan` 构造 override 跑 `RealtimeProfilePlay`；FAST/SLOW
+   收敛结果回写 timing offset；排练失败/技术故障可暂停续跑，正式局生命归零直接拒绝。
+5. 正式验证通过条件：结果有效、完成、存活且 miss<10；通过后候选 Profile 标记
+   `accepted=true` 并写校准会话报告。
+
+### 5. 挑战演出（ChallengeLive）
+
+1. 进程互斥 → 主页 → 演出特效门禁 → 局数门控 → `RealtimeProfileCheck`。
+2. 主页 → 演出选择 → 挑战入口 → 歌曲标记 → `RealtimeDifficultySelect` → 准备页。
+3. 挑战点数选择/确认 → 乐队标记 → `RealtimeFormalPreflight`（关闭自动演出、3D Cut-in、
+   3D/MV）→ `RealtimePerformanceSettingsGate` → 开始 → `RealtimeProfilePlay`。
+4. 结束回主页 → 计数循环 → `TaskOutcome`。
+
+### 6. 自动演出（AutoLive）
+
+1. 进程互斥 → 主页 → 演出选择 → 自由演出 → 选难度 → 准备页。
+2. 模板识别自动演出开关（开/关）与配额耗尽；点开始后被动等结算（`CommonRecover`），
+   回主页循环计数。此任务不使用实时触控引擎。
+
+### 非演出任务
+
+- `DailyFreeGacha`（每日免费抽卡）和 `ManualFlowRecording`（手动流程录制）不属于演出流程，
+  需要时再单独文档化。
+
 ## 需要警惕的点
 
 1. **修改代码后必须重新部署**：MFA 不会自动读取仓库资源。改 `resource/` 或 `agent/` 后务必跑 `launch-mfa.ps1`。
