@@ -266,11 +266,16 @@ class CooperativeLiveFlow:
         *,
         timeout: float,
         interval: float = 0.35,
+        detect_member_exit: bool = True,
     ) -> tuple[str | None, np.ndarray]:
         deadline = time.monotonic() + timeout
         image = self.capture()
         while True:
-            if self.visible(image, "member_exit_title", 0.93):
+            if detect_member_exit and self.visible(
+                image,
+                "member_exit_title",
+                0.93,
+            ):
                 raise MemberExited("协力成员退出房间")
             for name in names:
                 if name == "playfield":
@@ -576,7 +581,13 @@ class CooperativeLiveFlow:
         same pipeline recogniser as task startup so its proven 0.82 threshold
         remains the single source of truth.
         """
-        state, image = self.wait_for(names, timeout=timeout)
+        # 演出结束后的结算页面不会再出现“成员退出”弹窗；此处关闭该检查，
+        # 避免结算导航被残留模板命中打断，把弹窗处理限制在房间/准备阶段。
+        state, image = self.wait_for(
+            names,
+            timeout=timeout,
+            detect_member_exit=False,
+        )
         if state is not None:
             return state
         if self.pipeline_box(image, "CooperativeHomeMarker") is not None:

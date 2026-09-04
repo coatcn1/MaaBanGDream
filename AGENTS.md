@@ -285,7 +285,7 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
 17. **Legacy 演奏的长条头不能既 DOWN 又 TAP**：视觉回退局里，hold 起手后其头部碎片会在后续帧被 first-visible rescue 成同轨道 TAP，一颗长条被按两次。抑制器必须记录各轨最近 hold 起手时刻，在 `hold_start_suppress_seconds` 窗口内拦截同轨道 TAP/FLICK；Native 路径不受影响。
 18. **协力黑场转场不能被当成“没有封面”**：准备完成后游戏会先整屏黑一下，随后封面或演奏场淡入；final cover 等待在黑场时进入无 sleep 的密集采样窗口，并在该窗口结束前不因演奏场出现而放弃。标题 OCR 还会把省略号或右侧提示读成杂字（如“…”→“今の”），`title_similarity` 必须容忍首尾噪声，否则准备页谱面无法确认。
 19. **跳过演出设置页不能跳过 Native 预武装**：`game_effect_settings_enabled=false` 时 `RealtimePerformanceSettingsGate` 直接返回，但单人非 deferred 流程的 Native 预武装就在这个门禁里；跳过时仍必须调用 `prepare_native_for_settings_gate`（或按 `defer_native_prearm` 推迟），否则开演前消费会报“预武装不存在或已被消费”，整局零输入。
-20. **协力结算后识别不到房间页不能终止任务**：成员退出弹窗关闭后往往还在结算页，重连不能直接 `ensure_room_page`；应先继续推进结算回房间/主页，仍失败走 `CommonRecover` 重启游戏再进。非 stay 路径结算回不去时把本局计入完成并恢复主页继续下一局，最后一局 stay 失败直接按完成返回。
+20. **协力结算后识别不到房间页不能终止任务**：成员退出弹窗关闭后往往还在结算页，重连不能直接 `ensure_room_page`；应先继续推进结算回房间/主页，仍失败走 `CommonRecover` 重启游戏再进。非 stay 路径结算回不去时把本局计入完成并恢复主页继续下一局，最后一局 stay 失败直接按完成返回。演出结束后的结算导航不识别成员退出弹窗：`wait_for_post_score_destination` 必须传 `detect_member_exit=False`，成员退出检测只保留在房间/准备阶段。
 
 ## 修改后的最低验收
 

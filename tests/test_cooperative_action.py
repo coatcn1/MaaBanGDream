@@ -548,7 +548,7 @@ def test_stay_in_room_confirms_repeat_popup_and_verifies_lobby(monkeypatch):
     flow = object.__new__(CooperativeLiveFlow)
     flow.settings = {"entry_method": "friend"}
     states = iter(["repeat_room_title", "room_wait"])
-    flow.wait_for = lambda names, timeout: (
+    flow.wait_for = lambda names, timeout, **kwargs: (
         next(states),
         np.zeros((720, 1280, 3), dtype=np.uint8),
     )
@@ -614,7 +614,7 @@ def test_stay_in_room_rechecks_repeat_popup_after_every_accelerated_back(monkeyp
     # There can be any number and kind of result pages between the settled
     # cooperative score and the repeat-room popup.
     states = iter([None, None, None, "repeat_room_title", "room_wait"])
-    flow.wait_for = lambda names, timeout: (
+    flow.wait_for = lambda names, timeout, **kwargs: (
         next(states),
         np.zeros((720, 1280, 3), dtype=np.uint8),
     )
@@ -652,7 +652,7 @@ def test_return_to_room_selection_accelerates_each_page_without_extra_match():
         tasker=SimpleNamespace(stopping=False, controller=Controller())
     )
     states = iter([None, "room_search"])
-    flow.wait_for = lambda names, timeout: (
+    flow.wait_for = lambda names, timeout, **kwargs: (
         next(states),
         np.zeros((720, 1280, 3), dtype=np.uint8),
     )
@@ -666,6 +666,23 @@ def test_return_to_room_selection_accelerates_each_page_without_extra_match():
         ("key", 4),
         ("click", (1279, 719)),
     ]
+
+
+def test_post_score_wait_ignores_member_exit_template(monkeypatch):
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.capture = lambda: np.zeros((720, 1280, 3), dtype=np.uint8)
+
+    def visible(image, name, threshold=0.9):
+        return name == "member_exit_title"
+
+    flow.visible = visible
+    flow.pipeline_box = lambda image, node: None
+    monkeypatch.setattr(cooperative_action.time, "sleep", lambda _seconds: None)
+
+    assert flow.wait_for_post_score_destination(
+        ("room_search", "live_entry"),
+        timeout=0.01,
+    ) is None
 
 
 def test_return_to_room_selection_recognizes_home_and_reenters_before_next_round():
@@ -687,7 +704,7 @@ def test_return_to_room_selection_recognizes_home_and_reenters_before_next_round
     unknown = np.zeros((1, 1, 3), dtype=np.uint8)
     home = np.ones((1, 1, 3), dtype=np.uint8)
     frames = iter([(None, unknown), (None, home)])
-    flow.wait_for = lambda names, timeout: next(frames)
+    flow.wait_for = lambda names, timeout, **kwargs: next(frames)
     flow.pipeline_box = lambda image, node: (
         SimpleNamespace(x=0, y=0, w=1, h=1)
         if image is home and node == "CooperativeHomeMarker"
