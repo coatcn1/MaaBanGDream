@@ -228,6 +228,38 @@ def resolve_local_chart_for_run(
     )
 
 
+def _effective_native_chart_selection(
+    selected: Any,
+    prepared: Any,
+) -> Any:
+    """校验最终封面谱面与 Native 预武装谱面，返回本轮实际消费的谱面。
+
+    协力漏键抖动会基于同一首歌生成 run 特定的 jittered 副本；副本路径
+    不同但歌曲身份一致，必须以预武装副本为准，否则正式消费会因缓存键
+    不一致而失败。真正的歌曲/难度不一致仍必须硬失败。
+    """
+    if prepared is None:
+        raise RuntimeError("最终封面确认后的 Native 预武装谱面不一致")
+    if getattr(prepared, "path", None) == getattr(selected, "path", None):
+        return selected
+    same_song = (
+        getattr(prepared, "bestdori_song_id", None)
+        == getattr(selected, "bestdori_song_id", None)
+        and str(getattr(prepared, "difficulty", "")).strip().lower()
+        == str(getattr(selected, "difficulty", "")).strip().lower()
+    )
+    prepared_level = getattr(prepared, "level", None)
+    selected_level = getattr(selected, "level", None)
+    same_level = (
+        prepared_level is None
+        or selected_level is None
+        or int(prepared_level) == int(selected_level)
+    )
+    if not same_song or not same_level:
+        raise RuntimeError("最终封面确认后的 Native 预武装谱面不一致")
+    return prepared
+
+
 @dataclass(frozen=True, slots=True)
 class FinalCoverWaitOutcome:
     status: str
@@ -1827,16 +1859,17 @@ class RealtimeProfilePlay(CustomAction):
                             params.get("native_prearm_ttl_seconds", 30.0)
                         ),
                     )
-                    if (
-                        prepared_selection is None
-                        or prepared_selection.path != selected_chart.path
-                    ):
+                    try:
+                        selected_chart = _effective_native_chart_selection(
+                            selected_chart,
+                            prepared_selection,
+                        )
+                    except RuntimeError:
                         discard_prearmed_backend(
                             "final-cover-prearm-chart-mismatch"
                         )
-                        raise RuntimeError(
-                            "最终封面确认后的 Native 预武装谱面不一致"
-                        )
+                        raise
+                    chart_timeline = selected_chart.timeline
                 live_run = update_live_run(prepared_for_play=False)
                 if recorder is not None:
                     _recorder_update_metadata(recorder, live_run)
