@@ -205,9 +205,10 @@ def _cooperative_jittered_chart(
 ) -> Path:
     """协力模式按 run_id 确定性漏掉 1~2 个普通单点，避免整局全 P。
 
-    首音是 photogate 的时钟锚点，漏掉首音会破坏整局节奏，因此从第二个
-    单点开始随机挑选。每次 run 的落点不同，但同一次 run 内两次解析结果
-    一致，保证预武装与正式消费拿到同一份谱面。
+    首音是 photogate 的时钟锚点，漏掉首音会破坏整局节奏，因此漏键固定
+    放在整曲末尾的最后 1~2 个单点，中段节奏不受影响。漏 1 个还是 2 个
+    由 run_id 决定，同一次 run 内两次解析结果一致，保证预武装与正式
+    消费拿到同一份谱面。
     """
     try:
         payload = json.loads(Path(chart_path).read_text(encoding="utf-8"))
@@ -226,7 +227,9 @@ def _cooperative_jittered_chart(
         return Path(chart_path)
     rng = random.Random(hashlib.sha1(run_id.encode("utf-8")).digest())
     drops = min(len(candidates), rng.randint(1, 2))
-    dropped = sorted(rng.sample(candidates, drops), reverse=True)
+    # 从全部单点的末尾取最后 1~2 个；candidates 已排除首音，因此
+    # 首音不会被删除，删除下标降序保证原列表删除安全。
+    dropped = sorted(candidates[-drops:], reverse=True)
     jittered = json.loads(json.dumps(payload, ensure_ascii=False))
     for index in dropped:
         del jittered["chart"][index]
