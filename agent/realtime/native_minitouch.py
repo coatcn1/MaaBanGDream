@@ -27,6 +27,22 @@ _DEVICE_BINARY = "/data/local/tmp/minitouch_maabangdream"
 _VENDOR_ROOT = Path(__file__).resolve().parent / "native" / "vendor" / "minitouch"
 
 
+def _parse_surface_rotation(dumpsys_input: str) -> int:
+    """从 `dumpsys input` 输出解析 SurfaceOrientation，失败默认 0。"""
+    for line in str(dumpsys_input).splitlines():
+        line = line.strip()
+        if line.startswith("SurfaceOrientation:"):
+            value = line.split(":", 1)[1].strip()
+            try:
+                rotation = int(value)
+            except ValueError:
+                return 0
+            if 0 <= rotation <= 3:
+                return rotation
+            return 0
+    return 0
+
+
 class MinitouchStartError(RuntimeError):
     """minitouch 无法在设备上启动或握手失败。"""
 
@@ -54,6 +70,7 @@ class NativeMinitouchDevice:
         self._max_x = 0
         self._max_y = 0
         self._max_contacts = 0
+        self._surface_rotation = 0
         self._stderr_thread: threading.Thread | None = None
         self._stderr_lines: deque[str] = deque(maxlen=40)
         self._log_thread: threading.Thread | None = None
@@ -102,6 +119,10 @@ class NativeMinitouchDevice:
     @property
     def max_contacts(self) -> int:
         return self._max_contacts
+
+    @property
+    def surface_rotation(self) -> int:
+        return self._surface_rotation
 
     @property
     def recent_stderr(self) -> list[str]:
@@ -401,6 +422,14 @@ class NativeMinitouchDevice:
         self._max_contacts = int(parts[1])
         self._max_x = int(parts[2])
         self._max_y = int(parts[3])
+        # MuMu 等模拟器的物理触摸面可能是竖屏（如 720x1280），而游戏截图
+        # 是横屏；读取当前 SurfaceOrientation，后续发布命令时据此把逻辑
+        # 坐标映射回物理坐标，避免所有触点被压到同一列。
+        try:
+            rotation_text = self._run_adb("shell", "dumpsys", "input")
+        except MinitouchStartError:
+            rotation_text = ""
+        self._surface_rotation = _parse_surface_rotation(rotation_text)
         if handshake.get("$"):
             try:
                 self._pid = int(handshake["$"].split()[1])
