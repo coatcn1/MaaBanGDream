@@ -72,6 +72,7 @@ class PlayfieldLifecycleMonitor:
         confirm_checks: int = 2,
         missing_checks: int | None = 10,
         active_check_interval_seconds: float = 0.2,
+        start_gate: Any | None = None,
     ) -> None:
         if confirm_checks < 1:
             raise ValueError("confirm_checks 必须大于 0")
@@ -80,6 +81,7 @@ class PlayfieldLifecycleMonitor:
         if active_check_interval_seconds < 0:
             raise ValueError("active_check_interval_seconds 不能为负数")
         self.detector = detector or PlayfieldDetector()
+        self.start_gate = start_gate
         self.confirm_checks = int(confirm_checks)
         self.missing_checks = (
             None if missing_checks is None else int(missing_checks)
@@ -107,6 +109,14 @@ class PlayfieldLifecycleMonitor:
         if self.completed:
             return "completed"
         timestamp = float(now)
+        if not self.active and self.start_gate is not None:
+            self.checks += 1
+            if self.start_gate.observe(image, timestamp) is None:
+                return "waiting"
+            # 仅消费首音出现这一事实；Legacy 不套用 Native 的谱面时钟补偿。
+            self.mark_active(timestamp)
+            print(f"RealtimePlayfield first_note=true gate={self.start_gate.report()}", flush=True)
+            return "active"
         if self.active and timestamp < self.next_active_check_at:
             return "missing" if self.missing_streak > 0 else "active"
         visible = bool(self.detector(image))

@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from agent.realtime import profile_play_action
 from agent.realtime.chart_repository import ChartResolution
@@ -12,6 +13,88 @@ from agent.realtime.song_identity import (
     FINAL_SONG_JACKET_ROI,
     fingerprint_jacket,
 )
+
+
+@pytest.mark.parametrize("supply_preflight_black", [False, True])
+def test_ordered_startup_ignores_ready_page_until_black(monkeypatch, supply_preflight_black):
+    cover, song_id = final_cover_frame()
+    black = np.zeros_like(cover)
+    clock = [0.0]
+    observed = []
+    # 即使准备页同时误命中封面和演奏场，也必须先观察本局黑场。
+    frames = iter([cover, cover, black, cover] if not supply_preflight_black else [cover])
+
+    class Controller:
+        def post_screencap(self):
+            clock[0] += 0.1
+            image = next(frames)
+            return SimpleNamespace(wait=lambda: SimpleNamespace(get=lambda: image))
+
+    monkeypatch.setattr(profile_play_action.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(profile_play_action, "PlayfieldDetector", lambda: lambda _: True)
+    outcome = wait_for_final_cover(
+        Controller(), SimpleNamespace(song_level=28, song_title="SAVIOR OF SONG"),
+        selection(song_id), "Expert", lambda: False,
+        timeout_seconds=1, poll_interval_seconds=0, require_black_transition=True,
+        initial_image=black if supply_preflight_black else None,
+        observer=lambda image, now, detail: observed.append(detail["status"]),
+    )
+    assert outcome.status == "confirmed"
+    assert observed == (["black-transition", "confirmed"] if supply_preflight_black else
+                        ["waiting-black", "waiting-black", "black-transition", "confirmed"])
+
+
+def test_ordered_startup_never_degrades_or_completes_without_black(monkeypatch):
+    ready, song_id = final_cover_frame()
+    clock = [0.0]
+
+    class Controller:
+        def post_screencap(self):
+            clock[0] += 0.2
+            return SimpleNamespace(wait=lambda: SimpleNamespace(get=lambda: ready))
+
+    monkeypatch.setattr(profile_play_action.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(profile_play_action, "PlayfieldDetector", lambda: lambda _: True)
+    with pytest.raises(RuntimeError, match="全黑开演转场"):
+        wait_for_final_cover(
+            Controller(), SimpleNamespace(song_level=28, song_title="SAVIOR OF SONG"),
+            selection(song_id), "Expert", lambda: False,
+            timeout_seconds=1, poll_interval_seconds=0, require_black_transition=True,
+        )
+
+
+def test_ordered_startup_stop_does_not_capture_or_fallback():
+    with pytest.raises(InterruptedError):
+        wait_for_final_cover(
+            None, SimpleNamespace(song_level=28, song_title="SAVIOR OF SONG"),
+            selection(final_cover_frame()[1]), "Expert", lambda: True,
+            require_black_transition=True,
+        )
+
+
+def test_opening_black_after_false_ready_playfield_is_not_completion(monkeypatch):
+    ready, song_id = final_cover_frame()
+    black = np.zeros_like(ready)
+    clock = [0.0]
+    states = []
+
+    class Controller:
+        def post_screencap(self):
+            clock[0] += 0.1
+            image = ready if clock[0] < 0.3 else black
+            return SimpleNamespace(wait=lambda: SimpleNamespace(get=lambda: image))
+
+    monkeypatch.setattr(profile_play_action.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(profile_play_action, "PlayfieldDetector", lambda: lambda image: image is ready)
+    with pytest.raises(RuntimeError, match="黑场后的歌曲封面或完整演奏场"):
+        wait_for_final_cover(
+            Controller(), SimpleNamespace(song_level=28, song_title="SAVIOR OF SONG"),
+            selection(song_id), "Expert", lambda: False,
+            timeout_seconds=1, poll_interval_seconds=0, require_black_transition=True,
+            observer=lambda image, now, detail: states.append(detail["status"]),
+        )
+    assert states[:2] == ["waiting-black", "waiting-black"]
+    assert set(states[2:]) == {"black-transition"}
 
 
 def final_cover_frame(seed: int = 7) -> tuple[np.ndarray, str]:

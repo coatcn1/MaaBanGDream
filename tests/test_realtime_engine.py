@@ -1140,6 +1140,27 @@ def test_engine_can_gate_and_complete_without_numeric_life_detection():
     assert touch.closed == 1
 
 
+def test_engine_does_not_play_or_finish_before_first_note():
+    engine, detector, planner, touch, capture = build()
+
+    class NoFirstNote:
+        def observe(self, image, now):
+            return None
+
+    # 准备页误匹配后消失，仍不能触发音符检测、生命监控或结算。
+    engine.playfield_monitor = PlayfieldLifecycleMonitor(
+        detector=lambda _: True, start_gate=NoFirstNote(), missing_checks=1,
+    )
+    stats = engine.run(
+        capture, lambda: False, duration_seconds=2, target_fps=60,
+        startup_timeout_seconds=1,
+    )
+    assert not stats.completed
+    assert stats.dispatched_actions == 0
+    assert planner.updates == 0
+    assert touch.closed == 1
+
+
 def test_invisible_transition_frames_do_not_trigger_life_safety():
     engine, _, planner, touch, capture = build()
     triggered = []

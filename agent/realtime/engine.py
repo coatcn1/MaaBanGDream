@@ -554,6 +554,13 @@ class RealtimeEngine:
                         (self.clock() - stage_started) * 1000,
                     )
                     if playfield_state == "waiting":
+                        gate = getattr(self.playfield_monitor, "start_gate", None)
+                        record_phase = getattr(self.debug_recorder, "record_phase", None)
+                        if gate is not None and callable(record_phase):
+                            record_phase(image, now, "first-note-gate", diagnostics=[{
+                                "event": "waiting-first-note",
+                                **gate.report(),
+                            }])
                         frames += 1
                         if now - started_at >= startup_timeout_seconds:
                             startup_timed_out = True
