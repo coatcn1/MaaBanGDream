@@ -805,7 +805,31 @@ void test_chart_48_mixed_groups_share_unrelated_first_phase() {
 
 }  // namespace
 
+void test_commit_intervals_do_not_accumulate_phase() {
+    mbdr::TouchLatencyOffsets offsets;
+    offsets.interval_ms = 0.1;
+    mbdr::TouchScriptCompiler compiler(offsets);
+    std::vector<mbdr::ScheduledAction> actions;
+    for (int i = 0; i < 100; ++i) {
+        actions.push_back(action(mbdr::ActionKind::Tap, 0, i * 0.1));
+    }
+    const auto lines = compiler.compile(actions, mbdr::EngineConfig{}, 0.0);
+    // 用恒定命令间隔模拟设备；遗漏 commit 的间隔会随音符数累积。
+    double elapsed = 0.0;
+    int downs = 0;
+    for (const auto& line : lines) {
+        elapsed += 0.1;
+        if (line.rfind("w ", 0) == 0) elapsed += std::stod(line.substr(2));
+        if (line.rfind("d ", 0) == 0) {
+            CHECK(std::abs(elapsed - downs * 100.0) < 3.0);
+            ++downs;
+        }
+    }
+    CHECK_EQ(downs, 100);
+}
+
 int run_touch_script_tests() {
+    test_commit_intervals_do_not_accumulate_phase();
     test_basic_hold_lifecycle_ordering();
     test_commit_precedes_every_wait();
     test_per_type_offset_shortens_waits_with_clamp();

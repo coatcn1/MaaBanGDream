@@ -479,6 +479,9 @@ std::vector<std::string> TouchScriptCompiler::compile(
     };
     auto emit_commit = [&]() {
         if (script.empty() || script.back() != "c\n") {
+            // commit 的执行成本已分摊到触控类型，但其前置命令间隔仍须
+            // 独立计入；遗漏会使补偿少算每个事务一次间隔，随曲长漂移。
+            account(0.0);
             script.push_back("c\n");
         }
     };
