@@ -53,6 +53,11 @@ class LocalChartRepository:
     ) -> ChartResolution:
         manifest = self._load_manifest()
         songs = manifest["songs"]
+        if title and _FULL_TITLE_PREFIX.match(re.sub(r"['\"‘’]", "", str(title))):
+            # 明确读到 FULL 就是版本证据，不能被首尾噪声裁剪抹成普通版。
+            songs = [song for song in songs if any(
+                _FULL_TITLE_PREFIX.match(str(value)) for value in song.get("titles", ())
+            )]
         normalized_difficulty = str(difficulty).strip().lower()
         fingerprint_matches = [
             song for song in songs

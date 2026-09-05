@@ -490,6 +490,7 @@
     "action": "Custom",
     "custom_action": "RealtimeDifficultySelect",
     "custom_action_param": {
+      "defer_song_title_to_preparation": true,
       "difficulty": "Easy",
       "max_attempts": 3
     },
@@ -639,6 +640,7 @@
     "action": "Custom",
     "custom_action": "RealtimePerformanceSettingsGate",
     "custom_action_param": {
+      "confirm_preparation_identity": true,
       "difficulty": "Easy",
       "require_profile": true,
       "dpi": 240,
@@ -666,6 +668,7 @@
     "action": "Custom",
     "custom_action": "RealtimePerformanceSettingsGate",
     "custom_action_param": {
+      "confirm_preparation_identity": true,
       "difficulty": "Easy",
       "require_profile": true,
       "dpi": 240,
@@ -762,6 +765,7 @@
     "action": "Custom",
     "custom_action": "RealtimePerformanceSettingsGate",
     "custom_action_param": {
+      "confirm_preparation_identity": true,
       "difficulty": "Easy",
       "require_profile": false,
       "dpi": 240,

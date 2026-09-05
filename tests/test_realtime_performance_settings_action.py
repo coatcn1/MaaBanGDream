@@ -201,9 +201,15 @@ def test_gate_reads_current_speed_and_uses_real_half_tenth_cent_buttons(monkeypa
 
 
 def test_gate_skips_speed_read_when_game_effect_settings_disabled(monkeypatch):
+    monkeypatch.setenv("MAABANGDREAM_ORDERED_STARTUP", "1")
     clear_verified_settings()
     clicks = []
     prepared = []
+    events = []
+    monkeypatch.setattr(
+        "agent.realtime.preparation_identity.confirm_preparation_identity",
+        lambda image, difficulty: events.append("identity"),
+    )
     monkeypatch.setattr(
         "agent.realtime.performance_settings_action._expected_speed",
         lambda context, params, image: (5.0, "expert.json"),
@@ -219,7 +225,7 @@ def test_gate_skips_speed_read_when_game_effect_settings_disabled(monkeypatch):
     monkeypatch.setattr(
         performance_settings_action,
         "prepare_native_for_settings_gate",
-        lambda **kwargs: prepared.append(kwargs),
+        lambda **kwargs: (events.append("prearm"), prepared.append(kwargs)),
     )
     context = SimpleNamespace(
         tasker=SimpleNamespace(stopping=False, controller=_Controller()),
@@ -227,7 +233,9 @@ def test_gate_skips_speed_read_when_game_effect_settings_disabled(monkeypatch):
     assert RealtimePerformanceSettingsGate()._run(context, {
         "difficulty": "Expert",
         "require_profile": True,
+        "confirm_preparation_identity": True,
     })
+    assert events == ["identity", "prearm"]
     # 关闭演出特效设置后整类跳过：不打开齿轮，不读流速。
     assert clicks == []
     # 但 Native 预武装仍必须生成，否则单人正式演奏会零输入失败。

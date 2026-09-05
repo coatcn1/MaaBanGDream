@@ -517,7 +517,10 @@ def test_realtime_multi_live_contract_and_options():
         target, play_node = expected[case["name"]]
         override = case["pipeline_override"]
         selection = override["RealtimeLiveDifficulty"]["custom_action_param"]
-        assert selection == {"difficulty": case["name"], "max_attempts": 3}
+        assert selection == {
+            "difficulty": case["name"], "max_attempts": 3,
+            "defer_song_title_to_preparation": True,
+        }
         assert target == tuple(DIFFICULTY_TARGETS[case["name"]])
         assert override["RealtimeLiveRehearsalStart"]["next"] == [
             "RealtimeLiveRehearsalPostStart"

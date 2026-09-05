@@ -681,6 +681,7 @@
           "pipeline_override": {
             "RealtimeLiveDifficulty": {
               "custom_action_param": {
+                "defer_song_title_to_preparation": true,
                 "difficulty": "Easy",
                 "max_attempts": 3
               }
@@ -738,6 +739,7 @@
             },
             "RealtimeLiveFormalSettingsGate": {
               "custom_action_param": {
+                "confirm_preparation_identity": true,
                 "difficulty": "Easy",
                 "require_profile": true,
                 "dpi": 240,
@@ -747,6 +749,7 @@
             },
             "RealtimeLiveVisualEvaluationSettingsGate": {
               "custom_action_param": {
+                "confirm_preparation_identity": true,
                 "difficulty": "Easy",
                 "require_profile": true,
                 "dpi": 240,
@@ -779,6 +782,7 @@
             },
             "RealtimeLiveRehearsalSettingsGate": {
               "custom_action_param": {
+                "confirm_preparation_identity": true,
                 "difficulty": "Easy",
                 "require_profile": false,
                 "dpi": 240,
@@ -795,6 +799,7 @@
           "pipeline_override": {
             "RealtimeLiveDifficulty": {
               "custom_action_param": {
+                "defer_song_title_to_preparation": true,
                 "difficulty": "Normal",
                 "max_attempts": 3
               }
@@ -852,6 +857,7 @@
             },
             "RealtimeLiveFormalSettingsGate": {
               "custom_action_param": {
+                "confirm_preparation_identity": true,
                 "difficulty": "Normal",
                 "require_profile": true,
                 "dpi": 240,
@@ -861,6 +867,7 @@
             },
             "RealtimeLiveVisualEvaluationSettingsGate": {
               "custom_action_param": {
+                "confirm_preparation_identity": true,
                 "difficulty": "Normal",
                 "require_profile": true,
                 "dpi": 240,
@@ -893,6 +900,7 @@
             },
             "RealtimeLiveRehearsalSettingsGate": {
               "custom_action_param": {
+                "confirm_preparation_identity": true,
                 "difficulty": "Normal",
                 "require_profile": false,
                 "dpi": 240,
@@ -909,6 +917,7 @@
           "pipeline_override": {
             "RealtimeLiveDifficulty": {
               "custom_action_param": {
+                "defer_song_title_to_preparation": true,
                 "difficulty": "Hard",
                 "max_attempts": 3
               }
@@ -966,6 +975,7 @@
             },
             "RealtimeLiveFormalSettingsGate": {
               "custom_action_param": {
+                "confirm_preparation_identity": true,
                 "difficulty": "Hard",
                 "require_profile": true,
                 "dpi": 240,
@@ -975,6 +985,7 @@
             },
             "RealtimeLiveVisualEvaluationSettingsGate": {
               "custom_action_param": {
+                "confirm_preparation_identity": true,
                 "difficulty": "Hard",
                 "require_profile": true,
                 "dpi": 240,
@@ -1007,6 +1018,7 @@
             },
             "RealtimeLiveRehearsalSettingsGate": {
               "custom_action_param": {
+                "confirm_preparation_identity": true,
                 "difficulty": "Hard",
                 "require_profile": false,
                 "dpi": 240,
@@ -1023,6 +1035,7 @@
           "pipeline_override": {
             "RealtimeLiveDifficulty": {
               "custom_action_param": {
+                "defer_song_title_to_preparation": true,
                 "difficulty": "Expert",
                 "max_attempts": 3
               }
@@ -1080,6 +1093,7 @@
             },
             "RealtimeLiveFormalSettingsGate": {
               "custom_action_param": {
+                "confirm_preparation_identity": true,
                 "difficulty": "Expert",
                 "require_profile": true,
                 "dpi": 240,
@@ -1089,6 +1103,7 @@
             },
             "RealtimeLiveVisualEvaluationSettingsGate": {
               "custom_action_param": {
+                "confirm_preparation_identity": true,
                 "difficulty": "Expert",
                 "require_profile": true,
                 "dpi": 240,
@@ -1121,6 +1136,7 @@
             },
             "RealtimeLiveRehearsalSettingsGate": {
               "custom_action_param": {
+                "confirm_preparation_identity": true,
                 "difficulty": "Expert",
                 "require_profile": false,
                 "dpi": 240,
@@ -1137,6 +1153,7 @@
           "pipeline_override": {
             "RealtimeLiveDifficulty": {
               "custom_action_param": {
+                "defer_song_title_to_preparation": true,
                 "difficulty": "Special",
                 "max_attempts": 3
               }
@@ -1194,6 +1211,7 @@
             },
             "RealtimeLiveFormalSettingsGate": {
               "custom_action_param": {
+                "confirm_preparation_identity": true,
                 "difficulty": "Special",
                 "require_profile": true,
                 "dpi": 240,
@@ -1203,6 +1221,7 @@
             },
             "RealtimeLiveVisualEvaluationSettingsGate": {
               "custom_action_param": {
+                "confirm_preparation_identity": true,
                 "difficulty": "Special",
                 "require_profile": true,
                 "dpi": 240,
@@ -1235,6 +1254,7 @@
             },
             "RealtimeLiveRehearsalSettingsGate": {
               "custom_action_param": {
+                "confirm_preparation_identity": true,
                 "difficulty": "Special",
                 "require_profile": false,
                 "dpi": 240,

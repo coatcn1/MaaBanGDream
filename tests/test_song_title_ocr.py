@@ -12,6 +12,10 @@ from agent.realtime.song_title_ocr import (
 def test_bundled_song_title_model_and_dictionary_exist():
     assert MODEL_PATH.is_file()
     assert MODEL_PATH.stat().st_size > 10_000_000
+
+
+def test_title_noise_cannot_reduce_unrelated_text_to_one_letter():
+    assert title_similarity("ERER", "R") < 0.68
     assert CONFIG_PATH.is_file()
 
 

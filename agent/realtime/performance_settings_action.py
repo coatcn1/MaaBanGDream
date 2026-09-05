@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import time
 import traceback
 from collections.abc import Callable
@@ -445,6 +446,14 @@ class RealtimePerformanceSettingsGate(CustomAction):
             reason = f"{type(exc).__name__}: {exc}"
             record_failure_reason(f"开演前流速设置失败：{reason}")
             try:
+                latest_run = current_live_run()
+                if latest_run is not None and latest_run.preparation_identity_image is not None:
+                    run_context = latest_run
+                    evidence_dir = PROJECT_ROOT / "screencap"
+                    evidence_dir.mkdir(parents=True, exist_ok=True)
+                    evidence_path = evidence_dir / f"preparation-identity-{latest_run.run_id}.png"
+                    if not cv2.imwrite(str(evidence_path), latest_run.preparation_identity_image):
+                        print("RealtimePreparationIdentity evidence_save_failed=true", flush=True)
                 # Lazy import avoids the visual gate's dependency on this
                 # module's fixed digit classifier.
                 from .game_effect_settings_action import (
@@ -489,6 +498,16 @@ class RealtimePerformanceSettingsGate(CustomAction):
             raise ValueError(f"不支持的难度：{difficulty}")
         controller = context.tasker.controller
         before = controller.post_screencap().wait().get()
+        if context.tasker.stopping:
+            return True
+        if (
+            params.get("confirm_preparation_identity", False)
+            and os.environ.get("MAABANGDREAM_ORDERED_STARTUP", "0") == "1"
+        ):
+            from .preparation_identity import confirm_preparation_identity
+            confirm_preparation_identity(before, difficulty)
+            if context.tasker.stopping:
+                return True
         expected, profile = _expected_speed(context, params, before)
         _speed_cents(expected)
         if on_expected is not None:

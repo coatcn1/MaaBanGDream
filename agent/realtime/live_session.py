@@ -35,6 +35,8 @@ class LiveRunContext:
     # Internal one-shot handoff from a verified difficulty screen to Play.
     # Deliberately omitted from serialized session metadata.
     prepared_for_play: bool = False
+    # 保留本局准备页证据，待演奏记录器建立后归入同一个证据包，不序列化像素。
+    preparation_identity_image: object | None = None
 
     def to_mapping(self) -> dict:
         return {
