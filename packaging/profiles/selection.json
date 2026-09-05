@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "pinned": {
+    "Expert": "expert-20260905233716.json"
+  },
+  "runtime_options": {
+    "life_safety_enabled": false,
+    "life_exit_threshold": 200,
+    "rehearsal_ignore_life_safety": false,
+    "skip_process_conflict_cleanup": false,
+    "game_effect_settings_enabled": false,
+    "note_skin_type": 1,
+    "judgement_assist_effect": false,
+    "tap_effect": 1,
+    "chart_prediction_enabled": true,
+    "chart_predict_presses": true,
+    "native_realtime_enabled": false,
+    "cooperative_jitter_enabled": false,
+    "play_failure_retry_count": 1,
+    "calibration_note_speeds": {
+      "Easy": 2.0,
+      "Normal": 2.0,
+      "Hard": 2.0,
+      "Expert": 5.0,
+      "Special": 5.0
+    }
+  }
+}

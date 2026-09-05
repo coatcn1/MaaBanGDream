@@ -29,7 +29,24 @@
 - 本候选只供本地测试；实机成绩、结算对话推进及手动停止行为由用户验收，未推送或发布。
 - 离线验证：`verify.ps1` 为 876 passed / 7 skipped；Native 构建与 1786 项 C++ 检查通过；部署后的完整运行时兼容检查通过。EXIST 原谱面新旧高层动作一致，固定每命令 0.01 ms 开销的模型误差上限由约 22.5 ms 降至 1.3 ms；该模型不代表实机调度或游戏判定。
 
-## 2026-09-05（v1.2.0 已发布内容）
+## 2026-09-05（v1.2.3）
+
+- Native 已启用但没有可靠本地谱面时（例如 Easy/Normal 未收录，或等级冲突）不再在预武装阶段失败：预武装跳过并整局回退 Legacy 视觉演奏，选完难度后正常点排练/开始。
+- `prepare_native_for_settings_gate` 无谱面时返回 None 而不是抛错；`RealtimeProfilePlay` 在开演前把 Native 关成 Legacy，禁止中途混用。
+
+## 2026-09-05（v1.2.2）
+
+- 修复便携包缺失 `maabangdream_realtime.pyd`：发布构建现在显式调用 `build_native_realtime.ps1` 构建 Native 扩展并内置到 `agent/realtime/native/`。
+- 发布包校验增加 Native 扩展存在性与导入/版本自检，防止再次出现“打开 Native 后整局零输入”。
+- 开演前门禁失败提示不再统一说成“流速验证失败”，改为指出可能是流速设置或 Native 预武装失败。
+
+## 2026-09-05（v1.2.1）
+
+- 修复便携包二次启动失败：`check_runtime.py` 用 `utf-8-sig` 读取 JSON，容忍 Windows PowerShell 5.1 生成的 `interface.json` BOM。
+- `start-release.ps1` 与 `launch-mfa.ps1` 生成 JSON 一律无 BOM 写入。
+- `start-release.ps1` 启动前对 `MFAAvalonia.exe` 执行 `Unblock-File`，解除浏览器下载压缩包带来的 Zone.Identifier，避免 SmartScreen 取消导致 Start-Process 报 “The operation was canceled by the user”。
+
+## 2026-09-05（v1.2.0）
 
 - 协力首拍门控拦截“其他成员正在准备中”弹窗（含缩放出现/消失与背景变暗）：弹窗存在/消失只重置基线，大面积整行变化不再被当成首音；单人/校准/挑战不受影响。
 - 协力漏键抖动改为固定漏歌曲末尾的 1~2 个普通单点（漏 1 个还是 2 个由 run_id 决定），并修复 jittered 副本与最终封面谱面按路径判等导致的预武装消费失败，改为按歌曲身份判等。

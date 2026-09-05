@@ -115,6 +115,13 @@ if ($LASTEXITCODE -ne 0) {
 Get-ChildItem -LiteralPath $packageRoot -Recurse -File -Filter '*.pdb' |
     Remove-Item -Force
 
+# Native 实时扩展被 .gitignore 忽略、不会进入 Git，但便携包必须内置；
+# 否则打开 Native 的便携环境会报 “No module named 'maabangdream_realtime'”。
+& (Join-Path $projectRoot 'scripts\build_native_realtime.ps1')
+if ($LASTEXITCODE -ne 0) {
+    throw 'Native realtime extension build failed.'
+}
+
 function Copy-ProjectFile {
     param(
         [Parameter(Mandatory = $true)]
@@ -138,6 +145,7 @@ if ($LASTEXITCODE -ne 0 -or -not $trackedRuntimeFiles) {
 foreach ($relativePath in $trackedRuntimeFiles) {
     Copy-ProjectFile -RelativePath $relativePath
 }
+Copy-ProjectFile -RelativePath 'agent\realtime\native\maabangdream_realtime.pyd'
 
 foreach ($relativePath in @(
     'requirements.txt',
@@ -254,6 +262,14 @@ foreach ($name in $forbiddenTopLevelNames) {
     if (Test-Path -LiteralPath (Join-Path $packageRoot $name)) {
         throw "Private/runtime state leaked into release package: $name"
     }
+}
+
+# 内置维护者校准好的默认 Profile 与选择种子，便携包首次启动即可直接用。
+$seedProfiles = Join-Path $projectRoot 'packaging\profiles'
+if (Test-Path -LiteralPath $seedProfiles -PathType Container) {
+    $packageProfiles = Join-Path $packageRoot 'profiles'
+    New-Item -ItemType Directory -Force -Path $packageProfiles | Out-Null
+    Copy-Item -Path (Join-Path $seedProfiles '*') -Destination $packageProfiles -Force
 }
 
 $zipPath = Join-Path $outputFull "$packageName.zip"

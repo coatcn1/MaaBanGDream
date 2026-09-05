@@ -232,6 +232,39 @@ def test_settings_prearm_failure_stops_backend_and_leaves_no_cache(tmp_path):
         manager.consume("run-48", chart)
 
 
+def test_settings_prearm_skips_without_reliable_local_chart(tmp_path):
+    timers = TimerFactory()
+    manager = NativePrearmManager(timer_factory=timers)
+    repository = SimpleNamespace(
+        resolve=lambda *args, **kwargs: SimpleNamespace(
+            selection=None,
+            reason="selected song level does not match local chart metadata",
+        )
+    )
+    constructed = []
+
+    def factory(chart_path, **kwargs):
+        constructed.append(chart_path)
+        raise AssertionError("无可靠谱面时不得构造 Native 后端")
+
+    result = prepare_native_for_settings_gate(
+        controller=SimpleNamespace(info={
+            "adb_path": "C:/tools/adb.exe",
+            "adb_serial": "test-device",
+        }),
+        live_run=_confirmed_run(),
+        difficulty="Expert",
+        project_root=tmp_path,
+        runtime_options={"native_realtime_enabled": True},
+        repository=repository,
+        backend_factory=factory,
+        manager=manager,
+    )
+
+    assert result is None
+    assert constructed == []
+
+
 def test_settings_prearm_success_arms_waits_and_caches_exact_key(tmp_path):
     timers = TimerFactory()
     manager = NativePrearmManager(timer_factory=timers)
