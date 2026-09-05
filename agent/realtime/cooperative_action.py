@@ -28,6 +28,7 @@ except ImportError:
 from .difficulty_action import RealtimeDifficultySelect
 from .game_effect_settings_action import RealtimeGameEffectSettingsGate
 from .game_effect_settings_action import _click as _maa_click
+from .vision_io import imread_unicode
 from .game_effect_settings_action import _swipe as _maa_swipe
 from .live_session import append_current_run_event
 from .life_monitor import LifeDetector
@@ -191,7 +192,7 @@ class CooperativeLiveFlow:
         self.progress_callback = progress_callback
         self.detector = LifeDetector()
         self.templates = {
-            path.stem: cv2.imread(str(path), cv2.IMREAD_COLOR)
+            path.stem: imread_unicode(path, cv2.IMREAD_COLOR)
             for path in TEMPLATE_DIR.glob("*.png")
         }
         missing = [name for name, image in self.templates.items() if image is None]

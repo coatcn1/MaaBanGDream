@@ -16,6 +16,7 @@ import numpy as np
 
 from .note_detector import ObservedNote
 from .touch_planner import TouchAction
+from .vision_io import imwrite_unicode
 
 
 _SENTINEL = None
@@ -200,7 +201,7 @@ class RealtimeDebugRecorder:
             relative = Path("checkpoints") / (
                 f"{index:03d}-{safe_phase}-{safe_status}.png"
             )
-            if not cv2.imwrite(str(self.output_dir / relative), image):
+            if not imwrite_unicode(self.output_dir / relative, image):
                 raise OSError("无法保存实时演奏阶段证据截图")
             payload = {
                 "index": index,
@@ -525,7 +526,7 @@ class RealtimeDebugRecorder:
         relative = Path("events") / (
             f"frame-{self._trace_frames:06d}-{kind}-lane-{lane}.png"
         )
-        if not cv2.imwrite(str(self.output_dir / relative), image):
+        if not imwrite_unicode(self.output_dir / relative, image):
             raise OSError("无法保存实时演奏异常截图")
         self._events.write(json.dumps({
             "frame": self._trace_frames,

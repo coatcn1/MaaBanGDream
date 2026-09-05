@@ -34,6 +34,7 @@ from .run_reporting import (
     PreflightPerformanceSnapshot,
     write_preflight_terminal_result,
 )
+from .vision_io import imread_unicode, imwrite_unicode
 
 
 @dataclass(frozen=True)
@@ -133,7 +134,7 @@ def _normalise_glyph(mask: np.ndarray) -> np.ndarray:
 
 @lru_cache(maxsize=1)
 def _digit_templates() -> tuple[np.ndarray, ...]:
-    sprite = cv2.imread(str(_DIGIT_TEMPLATE_PATH), cv2.IMREAD_GRAYSCALE)
+    sprite = imread_unicode(_DIGIT_TEMPLATE_PATH, cv2.IMREAD_GRAYSCALE)
     if sprite is None or sprite.shape != (28, 200):
         raise RuntimeError(f"流速数字模板损坏：{_DIGIT_TEMPLATE_PATH}")
     return tuple(sprite[:, index * 20:(index + 1) * 20] >= 128 for index in range(10))
@@ -147,7 +148,7 @@ def _type_digit_templates() -> tuple[np.ndarray, ...]:
     shared speed templates misread TYPE5 as 3.  These templates are sampled
     from the 1280x720 演出皮肤设定 page rows.
     """
-    sprite = cv2.imread(str(_TYPE_DIGIT_TEMPLATE_PATH), cv2.IMREAD_GRAYSCALE)
+    sprite = imread_unicode(_TYPE_DIGIT_TEMPLATE_PATH, cv2.IMREAD_GRAYSCALE)
     if sprite is None or sprite.shape != (28, 200):
         raise RuntimeError(f"TYPE 数字模板损坏：{_TYPE_DIGIT_TEMPLATE_PATH}")
     return tuple(
@@ -168,7 +169,7 @@ def _type_label_templates() -> tuple[tuple[int, np.ndarray], ...]:
     result = []
     for value in range(1, 8):
         path = _TYPE_LABEL_DIR / f"type_label_{value}.png"
-        template = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        template = imread_unicode(path, cv2.IMREAD_COLOR)
         if template is None or template.shape != (34, 95, 3):
             raise RuntimeError(f"TYPE 标签模板损坏：{path}")
         result.append((value, template))
@@ -452,7 +453,7 @@ class RealtimePerformanceSettingsGate(CustomAction):
                     evidence_dir = PROJECT_ROOT / "screencap"
                     evidence_dir.mkdir(parents=True, exist_ok=True)
                     evidence_path = evidence_dir / f"preparation-identity-{latest_run.run_id}.png"
-                    if not cv2.imwrite(str(evidence_path), latest_run.preparation_identity_image):
+                    if not imwrite_unicode(evidence_path, latest_run.preparation_identity_image):
                         print("RealtimePreparationIdentity evidence_save_failed=true", flush=True)
                 # Lazy import avoids the visual gate's dependency on this
                 # module's fixed digit classifier.

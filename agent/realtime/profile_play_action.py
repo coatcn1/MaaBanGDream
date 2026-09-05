@@ -40,6 +40,7 @@ from .live_session import (
     update_live_run,
 )
 from .note_detector import NoteDetector
+from .vision_io import imread_unicode, imwrite_unicode
 from .profile_action import PROJECT_ROOT
 from .profile_store import (
     EnvironmentSignature,
@@ -726,7 +727,7 @@ def _template_click_point(
     best_score = threshold
     best_point = None
     for template_path in template_paths:
-        template = cv2.imread(str(template_path))
+        template = imread_unicode(template_path)
         if template is None:
             continue
         if (
@@ -819,7 +820,7 @@ def _advance_result_rank_page(
     threshold: float = RESULT_NEXT_TEMPLATE_THRESHOLD,
 ) -> bool:
     """Advance a recognised rank page through Android Back, never a click."""
-    template = cv2.imread(str(template_path))
+    template = imread_unicode(template_path)
     if template is None:
         return False
     matched = cv2.matchTemplate(image, template, cv2.TM_CCOEFF_NORMED)
@@ -2576,8 +2577,8 @@ class RealtimeProfilePlay(CustomAction):
                     f"realtime-startup-timeout-{result_stamp}.png"
                 )
                 try:
-                    if cv2.imwrite(
-                        str(startup_diagnostic), stall_safe_capture.last_image,
+                    if imwrite_unicode(
+                        startup_diagnostic, stall_safe_capture.last_image,
                     ):
                         failed_payload["startup_diagnostic_frame"] = str(
                             startup_diagnostic.relative_to(PROJECT_ROOT).as_posix()
@@ -2696,7 +2697,7 @@ class RealtimeProfilePlay(CustomAction):
                 if outcome.image is not None:
                     try:
                         diagnostic_saved = bool(
-                            cv2.imwrite(str(diagnostic), outcome.image)
+                            imwrite_unicode(diagnostic, outcome.image)
                         )
                         if not diagnostic_saved:
                             diagnostic_error = (
@@ -2766,7 +2767,7 @@ class RealtimeProfilePlay(CustomAction):
             screenshot_error = None
             if save_screenshot:
                 try:
-                    if not cv2.imwrite(str(screenshot_path), result):
+                    if not imwrite_unicode(screenshot_path, result):
                         screenshot_error = (
                             f"无法保存结算截图: {screenshot_path}"
                         )

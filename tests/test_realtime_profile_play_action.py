@@ -1586,7 +1586,7 @@ def _completed_play_harness(
         return True
 
     monkeypatch.setattr(
-        "agent.realtime.profile_play_action.cv2.imwrite",
+        "agent.realtime.profile_play_action.imwrite_unicode",
         fake_imwrite,
     )
 

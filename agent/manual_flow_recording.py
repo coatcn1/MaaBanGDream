@@ -24,6 +24,11 @@ try:
 except ImportError:
     from task_reporting import record_failure_reason
 
+try:
+    from .realtime.vision_io import imwrite_unicode
+except ImportError:
+    from realtime.vision_io import imwrite_unicode
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RECORDING_ROOT = PROJECT_ROOT / "debug" / "recordings"
@@ -186,10 +191,10 @@ class ManualFlowVideoWriter:
         verification = self._verify_video()
         os.replace(self._partial_path, self.video_path)
         if self._first_frame is not None:
-            if not cv2.imwrite(str(self.output_dir / "first-frame.png"), self._first_frame):
+            if not imwrite_unicode(self.output_dir / "first-frame.png", self._first_frame):
                 raise OSError("无法保存录像首帧")
         if self._last_frame is not None:
-            if not cv2.imwrite(str(self.output_dir / "last-frame.png"), self._last_frame):
+            if not imwrite_unicode(self.output_dir / "last-frame.png", self._last_frame):
                 raise OSError("无法保存录像末帧")
 
         intervals_ms = [
