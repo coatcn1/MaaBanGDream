@@ -16,6 +16,7 @@ from agent.realtime.profile_play_action import (
     ResultCollectionOutcome,
     ResultCollectionStatus,
     _dismiss_reward_popup,
+    _effective_native_chart_selection,
     _result_report_payload,
     _write_calibration_report,
     collect_result,
@@ -39,6 +40,58 @@ class Job:
 class Controller:
     def post_screencap(self):
         return Job()
+
+
+def _chart_selection(
+    path: str,
+    *,
+    song_id: int = 55,
+    difficulty: str = "expert",
+    level: int = 27,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        path=Path(path),
+        timeline=object(),
+        bestdori_song_id=song_id,
+        difficulty=difficulty,
+        level=level,
+    )
+
+
+def test_effective_native_chart_accepts_jittered_variant_of_same_song():
+    selected = _chart_selection("resource/charts/bestdori/55/expert.json")
+    prepared = _chart_selection("debug/jittered-charts/run-1.json")
+
+    effective = _effective_native_chart_selection(selected, prepared)
+
+    assert effective is prepared
+
+
+def test_effective_native_chart_keeps_selected_when_paths_match():
+    selected = _chart_selection("resource/charts/bestdori/55/expert.json")
+    prepared = _chart_selection("resource/charts/bestdori/55/expert.json")
+
+    effective = _effective_native_chart_selection(selected, prepared)
+
+    assert effective is selected
+
+
+def test_effective_native_chart_rejects_different_song():
+    selected = _chart_selection("resource/charts/bestdori/55/expert.json")
+    prepared = _chart_selection(
+        "debug/jittered-charts/run-1.json",
+        song_id=56,
+    )
+
+    with pytest.raises(RuntimeError, match="预武装谱面不一致"):
+        _effective_native_chart_selection(selected, prepared)
+
+
+def test_effective_native_chart_rejects_missing_prepared():
+    selected = _chart_selection("resource/charts/bestdori/55/expert.json")
+
+    with pytest.raises(RuntimeError, match="预武装谱面不一致"):
+        _effective_native_chart_selection(selected, None)
 
 
 class Tasker:

@@ -3,7 +3,7 @@
   "interface_version": 2,
   "name": "MaaBanGDream",
   "label": "BanG Dream! 自动化（MaaFramework）",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "支持自动演出、单人实时演奏、多人协力演出、智能校准和挑战演出。",
   "license": "GPL-3.0-only",
   "controller": [
@@ -91,6 +91,12 @@
         "CalibrationResumeMode",
         "CalibrationDebug"
       ]
+    },
+    {
+      "name": "DailyFreeGacha",
+      "label": "🎁 每日免费抽卡",
+      "description": "完成每日演出奖励后，自动抽取“每日3次免费 演出招募”的免费单抽；未完成或次数已耗尽时正常结束。",
+      "entry": "DailyFreeGacha"
     },
     {
       "name": "ChallengeLive",

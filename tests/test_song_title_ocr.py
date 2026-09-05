@@ -31,3 +31,11 @@ def test_song_title_similarity_tolerates_small_japanese_ocr_errors():
         "ハッピーシンセサィ女",
         "ハッピーシンセサイザ",
     ) >= 0.75
+
+
+def test_song_title_similarity_ignores_trailing_ocr_junk():
+    assert title_similarity("「僕は…」今の", "「僕は...」") >= 0.95
+
+
+def test_song_title_similarity_ignores_leading_ocr_junk():
+    assert title_similarity("今の「僕は…」", "「僕は...」") >= 0.95

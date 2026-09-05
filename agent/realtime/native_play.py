@@ -12,9 +12,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+import numpy as np
+
 from . import native_engine
 from .native_minitouch import NativeMinitouchDevice
 from .playfield_monitor import LANE_CENTERS, PlayfieldDetector
+from .prepare_popup import CooperativePreparePopupDetector
 
 
 TOUCH_Y = 590.0
@@ -60,6 +63,11 @@ class _ExpectedCommand:
 class NativeStartPhotogate:
     """用判定线附近的整行颜色变化定位第一颗音符。"""
 
+    # 协力弹窗及其背景变暗会让判定带大面积同向变化；首颗音符只影响少数
+    # 相邻轨道列。逐列变化超过该分量的列数占比过大时视为弹窗转场。
+    _BROAD_COLUMN_MIN = 45.0
+    _BROAD_COLUMN_FRACTION = 0.35
+
     def __init__(
         self,
         *,
@@ -72,6 +80,8 @@ class NativeStartPhotogate:
         latency_ms: float = PHOTOGATE_LATENCY_MS,
         mode: str = "single-playfield-first-note",
         playfield_detector: Callable[[Any], bool] | None = None,
+        popup_detector: Callable[[Any], bool] | None = None,
+        suppress_prepare_popup: bool | None = None,
     ) -> None:
         if not 0 <= from_row <= to_row < reference_height:
             raise ValueError("photogate 行范围无效")
@@ -95,7 +105,24 @@ class NativeStartPhotogate:
         else:
             self._playfield_detector = playfield_detector
         self.mode = str(mode)
+        # 协力进入演奏场后可能出现“其他成员正在准备中”弹窗；其出现/消失
+        # 会让整行颜色发生大变化，被首拍门控误判成第一颗音符。默认仅对
+        # 协力策略启用弹窗门控，单人/校准/挑战保持原有行为。
+        if suppress_prepare_popup is None:
+            suppress_prepare_popup = str(mode).startswith("cooperative")
+        self._popup_gate_enabled = bool(suppress_prepare_popup)
+        self._popup_detector = (
+            popup_detector
+            if popup_detector is not None
+            else (
+                CooperativePreparePopupDetector()
+                if self._popup_gate_enabled
+                else None
+            )
+        )
         self._last_color: Any | None = None
+        # 冻结时保存判定带逐列基线，用于区分“整行变暗/弹窗”与“窄列音符”。
+        self._frozen_columns: np.ndarray | None = None
         self._previous_change: float | None = None
         self._previous_frame_s: float | None = None
         self._observed_since_s: float | None = None
@@ -113,11 +140,15 @@ class NativeStartPhotogate:
         self.playfield_waited_frames = 0
         self.playfield_loss_events = 0
         self._playfield_active = False
+        self._prepare_popup_active = False
+        self.prepare_popup_frames = 0
+        self.prepare_popup_blocked_events = 0
         self._significant_events: deque[dict[str, object]] = deque(maxlen=32)
 
     def _reset_band_state(self) -> None:
         """演奏场尚未成立或短暂消失时，丢弃此前加载页颜色基线。"""
         self._last_color = None
+        self._frozen_columns = None
         self._previous_change = None
         self._previous_frame_s = None
         self.stable_since_s = None
@@ -177,6 +208,11 @@ class NativeStartPhotogate:
             "photogate_trigger_score": self.trigger_score,
             "photogate_trigger_source": self.trigger_source,
             "photogate_last_change_score": self.last_change_score,
+            "photogate_prepare_popup_enabled": self._popup_gate_enabled,
+            "photogate_prepare_popup_frames": self.prepare_popup_frames,
+            "photogate_prepare_popup_blocked_events": (
+                self.prepare_popup_blocked_events
+            ),
             "photogate_events": list(self._significant_events),
         }
 
@@ -208,16 +244,38 @@ class NativeStartPhotogate:
                 self.playfield_loss_events += 1
                 self._record_event("playfield-lost", frame_s, 0.0)
             self._playfield_active = False
+            self._prepare_popup_active = False
             self._reset_band_state()
             return None
         if not self._playfield_active:
             self._playfield_active = True
             self.playfield_seen_at_s = frame_s
             self._reset_band_state()
-            self._last_color = current
-            self._previous_frame_s = frame_s
             self._record_event("playfield-visible", frame_s, 0.0)
-            return None
+        if self._popup_gate_enabled:
+            # 弹窗存在时不允许建立颜色基线，也不允许首拍触发；弹窗消失
+            # 的那一帧同样只重置基线，避免把弹窗淡出当成第一颗音符。
+            if self._popup_detector is None:
+                raise RuntimeError("协力弹窗门控缺少检测器")
+            popup_visible = bool(self._popup_detector(image))
+            if popup_visible:
+                self.prepare_popup_frames += 1
+                if not self._prepare_popup_active:
+                    self._prepare_popup_active = True
+                    self.prepare_popup_blocked_events += 1
+                    self._record_event(
+                        "prepare-popup-visible",
+                        frame_s,
+                        0.0,
+                    )
+                self._reset_band_state()
+                return None
+            if self._prepare_popup_active:
+                self._prepare_popup_active = False
+                self.prepare_popup_blocked_events += 1
+                self._record_event("prepare-popup-gone", frame_s, 0.0)
+                self._reset_band_state()
+                return None
         if self._last_color is None:
             self._last_color = current
             self._previous_frame_s = frame_s
@@ -239,6 +297,9 @@ class NativeStartPhotogate:
                 if frame_s - self.stable_since_s >= self._stable_duration_s:
                     self.frozen = True
                     self.frozen_at_s = frame_s
+                    self._frozen_columns = image[
+                        from_row : to_row + 1, :, :3
+                    ].astype("float64").mean(axis=0)
                     self._record_event("stable", frame_s, change_score)
             else:
                 # 必须连续稳定；开场动画的任一显著变化都会重新计时。
@@ -259,6 +320,32 @@ class NativeStartPhotogate:
             self._previous_frame_s = frame_s
             self._last_color = current
             return None
+
+        if (
+            change_score >= self._change_threshold
+            and self._popup_gate_enabled
+            and self._frozen_columns is not None
+        ):
+            # 弹窗缩放出现/消失或背景变暗时，判定带会发生大面积变化；首颗
+            # 音符只改变少数相邻轨道列。逐列比较冻结基线，变化列占比过高
+            # 就判定为弹窗转场，重置基线后继续等待真正的首音。
+            current_columns = image[
+                from_row : to_row + 1, :, :3
+            ].astype("float64").mean(axis=0)
+            column_change = np.abs(
+                current_columns - self._frozen_columns
+            ).sum(axis=1)
+            broad_columns = int(
+                (column_change >= self._BROAD_COLUMN_MIN).sum()
+            )
+            if broad_columns >= self._BROAD_COLUMN_FRACTION * image.shape[1]:
+                self._record_event(
+                    "broad-change-blocked",
+                    frame_s,
+                    change_score,
+                )
+                self._reset_band_state()
+                return None
 
         trigger_s: float | None = None
         trigger_source: str | None = None

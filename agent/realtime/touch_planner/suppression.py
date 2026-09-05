@@ -40,6 +40,14 @@ class JudgementSuppressor:
         current_down_lanes = {
             action.lane for action in structural if action.kind == ActionKind.DOWN
         }
+        # 同一帧内已经通过 current_down_lanes 处理；这里补上跨帧场景：
+        # hold 起手后，其头部碎片仍可能在下几帧被 ordinary 当成同轨道
+        # TAP，若不拦截就会对同一颗长条按两次。
+        recent_hold_lanes = {
+            lane
+            for lane, started in self._state._hold_started_at_by_lane.items()
+            if now - started < self._config.hold_start_suppress_seconds
+        }
 
         transients = [
             action for action in actions
@@ -229,7 +237,15 @@ class JudgementSuppressor:
                 and not trusted(action)
                 and any(abs(action.lane - lane) <= 1 for lane in current_down_lanes)
             )
-            if recently_covered or covered_by_hold_start:
+            covered_by_recent_hold_start = (
+                action.kind in (ActionKind.TAP, ActionKind.FLICK)
+                and action.lane in recent_hold_lanes
+            )
+            if (
+                recently_covered
+                or covered_by_hold_start
+                or covered_by_recent_hold_start
+            ):
                 continue
             kept.append(action)
             self._state._last_trigger[action.lane] = now

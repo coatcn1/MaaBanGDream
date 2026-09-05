@@ -7,7 +7,7 @@
 基于 MaaFramework 的 BanG Dream! 自动化项目。通过 MFAAvalonia GUI 加载 Python Agent，控制 Android 模拟器完成自动演出、实时触控演奏、校准和挑战演出。
 
 - 仓库：`https://github.com/coatcn1/MaaBanGDream`
-- 当前版本：`v1.0.0`
+- 当前版本：`v1.2.0`
 - 许可证：GPL-3.0-only
 
 ## MaaBanGDream 运行布局
@@ -47,7 +47,7 @@ Python:   D:\Documents\workplace\.tools\Miniconda3\envs\maabangdream\python.exe 
 
 ```
 main                                      ← 发布主线
-feature/bestdori-local-chart-repository   ← 当前 MaaBanGDream 开发分支
+feature/cooperative-safety                ← 当前统一开发分支（已合并抽卡、登录下载与协力改动）
 ```
 
 定制 MFAAvalonia 独立开发分支为 `feature/performance-visual-settings`；两个仓库必须分别提交和推送。
@@ -102,6 +102,100 @@ D:\Documents\workplace\.tools\Miniconda3\envs\maabangdream\python.exe -m pytest 
 ```
 
 pytest 临时目录固定在 `.local/pytest-<进程号>`（Git 忽略），不使用系统 AppData。
+
+## 演出类型流程
+
+任务入口定义在 `interface.json` 的 `task`，每个入口对应 `resource/pipeline/*.json`。
+所有演出任务都先经过进程互斥检查，再用 `CommonRecover` 恢复主页/登录；带次数的任务
+在每局结束回主页并由 `TaskProgress`/`TaskOutcome` 报告。单局演奏的统一核心是
+`RealtimeProfilePlay`（`agent/realtime/profile_play_action.py`）。
+
+### 0. RealtimeProfilePlay：单局演奏通用内部流程
+
+1. 解析运行时选项与 Profile，确认游戏前台，校验环境签名（分辨率/DPI/帧率/画质/流速）。
+2. 从准备页身份解析本地谱面（`resolve_confirmed_chart`）；Native 可用时消费预武装后端
+   （`consume_prearmed_backend`）。
+3. 建立 `debug/recordings/<run_id>` 证据包并保存 preflight 截图。
+4. 需要最终封面复核的模式执行 `wait_for_final_cover`：封面 pHash + 等级 + 标题；黑场转场
+   期间密集采样；失败时保留准备页谱面或降级 Legacy。
+5. Native 路径：`NativeStartPhotogate` 首音门控（生命条 + 六轨判定标记、稳定窗口、500ms
+   宽限、协力“其他成员正在准备中”弹窗拦截）→ `NativeMinitouchBackend` 启动 →
+   C++ PlaybackSession 滚动发布 → 约 5Hz 生命/终态监控。
+   Legacy 路径：`NoteDetector` + `RealtimePlanner` + `ControllerTouchDispatcher` 60FPS
+   视觉演奏，可选数值生命保护。
+6. 终态判定（结算/生命失败/用户停止/超时）→ 释放全部触点 → Native 完整性门禁 →
+   写 `screencap/realtime-result-*.json`。
+7. 结果处理：单人/挑战解析判定并回写 FAST/SLOW timing offset，协力只推进结算；失败按
+   `play_failure_retry_count` 重试。
+
+### 1. 单人实时演奏（RealtimeLive，入口 RealtimeMultiLive）
+
+1. 进程互斥 → `CommonRecover` 主页 → `RealtimeGameEffectSettingsGate` 演出特效设置
+   （`game_effect_settings_enabled=false` 时跳过）。
+2. 局循环：主页 → 演出选择（`LiveSelectFind`）→ 自由演出 → 歌曲选择标记 →
+   `RealtimeDifficultySelect`（点击目标难度并读等级/标题/封面身份，确认本地谱面）。
+3. 准备页按正式/排练分路：
+   - 正式：切到正式标记，检查必须有可用 Profile，执行 `RealtimeFormalPreflight`
+     （关闭自动演出、3D Cut-in、3D/MV 显示）和 `RealtimePerformanceSettingsGate`
+     （流速；跳过时仍执行 Native 预武装），开始后进入 `RealtimeProfilePlay`。
+   - 排练：关闭 Demo 演出显示 → 同上门禁 → 开始 → `RealtimeProfilePlay`（rehearsal 参数）。
+4. 每局结束 `CommonRecover` 回主页 → `TaskProgress` 计数 → 循环或 `TaskOutcome`。
+
+### 2. 协力演出（CooperativeLive）
+
+1. `CooperativeLiveConfigure` 依次配置：入房方式/档位/房号/难度/次数/结算动作/成员退出
+   策略/调试。
+2. 主页 → 演出选择 → 协力入口；按配置进普通房、好友邀请或私房；`verify_room_entry`
+   确认已离开房间选择页。
+3. 房间准备：等准备页 → 点难度并复核 → 演出特效/流速门禁（跳过时仍处理预武装/推迟）→
+   点“准备完毕”并确认按钮消失（最多 3 次）。
+4. `RealtimeProfilePlay`（cooperative 参数）：最终封面必确认（黑场与 5 封面准备页处理）；
+   Native deferred 预武装；首拍门控拦截“其他成员正在准备中”弹窗；
+   `cooperative_jitter_enabled` 时末尾漏 1~2 个单点。
+5. 结算：`cooperative_result=advanced`（右下角 + ESC 循环推进到 PGGBM 并返回）；之后
+   `return_to_room_selection` 回房间选择，好友/私房走 `stay_in_room`；成员退出按策略
+   确认结束或重连。
+6. 结算后识别不到房间页：先继续推进剩余结算页，仍失败走 `CommonRecover`（允许重启游戏）
+   恢复主页继续下一局，不终止任务；最后一局 stay 失败直接按完成返回。
+7. 次数循环 → `CooperativeLiveFinalize` 回主页 → `TaskOutcome`。
+
+### 3. 一键实时演奏（ContinuousRealtimeLive）
+
+1. 进程互斥；要求最近 15 分钟内有演出视觉设置读回复核（`require_recent_visual_settings`）。
+2. 被动监听：每 0.1s 截图检测生命条（数值 ≥20 连续 3 帧）；检测到歌曲开始就调用一次
+   `RealtimeProfilePlay`（`ignore_note_speed`、无生命保护、`require_completion=false`），
+   打完继续监听下一首，直到用户停止。
+3. 停止/失败保存最后一帧诊断截图到 `debug/recordings/listener-*`。
+
+### 4. 实时校准（RealtimeCalibration）
+
+1. 进程互斥 → 主页 → 演出特效门禁 → 读难度/歌曲模式/续跑模式/调试选项。
+2. `CalibrationSessionStore` 新建或续跑会话（`auto`/`restart`）；环境签名一致才复用；
+   生成 `accepted=false` 的候选 Profile。
+3. 阶段固定为 `rehearsal-1`（一首排练）→ `formal-validation`（一首正式验证）。
+4. 每局用 `calibration_round_plan` 构造 override 跑 `RealtimeProfilePlay`；FAST/SLOW
+   收敛结果回写 timing offset；排练失败/技术故障可暂停续跑，正式局生命归零直接拒绝。
+5. 正式验证通过条件：结果有效、完成、存活且 miss<10；通过后候选 Profile 标记
+   `accepted=true` 并写校准会话报告。
+
+### 5. 挑战演出（ChallengeLive）
+
+1. 进程互斥 → 主页 → 演出特效门禁 → 局数门控 → `RealtimeProfileCheck`。
+2. 主页 → 演出选择 → 挑战入口 → 歌曲标记 → `RealtimeDifficultySelect` → 准备页。
+3. 挑战点数选择/确认 → 乐队标记 → `RealtimeFormalPreflight`（关闭自动演出、3D Cut-in、
+   3D/MV）→ `RealtimePerformanceSettingsGate` → 开始 → `RealtimeProfilePlay`。
+4. 结束回主页 → 计数循环 → `TaskOutcome`。
+
+### 6. 自动演出（AutoLive）
+
+1. 进程互斥 → 主页 → 演出选择 → 自由演出 → 选难度 → 准备页。
+2. 模板识别自动演出开关（开/关）与配额耗尽；点开始后被动等结算（`CommonRecover`），
+   回主页循环计数。此任务不使用实时触控引擎。
+
+### 非演出任务
+
+- `DailyFreeGacha`（每日免费抽卡）和 `ManualFlowRecording`（手动流程录制）不属于演出流程，
+  需要时再单独文档化。
 
 ## 需要警惕的点
 
@@ -179,6 +273,19 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
 5. **正式演奏时限**：旧的 300 秒上限会在长曲仍演奏时强制失败。正式演奏节点当前为 600 秒，并应在超时、生命保护、用户停止、结算识别等终态记录具体原因。
 6. **禁止含糊日志**：不要写“详情见上一条日志”。终态日志必须包含当前阶段和可执行的具体原因；运行时原因通过 `TaskOutcome` 的 latest failure reason 传递。
 7. **启动恢复必须有界**：未知界面最多按 ESC 恢复 60 秒；仍无法识别主页才重启游戏。登录画面应先识别“点击任意处/开始”，登录阶段不得过早发送 ESC。
+8. **部署必须从包含所有未合并功能的分支进行**：`launch-mfa.ps1` 用当前工作树的 `interface.json` 和 Agent 覆盖运行目录。多个未合并 feature 分支并存时，从缺少某功能的旧分支部署，会把该功能从 MFA 里“部署丢”。当前统一工作分支是 `feature/cooperative-safety`。
+9. **MFA 任务列表有“用户删除记忆”**：某次部署的 interface 缺少某个任务时，MFA 会把它记进 `config/instances/default.json` 的 `CurrentTasks`（`任务名<|||>Entry` 键）当作“用户已删除”，之后 interface 恢复该任务也不会加回。恢复方法：停止 MFA，从 `CurrentTasks` 删掉对应键再启动；不要在 MFA 运行时直接改该文件（内存会覆盖）。
+10. **演出设置自动保存会覆盖用户设置**：MFA 演出设置页在读取 Profile 失败时会把界面默认值整体写回 `profiles/selection.json`，清空用户运行时选项（Native、演出特效、TAP EFFECT、判定辅助、重试次数、校准流速等）。MFA 侧已加“读取成功前禁止自动保存”的保护。新增运行时选项必须四处同步：`profile_store.py` 的 `DEFAULT_RUNTIME_OPTIONS` 与 `_validated_runtime_options`、MFA `PerformanceProfileSettingsUserControlModel.cs` 的属性/加载/Capture、AXAML 开关。
+11. **登录下载确认框会被退出确认的取消模板误命中**：下载框与退出确认框都有灰色“取消”按钮，`quit_confirm_cancel.png` 在下载框上得分 0.952（阈值 0.9）。下载确认必须先于通用模态取消处理；下载进行中用进度标记被动等待，不发送 BACK/ESC。
+12. **流速校准与演出特效设置同类**：`game_effect_settings_enabled=false` 时，开演前不打开齿轮读/改流速，直接信任声明值（`RealtimePerformanceSettingsGate` 已支持跳过）。不要把两者拆成两套开关语义。
+13. **协力准备完毕点击必须确认送达**：点“准备完毕”后要确认按钮消失，最多重试 3 次，防止触控未送达导致倒计时结束后空演奏/跳车。协力结果与一次性弹窗用“点右下角确定 + ESC”交替循环推进（用户验证过可应付大多数页面）。
+14. **抽卡任务的页面陷阱**：左侧卡池列表滑动找“每日3次免费演出招募”时，滑动起点避开列表底部的“生日纪念服装贩售”入口（否则被当成点击进商店）；9.4.3 免费单抽有“TOUCH TO CUT”剪票引导需要点一下；状态判断统一用“点免费按钮后是否出现确认弹窗”，不要用“剩余N回/尚未完成”状态模板（会互相误匹配）。协力漏键抖动只对 Native 路径生效，由 `cooperative_jitter_enabled` 开关控制。
+15. **协力“其他成员正在准备中”弹窗会误触发首拍门控**：弹窗在演奏场建立后出现/消失（含缩放动画），或弹窗出现时背景变暗，会让判定带整行颜色大幅变化，被当成第一颗音符，把谱面时钟提前启动。Native 协力首拍门控必须：弹窗主体（中下部白色圆角矩形 + 左侧粉色图标）存在时不建立颜色基线；弹窗消失的那一帧只重置基线；冻结基线后若判定带大面积同向变化，视为弹窗/变暗转场而不是首音。首音只能是窄列局部变化；单人/校准/挑战不得引入该弹窗门控。
+16. **协力漏键抖动的 jittered 副本会被误判为预武装谱面不一致**：开启 `cooperative_jitter_enabled` 后，Native 预武装解析会把同一首歌替换成 `debug/jittered-charts/<run_id>.json` 副本，而最终封面复核得到的仍是 canonical 路径；用路径判等会直接失败，导致本局零输入、生命归零。判等必须比较歌曲身份（`bestdori_song_id` + `difficulty` + `level`），身份一致时以预武装副本为准消费。
+17. **Legacy 演奏的长条头不能既 DOWN 又 TAP**：视觉回退局里，hold 起手后其头部碎片会在后续帧被 first-visible rescue 成同轨道 TAP，一颗长条被按两次。抑制器必须记录各轨最近 hold 起手时刻，在 `hold_start_suppress_seconds` 窗口内拦截同轨道 TAP/FLICK；Native 路径不受影响。
+18. **协力黑场转场不能被当成“没有封面”**：准备完成后游戏会先整屏黑一下，随后封面或演奏场淡入；final cover 等待在黑场时进入无 sleep 的密集采样窗口，并在该窗口结束前不因演奏场出现而放弃。标题 OCR 还会把省略号或右侧提示读成杂字（如“…”→“今の”），`title_similarity` 必须容忍首尾噪声，否则准备页谱面无法确认。
+19. **跳过演出设置页不能跳过 Native 预武装**：`game_effect_settings_enabled=false` 时 `RealtimePerformanceSettingsGate` 直接返回，但单人非 deferred 流程的 Native 预武装就在这个门禁里；跳过时仍必须调用 `prepare_native_for_settings_gate`（或按 `defer_native_prearm` 推迟），否则开演前消费会报“预武装不存在或已被消费”，整局零输入。
+20. **协力结算后识别不到房间页不能终止任务**：成员退出弹窗关闭后往往还在结算页，重连不能直接 `ensure_room_page`；应先继续推进结算回房间/主页，仍失败走 `CommonRecover` 重启游戏再进。非 stay 路径结算回不去时把本局计入完成并恢复主页继续下一局，最后一局 stay 失败直接按完成返回。演出结束后的结算导航不识别成员退出弹窗：`wait_for_post_score_destination` 必须传 `detect_member_exit=False`，成员退出检测只保留在房间/准备阶段。
 
 ## 修改后的最低验收
 

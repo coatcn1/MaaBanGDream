@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
+import random
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
-from .chart_repository import ChartResolution, LocalChartRepository
+from .chart_repository import (
+    ChartResolution,
+    LocalChartRepository,
+)
 
 
 DEFAULT_TTL_SECONDS = 30.0
@@ -192,6 +198,56 @@ class NativePrearmManager:
 _GLOBAL_MANAGER = NativePrearmManager()
 
 
+def _cooperative_jittered_chart(
+    chart_path: Path,
+    run_id: str,
+    root: Path,
+) -> Path:
+    """协力模式按 run_id 确定性漏掉 1~2 个普通单点，避免整局全 P。
+
+    首音是 photogate 的时钟锚点，漏掉首音会破坏整局节奏，因此漏键固定
+    放在整曲末尾的最后 1~2 个单点，中段节奏不受影响。漏 1 个还是 2 个
+    由 run_id 决定，同一次 run 内两次解析结果一致，保证预武装与正式
+    消费拿到同一份谱面。
+    """
+    try:
+        payload = json.loads(Path(chart_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return Path(chart_path)
+    chart = payload.get("chart")
+    if not isinstance(chart, list):
+        return Path(chart_path)
+    singles = [
+        index
+        for index, entry in enumerate(chart)
+        if isinstance(entry, dict) and entry.get("type") == "Single"
+    ]
+    candidates = singles[1:]
+    if not candidates:
+        return Path(chart_path)
+    rng = random.Random(hashlib.sha1(run_id.encode("utf-8")).digest())
+    drops = min(len(candidates), rng.randint(1, 2))
+    # 从全部单点的末尾取最后 1~2 个；candidates 已排除首音，因此
+    # 首音不会被删除，删除下标降序保证原列表删除安全。
+    dropped = sorted(candidates[-drops:], reverse=True)
+    jittered = json.loads(json.dumps(payload, ensure_ascii=False))
+    for index in dropped:
+        del jittered["chart"][index]
+    output_dir = root / "debug" / "jittered-charts"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"{run_id}.json"
+    output_path.write_text(
+        json.dumps(jittered, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    print(
+        f"NativeCooperativeJitter run_id={run_id} dropped={drops} "
+        f"singles={len(singles)}",
+        flush=True,
+    )
+    return output_path
+
+
 def resolve_confirmed_chart(
     live_run: Any,
     difficulty: str,
@@ -210,12 +266,30 @@ def resolve_confirmed_chart(
         else Path(__file__).resolve().parents[2]
     )
     repository = repository or LocalChartRepository(root / "resource" / "charts")
-    return repository.resolve(
+    resolution = repository.resolve(
         live_run.song_id,
         difficulty,
         level=getattr(live_run, "song_level", None),
         title=getattr(live_run, "song_title", None),
     )
+    selection = resolution.selection
+    mode = str(getattr(live_run, "mode", "") or "").lower()
+    if selection is not None and mode == "cooperative":
+        from .profile_store import RealtimeProfileStore
+
+        runtime_options = RealtimeProfileStore(
+            root / "profiles"
+        ).runtime_options()
+        if bool(runtime_options.get("cooperative_jitter_enabled", True)):
+            jittered_path = _cooperative_jittered_chart(
+                selection.path,
+                str(getattr(live_run, "run_id", "")),
+                root,
+            )
+            if jittered_path != selection.path:
+                selection = replace(selection, path=jittered_path)
+                resolution = ChartResolution(selection, resolution.reason)
+    return resolution
 
 
 def controller_adb_endpoint(controller: Any) -> tuple[str, str]:

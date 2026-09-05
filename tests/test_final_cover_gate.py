@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
+from agent.realtime import profile_play_action
 from agent.realtime.chart_repository import ChartResolution
 from agent.realtime.final_cover import FinalCoverGate, FinalCoverResolver
 from agent.realtime.profile_play_action import wait_for_final_cover
@@ -138,6 +139,99 @@ def test_wait_for_final_cover_uses_the_controller_frame_stream():
     assert outcome.status == "confirmed"
     assert outcome.resolution.confirmation.bestdori_song_id == 306
     assert outcome.resolution.selection.bestdori_song_id == 306
+
+
+def test_wait_for_final_cover_matches_cover_after_black_transition():
+    black = np.zeros((720, 1280, 3), dtype=np.uint8)
+    cover, _song_id = final_cover_frame()
+
+    class Job:
+        def __init__(self, image):
+            self.image = image
+
+        def wait(self):
+            return self
+
+        def get(self):
+            return self.image
+
+    class Controller:
+        def __init__(self):
+            self.frames = iter((black, black, cover, cover))
+
+        def post_screencap(self):
+            return Job(next(self.frames))
+
+    outcome = wait_for_final_cover(
+        Controller(),
+        SimpleNamespace(song_level=28, song_title="SAVIOR OF SONG"),
+        selection(_song_id),
+        "Expert",
+        lambda: False,
+        timeout_seconds=1,
+        poll_interval_seconds=0,
+    )
+
+    assert outcome.status == "confirmed"
+
+
+def test_wait_for_final_cover_defers_playfield_bail_through_black_transition(
+    monkeypatch,
+):
+    black = np.zeros((720, 1280, 3), dtype=np.uint8)
+    playfield, _ = final_cover_frame(seed=83)
+    clock = {"value": 0.0}
+    consumed = []
+    monkeypatch.setattr(
+        profile_play_action.time,
+        "monotonic",
+        lambda: clock["value"],
+    )
+
+    class Repository:
+        def resolve(self, *_args, **_kwargs):
+            return ChartResolution(None, "no matching chart")
+
+    class Job:
+        def __init__(self, image):
+            self.image = image
+
+        def wait(self):
+            return self
+
+        def get(self):
+            return self.image
+
+    class Controller:
+        def __init__(self):
+            self.frames = iter((black, playfield, playfield, playfield,
+                                playfield, playfield, playfield, playfield))
+
+        def post_screencap(self):
+            image = next(self.frames)
+            consumed.append(image)
+            clock["value"] += 0.1
+            return Job(image)
+
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action.PlayfieldDetector",
+        lambda: (lambda _image: True),
+    )
+
+    outcome = wait_for_final_cover(
+        Controller(),
+        SimpleNamespace(song_level=28, song_title="SAVIOR OF SONG"),
+        None,
+        "Expert",
+        lambda: False,
+        repository=Repository(),
+        timeout_seconds=2,
+        poll_interval_seconds=0,
+    )
+
+    assert outcome.status == "degraded-visual-legacy"
+    # 黑场之后不能在第 2 帧立刻放弃，必须等密集采样窗口结束。
+    assert len(consumed) >= 4
 
 
 def test_wait_for_final_cover_can_defer_chart_resolution_until_coop_cover():

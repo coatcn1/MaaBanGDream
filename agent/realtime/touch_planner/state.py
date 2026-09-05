@@ -47,6 +47,7 @@ class PlannerState:
         self._active_hold_tail: dict[int, float] = {}
         self._hold_release_at: dict[int, float] = {}
         self._hold_started: dict[int, float] = {}
+        self._hold_started_at_by_lane: dict[int, float] = {}
         self._hold_released_at: dict[int, float] = {}
         self._hold_chord_partner: dict[int, int] = {}
         self._hold_confirmed: set[int] = set()
@@ -83,6 +84,7 @@ class PlannerState:
         self._hold_seen.clear()
         self._hold_release_at.clear()
         self._hold_started.clear()
+        self._hold_started_at_by_lane.clear()
         self._hold_released_at.clear()
         self._hold_chord_partner.clear()
         self._hold_confirmed.clear()

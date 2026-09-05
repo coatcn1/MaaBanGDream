@@ -496,6 +496,52 @@ class RealtimePerformanceSettingsGate(CustomAction):
                 expected_note_speed=expected,
                 profile=profile,
             ))
+        options = RealtimeProfileStore(
+            PROJECT_ROOT / "profiles"
+        ).runtime_options()
+        if not bool(options.get("game_effect_settings_enabled", True)):
+            # 流速校准与演出特效设置同属“开演前改游戏设置页”一类；用户
+            # 关闭演出特效设置后整类跳过，直接信任声明的流速，不再打开
+            # 齿轮读取或修正。下游签名仍需要完整的 actual_note_speed。
+            _VERIFIED[difficulty] = VerifiedPerformanceSettings(
+                difficulty=difficulty,
+                actual_note_speed=expected,
+                expected_note_speed=expected,
+                profile=profile,
+                verified_at=time.monotonic(),
+            )
+            print(
+                "RealtimePerformanceSettingsGate enabled=false skipped=true "
+                f"difficulty={difficulty} expected={expected:.2f} "
+                f"source=configured-values profile={profile or 'calibration-setting'}",
+                flush=True,
+            )
+            # 跳过“打开游戏设置页读/改流速”不等于跳过 Native 预武装。单人
+            # 非 deferred 流程依赖这里生成预武装后端；漏掉会让开演前消费
+            # 直接报“不存在或已被消费”，整局零输入。
+            if bool(params.get("defer_native_prearm", False)):
+                discard_prearmed_backend("deferred-until-final-cover")
+                print(
+                    "RealtimePerformanceSettingsGate native_prearm=deferred "
+                    "reason=skip-game-settings",
+                    flush=True,
+                )
+            else:
+                prepare_native_for_settings_gate(
+                    controller=controller,
+                    live_run=current_live_run(),
+                    difficulty=difficulty,
+                    project_root=PROJECT_ROOT,
+                    ready_timeout_s=float(
+                        params.get("native_ready_timeout_seconds", 10.0)
+                    ),
+                    ttl_s=float(
+                        params.get("native_prearm_ttl_seconds", 30.0)
+                    ),
+                )
+            if context.tasker.stopping:
+                discard_prearmed_backend("user-stopped-after-prearm")
+            return True
         coordinates = dict(DEFAULT_COORDINATES)
         coordinates.update(params.get("coordinates", {}))
         coordinates = {

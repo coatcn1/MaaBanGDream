@@ -266,11 +266,16 @@ class CooperativeLiveFlow:
         *,
         timeout: float,
         interval: float = 0.35,
+        detect_member_exit: bool = True,
     ) -> tuple[str | None, np.ndarray]:
         deadline = time.monotonic() + timeout
         image = self.capture()
         while True:
-            if self.visible(image, "member_exit_title", 0.93):
+            if detect_member_exit and self.visible(
+                image,
+                "member_exit_title",
+                0.93,
+            ):
                 raise MemberExited("协力成员退出房间")
             for name in names:
                 if name == "playfield":
@@ -505,11 +510,30 @@ class CooperativeLiveFlow:
             self.context, self.action_argv(performance_params)
         ):
             raise RuntimeError("协力准备页流速复核失败")
-        self.click((1129, 610))
+        self.ready_up_and_verify()
         print(
             f"CooperativeLive ready=true difficulty={difficulty} speed_gate=verified",
             flush=True,
         )
+
+    def ready_up_and_verify(self) -> None:
+        """点击“准备完毕”并确认按钮消失，防止触控未送达造成空演奏。"""
+        for attempt in range(3):
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
+            image = self.capture()
+            box = self.template_box(image, "ready_button", 0.90)
+            if box is None:
+                # 按钮已消失：已进入准备完毕/成员等待或加载流程。
+                print(
+                    f"CooperativeLive ready=confirmed attempt={attempt + 1}",
+                    flush=True,
+                )
+                return
+            left, top, width, height = box
+            self.click((left + width // 2, top + height // 2))
+            time.sleep(2.0)
+        raise RuntimeError("点击准备完毕后按钮仍在，触控可能未送达")
 
     def jump_after_download_timeout(self) -> None:
         require_game_foreground(self.controller)
@@ -557,7 +581,13 @@ class CooperativeLiveFlow:
         same pipeline recogniser as task startup so its proven 0.82 threshold
         remains the single source of truth.
         """
-        state, image = self.wait_for(names, timeout=timeout)
+        # 演出结束后的结算页面不会再出现“成员退出”弹窗；此处关闭该检查，
+        # 避免结算导航被残留模板命中打断，把弹窗处理限制在房间/准备阶段。
+        state, image = self.wait_for(
+            names,
+            timeout=timeout,
+            detect_member_exit=False,
+        )
         if state is not None:
             return state
         if self.pipeline_box(image, "CooperativeHomeMarker") is not None:
@@ -827,7 +857,31 @@ class CooperativeLiveFlow:
             f"attempt={reconnects}/{reconnect_limit}",
             flush=True,
         )
-        self.ensure_room_page(timeout=15.0)
+        # 成员退出弹窗关闭后，游戏往往还停留在结算页，不能直接要求
+        # “房间选择页”出现。先把剩余结算页推进回房间/主页；仍失败则走
+        # 主页恢复再重进，避免因为识别不到房间页把整个任务报错停掉。
+        try:
+            self.return_to_room_selection()
+        except MemberExited:
+            try:
+                self.recover_after_play_failure("成员退出弹窗反复出现")
+            except Exception as recovery_error:
+                raise RuntimeError(
+                    "成员退出后恢复失败："
+                    f"{type(recovery_error).__name__}: {recovery_error}"
+                ) from recovery_error
+        except InterruptedError:
+            raise
+        except Exception as exc:
+            try:
+                self.recover_after_play_failure(
+                    f"成员退出后未回到房间：{type(exc).__name__}: {exc}"
+                )
+            except Exception as recovery_error:
+                raise RuntimeError(
+                    "成员退出后恢复失败："
+                    f"{type(recovery_error).__name__}: {recovery_error}"
+                ) from recovery_error
         return reconnects
 
     def run(self) -> bool:
@@ -948,6 +1002,26 @@ class CooperativeLiveFlow:
                     reconnects = next_reconnects
                     reuse_room = False
                     continue
+                except InterruptedError:
+                    raise
+                except Exception as exc:
+                    if is_last:
+                        print(
+                            "CooperativeLive stay_skipped last_round=true "
+                            f"reason={type(exc).__name__}: {exc}",
+                            flush=True,
+                        )
+                        return True
+                    print(
+                        "CooperativeLive stay=recover "
+                        f"reason={type(exc).__name__}: {exc}",
+                        flush=True,
+                    )
+                    self.recover_after_play_failure(
+                        f"结算后未返回房间：{type(exc).__name__}: {exc}"
+                    )
+                    reuse_room = False
+                    continue
                 reuse_room = True
             elif not is_last:
                 try:
@@ -957,6 +1031,19 @@ class CooperativeLiveFlow:
                     if next_reconnects is None:
                         return False
                     reconnects = next_reconnects
+                except InterruptedError:
+                    raise
+                except Exception as exc:
+                    # 本局已经计入完成；结算页面没有走回房间时恢复主页并继续
+                    # 下一局，而不是把识别失败当成整个任务的致命错误。
+                    print(
+                        "CooperativeLive post_score=recover "
+                        f"reason={type(exc).__name__}: {exc}",
+                        flush=True,
+                    )
+                    self.recover_after_play_failure(
+                        f"结算后未返回房间：{type(exc).__name__}: {exc}"
+                    )
                 reuse_room = False
         return True
 

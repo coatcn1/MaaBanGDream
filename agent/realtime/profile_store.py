@@ -113,6 +113,7 @@ class RealtimeProfileStore:
         "chart_prediction_enabled": True,
         "chart_predict_presses": True,
         "native_realtime_enabled": False,
+        "cooperative_jitter_enabled": True,
         "play_failure_retry_count": 1,
         "calibration_note_speeds": {
             "Easy": 2.0,
@@ -254,6 +255,11 @@ class RealtimeProfileStore:
         )
         if not isinstance(native_realtime_enabled, bool):
             raise ValueError("native_realtime_enabled 必须是布尔值")
+        cooperative_jitter_enabled = options.get(
+            "cooperative_jitter_enabled", True
+        )
+        if not isinstance(cooperative_jitter_enabled, bool):
+            raise ValueError("cooperative_jitter_enabled 必须是布尔值")
         retry_count_raw = options.get("play_failure_retry_count", 1)
         if isinstance(retry_count_raw, bool):
             raise ValueError("play_failure_retry_count 必须是 0..3 的整数")
@@ -305,6 +311,7 @@ class RealtimeProfileStore:
             "chart_prediction_enabled": chart_prediction_enabled,
             "chart_predict_presses": chart_predict_presses,
             "native_realtime_enabled": native_realtime_enabled,
+            "cooperative_jitter_enabled": cooperative_jitter_enabled,
             "play_failure_retry_count": play_failure_retry_count,
             "calibration_note_speeds": speeds,
         }

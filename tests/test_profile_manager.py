@@ -143,6 +143,7 @@ def test_selection_state_is_written_atomically(tmp_path):
             "chart_prediction_enabled": True,
             "chart_predict_presses": True,
             "native_realtime_enabled": False,
+            "cooperative_jitter_enabled": True,
             "play_failure_retry_count": 1,
             "calibration_note_speeds": {
                 "Easy": 2.0,
@@ -176,6 +177,7 @@ def test_runtime_options_default_and_atomic_update_do_not_invalidate_profile(tmp
             "chart_prediction_enabled": True,
             "chart_predict_presses": True,
             "native_realtime_enabled": False,
+            "cooperative_jitter_enabled": True,
             "play_failure_retry_count": 1,
             "calibration_note_speeds": {
             "Easy": 2.0,

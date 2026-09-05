@@ -343,7 +343,8 @@ def test_login_mode_clicks_start_before_using_back(monkeypatch):
 def test_resource_download_clicks_once_waits_and_resumes_login(monkeypatch):
     context = Context({
         "HomeMarker": [False, False, False, True],
-        "ResourceDownloadConfirm": [True],
+        # 第一帧会先做一次“下载确认框在场”的识别，随后同一帧再点击下载。
+        "ResourceDownloadConfirm": [True, True],
         "ResourceDownloadPageMarker": [True, False],
         "LoginScreenMarker": [True],
     })
