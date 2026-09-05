@@ -95,8 +95,12 @@ $interface = Get-Content `
 $interface.resource[0].path = @('./resource')
 $interface.agent.child_exec = $python.Replace('\', '/')
 $interface.agent.child_args = @($agent.Replace('\', '/'))
-$interface | ConvertTo-Json -Depth 100 |
-    Set-Content -LiteralPath $interfacePath -Encoding utf8
+$interfaceJson = $interface | ConvertTo-Json -Depth 100
+[System.IO.File]::WriteAllText(
+    $interfacePath,
+    $interfaceJson,
+    [System.Text.UTF8Encoding]::new($false)
+)
 
 $profileManagerConfig = [ordered]@{
     version = 1
@@ -132,8 +136,12 @@ $profileManagerConfig = [ordered]@{
         mfa_logs = $mfaLogs
     }
 }
-$profileManagerConfig | ConvertTo-Json -Depth 10 |
-    Set-Content -LiteralPath $profileManagerPath -Encoding utf8
+$profileManagerJson = $profileManagerConfig | ConvertTo-Json -Depth 10
+[System.IO.File]::WriteAllText(
+    $profileManagerPath,
+    $profileManagerJson,
+    [System.Text.UTF8Encoding]::new($false)
+)
 
 if (Test-Path -LiteralPath $instanceConfigDirectory) {
     Get-ChildItem `
@@ -152,8 +160,12 @@ if (Test-Path -LiteralPath $instanceConfigDirectory) {
             -NotePropertyName 'AdbControlInputType' `
             -NotePropertyValue 'MinitouchAndAdbKey' `
             -Force
-        $instance | ConvertTo-Json -Depth 100 |
-            Set-Content -LiteralPath $_.FullName -Encoding utf8
+        $instanceJson = $instance | ConvertTo-Json -Depth 100
+        [System.IO.File]::WriteAllText(
+            $_.FullName,
+            $instanceJson,
+            [System.Text.UTF8Encoding]::new($false)
+        )
     }
 }
 
@@ -165,6 +177,9 @@ if ($NoLaunch) {
 $env:MAABANGDREAM_MFA_SESSION_ID = [Guid]::NewGuid().ToString('N')
 $env:MAABANGDREAM_MFA_ROOT = $packageRoot
 try {
+    # 浏览器下载的压缩包会给 MFAAvalonia.exe 打上 Zone.Identifier
+    # 标记，ShellExecute 启动会弹 SmartScreen 并被取消；先解除该标记。
+    Unblock-File -LiteralPath $mfa -ErrorAction SilentlyContinue
     Start-Process -FilePath $mfa -WorkingDirectory $packageRoot
 }
 finally {
