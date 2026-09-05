@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import zipfile
 from pathlib import Path
 
@@ -16,6 +17,7 @@ REQUIRED_PATHS = (
     "interface.template.json",
     "agent/server.py",
     "agent/profile_manager.py",
+    "agent/realtime/native/maabangdream_realtime.pyd",
     "resource/pipeline/auto_live.json",
     "resource/charts/manifest.json",
     "scripts/start-release.ps1",
@@ -71,6 +73,19 @@ def validate(package_root: Path) -> list[str]:
                 errors.append(
                     f"local path marker {forbidden!r} found in portable runtime"
                 )
+
+    native_pyd = package_root / "agent/realtime/native/maabangdream_realtime.pyd"
+    if native_pyd.is_file():
+        native_dir = str(native_pyd.parent)
+        if native_dir not in sys.path:
+            sys.path.insert(0, native_dir)
+        try:
+            import maabangdream_realtime as _native_realtime
+
+            if not str(getattr(_native_realtime, "version", lambda: "")()):
+                errors.append("native realtime extension version self-check failed")
+        except Exception as exc:
+            errors.append(f"native realtime extension import failed: {exc}")
 
     for path in package_root.rglob("*"):
         if not path.is_file() or path.suffix.lower() not in TEXT_SUFFIXES:
