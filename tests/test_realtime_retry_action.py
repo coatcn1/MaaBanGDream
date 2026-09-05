@@ -103,3 +103,16 @@ def test_retryable_failure_classifier_keeps_hard_conflicts_out():
     assert retryable_play_failure("RuntimeError: capture timed out") is True
     assert retryable_play_failure("ValueError: invalid option") is False
     assert retryable_play_failure("准备页难度冲突") is False
+
+
+def test_retry_budget_survives_callback_wrapper_recreation(monkeypatch):
+    configure_transient_failure(monkeypatch, retry_count=1)
+    monkeypatch.setattr(runtime_options, "discard_prearmed_backend", lambda _: None)
+    action = RealtimePlayRetryControl()
+    contexts = [SimpleNamespace(tasker=SimpleNamespace(stopping=False, _handle=12345))
+                for _ in range(5)]
+    assert action.run(contexts[0], argv("reset"))
+    assert action.run(contexts[1], argv("check"))
+    assert not action.run(contexts[2], argv("check"))
+    assert not action.run(contexts[3], argv("check"))
+    assert action.run(contexts[4], argv("reset"))

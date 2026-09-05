@@ -104,7 +104,11 @@ class RealtimePlayRetryControl(CustomAction):
     """管理普通单人单局的有界重试；校准由其外层状态机负责。"""
 
     def run(self, context: Context, argv: CustomAction.RunArg) -> bool:
-        key = id(context.tasker)
+        # 每次 Custom Action 回调会重新包装 Tasker；Python 对象地址不是任务身份。
+        tasker = context.tasker
+        handle = getattr(tasker, "_handle", None)
+        handle = getattr(handle, "value", handle)
+        key = int(handle) if handle else id(tasker)
         try:
             params = json.loads(argv.custom_action_param or "{}")
             operation = str(params.get("operation", "check"))
@@ -149,7 +153,6 @@ class RealtimePlayRetryControl(CustomAction):
                     attempt=used + 1,
                     attempt_limit=retry_limit + 1,
                 )
-                _PLAY_RETRY_COUNTS.pop(key, None)
                 print(
                     "RealtimePlayRetry retry=false class=exhausted "
                     f"attempt={used + 1}/{retry_limit + 1} reason={reason}",
