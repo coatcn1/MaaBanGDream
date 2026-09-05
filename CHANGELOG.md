@@ -8,6 +8,12 @@
 - Native Realtime Engine V2 仍是未发布、默认关闭的实验路径；离线实现不代表真机成绩，验收前不会替代 Python Legacy。
 - 当前待验收项：Native V2 连续 10 局 Expert 真机门槛、共享封面歌曲的 Normal 真机复验，以及完整校准断点续跑；v1.2.0 的协力弹窗门控、末尾漏键、结算恢复与单人跳过设置页预武装仍需真机复验。
 
+## 2026-09-05（v1.2.1）
+
+- 修复便携包二次启动失败：`check_runtime.py` 用 `utf-8-sig` 读取 JSON，容忍 Windows PowerShell 5.1 生成的 `interface.json` BOM。
+- `start-release.ps1` 与 `launch-mfa.ps1` 生成 JSON 一律无 BOM 写入。
+- `start-release.ps1` 启动前对 `MFAAvalonia.exe` 执行 `Unblock-File`，解除浏览器下载压缩包带来的 Zone.Identifier，避免 SmartScreen 取消导致 Start-Process 报 “The operation was canceled by the user”。
+
 ## 2026-09-05（v1.2.0）
 
 - 协力首拍门控拦截“其他成员正在准备中”弹窗（含缩放出现/消失与背景变暗）：弹窗存在/消失只重置基线，大面积整行变化不再被当成首音；单人/校准/挑战不受影响。

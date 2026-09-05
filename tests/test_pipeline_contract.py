@@ -23,7 +23,7 @@ def test_all_pipeline_clicks_use_the_foreground_guard():
 def test_interface_references_existing_entry_and_resource():
     interface = load(ROOT / "interface.json")
     assert interface["interface_version"] == 2
-    assert interface["version"] == "1.2.0"
+    assert interface["version"] == "1.2.1"
     assert [task["name"] for task in interface["task"]] == [
         "AutoLive", "RealtimeLive", "CooperativeLive", "ContinuousRealtimeLive",
         "RealtimeCalibration", "DailyFreeGacha", "ChallengeLive",
