@@ -1,0 +1,638 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-09-05T23:37:16.067",
+  "difficulty": "Expert",
+  "accepted": true,
+  "accepted_at": "2026-09-05T23:44:00.933",
+  "environment": {
+    "resolution": [
+      1280,
+      720
+    ],
+    "dpi": 240,
+    "game_fps": 60,
+    "render_quality": "standard",
+    "note_speed": 5.0,
+    "note_skin_type": 1,
+    "tap_effect": 1,
+    "judgement_assist_effect": false
+  },
+  "settings": {
+    "target_fps": 60,
+    "timing_offset_ms": 60,
+    "frame_timeout_ms": 150,
+    "playfield_timeout_ms": 1500
+  },
+  "rehearsals": [
+    {
+      "attempt": 1,
+      "stage": "rehearsal-1",
+      "status": "completed",
+      "started_at": "2026-09-05T23:37:16.071",
+      "ended_at": "2026-09-05T23:40:20.648",
+      "initial_timing_offset_ms": 0,
+      "report_path": null,
+      "recording_path": null,
+      "result": {
+        "schema_version": 1,
+        "valid": true,
+        "result_status": "stable",
+        "run_id": "b65770f2-2a29-485d-8685-8fe79e2c9bd3",
+        "song_id": "song-jacket-phash-v2-82ef4902df9c2a7d",
+        "song_id_method": "song-jacket-phash-v2",
+        "started_at": "2026-09-05T15:37:29.218054Z",
+        "mode": "calibration-rehearsal",
+        "difficulty": "Expert",
+        "profile": null,
+        "session": {
+          "run_id": "b65770f2-2a29-485d-8685-8fe79e2c9bd3",
+          "started_at": "2026-09-05T15:37:29.218054Z",
+          "mode": "calibration-rehearsal",
+          "difficulty": "Expert",
+          "profile_name": null,
+          "song_id": "song-jacket-phash-v2-82ef4902df9c2a7d",
+          "song_id_method": "song-jacket-phash-v2",
+          "song_level": 26,
+          "song_title": null,
+          "song_title_confidence": null,
+          "settings": {
+            "expected_note_speed": 5.0,
+            "actual_note_speed": 5.0,
+            "note_skin_type": 1,
+            "tap_effect": 1,
+            "judgement_assist": false
+          },
+          "debug_recording": false,
+          "recording_path": "debug/recordings/realtime-20260905-233743-505054",
+          "final_cover": {
+            "confirmed": true,
+            "song_id": "song-jacket-phash-v2-82ef4902df9c2a7d",
+            "status": "confirmed",
+            "reason": null
+          }
+        },
+        "settings": {
+          "expected_note_speed": 5.0,
+          "actual_note_speed": 5.0,
+          "note_skin_type": 1,
+          "tap_effect": 1,
+          "judgement_assist": false
+        },
+        "debug_recording_path": "debug/recordings/realtime-20260905-233743-505054",
+        "eligible_for_profile_acceptance": true,
+        "initial_timing_offset_ms": 0,
+        "current_timing_offset_ms": 35,
+        "suggested_timing_offset_ms": 35,
+        "realtime_feedback_fast": 1,
+        "realtime_feedback_slow": 59,
+        "realtime_feedback_valid": 60,
+        "realtime_feedback_ignored": 8,
+        "realtime_feedback_ignored_reasons": {
+          "recent_hold_release": 8
+        },
+        "realtime_feedback_sightings": 5912,
+        "realtime_feedback_reports": 68,
+        "filtered_adjacent_artifacts": 86,
+        "rejected_hold_candidates": 207,
+        "recovered_contacts": 0,
+        "processed_frames": 8390,
+        "dispatched_actions": 1035,
+        "action_counts": {
+          "tap": 669,
+          "flick": 34,
+          "down": 69,
+          "up": 67,
+          "move": 196
+        },
+        "engine_mode": "legacy",
+        "native": {},
+        "frame_interval_p50_ms": 16.676500003086403,
+        "frame_interval_p95_ms": 18.541299999924377,
+        "frame_interval_max_ms": 23.694600000453647,
+        "stage_timings_ms": {
+          "capture": {
+            "p50": 4.87779999821214,
+            "p95": 6.244200001674471,
+            "max": 9.809700000914745,
+            "sample_count": 8391,
+            "retained_samples": 8391,
+            "percentile_scope": "full_run"
+          },
+          "touch_advance": {
+            "p50": 0.2339000020583626,
+            "p95": 0.6435649967897915,
+            "max": 4.608999995980412,
+            "sample_count": 7922,
+            "retained_samples": 7922,
+            "percentile_scope": "full_run"
+          },
+          "life": {
+            "p50": 0.000300002284348011,
+            "p95": 0.000500003807246685,
+            "max": 0.03550000110408291,
+            "sample_count": 7922,
+            "retained_samples": 7922,
+            "percentile_scope": "full_run"
+          },
+          "playfield_monitor": {
+            "p50": 0.0016999983927235007,
+            "p95": 0.22479999825009145,
+            "max": 0.7488999981433153,
+            "sample_count": 8391,
+            "retained_samples": 8391,
+            "percentile_scope": "full_run"
+          },
+          "detector": {
+            "p50": 3.8748500010115094,
+            "p95": 5.041004997474374,
+            "max": 8.5527000046568,
+            "sample_count": 7922,
+            "retained_samples": 7922,
+            "percentile_scope": "full_run"
+          },
+          "planner": {
+            "p50": 0.4078999991179444,
+            "p95": 0.6734000049618771,
+            "max": 8.82899999851361,
+            "sample_count": 7922,
+            "retained_samples": 7922,
+            "percentile_scope": "full_run"
+          },
+          "timing_feedback": {
+            "p50": 0.05345000317902304,
+            "p95": 0.07850000110920519,
+            "max": 0.45030000183032826,
+            "sample_count": 7922,
+            "retained_samples": 7922,
+            "percentile_scope": "full_run"
+          },
+          "dispatch": {
+            "p50": 0.000200001522898674,
+            "p95": 0.000500003807246685,
+            "max": 2.7293999955873005,
+            "sample_count": 7922,
+            "retained_samples": 7922,
+            "percentile_scope": "full_run"
+          },
+          "recorder_enqueue": {
+            "p50": 0.020699997548945248,
+            "p95": 0.03010000327776652,
+            "max": 0.15079999866429716,
+            "sample_count": 7922,
+            "retained_samples": 7922,
+            "percentile_scope": "full_run"
+          }
+        },
+        "frame_interval_outliers": [],
+        "cleanup_failed": false,
+        "cleanup_errors": [],
+        "recorder_error": null,
+        "startup_timed_out": false,
+        "effective_fps": 59.99921000408856,
+        "terminal_reason": "已识别演奏结束并进入结算",
+        "perfect": 151,
+        "great": 670,
+        "good": 19,
+        "bad": 4,
+        "miss": 6,
+        "fast": 5,
+        "slow": 688,
+        "confidence": 0.9016111206543854,
+        "hit_rate": 0.9929411764705882,
+        "timing_offset_ms": 35,
+        "survived": true,
+        "completed": true,
+        "play_attempt": 1,
+        "play_attempt_limit": 2
+      },
+      "song_id": "song-jacket-phash-v2-82ef4902df9c2a7d",
+      "suggested_timing_offset_ms": 60,
+      "termination_reason": null
+    }
+  ],
+  "formal_attempts": [
+    {
+      "attempt": 2,
+      "stage": "formal-validation",
+      "status": "completed",
+      "started_at": "2026-09-05T23:40:20.652",
+      "ended_at": "2026-09-05T23:44:00.931",
+      "initial_timing_offset_ms": 60,
+      "report_path": null,
+      "recording_path": null,
+      "result": {
+        "schema_version": 1,
+        "valid": true,
+        "result_status": "stable",
+        "run_id": "6383122e-3fd9-40a0-abea-0fa7db950247",
+        "song_id": "song-jacket-phash-v2-82ef4902df9c2a7d",
+        "song_id_method": "song-jacket-phash-v2",
+        "started_at": "2026-09-05T15:40:33.984215Z",
+        "mode": "calibration-formal",
+        "difficulty": "Expert",
+        "profile": null,
+        "session": {
+          "run_id": "6383122e-3fd9-40a0-abea-0fa7db950247",
+          "started_at": "2026-09-05T15:40:33.984215Z",
+          "mode": "calibration-formal",
+          "difficulty": "Expert",
+          "profile_name": null,
+          "song_id": "song-jacket-phash-v2-82ef4902df9c2a7d",
+          "song_id_method": "song-jacket-phash-v2",
+          "song_level": 26,
+          "song_title": null,
+          "song_title_confidence": null,
+          "settings": {
+            "expected_note_speed": 5.0,
+            "actual_note_speed": 5.0,
+            "note_skin_type": 1,
+            "tap_effect": 1,
+            "judgement_assist": false
+          },
+          "debug_recording": false,
+          "recording_path": "debug/recordings/realtime-20260905-234046-324733",
+          "final_cover": {
+            "confirmed": true,
+            "song_id": "song-jacket-phash-v2-82ef4902df9c2a7d",
+            "status": "confirmed",
+            "reason": null
+          }
+        },
+        "settings": {
+          "expected_note_speed": 5.0,
+          "actual_note_speed": 5.0,
+          "note_skin_type": 1,
+          "tap_effect": 1,
+          "judgement_assist": false
+        },
+        "debug_recording_path": "debug/recordings/realtime-20260905-234046-324733",
+        "eligible_for_profile_acceptance": true,
+        "initial_timing_offset_ms": 60,
+        "current_timing_offset_ms": 48,
+        "suggested_timing_offset_ms": 48,
+        "realtime_feedback_fast": 5,
+        "realtime_feedback_slow": 2,
+        "realtime_feedback_valid": 7,
+        "realtime_feedback_ignored": 1,
+        "realtime_feedback_ignored_reasons": {
+          "no_recent_transient_input": 1
+        },
+        "realtime_feedback_sightings": 82,
+        "realtime_feedback_reports": 8,
+        "filtered_adjacent_artifacts": 72,
+        "rejected_hold_candidates": 847,
+        "recovered_contacts": 0,
+        "processed_frames": 8501,
+        "dispatched_actions": 1041,
+        "action_counts": {
+          "tap": 669,
+          "flick": 34,
+          "down": 69,
+          "move": 202,
+          "up": 67
+        },
+        "engine_mode": "legacy",
+        "native": {},
+        "frame_interval_p50_ms": 16.66300000215415,
+        "frame_interval_p95_ms": 18.736224999884143,
+        "frame_interval_max_ms": 1066.1380999954417,
+        "stage_timings_ms": {
+          "capture": {
+            "p50": 4.6205999969970435,
+            "p95": 6.217514999298146,
+            "max": 14.24129999941215,
+            "sample_count": 8502,
+            "retained_samples": 8502,
+            "percentile_scope": "full_run"
+          },
+          "touch_advance": {
+            "p50": 0.25039999309228733,
+            "p95": 0.6826400029240176,
+            "max": 5.451900004118215,
+            "sample_count": 7947,
+            "retained_samples": 7947,
+            "percentile_scope": "full_run"
+          },
+          "life": {
+            "p50": 0.000300002284348011,
+            "p95": 0.000500003807246685,
+            "max": 0.1680999994277954,
+            "sample_count": 7947,
+            "retained_samples": 7947,
+            "percentile_scope": "full_run"
+          },
+          "playfield_monitor": {
+            "p50": 0.0016999983927235007,
+            "p95": 0.22468499410024373,
+            "max": 0.971200002823025,
+            "sample_count": 8502,
+            "retained_samples": 8502,
+            "percentile_scope": "full_run"
+          },
+          "detector": {
+            "p50": 4.477999995287973,
+            "p95": 5.948500004160451,
+            "max": 10.710599999583792,
+            "sample_count": 7947,
+            "retained_samples": 7947,
+            "percentile_scope": "full_run"
+          },
+          "planner": {
+            "p50": 0.4887999966740608,
+            "p95": 0.8286499964015092,
+            "max": 8.57710000127554,
+            "sample_count": 7947,
+            "retained_samples": 7947,
+            "percentile_scope": "full_run"
+          },
+          "timing_feedback": {
+            "p50": 0.0537999949301593,
+            "p95": 0.08337000181199981,
+            "max": 0.41590000182623044,
+            "sample_count": 7947,
+            "retained_samples": 7947,
+            "percentile_scope": "full_run"
+          },
+          "dispatch": {
+            "p50": 0.000200001522898674,
+            "p95": 0.000500003807246685,
+            "max": 2.7565000054892153,
+            "sample_count": 7947,
+            "retained_samples": 7947,
+            "percentile_scope": "full_run"
+          },
+          "recorder_enqueue": {
+            "p50": 0.02010000025620684,
+            "p95": 0.029900002118665725,
+            "max": 0.37229999725241214,
+            "sample_count": 7947,
+            "retained_samples": 7947,
+            "percentile_scope": "full_run"
+          }
+        },
+        "frame_interval_outliers": [
+          {
+            "frame": 8376,
+            "dominant_stage_frame": 8376,
+            "elapsed_ms": 139605.4746000009,
+            "interval_ms": 1066.1380999954417,
+            "dominant_stage": "unattributed",
+            "dominant_stage_ms": 1055.8153999954811,
+            "unattributed_ms": 1055.8153999954811,
+            "notes": 5,
+            "actions": 0,
+            "active_contacts": 0
+          },
+          {
+            "frame": 8301,
+            "dominant_stage_frame": 8301,
+            "elapsed_ms": 138354.84730000462,
+            "interval_ms": 232.71300000487827,
+            "dominant_stage": "unattributed",
+            "dominant_stage_ms": 224.7345000214409,
+            "unattributed_ms": 224.7345000214409,
+            "notes": 3,
+            "actions": 0,
+            "active_contacts": 0
+          }
+        ],
+        "cleanup_failed": false,
+        "cleanup_errors": [],
+        "recorder_error": null,
+        "startup_timed_out": false,
+        "effective_fps": 59.431395753128605,
+        "terminal_reason": "已识别演奏结束并进入结算",
+        "perfect": 839,
+        "great": 11,
+        "good": 0,
+        "bad": 0,
+        "miss": 0,
+        "fast": 9,
+        "slow": 2,
+        "confidence": 0.9414918520024008,
+        "hit_rate": 1.0,
+        "timing_offset_ms": 48,
+        "survived": true,
+        "completed": true,
+        "play_attempt": 1,
+        "play_attempt_limit": 2
+      },
+      "song_id": "song-jacket-phash-v2-82ef4902df9c2a7d",
+      "suggested_timing_offset_ms": 60,
+      "termination_reason": null
+    }
+  ],
+  "formal": {
+    "attempt": 2,
+    "stage": "formal-validation",
+    "status": "completed",
+    "started_at": "2026-09-05T23:40:20.652",
+    "ended_at": "2026-09-05T23:44:00.931",
+    "initial_timing_offset_ms": 60,
+    "report_path": null,
+    "recording_path": null,
+    "result": {
+      "schema_version": 1,
+      "valid": true,
+      "result_status": "stable",
+      "run_id": "6383122e-3fd9-40a0-abea-0fa7db950247",
+      "song_id": "song-jacket-phash-v2-82ef4902df9c2a7d",
+      "song_id_method": "song-jacket-phash-v2",
+      "started_at": "2026-09-05T15:40:33.984215Z",
+      "mode": "calibration-formal",
+      "difficulty": "Expert",
+      "profile": null,
+      "session": {
+        "run_id": "6383122e-3fd9-40a0-abea-0fa7db950247",
+        "started_at": "2026-09-05T15:40:33.984215Z",
+        "mode": "calibration-formal",
+        "difficulty": "Expert",
+        "profile_name": null,
+        "song_id": "song-jacket-phash-v2-82ef4902df9c2a7d",
+        "song_id_method": "song-jacket-phash-v2",
+        "song_level": 26,
+        "song_title": null,
+        "song_title_confidence": null,
+        "settings": {
+          "expected_note_speed": 5.0,
+          "actual_note_speed": 5.0,
+          "note_skin_type": 1,
+          "tap_effect": 1,
+          "judgement_assist": false
+        },
+        "debug_recording": false,
+        "recording_path": "debug/recordings/realtime-20260905-234046-324733",
+        "final_cover": {
+          "confirmed": true,
+          "song_id": "song-jacket-phash-v2-82ef4902df9c2a7d",
+          "status": "confirmed",
+          "reason": null
+        }
+      },
+      "settings": {
+        "expected_note_speed": 5.0,
+        "actual_note_speed": 5.0,
+        "note_skin_type": 1,
+        "tap_effect": 1,
+        "judgement_assist": false
+      },
+      "debug_recording_path": "debug/recordings/realtime-20260905-234046-324733",
+      "eligible_for_profile_acceptance": true,
+      "initial_timing_offset_ms": 60,
+      "current_timing_offset_ms": 48,
+      "suggested_timing_offset_ms": 48,
+      "realtime_feedback_fast": 5,
+      "realtime_feedback_slow": 2,
+      "realtime_feedback_valid": 7,
+      "realtime_feedback_ignored": 1,
+      "realtime_feedback_ignored_reasons": {
+        "no_recent_transient_input": 1
+      },
+      "realtime_feedback_sightings": 82,
+      "realtime_feedback_reports": 8,
+      "filtered_adjacent_artifacts": 72,
+      "rejected_hold_candidates": 847,
+      "recovered_contacts": 0,
+      "processed_frames": 8501,
+      "dispatched_actions": 1041,
+      "action_counts": {
+        "tap": 669,
+        "flick": 34,
+        "down": 69,
+        "move": 202,
+        "up": 67
+      },
+      "engine_mode": "legacy",
+      "native": {},
+      "frame_interval_p50_ms": 16.66300000215415,
+      "frame_interval_p95_ms": 18.736224999884143,
+      "frame_interval_max_ms": 1066.1380999954417,
+      "stage_timings_ms": {
+        "capture": {
+          "p50": 4.6205999969970435,
+          "p95": 6.217514999298146,
+          "max": 14.24129999941215,
+          "sample_count": 8502,
+          "retained_samples": 8502,
+          "percentile_scope": "full_run"
+        },
+        "touch_advance": {
+          "p50": 0.25039999309228733,
+          "p95": 0.6826400029240176,
+          "max": 5.451900004118215,
+          "sample_count": 7947,
+          "retained_samples": 7947,
+          "percentile_scope": "full_run"
+        },
+        "life": {
+          "p50": 0.000300002284348011,
+          "p95": 0.000500003807246685,
+          "max": 0.1680999994277954,
+          "sample_count": 7947,
+          "retained_samples": 7947,
+          "percentile_scope": "full_run"
+        },
+        "playfield_monitor": {
+          "p50": 0.0016999983927235007,
+          "p95": 0.22468499410024373,
+          "max": 0.971200002823025,
+          "sample_count": 8502,
+          "retained_samples": 8502,
+          "percentile_scope": "full_run"
+        },
+        "detector": {
+          "p50": 4.477999995287973,
+          "p95": 5.948500004160451,
+          "max": 10.710599999583792,
+          "sample_count": 7947,
+          "retained_samples": 7947,
+          "percentile_scope": "full_run"
+        },
+        "planner": {
+          "p50": 0.4887999966740608,
+          "p95": 0.8286499964015092,
+          "max": 8.57710000127554,
+          "sample_count": 7947,
+          "retained_samples": 7947,
+          "percentile_scope": "full_run"
+        },
+        "timing_feedback": {
+          "p50": 0.0537999949301593,
+          "p95": 0.08337000181199981,
+          "max": 0.41590000182623044,
+          "sample_count": 7947,
+          "retained_samples": 7947,
+          "percentile_scope": "full_run"
+        },
+        "dispatch": {
+          "p50": 0.000200001522898674,
+          "p95": 0.000500003807246685,
+          "max": 2.7565000054892153,
+          "sample_count": 7947,
+          "retained_samples": 7947,
+          "percentile_scope": "full_run"
+        },
+        "recorder_enqueue": {
+          "p50": 0.02010000025620684,
+          "p95": 0.029900002118665725,
+          "max": 0.37229999725241214,
+          "sample_count": 7947,
+          "retained_samples": 7947,
+          "percentile_scope": "full_run"
+        }
+      },
+      "frame_interval_outliers": [
+        {
+          "frame": 8376,
+          "dominant_stage_frame": 8376,
+          "elapsed_ms": 139605.4746000009,
+          "interval_ms": 1066.1380999954417,
+          "dominant_stage": "unattributed",
+          "dominant_stage_ms": 1055.8153999954811,
+          "unattributed_ms": 1055.8153999954811,
+          "notes": 5,
+          "actions": 0,
+          "active_contacts": 0
+        },
+        {
+          "frame": 8301,
+          "dominant_stage_frame": 8301,
+          "elapsed_ms": 138354.84730000462,
+          "interval_ms": 232.71300000487827,
+          "dominant_stage": "unattributed",
+          "dominant_stage_ms": 224.7345000214409,
+          "unattributed_ms": 224.7345000214409,
+          "notes": 3,
+          "actions": 0,
+          "active_contacts": 0
+        }
+      ],
+      "cleanup_failed": false,
+      "cleanup_errors": [],
+      "recorder_error": null,
+      "startup_timed_out": false,
+      "effective_fps": 59.431395753128605,
+      "terminal_reason": "已识别演奏结束并进入结算",
+      "perfect": 839,
+      "great": 11,
+      "good": 0,
+      "bad": 0,
+      "miss": 0,
+      "fast": 9,
+      "slow": 2,
+      "confidence": 0.9414918520024008,
+      "hit_rate": 1.0,
+      "timing_offset_ms": 48,
+      "survived": true,
+      "completed": true,
+      "play_attempt": 1,
+      "play_attempt_limit": 2
+    },
+    "song_id": "song-jacket-phash-v2-82ef4902df9c2a7d",
+    "suggested_timing_offset_ms": 60,
+    "termination_reason": null
+  },
+  "modified_at": "2026-09-05T23:44:00.933",
+  "calibration_session": "9f8e12a7da2a4bed9d0e5c00f681d6eb",
+  "calibration_status": "accepted"
+}

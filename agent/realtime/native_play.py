@@ -970,6 +970,7 @@ class NativeMinitouchBackend:
             commands = [str(line).strip() for line in script]
             if not commands or any(not command for command in commands):
                 raise RuntimeError("TouchScriptCompiler 生成了空命令行")
+            commands = self._apply_touch_surface_mapping(commands)
             receipt_by_commit: dict[int, list[dict[str, object]]] = {}
             receipt_source_lines: set[int] = set()
             new_tokens: set[int] = set()
@@ -1032,7 +1033,9 @@ class NativeMinitouchBackend:
                     f"{len(self._published_action_tokens) + len(new_tokens)} "
                     f"planned={len(self._actions)}"
                 )
-            self._device.publish("".join(script))
+            self._device.publish(
+                "".join(command + "\n" for command in commands)
+            )
             self._expected_commands.extend(records)
             self._published_commands += len(records)
             self._published_action_tokens.update(new_tokens)
@@ -1043,6 +1046,65 @@ class NativeMinitouchBackend:
         except Exception as exc:  # noqa: BLE001 - worker 将错误传播给主循环
             self._publish_error = f"{type(exc).__name__}: {exc}"
             return False
+
+    @staticmethod
+    def _rotate_touch_point(
+        x: int,
+        y: int,
+        *,
+        max_x: int,
+        max_y: int,
+        rotation: int,
+    ) -> tuple[int, int]:
+        """把逻辑横屏坐标映射回 minitouch 的物理触摸面坐标。"""
+        if rotation == 1:
+            # ROTATION_90：内容顺时针旋转 90°。
+            return max_x - 1 - y, x
+        if rotation == 3:
+            # ROTATION_270：内容逆时针旋转 90°。
+            return y, max_y - 1 - x
+        if rotation == 2:
+            # ROTATION_180。
+            return max_x - 1 - x, max_y - 1 - y
+        return x, y
+
+    def _apply_touch_surface_mapping(
+        self,
+        commands: list[str],
+    ) -> list[str]:
+        """发布前统一旋转 d/m 的坐标，保证回执与 jlog 使用同一组坐标。"""
+        max_x = int(getattr(self._device, "max_x", 0) or 0)
+        max_y = int(getattr(self._device, "max_y", 0) or 0)
+        rotation = int(getattr(self._device, "surface_rotation", 0) or 0)
+        if rotation == 0 and max_y > max_x:
+            # 物理面是竖屏而游戏截图是横屏时，即使没解析出旋转值也按
+            # ROTATION_90 处理，避免坐标被压到同一列。
+            rotation = 1
+        if max_x <= 0 or max_y <= 0 or rotation == 0:
+            return commands
+        mapped: list[str] = []
+        for command in commands:
+            parts = command.split()
+            if len(parts) < 4 or parts[0] not in {"d", "m"}:
+                mapped.append(command)
+                continue
+            try:
+                x = int(parts[2])
+                y = int(parts[3])
+            except ValueError:
+                mapped.append(command)
+                continue
+            new_x, new_y = self._rotate_touch_point(
+                x,
+                y,
+                max_x=max_x,
+                max_y=max_y,
+                rotation=rotation,
+            )
+            parts[2] = str(new_x)
+            parts[3] = str(new_y)
+            mapped.append(" ".join(parts))
+        return mapped
 
     @staticmethod
     def _state_name(state: Any) -> str:

@@ -8,6 +8,11 @@
 - Native Realtime Engine V2 仍是未发布、默认关闭的实验路径；离线实现不代表真机成绩，验收前不会替代 Python Legacy。
 - 当前待验收项：Native V2 连续 10 局 Expert 真机门槛、共享封面歌曲的 Normal 真机复验，以及完整校准断点续跑；v1.2.0 的协力弹窗门控、末尾漏键、结算恢复与单人跳过设置页预武装仍需真机复验。
 
+## 2026-09-05（v1.2.3）
+
+- Native 已启用但没有可靠本地谱面时（例如 Easy/Normal 未收录，或等级冲突）不再在预武装阶段失败：预武装跳过并整局回退 Legacy 视觉演奏，选完难度后正常点排练/开始。
+- `prepare_native_for_settings_gate` 无谱面时返回 None 而不是抛错；`RealtimeProfilePlay` 在开演前把 Native 关成 Legacy，禁止中途混用。
+
 ## 2026-09-05（v1.2.2）
 
 - 修复便携包缺失 `maabangdream_realtime.pyd`：发布构建现在显式调用 `build_native_realtime.ps1` 构建 Native 扩展并内置到 `agent/realtime/native/`。

@@ -78,6 +78,7 @@ def test_release_builder_uses_clean_sources_and_excludes_private_state():
     assert r"agent\realtime\native\maabangdream_realtime.pyd" in builder
     assert "maabangdream_realtime.pyd" in validator
     assert "native realtime extension" in validator
+    assert r"packaging\profiles" in builder
     for private_name in (
         "config",
         "logs",
@@ -89,7 +90,21 @@ def test_release_builder_uses_clean_sources_and_excludes_private_state():
         "appsettings.json",
     ):
         assert private_name in builder
-        assert private_name in validator
+        if private_name != "profiles":
+            assert private_name in validator
+
+
+def test_seed_profiles_are_pinned_and_free_of_machine_paths():
+    profiles_dir = ROOT / "packaging" / "profiles"
+    assert profiles_dir.is_dir()
+    selection = json.loads(
+        (profiles_dir / "selection.json").read_text(encoding="utf-8")
+    )
+    assert selection["pinned"]["Expert"] == "expert-20260905233716.json"
+    for path in profiles_dir.glob("*.json"):
+        text = path.read_text(encoding="utf-8")
+        for marker in (r"E:\game", r"D:\Documents", r"C:\Users"):
+            assert marker not in text
 
 
 def test_release_readme_documents_sources_and_first_run():

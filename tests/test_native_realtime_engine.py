@@ -12,6 +12,7 @@ import threading
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -22,7 +23,10 @@ from agent.realtime import native_play as native_play_module
 from agent.realtime.chart_timeline import ChartTimeline
 from agent.realtime.engine import RealtimeEngine
 from agent.realtime.life_monitor import LifeGuard, LifeReading
-from agent.realtime.native_minitouch import NativeMinitouchDevice
+from agent.realtime.native_minitouch import (
+    NativeMinitouchDevice,
+    _parse_surface_rotation,
+)
 from agent.realtime.native_play import (
     NativeMinitouchBackend,
     NativeStartPhotogate,
@@ -611,6 +615,55 @@ def test_native_start_gate_uses_lifecycle_specific_stability_not_song_offset():
     assert cooperative.mode == "cooperative-playfield-confirmed"
     assert cooperative.stable_duration_ms == 120.0
     assert single.grace_ms == cooperative.grace_ms == 500.0
+
+
+def test_minitouch_surface_rotation_parses_bounded_values():
+    assert _parse_surface_rotation("SurfaceOrientation: 1") == 1
+    assert _parse_surface_rotation("SurfaceOrientation: 3") == 3
+    assert _parse_surface_rotation("no rotation line") == 0
+    assert _parse_surface_rotation("SurfaceOrientation: 9") == 0
+
+
+def test_touch_point_rotation_mappings_cover_all_orientations():
+    assert NativeMinitouchBackend._rotate_touch_point(
+        190, 590, max_x=720, max_y=1280, rotation=1
+    ) == (129, 190)
+    assert NativeMinitouchBackend._rotate_touch_point(
+        190, 590, max_x=720, max_y=1280, rotation=3
+    ) == (590, 1089)
+    assert NativeMinitouchBackend._rotate_touch_point(
+        190, 590, max_x=1280, max_y=720, rotation=2
+    ) == (1089, 129)
+    assert NativeMinitouchBackend._rotate_touch_point(
+        190, 590, max_x=1280, max_y=720, rotation=0
+    ) == (190, 590)
+
+
+def test_publish_maps_portrait_surface_coordinates_before_jlog():
+    backend = object.__new__(NativeMinitouchBackend)
+    backend._device = SimpleNamespace(
+        max_x=720,
+        max_y=1280,
+        surface_rotation=1,
+    )
+
+    mapped = backend._apply_touch_surface_mapping([
+        "c",
+        "w 181",
+        "d 7 190 590 50",
+        "m 7 200 585 50",
+        "u 7",
+        "c",
+    ])
+
+    assert mapped == [
+        "c",
+        "w 181",
+        "d 7 129 190 50",
+        "m 7 134 200 50",
+        "u 7",
+        "c",
+    ]
 
 
 def _synthetic_playfield() -> np.ndarray:

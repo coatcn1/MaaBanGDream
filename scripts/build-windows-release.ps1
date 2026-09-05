@@ -264,6 +264,14 @@ foreach ($name in $forbiddenTopLevelNames) {
     }
 }
 
+# 内置维护者校准好的默认 Profile 与选择种子，便携包首次启动即可直接用。
+$seedProfiles = Join-Path $projectRoot 'packaging\profiles'
+if (Test-Path -LiteralPath $seedProfiles -PathType Container) {
+    $packageProfiles = Join-Path $packageRoot 'profiles'
+    New-Item -ItemType Directory -Force -Path $packageProfiles | Out-Null
+    Copy-Item -Path (Join-Path $seedProfiles '*') -Destination $packageProfiles -Force
+}
+
 $zipPath = Join-Path $outputFull "$packageName.zip"
 $shaPath = "$zipPath.sha256"
 foreach ($oldArtifact in @($zipPath, $shaPath)) {

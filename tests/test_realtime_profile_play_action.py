@@ -475,6 +475,104 @@ def test_profile_native_consumes_and_configures_prearmed_backend(monkeypatch):
     assert backend.stop_calls == 1
 
 
+def test_profile_falls_back_to_legacy_without_reliable_native_chart(
+    monkeypatch,
+):
+    prepared_run = reset_live_run(
+        mode="formal",
+        difficulty="Easy",
+        prepared_for_play=True,
+    )
+    tasker = Tasker()
+    context = SimpleNamespace(tasker=tasker)
+    settings = SimpleNamespace(
+        target_fps=60,
+        timing_offset_ms=17,
+        note_speed=2.0,
+        profile_path=SimpleNamespace(name="easy.json"),
+    )
+    monkeypatch.setattr(
+        profile_play_action.RealtimeProfileStore,
+        "resolve_latest",
+        lambda *args, **kwargs: settings,
+    )
+    monkeypatch.setattr(
+        profile_play_action.RealtimeProfileStore,
+        "runtime_options",
+        lambda *args, **kwargs: {
+            "chart_prediction_enabled": True,
+            "chart_predict_presses": True,
+            "native_realtime_enabled": True,
+            "life_safety_enabled": False,
+            "life_exit_threshold": 100,
+        },
+    )
+    monkeypatch.setattr(
+        profile_play_action,
+        "resolve_local_chart_for_run",
+        lambda *args, **kwargs: SimpleNamespace(
+            selection=None,
+            reason="selected song level does not match local chart metadata",
+        ),
+    )
+    monkeypatch.setattr(
+        profile_play_action,
+        "require_game_foreground",
+        lambda controller: None,
+    )
+    monkeypatch.setattr(profile_play_action, "debug_enabled", lambda: False)
+    monkeypatch.setattr(
+        profile_play_action,
+        "diagnostic_trace_enabled",
+        lambda: False,
+    )
+
+    class Dispatcher:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def close(self):
+            pass
+
+    consume_calls = []
+
+    def consume(run_id, chart_path):
+        consume_calls.append((run_id, chart_path))
+        raise AssertionError("无可靠谱面时不得消费 Native 预武装")
+
+    engine_backends = []
+
+    class StopAfterSetupEngine:
+        def __init__(self, *args, **kwargs):
+            engine_backends.append(kwargs["native_backend"])
+            raise RuntimeError("stop after legacy setup")
+
+    monkeypatch.setattr(
+        profile_play_action,
+        "ControllerTouchDispatcher",
+        Dispatcher,
+    )
+    monkeypatch.setattr(
+        profile_play_action,
+        "consume_prearmed_backend",
+        consume,
+    )
+    monkeypatch.setattr(
+        profile_play_action,
+        "RealtimeEngine",
+        StopAfterSetupEngine,
+    )
+
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Easy",
+    }))
+    with pytest.raises(RuntimeError, match="stop after legacy setup"):
+        RealtimeProfilePlay()._run(context, argv)
+
+    assert consume_calls == []
+    assert engine_backends == [None]
+
+
 def test_explicit_native_requires_controller_adb_endpoint():
     with pytest.raises(RuntimeError, match="adb_path.*adb_serial"):
         profile_play_action._native_adb_endpoint(Controller())

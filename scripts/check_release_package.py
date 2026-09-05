@@ -31,7 +31,6 @@ REQUIRED_PATHS = (
 FORBIDDEN_TOP_LEVEL = (
     "config",
     "logs",
-    "profiles",
     "debug",
     "screencap",
     ".maabangdream-backup",

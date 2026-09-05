@@ -1625,9 +1625,16 @@ class RealtimeProfilePlay(CustomAction):
                         discard_prearmed_backend(
                             "profile-chart-resolution-missing"
                         )
-                        raise RuntimeError(
-                            "Native 已显式启用，但当前歌曲没有经过确认的"
-                            f"本地谱面：{chart_reason}"
+                        # 没有可信本地谱面（如 Easy/Normal 未收录）时整局
+                        # 回退 Legacy 视觉演奏；不得中途再切回 Native。
+                        native_requested = False
+                        chart_prediction_enabled = False
+                        chart_predict_presses = False
+                        print(
+                            "RealtimeProfilePlay native_disabled="
+                            "legacy-fallback "
+                            f"reason={chart_reason}",
+                            flush=True,
                         )
                     elif final_cover_required:
                         print(
