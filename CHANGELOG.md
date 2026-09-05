@@ -8,6 +8,12 @@
 - Native Realtime Engine V2 仍是未发布、默认关闭的实验路径；离线实现不代表真机成绩，验收前不会替代 Python Legacy。
 - 当前待验收项：Native V2 连续 10 局 Expert 真机门槛、共享封面歌曲的 Normal 真机复验，以及完整校准断点续跑；v1.2.0 的协力弹窗门控、末尾漏键、结算恢复与单人跳过设置页预武装仍需真机复验。
 
+## 2026-09-06（v1.2.4-dev 本地测试候选，未发布）
+
+- 合并 v1.2.3：便携包 BOM/Unblock 修复、内置 Native 扩展、无本地谱面回退 Legacy、minitouch 竖屏物理面旋转与内置默认校准 Profile。
+- 汇集结算剧情跳过、Native commit 间隔补偿、准备页身份复核、ordered startup 门控、按实际 `w` 命令数结算等待成本、按底层 Tasker 句柄保存重试预算等候选。
+- 完整验证 908 passed / 7 skipped，Native 构建 1786 项 C++ 检查通过；仅供真机验收，不创建 tag 或 Release。
+
 ## 2026-09-05（结算与时序修复候选，待真机验收）
 
 - 修复实际选择难度后准备页身份门禁失效：MaaFramework 整块替换 `custom_action_param`，五档难度的 interface override 需显式保留标题延后和准备页复核参数。真实框架覆盖回归修复前五档均失败，修复后均通过。
