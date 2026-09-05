@@ -342,10 +342,14 @@ def prepare_native_for_settings_gate(
     )
     selection = resolution.selection
     if selection is None:
-        raise RuntimeError(
-            "Native 已显式启用，但预武装无可靠本地谱面："
-            f"{resolution.reason}"
+        # Easy/Normal 未收录本地谱面，或身份/等级冲突时没有可靠谱面；
+        # 本局必须整体回退 Legacy 视觉演奏，不能在预武装阶段把任务打停。
+        print(
+            "NativePrearm skipped=true reason=no-reliable-local-chart "
+            f"detail={resolution.reason}",
+            flush=True,
         )
+        return None
     adb_path, adb_serial = controller_adb_endpoint(controller)
     if backend_factory is None:
         from .native_play import NativeMinitouchBackend
