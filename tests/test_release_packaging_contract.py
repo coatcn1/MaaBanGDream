@@ -38,6 +38,8 @@ def test_release_launcher_generates_machine_local_paths_at_first_run():
     assert "MinitouchAndAdbKey" in launcher
     assert "MAABANGDREAM_MFA_SESSION_ID" in launcher
     assert "$env:MAABANGDREAM_MFA_ROOT = $packageRoot" in launcher
+    assert "OrderedStartupTrial" in launcher
+    assert "MAABANGDREAM_ORDERED_STARTUP" in launcher
 
 
 def test_launchers_write_json_without_bom_and_check_tolerates_bom():
