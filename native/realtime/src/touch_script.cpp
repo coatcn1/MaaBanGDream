@@ -506,6 +506,7 @@ std::vector<std::string> TouchScriptCompiler::compile(
         double wait_ms = std::max(
             0.0, compensated_wait_ms - loss_adjust);
         double emitted_wait_ms = 0.0;
+        int emitted_wait_count = 0;
         const double chunk_ms = std::max(1, config.max_wait_ms);
         while (wait_ms > 0.0) {
             const double piece = std::min(wait_ms, chunk_ms);
@@ -513,12 +514,17 @@ std::vector<std::string> TouchScriptCompiler::compile(
             if (rounded > 0) {
                 emit_commit();
                 script.push_back(line({"w ", std::to_string(rounded)}));
+                ++emitted_wait_count;
                 emitted_wait_ms += static_cast<double>(rounded);
                 wait_ms -= piece;
             } else {
                 wait_ms = 0.0;
             }
         }
+        // 预估只计了一条 w；亚毫秒间隔可能被舍入成零，多段长等待又可能
+        // 发出多条。按实际条数归还或补记成本，避免密集谱面凭空越补越早。
+        residual += (emitted_wait_count - 1)
+            * (offsets_.wait_ms + offsets_.interval_ms);
         // cursor 只描述理想绝对时间轴；设备实际发出的整数等待与理想值
         // 之差由 loss 单独跨块携带。若同时按 rounded 推进 cursor，会在
         // 下一事件的 due-cursor 中再次补同一误差，长曲会产生随机游走。

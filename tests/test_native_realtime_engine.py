@@ -120,6 +120,25 @@ def _compile_full_touch_script(actions, *, end_time_s: float) -> list[str]:
     ))
 
 
+@requires_native
+def test_submillisecond_event_gaps_do_not_charge_nonexistent_waits():
+    compiler = native_engine.touch_script_compiler(offsets={"wait_ms": 0.7})
+    actions = [{"kind": "tap", "lane": lane, "due_s": i * 0.1 + lane * 0.0001,
+                "contact": -1, "target_x": -1.0, "flick_direction": None}
+               for i in range(100) for lane in (0, 1)]
+    script = compiler.compile(actions, {"judgement_y": 590.0}, 0, 10.1, True)
+    elapsed_ms = 0.0
+    downs = 0
+    for line in script:
+        if line.startswith("w "):
+            elapsed_ms += float(line.split()[1]) + 0.7
+        if line.startswith("d "):
+            due_ms = (downs // 2) * 100 + (downs % 2) * 0.1
+            assert abs(elapsed_ms - due_ms) < 3
+            downs += 1
+    assert downs == 200
+
+
 def _assert_protocol_lifecycle(script: list[str]) -> None:
     active: set[int] = set()
     for raw in script:
@@ -734,6 +753,34 @@ def test_cooperative_photogate_blocks_broad_prepare_dim():
         event["event"] for event in report["photogate_events"]
     ]
     assert "broad-change-blocked" in event_names
+
+
+def test_legacy_lifecycle_waits_for_popup_and_first_note_before_completion():
+    from agent.realtime.playfield_monitor import PlayfieldLifecycleMonitor
+
+    playfield = _synthetic_playfield()
+    absent = np.zeros_like(playfield)
+    popup = [False]
+    gate = NativeStartPhotogate(
+        stable_duration_ms=100, grace_ms=0,
+        mode="cooperative-playfield-confirmed",
+        popup_detector=lambda _: popup[0],
+    )
+    monitor = PlayfieldLifecycleMonitor(
+        start_gate=gate, missing_checks=2, active_check_interval_seconds=0,
+    )
+    assert monitor.observe(playfield, 0) == "waiting"
+    popup[0] = True
+    assert monitor.observe(playfield, 0.2) == "waiting"
+    assert monitor.observe(absent, 0.3) == "waiting"
+    popup[0] = False
+    for now in (0.4, 0.5, 0.7, 0.9):
+        assert monitor.observe(playfield, now) == "waiting"
+    note = playfield.copy()
+    note[510:536, 600:680] = 200
+    assert monitor.observe(note, 1.0) == "active"
+    assert monitor.observe(absent, 1.1) == "missing"
+    assert monitor.observe(absent, 1.2) == "completed"
 
 
 def test_single_photogate_does_not_enable_prepare_popup_gate():
