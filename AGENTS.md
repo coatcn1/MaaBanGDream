@@ -7,7 +7,7 @@
 基于 MaaFramework 的 BanG Dream! 自动化项目。通过 MFAAvalonia GUI 加载 Python Agent，控制 Android 模拟器完成自动演出、实时触控演奏、校准和挑战演出。
 
 - 仓库：`https://github.com/coatcn1/MaaBanGDream`
-- 当前版本：`v1.1.0`
+- 当前版本：`v1.2.0`
 - 许可证：GPL-3.0-only
 
 ## MaaBanGDream 运行布局
