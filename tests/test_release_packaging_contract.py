@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+
+from scripts.check_runtime import load_json
 
 
 ROOT = Path(__file__).parents[1]
@@ -35,6 +38,29 @@ def test_release_launcher_generates_machine_local_paths_at_first_run():
     assert "MinitouchAndAdbKey" in launcher
     assert "MAABANGDREAM_MFA_SESSION_ID" in launcher
     assert "$env:MAABANGDREAM_MFA_ROOT = $packageRoot" in launcher
+
+
+def test_launchers_write_json_without_bom_and_check_tolerates_bom():
+    launcher = read("scripts/start-release.ps1")
+    developer_launcher = read("scripts/launch-mfa.ps1")
+    checker = read("scripts/check_runtime.py")
+
+    for script in (launcher, developer_launcher):
+        assert "[System.Text.UTF8Encoding]::new($false)" in script
+    assert "Set-Content -LiteralPath $interfacePath -Encoding utf8" not in launcher
+    assert "Set-Content -LiteralPath $deployedInterface -Encoding utf8" not in developer_launcher
+    assert "utf-8-sig" in checker
+    assert "Unblock-File -LiteralPath $mfa" in launcher
+
+
+def test_runtime_check_loads_bom_prefixed_interface(tmp_path):
+    path = tmp_path / "interface.json"
+    path.write_bytes(
+        b"\xef\xbb\xbf"
+        + json.dumps({"interface_version": 2}).encode("utf-8")
+    )
+
+    assert load_json(path)["interface_version"] == 2
 
 
 def test_release_builder_uses_clean_sources_and_excludes_private_state():

@@ -91,7 +91,12 @@ $interface = Get-Content -LiteralPath $sourceInterface -Raw -Encoding utf8 | Con
 $interface.resource[0].path = @('./resource/resource')
 $interface.agent.child_exec = $python.Replace('\', '/')
 $interface.agent.child_args = @($agent.Replace('\', '/'))
-$interface | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $deployedInterface -Encoding utf8
+$interfaceJson = $interface | ConvertTo-Json -Depth 100
+[System.IO.File]::WriteAllText(
+    $deployedInterface,
+    $interfaceJson,
+    [System.Text.UTF8Encoding]::new($false)
+)
 
 # The custom MFA settings page reads this ignored, machine-local sidecar. It is
 # deliberately generated here so neither usernames nor repository paths enter Git.
@@ -129,7 +134,12 @@ $profileManagerConfig = [ordered]@{
         mfa_logs = $mfaLogDirectory
     }
 }
-$profileManagerConfig | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $deployedProfileManager -Encoding utf8
+$profileManagerJson = $profileManagerConfig | ConvertTo-Json -Depth 10
+[System.IO.File]::WriteAllText(
+    $deployedProfileManager,
+    $profileManagerJson,
+    [System.Text.UTF8Encoding]::new($false)
+)
 
 # MFA defaults to continuing the queue when a MaaFramework task fails. That
 # converts Tasker.Task.Failed into a misleading "all tasks completed" message.
@@ -143,7 +153,12 @@ if (Test-Path -LiteralPath $instanceConfigDirectory) {
         # reliable.  The ADB device probe resets InputMethods on every MFA
         # start, so pin the input mode here (the UI setting overrides it).
         $instanceConfig | Add-Member -NotePropertyName 'AdbControlInputType' -NotePropertyValue 'MinitouchAndAdbKey' -Force
-        $instanceConfig | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $_.FullName -Encoding utf8
+        $instanceJson = $instanceConfig | ConvertTo-Json -Depth 100
+        [System.IO.File]::WriteAllText(
+            $_.FullName,
+            $instanceJson,
+            [System.Text.UTF8Encoding]::new($false)
+        )
     }
 }
 
