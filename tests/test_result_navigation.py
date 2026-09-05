@@ -6,11 +6,46 @@ from agent.realtime.result_navigation import (
     RESULT_ANIMATION_SKIP_POINT,
     ResultNavigationStatus,
     navigate_result_pages,
+    handle_story_page,
 )
 
 
 def test_animation_skip_uses_the_actual_bottom_right_pixel():
     assert RESULT_ANIMATION_SKIP_POINT == (1279, 719)
+
+
+def test_story_pages_are_handled_without_back_cancelling_skip_confirmation():
+    clock = Clock()
+    frames = iter(["menu", "skip", "confirm", "pggbm"])
+    handled = []
+    class Controller:
+        def post_screencap(self):
+            return Job(next(frames))
+        def post_click(self, *_point):
+            return Job()
+        def post_click_key(self, _key):
+            raise AssertionError("剧情跳过期间不能用 BACK 取消弹窗")
+    outcome = navigate_result_pages(
+        Controller(), lambda: False,
+        lambda frame: "pggbm" if frame == "pggbm" else None,
+        handle_intermediate=lambda frame: handled.append(frame) or True,
+        clock=clock.monotonic, sleeper=clock.sleep,
+    )
+    assert outcome.status is ResultNavigationStatus.IDENTIFIED
+    assert handled == ["menu", "skip", "confirm"]
+
+
+def test_story_stop_during_recognition_prevents_click():
+    from types import SimpleNamespace
+    stopped = [False]
+    def recognise(_image, _node):
+        stopped[0] = True
+        return SimpleNamespace(x=0, y=0, w=2, h=2)
+    assert not handle_story_page(
+        None, recognise=recognise,
+        click=lambda _point: (_ for _ in ()).throw(AssertionError("停止后仍输入")),
+        stopping=lambda: stopped[0],
+    )
 
 
 class Job:

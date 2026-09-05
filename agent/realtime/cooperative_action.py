@@ -35,7 +35,7 @@ from .performance_settings_action import RealtimePerformanceSettingsGate
 from .profile_play_action import RealtimeProfilePlay
 from .profile_store import RealtimeProfileStore
 from .native_prearm import discard_prearmed_backend
-from .result_navigation import RESULT_ANIMATION_SKIP_POINT
+from .result_navigation import RESULT_ANIMATION_SKIP_POINT, handle_story_page
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -214,6 +214,8 @@ class CooperativeLiveFlow:
         if self.stopped():
             raise InterruptedError("用户已停止任务")
         try:
+            if getattr(self, "_post_score_refresh", False):
+                return capture_image(self.context, node="ResultRefreshScreen")
             return capture_image(self.context)
         except ScreenRefreshCancelled as exc:
             raise InterruptedError("用户已停止任务") from exc
@@ -583,15 +585,23 @@ class CooperativeLiveFlow:
         """
         # 演出结束后的结算页面不会再出现“成员退出”弹窗；此处关闭该检查，
         # 避免结算导航被残留模板命中打断，把弹窗处理限制在房间/准备阶段。
-        state, image = self.wait_for(
-            names,
-            timeout=timeout,
-            detect_member_exit=False,
-        )
+        # 一帧同时检查出口和剧情，不为尚未到达的房间页空等两轮超时。
+        self._post_score_refresh = True
+        try:
+            state, image = self.wait_for(
+                names, timeout=0.0, detect_member_exit=False,
+            )
+        finally:
+            self._post_score_refresh = False
         if state is not None:
             return state
         if self.pipeline_box(image, "CooperativeHomeMarker") is not None:
             return "home"
+        if handle_story_page(
+            image, recognise=self.pipeline_box, click=self.click,
+            stopping=self.stopped,
+        ):
+            return "story"
         return None
 
     def advance_post_score_once(
@@ -610,7 +620,8 @@ class CooperativeLiveFlow:
         # Keep the user-requested click-before/after-Back cadence.  This is now
         # the literal bottom-right pixel, so it stays input-neutral even when
         # the intervening recognition says Back has already reached Home.
-        self.click(RESULT_ANIMATION_SKIP_POINT)
+        if state != "story":
+            self.click(RESULT_ANIMATION_SKIP_POINT)
         return state
 
     def navigate_to_cooperative_room_selection(self, origin: str) -> None:
@@ -682,6 +693,8 @@ class CooperativeLiveFlow:
                 ("room_search", "live_entry"),
                 timeout=min(2.0, remaining),
             )
+            if state == "story":
+                continue
             if state == "room_search":
                 print(
                     "CooperativeLive state=room-selection "
@@ -734,6 +747,8 @@ class CooperativeLiveFlow:
                 ("repeat_room_title", "room_search", "live_entry"),
                 timeout=min(2.0, remaining),
             )
+            if state == "story":
+                continue
             if state == "repeat_room_title":
                 break
             if state in {"home", "room_search", "live_entry"}:

@@ -52,6 +52,7 @@ from .result_navigation import (
     accelerated_back,
     back_then_click,
     navigate_result_pages,
+    handle_story_page,
 )
 from .result_parser import LiveResult, ResultParser, adjusted_timing_offset
 from .run_reporting import (
@@ -852,6 +853,7 @@ def collect_result(
     maximum_notes: int = 3000,
     cooperative_mode: bool = False,
     robust_navigation: bool = False,
+    handle_intermediate=lambda _image: False,
 ) -> ResultCollectionOutcome:
     """Reach PGGBM, read single-live counts, and advance result pages.
 
@@ -901,6 +903,7 @@ def collect_result(
             stopping,
             identify_terminal,
             before_input=before_input,
+            handle_intermediate=handle_intermediate,
             timeout_seconds=max(0.0, deadline - clock()),
             clock=clock,
             sleeper=sleeper,
@@ -2285,6 +2288,16 @@ class RealtimeProfilePlay(CustomAction):
                 native_failures = _native_execution_gate_failures(
                     native_report
                 )
+                print(
+                    "RealtimeProfilePlay native_timing "
+                    f"gate_passed={native_report.get('timing_gate_passed')} "
+                    f"absolute_valid={native_report.get('absolute_drift_valid')} "
+                    f"drift_p95_ms={native_report.get('drift_p95_ms')} "
+                    f"drift_max_ms={native_report.get('drift_max_ms')} "
+                    f"clock_uncertainty_ms={native_report.get('clock_uncertainty_ms')} "
+                    "scope=device-execution-not-game-judgements",
+                    flush=True,
+                )
                 if native_failures:
                     native_error = RuntimeError(
                         "Native 演奏未通过完整性门禁："
@@ -2532,6 +2545,17 @@ class RealtimeProfilePlay(CustomAction):
         if stats.completed and not stats.cleanup_failed and save_result:
             result_output.mkdir(parents=True, exist_ok=True)
             try:
+                def recognise_story(image, node):
+                    result = context.run_recognition(node, image)
+                    return result.box if result and result.hit else None
+
+                def click_story(point):
+                    if context.tasker.stopping:
+                        return
+                    require_game_foreground(controller)
+                    if not context.tasker.stopping:
+                        controller.post_click(*point).wait()
+
                 outcome = collect_result(
                     controller,
                     lambda: context.tasker.stopping,
@@ -2543,6 +2567,10 @@ class RealtimeProfilePlay(CustomAction):
                     ),
                     cooperative_mode=(run_mode == "cooperative"),
                     robust_navigation=True,
+                    handle_intermediate=lambda image: handle_story_page(
+                        image, recognise=recognise_story, click=click_story,
+                        stopping=lambda: context.tasker.stopping,
+                    ),
                 )
                 if recorder is not None and outcome.image is not None:
                     _recorder_checkpoint(

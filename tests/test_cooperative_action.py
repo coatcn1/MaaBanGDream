@@ -670,6 +670,7 @@ def test_return_to_room_selection_accelerates_each_page_without_extra_match():
 
 def test_post_score_wait_ignores_member_exit_template(monkeypatch):
     flow = object.__new__(CooperativeLiveFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
     flow.capture = lambda: np.zeros((720, 1280, 3), dtype=np.uint8)
 
     def visible(image, name, threshold=0.9):
@@ -683,6 +684,54 @@ def test_post_score_wait_ignores_member_exit_template(monkeypatch):
         ("room_search", "live_entry"),
         timeout=0.01,
     ) is None
+
+
+@pytest.mark.parametrize("stay", [False, True])
+def test_post_score_story_chain_does_not_cancel_confirm_or_wait_for_exit(stay):
+    flow = object.__new__(CooperativeLiveFlow)
+    actions = []
+    class Job:
+        def wait(self):
+            return self
+    class Controller:
+        def post_click_key(self, key):
+            actions.append(("key", key))
+            return Job()
+    flow.context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=Controller())
+    )
+    flow.settings = {"entry_method": "private"}
+    frames = iter(["menu", "skip", "confirm", "exit", "room_wait"])
+    flow.capture = lambda: next(frames)
+    flow.visible = lambda image, name, threshold=0.9: (
+        image == "exit" and name == ("repeat_room_title" if stay else "room_search")
+        or image == "room_wait" and name == "room_wait"
+    )
+    story = {"menu": "AutoLiveStoryMenu", "skip": "AutoLiveStorySkip",
+             "confirm": "AutoLiveStorySkipConfirmLarge"}
+    flow.pipeline_box = lambda image, node: (
+        SimpleNamespace(x=10, y=20, w=20, h=10)
+        if story.get(image) == node else None
+    )
+    flow.click = lambda point: actions.append(("click", point))
+    if stay:
+        flow.stay_in_room()
+    else:
+        flow.return_to_room_selection()
+    assert actions[:3] == [("click", (20, 25))] * 3
+    assert not any(kind == "key" for kind, _ in actions)
+
+
+def test_post_score_exit_checks_one_frame_without_nested_timeout():
+    flow = object.__new__(CooperativeLiveFlow)
+    seen = []
+    def wait_for(names, *, timeout, detect_member_exit):
+        seen.append((timeout, detect_member_exit, flow._post_score_refresh))
+        return "room_search", None
+    flow.wait_for = wait_for
+    assert flow.wait_for_post_score_destination(("room_search",), timeout=2) == "room_search"
+    assert seen == [(0.0, False, True)]
+    assert flow._post_score_refresh is False
 
 
 def test_return_to_room_selection_recognizes_home_and_reenters_before_next_round():

@@ -220,6 +220,12 @@
     "recognition": "DirectHit",
     "action": "DoNothing"
   },
+  "ResultRefreshScreen": {
+    "recognition": "DirectHit",
+    "action": "DoNothing",
+    "pre_delay": 0,
+    "post_delay": 150
+  },
   "TaskReportVisible": {
     "recognition": "DirectHit",
     "action": "DoNothing"
