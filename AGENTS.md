@@ -266,6 +266,8 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
 
 ## 最近交互与任务生命周期陷阱
 
+- **便携包不能假设 ASCII 安装路径**：便携运行时自带的 cv2 对含中文等非 ASCII 字符的路径读写会失败（开演前证据截图报“无法保存实时演奏阶段证据截图”），Native `.pyd` 的窄字符 `std::ifstream` 也会把 UTF-8 谱面路径误解成 ANSI 乱码。图像读写必须走 `agent/realtime/vision_io.py` 的字节级 `imdecode`/`imencode`，新增谱面文件读取在 Windows 必须转 UTF-16 用 `_wfopen`；禁止在 Agent 里直接 `cv2.imread/imwrite`。
+
 - **单人准备页身份复核**：FULL FIRE BIRD 与普通版封面相同但 Expert 为 28/27、本地 ID 为 243/187。单人及其校准在选择乐队页读取左下角标题、难度和等级，必须在 Native 预武装和点击开始前完成；选曲列表不再读标题。准备页等级与选曲页冲突仍硬拒绝，不能用谱面等级填充识别结果。最终封面只复核，首音只定时；不把单人 FULL 规则套到协力或挑战。
 - **重试身份不能使用包装对象地址**：Maa Custom Action 回调会重建 Tasker 包装对象，使用底层句柄保持单局预算；耗尽不能清零，须由下一局入口显式 reset。
 - **Custom Action 参数覆盖是整块替换**：在基础 Pipeline 新增参数时，必须同步所有 interface 难度选项和校准 override；只检查部署的基础 JSON 不足以证明实际回调参数。用独立进程中的真实 MaaFramework 应用覆盖后读取节点验证，避免 AgentServer 绑定无法创建 Resource。
