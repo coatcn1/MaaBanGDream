@@ -8,6 +8,12 @@
 - Native Realtime Engine V2 仍是未发布、默认关闭的实验路径；离线实现不代表真机成绩，验收前不会替代 Python Legacy。
 - 当前待验收项：Native V2 连续 10 局 Expert 真机门槛、共享封面歌曲的 Normal 真机复验，以及完整校准断点续跑；v1.2.0 的协力弹窗门控、末尾漏键、结算恢复与单人跳过设置页预武装仍需真机复验。
 
+## 2026-09-05（v1.2.2）
+
+- 修复便携包缺失 `maabangdream_realtime.pyd`：发布构建现在显式调用 `build_native_realtime.ps1` 构建 Native 扩展并内置到 `agent/realtime/native/`。
+- 发布包校验增加 Native 扩展存在性与导入/版本自检，防止再次出现“打开 Native 后整局零输入”。
+- 开演前门禁失败提示不再统一说成“流速验证失败”，改为指出可能是流速设置或 Native 预武装失败。
+
 ## 2026-09-05（v1.2.1）
 
 - 修复便携包二次启动失败：`check_runtime.py` 用 `utf-8-sig` 读取 JSON，容忍 Windows PowerShell 5.1 生成的 `interface.json` BOM。

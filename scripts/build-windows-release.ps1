@@ -115,6 +115,13 @@ if ($LASTEXITCODE -ne 0) {
 Get-ChildItem -LiteralPath $packageRoot -Recurse -File -Filter '*.pdb' |
     Remove-Item -Force
 
+# Native 实时扩展被 .gitignore 忽略、不会进入 Git，但便携包必须内置；
+# 否则打开 Native 的便携环境会报 “No module named 'maabangdream_realtime'”。
+& (Join-Path $projectRoot 'scripts\build_native_realtime.ps1')
+if ($LASTEXITCODE -ne 0) {
+    throw 'Native realtime extension build failed.'
+}
+
 function Copy-ProjectFile {
     param(
         [Parameter(Mandatory = $true)]
@@ -138,6 +145,7 @@ if ($LASTEXITCODE -ne 0 -or -not $trackedRuntimeFiles) {
 foreach ($relativePath in $trackedRuntimeFiles) {
     Copy-ProjectFile -RelativePath $relativePath
 }
+Copy-ProjectFile -RelativePath 'agent\realtime\native\maabangdream_realtime.pyd'
 
 foreach ($relativePath in @(
     'requirements.txt',

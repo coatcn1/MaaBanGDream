@@ -522,7 +522,7 @@
     ],
     "focus": {
       "Node.Action.Failed": {
-        "content": "❌ 挑战演出开演前流速验证失败：未能读取、修正或复核游戏内实际流速",
+        "content": "❌ 挑战演出开演前流速设置或 Native 预武装失败：详见任务日志原因",
         "display": [
           "log",
           "toast"
