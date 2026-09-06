@@ -187,6 +187,17 @@ class CommonRecover(CustomAction):
         adb_serial = str(params.get("adb_serial", "emulator-7554"))
         startup_grace = int(params.get("startup_grace_ms", 0)) / 1000
         click_nodes = [str(node) for node in params.get("click_nodes", [])]
+        story_click_nodes = [
+            str(node)
+            for node in params.get(
+                "story_click_nodes",
+                [
+                    "AutoLiveStorySkipConfirmLarge",
+                    "AutoLiveStorySkipConfirm",
+                    "AutoLiveStorySkip",
+                ],
+            )
+        ]
         resource_download_click_node = str(
             params.get("resource_download_click_node", "ResourceDownloadConfirm")
         )
@@ -517,6 +528,34 @@ class CommonRecover(CustomAction):
                 if (back_only and restart_round == 0) or login_recovery_active:
                     if context.tasker.stopping:
                         return True
+                    # 登录/弹窗点击后进入的 ESC 恢复阶段仍可能落在剧情页：
+                    # ESC 会在剧情页与“跳过”确认框之间来回切换。先处理
+                    # 剧情跳过/关闭节点，命中则点击并继续，不进入 ESC 循环。
+                    if login_recovery_active and not back_only:
+                        story_handled = False
+                        for node in story_click_nodes:
+                            result = context.run_recognition(node, image)
+                            if not result or not result.hit or not result.box:
+                                continue
+                            if context.tasker.stopping:
+                                return True
+                            box = result.box
+                            controller.post_click(
+                                box.x + box.w // 2,
+                                box.y + box.h // 2,
+                            ).wait()
+                            story_handled = True
+                            log_task(
+                                "游戏启动",
+                                "主页恢复",
+                                "INFO",
+                                f"处理剧情节点：{node}",
+                            )
+                            break
+                        if story_handled:
+                            if not _wait_unless_stopping(context, interval):
+                                return True
+                            continue
                     accelerate_back = (
                         back_only
                         and restart_round == 0
