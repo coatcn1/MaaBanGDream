@@ -1639,6 +1639,98 @@ def test_drift_rate_estimator_dead_zone_suppresses_tiny_slope():
     assert estimator.update() == 0.0
 
 
+def test_backend_feeds_chunk_median_drift_to_rate_estimator():
+    """速率估计必须吃 chunk 中位数，而不是同 commit 的成簇回执。
+
+    真实设备回执成簇到达：同一 chunk 内所有动作共享 actual_s，逐条回执
+    喂最小二乘会把斜率带偏甚至翻符号（MuMu 实测曾估计出负速率，反而把
+    w 拉长）。这里验证每个 chunk 只贡献一个中位数样本。
+    """
+    class Calibrator:
+        event_count = 2
+
+        def __init__(self):
+            self.offsets = SimpleNamespace(
+                down_ms=3.0, up_ms=2.0, move_ms=1.0,
+                wait_ms=0.5, interval_ms=0.0,
+            )
+            self.reset_calls = 0
+
+        def correction_ms(self, used_offsets):
+            return 1.5
+
+        def sample_counts(self):
+            return {
+                "down": 1, "up": 1, "move": 1,
+                "wait": 1, "interval": 1,
+            }
+
+        def reset(self):
+            self.reset_calls += 1
+
+    class Compiler:
+        def __init__(self):
+            self.rate_corrections = []
+            self.residuals = []
+
+        def add_residual_ms(self, value):
+            self.residuals.append(value)
+
+        def set_offsets(self, offsets):
+            pass
+
+        def set_rate_correction(self, rate):
+            self.rate_corrections.append(rate)
+
+    class Recorder:
+        def __init__(self):
+            self.completed = []
+
+        def complete_chunk(self, sequence):
+            self.completed.append(sequence)
+
+    class Estimator:
+        def __init__(self):
+            self.samples = []
+
+        def observe(self, elapsed_s, drift_ms):
+            self.samples.append((elapsed_s, drift_ms))
+
+        def update(self):
+            return 0.003
+
+    backend = object.__new__(native_play_module.NativeMinitouchBackend)
+    backend._chunk_drift_points = {7: [(0.2, 4.0), (0.4, 8.0), (0.6, 12.0)]}
+    backend._drift_rate_estimator = Estimator()
+    backend._calibrator = Calibrator()
+    backend._compiler = Compiler()
+    backend._session = SimpleNamespace(
+        reset_calibration=lambda: None,
+    )
+    backend._execution_timing = Recorder()
+    backend._calibration_correction_ms = 0.0
+    backend._calibration_chunks = 0
+    backend._last_observed_offsets = None
+    backend._drift_rate_estimate = 0.0
+
+    expected = native_play_module._ExpectedCommand(
+        command="c",
+        chunk_sequence=7,
+        used_offsets=SimpleNamespace(
+            down_ms=3.0, up_ms=2.0, move_ms=1.0,
+            wait_ms=0.5, interval_ms=0.0,
+        ),
+        last_in_chunk=True,
+    )
+    backend._complete_observed_chunk(expected)
+
+    # 一个 chunk 只喂一个中位数点：elapsed 中位数 0.4，漂移中位数 8.0。
+    assert backend._drift_rate_estimator.samples == [(0.4, 8.0)]
+    assert backend._compiler.rate_corrections == [0.003]
+    assert backend._execution_timing.completed == [7]
+    assert backend._chunk_drift_points == {}
+
+
 def test_native_device_emergency_stop_avoids_adb_cleanup(monkeypatch):
     events: list[str] = []
 

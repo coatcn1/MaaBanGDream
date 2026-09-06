@@ -573,6 +573,10 @@ class NativeMinitouchBackend:
         self._calibrator = native_engine.latency_calibrator()
         self._run_id = run_id or str(uuid.uuid4())
         self._jlog_path = Path(jlog_path) if jlog_path is not None else None
+        # 速率估计按 chunk 聚合：设备回执成簇到达（同一 commit 的动作共享
+        # 实际时刻），逐条回执喂回归会在窗口内得到大幅摆动的斜率甚至符号
+        # 翻转；先按 chunk 取中位数再估计，才是稳定的设备钟速率偏斜。
+        self._chunk_drift_points: dict[int, list[tuple[float, float]]] = {}
         self._device = device or NativeMinitouchDevice(
             adb_path,
             serial,
@@ -748,6 +752,14 @@ class NativeMinitouchBackend:
         if reset_session is not None:
             reset_session()
         if self._drift_rate_estimator is not None:
+            points = self._chunk_drift_points.pop(
+                int(expected.chunk_sequence), []
+            )
+            if points:
+                self._drift_rate_estimator.observe(
+                    median(point[0] for point in points),
+                    median(point[1] for point in points),
+                )
             self._drift_rate_estimate = self._drift_rate_estimator.update()
             self._compiler.set_rate_correction(self._drift_rate_estimate)
         self._execution_timing.complete_chunk(expected.chunk_sequence)
@@ -890,10 +902,12 @@ class NativeMinitouchBackend:
                         planned_s, actual_s, float(received_s),
                     )
                     if self._drift_rate_estimator is not None:
-                        self._drift_rate_estimator.observe(
+                        self._chunk_drift_points.setdefault(
+                            int(expected.chunk_sequence), []
+                        ).append((
                             planned_s - self._first_action_anchor_s,
                             (actual_s - planned_s) * 1000.0,
-                        )
+                        ))
             if expected.last_in_chunk:
                 self._complete_observed_chunk(expected)
         if self._playback_observation_started:
