@@ -299,6 +299,8 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
 18. **协力黑场转场不能被当成“没有封面”**：准备完成后游戏会先整屏黑一下，随后封面或演奏场淡入；final cover 等待在黑场时进入无 sleep 的密集采样窗口，并在该窗口结束前不因演奏场出现而放弃。标题 OCR 还会把省略号或右侧提示读成杂字（如“…”→“今の”），`title_similarity` 必须容忍首尾噪声，否则准备页谱面无法确认。
 19. **跳过演出设置页不能跳过 Native 预武装**：`game_effect_settings_enabled=false` 时 `RealtimePerformanceSettingsGate` 直接返回，但单人非 deferred 流程的 Native 预武装就在这个门禁里；跳过时仍必须调用 `prepare_native_for_settings_gate`（或按 `defer_native_prearm` 推迟），否则开演前消费会报“预武装不存在或已被消费”，整局零输入。
 20. **协力结算后识别不到房间页不能终止任务**：成员退出弹窗关闭后往往还在结算页，重连不能直接 `ensure_room_page`；应先继续推进结算回房间/主页，仍失败走 `CommonRecover` 重启游戏再进。非 stay 路径结算回不去时把本局计入完成并恢复主页继续下一局，最后一局 stay 失败直接按完成返回。演出结束后的结算导航不识别成员退出弹窗：`wait_for_post_score_destination` 必须传 `detect_member_exit=False`，成员退出检测只保留在房间/准备阶段。
+21. **成员退出弹窗只在进入演奏前出现**：该弹窗只会在进入演奏前（整屏黑场转场之前）的房间/准备阶段出现，演奏过程中和结算画面绝对不会出现。检测只应保留在房间/准备阶段（当前 `wait_for_post_score_destination` 已传 `detect_member_exit=False`）。现有 `cooperative/member_exit_title.png` 模板只剩弹窗面板左上角的一条边（没有标题文字），识别弱且可能误命中其他圆角面板；待用户提供当前版本该弹窗的录像后重新截图提取（要求标题文字完整、1280x720）。
+22. **协力生命归零的“断网跳车”流程（待实现）**：生命归零后按用户指定顺序执行：切断游戏网络 → 游戏退后台再切回 → 识别“已断开连接，是否切换到单人演奏”弹窗并点“退出” → 识别“网络连接失败”弹窗并点“重试”若干次 → 恢复网络 → 继续点“重试”直到返回游戏界面。关键约束：**禁止用 `svc wifi` / 飞行模式开关网络**——2026-09-06 实测 `svc wifi disable` 会顺带打断 MuMu 的 adb 通道（shell 挂起、设备掉线），引擎的截图与触控会全部中断；必须改用 iptables 按游戏 UID 屏蔽出口流量（需 root）或 MuMu 主机侧等效开关。两个弹窗的模板待用户录像后提取；实现必须带网络恢复的 finally 和有界重试，绝不能把模拟器留在断网状态。
 
 ## 修改后的最低验收
 
