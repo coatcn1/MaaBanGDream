@@ -15,11 +15,14 @@ try:
 except ImportError:  # AgentServer imports realtime as a top-level package.
     from foreground_guard import require_game_foreground
 
+try:
+    from .live_visual_gate import MODE_TOGGLE_POINT, live_performance_mode_is_off
+except ImportError:  # AgentServer 以顶层 realtime 包加载本模块时同样成立。
+    from live_visual_gate import MODE_TOGGLE_POINT, live_performance_mode_is_off
+
 
 def formal_live_mode_is_off(image) -> bool:
-    hsv = cv2.cvtColor(image[615:700, 165:235], cv2.COLOR_BGR2HSV)
-    saturated = np.count_nonzero((hsv[..., 1] >= 90) & (hsv[..., 2] >= 130))
-    return saturated < 45
+    return live_performance_mode_is_off(image)
 
 
 def cut_in_is_checked(image) -> bool:
@@ -66,7 +69,7 @@ class RealtimeFormalPreflight(CustomAction):
                     continue
                 if not formal_live_mode_is_off(image):
                     require_game_foreground(controller)
-                    controller.post_click(200, 655).wait()
+                    controller.post_click(*MODE_TOGGLE_POINT).wait()
                     if not _wait(context, .5):
                         return False
                     continue
