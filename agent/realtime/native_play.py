@@ -636,7 +636,7 @@ class NativeMinitouchBackend:
         self._drift_rate_estimator = (
             _DriftRateEstimator() if drift_rate_correction_enabled else None
         )
-        self._drift_rate_estimate: float | None = None
+        self._drift_rate_estimate = 0.0
         self._last_observed_offsets = dict(self._frozen_offsets)
         self._final_window_end_s: float | None = None
         self._game_terminal_reason: str | None = None
