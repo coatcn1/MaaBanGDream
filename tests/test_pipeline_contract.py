@@ -122,14 +122,14 @@ def test_recovery_is_bounded_and_shared():
         "recognition": "DirectHit",
         "action": "DoNothing",
     }
-    assert common["HomeMarker"]["threshold"] == 0.82
+    assert common["HomeMarker"]["threshold"] == 0.75
 
 
 def test_all_home_markers_accept_the_current_home_screen_score():
     for path in (ROOT / "resource" / "pipeline").glob("*.json"):
         for node in load(path).values():
             if node.get("template") == "home_marker.png":
-                assert node["threshold"] == 0.82
+                assert node["threshold"] == 0.75
 
 
 def test_all_pipeline_references_exist_and_nodes_are_unique():

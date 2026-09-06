@@ -196,7 +196,7 @@
   "AutoLiveHomeMarker": {
     "recognition": "TemplateMatch",
     "template": "home_marker.png",
-    "threshold": 0.82,
+    "threshold": 0.75,
     "action": "DoNothing",
     "next": [
       "AutoLiveHomeLive"
