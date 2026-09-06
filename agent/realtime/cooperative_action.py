@@ -38,6 +38,7 @@ from .performance_settings_action import RealtimePerformanceSettingsGate
 from .profile_play_action import RealtimeProfilePlay
 from .profile_store import RealtimeProfileStore
 from .native_prearm import discard_prearmed_backend
+from .cooperative_network import GameNetworkGate
 from .result_navigation import RESULT_ANIMATION_SKIP_POINT, handle_story_page
 
 
@@ -57,6 +58,9 @@ TEMPLATE_POSITIONS = {
     "connect_failed_body": (580, 345),
     "repeat_room_title": (393, 225),
     "sss_guide_close": (856, 610),
+    # 断网跳车弹窗：模板与锚点待用户提供真实断网录像后提取；模板缺失时
+    # disconnect_jump_out 在 visible 之前就 fail-closed，不会用到占位坐标。
+    "switch_to_single_title": (0, 0),
 }
 
 DEFAULT_SETTINGS: dict[str, object] = {
@@ -90,6 +94,8 @@ COOPERATIVE_DIFFICULTY_TARGETS = {
 MEMBER_DOWNLOAD_TIMEOUT_SECONDS = 60.0
 POST_SCORE_NAVIGATION_TIMEOUT_SECONDS = 60.0
 HOME_LIVE_POINT = (1175, 645)
+# 断网跳车弹窗的“退出”按钮点击点，待用户提供弹窗录像后提取。
+DISCONNECT_SWITCH_EXIT_POINT = (0, 0)
 
 
 def cooperative_play_params(settings: dict[str, object]) -> dict[str, object]:
@@ -313,6 +319,70 @@ class CooperativeLiveFlow:
         return not self.visible(
             self.capture(), "connect_failed_body", 0.90
         )
+
+    def _adb_shell(self, args) -> tuple[int, str]:
+        """把 MaaFramework 控制器 shell 通道适配成 (returncode, output)。"""
+        command = " ".join(str(part) for part in args)
+        try:
+            output = self.controller.post_shell(command, 8000).wait().get()
+            return 0, str(output or "")
+        except Exception as exc:  # noqa: BLE001 - 任何失败都要 fail-closed
+            return -1, str(exc)
+
+    def disconnect_jump_out(self, *, popup_timeout_s: float = 25.0) -> bool:
+        """生命归零后的断网跳车流程（AGENTS 第 22 条）。
+
+        顺序：按游戏 UID 用 iptables 屏蔽出口流量 → 游戏退后台再切回，触发
+        “已断开连接，是否切换到单人演奏”弹窗 → 点“退出” → “连接失败。”弹窗
+        有界点“重试” → 返回。任何一步失败都在 finally 恢复网络（fail-closed），
+        绝不把模拟器留在断网状态。跳车弹窗模板尚未提取时直接失败，不盲点。
+        """
+        gate = GameNetworkGate(self._adb_shell)
+        try:
+            if "switch_to_single_title" not in self.templates:
+                # 模板未提取时不做任何网络/前台扰动，直接 fail-closed。
+                print(
+                    "CooperativeDisconnectJump popup_template_missing=true",
+                    flush=True,
+                )
+                return False
+            if not gate.block():
+                print(
+                    "CooperativeDisconnectJump gate_block_failed=true",
+                    flush=True,
+                )
+                return False
+            # 退后台再切回；断网状态下切回会触发“是否切换到单人演奏”弹窗。
+            self.controller.post_click_key(3).wait()
+            time.sleep(0.6)
+            self.controller.post_start_app(GAME_PACKAGE).wait()
+            deadline = time.monotonic() + float(popup_timeout_s)
+            detected = False
+            while time.monotonic() < deadline:
+                if self.stopped():
+                    raise InterruptedError("用户已停止任务")
+                image = self.capture()
+                if self.visible(
+                    image,
+                    "switch_to_single_title",
+                    0.93,
+                ):
+                    detected = True
+                    break
+                time.sleep(0.35)
+            if not detected:
+                print(
+                    "CooperativeDisconnectJump popup_not_detected=true",
+                    flush=True,
+                )
+                return False
+            self.click(DISCONNECT_SWITCH_EXIT_POINT)
+            time.sleep(0.8)
+            self.dismiss_connect_failed()
+            print("CooperativeDisconnectJump completed=true", flush=True)
+            return True
+        finally:
+            gate.restore()
 
     def ensure_room_page(self, timeout: float = 15.0) -> np.ndarray:
         state, image = self.wait_for(("room_search",), timeout=timeout)

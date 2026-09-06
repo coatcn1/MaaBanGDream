@@ -11,6 +11,7 @@ import pytest
 import agent.realtime.cooperative_action as cooperative_action
 from agent.realtime.cooperative_action import (
     COOPERATIVE_DIFFICULTY_TARGETS,
+    DISCONNECT_SWITCH_EXIT_POINT,
     MEMBER_DOWNLOAD_TIMEOUT_SECONDS,
     CooperativeLiveFinalize,
     CooperativeLiveFlow,
@@ -36,12 +37,156 @@ def room_frame(hue: int) -> np.ndarray:
     return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
 
 
+def _fake_jump_flow(
+    monkeypatch,
+    *,
+    templates,
+    visible_results,
+    gate_block,
+):
+    """构造只含断网跳车所需成员的 CooperativeLiveFlow 与假控制器。"""
+    class Job:
+        def __init__(self, value):
+            self._value = value
+
+        def wait(self):
+            return self
+
+        def get(self):
+            return self._value
+
+    class Controller:
+        def __init__(self):
+            self.shell_calls = []
+            self.keys = []
+            self.started = []
+
+        def post_shell(self, command, timeout=20000):
+            self.shell_calls.append(command)
+            return Job("")
+
+        def post_click_key(self, key):
+            self.keys.append(key)
+            return Job(None)
+
+        def post_start_app(self, package):
+            self.started.append(package)
+            return Job(None)
+
+    controller = Controller()
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=controller)
+    )
+    flow.templates = dict(templates)
+    clicks: list[tuple[int, int]] = []
+    dismiss_calls: list[bool] = []
+    flow.capture = lambda: np.zeros((720, 1280, 3), dtype=np.uint8)
+    flow.visible = (
+        lambda image, name, threshold=0.9: visible_results.get(name, False)
+    )
+    flow.click = clicks.append
+    flow.dismiss_connect_failed = lambda: dismiss_calls.append(True)
+
+    class Gate:
+        def __init__(self, shell):
+            self.shell = shell
+            self.restored = 0
+
+        def block(self):
+            return gate_block
+
+        def restore(self):
+            self.restored += 1
+
+    gates = []
+
+    def gate_factory(shell):
+        gate = Gate(shell)
+        gates.append(gate)
+        return gate
+
+    monkeypatch.setattr(
+        cooperative_action, "GameNetworkGate", gate_factory
+    )
+    return flow, controller, clicks, dismiss_calls, gates
+
+
 def test_room_tier_classifier_covers_all_four_carousel_cards():
     assert classify_room_tier(room_frame(90)) == "free"
     assert classify_room_tier(room_frame(174)) == "beginner"
     assert classify_room_tier(room_frame(103)) == "chief"
     assert classify_room_tier(room_frame(19)) == "legend"
     assert classify_room_tier(room_frame(55)) is None
+
+
+def test_disconnect_jump_out_switches_dismisses_and_restores(monkeypatch):
+    flow, controller, clicks, dismiss_calls, gates = _fake_jump_flow(
+        monkeypatch,
+        templates={
+            "switch_to_single_title": np.zeros((10, 10, 3), dtype=np.uint8)
+        },
+        visible_results={"switch_to_single_title": True},
+        gate_block=True,
+    )
+    assert flow.disconnect_jump_out() is True
+    assert controller.keys == [3]
+    assert controller.started == [cooperative_action.GAME_PACKAGE]
+    assert clicks == [DISCONNECT_SWITCH_EXIT_POINT]
+    assert dismiss_calls == [True]
+    assert gates[0].restored == 1
+
+
+def test_disconnect_jump_out_missing_template_fails_before_any_device_action(
+    monkeypatch,
+):
+    flow, controller, clicks, dismiss_calls, gates = _fake_jump_flow(
+        monkeypatch,
+        templates={},
+        visible_results={},
+        gate_block=True,
+    )
+    assert flow.disconnect_jump_out() is False
+    assert controller.keys == []
+    assert controller.started == []
+    assert clicks == []
+    assert dismiss_calls == []
+    assert gates[0].restored == 1
+
+
+def test_disconnect_jump_out_restores_network_when_gate_block_fails(
+    monkeypatch,
+):
+    flow, controller, clicks, dismiss_calls, gates = _fake_jump_flow(
+        monkeypatch,
+        templates={
+            "switch_to_single_title": np.zeros((10, 10, 3), dtype=np.uint8)
+        },
+        visible_results={},
+        gate_block=False,
+    )
+    assert flow.disconnect_jump_out() is False
+    assert controller.keys == []
+    assert gates[0].restored == 1
+
+
+def test_disconnect_jump_out_restores_network_when_popup_times_out(
+    monkeypatch,
+):
+    flow, controller, clicks, dismiss_calls, gates = _fake_jump_flow(
+        monkeypatch,
+        templates={
+            "switch_to_single_title": np.zeros((10, 10, 3), dtype=np.uint8)
+        },
+        visible_results={},
+        gate_block=True,
+    )
+    assert flow.disconnect_jump_out(popup_timeout_s=0.2) is False
+    assert controller.keys == [3]
+    assert controller.started == [cooperative_action.GAME_PACKAGE]
+    assert clicks == []
+    assert dismiss_calls == []
+    assert gates[0].restored == 1
 
 
 @pytest.mark.parametrize(
