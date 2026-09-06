@@ -490,7 +490,10 @@ std::vector<std::string> TouchScriptCompiler::compile(
             return;
         }
         account(offsets_.wait_ms);
-        const double ideal_wait_ms = wait_s * kMillis;
+        // 宿主时间轴差距先按设备时钟速率换算；后续残差/取整损失仍以
+        // 设备毫秒为单位结算。cursor 保持宿主时间轴，不因缩放漂移。
+        const double ideal_wait_ms =
+            wait_s * kMillis * (1.0 - rate_correction_);
         double compensated_wait_ms = ideal_wait_ms;
         // 正补偿只能吃掉本段确实存在的等待；不足 1ms 的短段把剩余欠账
         // 留给后续窗口，不能凭空生成负等待。

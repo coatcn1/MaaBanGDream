@@ -526,6 +526,11 @@ PYBIND11_MODULE(maabangdream_realtime, module) {
         .def("set_offsets", &TouchScriptCompiler::set_offsets,
             py::arg("offsets"))
         .def_property_readonly("offsets", &TouchScriptCompiler::offsets)
+        .def("set_rate_correction",
+            &TouchScriptCompiler::set_rate_correction,
+            py::arg("rate"))
+        .def_property_readonly(
+            "rate_correction", &TouchScriptCompiler::rate_correction)
         .def("add_residual_ms", &TouchScriptCompiler::add_residual_ms,
             py::arg("ms"))
         .def("reset_contacts", &TouchScriptCompiler::reset_contacts)

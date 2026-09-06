@@ -1332,6 +1332,22 @@ def test_native_backend_publishes_first_chunk_from_photogate_anchor(monkeypatch)
     assert backend.report()["timing_gate_passed"] is False
     assert backend.report()["release_confirmed"] is True
     assert len(sessions[0].execution_observations) == 2
+    timing = backend.report()["execution_timing"]
+    assert timing["sample_count"] == 2
+    assert timing["samples"][0][1] == timing["samples"][1][1] == 1
+    assert [row[2] for row in timing["samples"]] == pytest.approx([0.0, 0.5])
+    for row, (planned, actual) in zip(
+        timing["samples"], sessions[0].execution_observations, strict=True
+    ):
+        assert row[3:6] == pytest.approx(
+            [planned, actual, (actual - planned) * 1000.0]
+        )
+    assert [row[1] for row in timing["chunks"]] == [2, 0]
+    assert timing["chunks"][0][4] == pytest.approx(
+        np.median([row[5] for row in timing["samples"]])
+    )
+    assert timing["chunks"][1][4] is None
+    assert backend.report()["execution_timing"] == timing
     # 两条同相位 DOWN 只有一次 commit，设备可见时刻必须完全相同。
     assert (
         sessions[0].execution_observations[0][1]
@@ -1535,6 +1551,7 @@ def test_native_report_rejects_absolute_drift_when_clock_uncertainty_exceeds_1ms
     backend._game_terminal_reason = "completed"
     backend._cancelled_pending_commands = 0
     backend._cancelled_pending_actions = 0
+    backend._execution_timing = native_play_module._ExecutionTimingTrace()
 
     report = backend.report()
 
@@ -1544,6 +1561,82 @@ def test_native_report_rejects_absolute_drift_when_clock_uncertainty_exceeds_1ms
     assert report["conservative_drift_p95_ms"] is None
     assert report["conservative_drift_max_ms"] is None
     assert report["timing_gate_passed"] is False
+
+
+def test_execution_timing_preserves_signed_partial_samples_and_snapshots():
+    timing = native_play_module._ExecutionTimingTrace()
+    timing.observe(1, 7, 100.0, 100.0, 99.990, 105.0)
+    timing.observe(2, 7, 100.0, 101.0, 101.030, 105.0)
+    partial = timing.report()
+    assert partial["chunks"] == []
+    assert [row[5] for row in partial["samples"]] == pytest.approx([-10, 30])
+    timing.complete_chunk(7)
+    timing.observe(3, 8, 100.0, 102.0, 102.050, 109.0)
+    final = timing.report()
+    assert final["sample_count"] == 3
+    assert final["chunks"][0] == pytest.approx((7, 2, 0.0, 1.0, 10.0))
+    assert final["samples"][-1][2] == 2.0
+    assert len(partial["samples"]) == 2
+    assert partial["chunks"] == []
+    assert json.loads(json.dumps(final))["sample_count"] == 3
+
+
+def test_drift_rate_estimator_waits_for_enough_span():
+    estimator = native_play_module._DriftRateEstimator(min_samples=8)
+    for step in range(7):
+        estimator.observe(step * 0.1, step * 0.1)
+    assert estimator.update() == 0.0
+    assert estimator.rate == 0.0
+    assert estimator.last_slope_ms_per_s is None
+
+
+def test_drift_rate_estimator_converges_to_growing_late_drift():
+    estimator = native_play_module._DriftRateEstimator(
+        window_s=20.0, min_samples=12, min_span_s=3.0, ema_alpha=1.0
+    )
+    for step in range(60):
+        elapsed = step * 0.2
+        # 漂移以 3ms/s 增长：斜率 /1000 = 0.003。
+        estimator.observe(elapsed, 4.0 + 3.0 * elapsed)
+    rate = estimator.update()
+    assert rate == pytest.approx(0.003, abs=0.0004)
+    assert estimator.last_slope_ms_per_s == pytest.approx(3.0, abs=0.4)
+
+
+def test_drift_rate_estimator_clamps_rate():
+    estimator = native_play_module._DriftRateEstimator(
+        window_s=10.0, min_samples=8, min_span_s=1.0,
+        max_rate=0.002, ema_alpha=1.0,
+    )
+    for step in range(20):
+        elapsed = step * 0.25
+        estimator.observe(elapsed, 50.0 * elapsed)
+    assert estimator.update() == 0.002
+
+
+def test_drift_rate_estimator_ignores_stall_spikes():
+    estimator = native_play_module._DriftRateEstimator(
+        window_s=20.0, min_samples=12, min_span_s=3.0, ema_alpha=1.0
+    )
+    for step in range(50):
+        elapsed = step * 0.2
+        drift = 3.0 * elapsed
+        # 8 秒处注入一次 60ms 停顿尖峰；中位数斜率不应被它拉偏。
+        if 7.8 <= elapsed <= 8.0:
+            drift += 60.0
+        estimator.observe(elapsed, drift)
+    rate = estimator.update()
+    assert rate == pytest.approx(0.003, abs=0.0006)
+
+
+def test_drift_rate_estimator_dead_zone_suppresses_tiny_slope():
+    estimator = native_play_module._DriftRateEstimator(
+        window_s=10.0, min_samples=8, min_span_s=1.0,
+        dead_zone_ms_per_s=0.5, ema_alpha=1.0,
+    )
+    for step in range(16):
+        estimator.observe(step * 0.25, 0.2 * step * 0.25)
+    assert estimator.update() == 0.0
 
 
 def test_native_device_emergency_stop_avoids_adb_cleanup(monkeypatch):

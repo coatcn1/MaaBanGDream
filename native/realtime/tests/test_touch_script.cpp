@@ -238,6 +238,31 @@ void test_per_type_offset_shortens_waits_with_clamp() {
     CHECK(sum_waits(script) == 1498);
 }
 
+void test_rate_correction_scales_waits_without_touching_residual() {
+    EngineConfig config;
+    const std::vector<ScheduledAction> actions = {
+        action(ActionKind::Down, 0, 0.5, 1),
+        action(ActionKind::Down, 1, 1.0, 2),
+        action(ActionKind::Down, 2, 1.5, 3),
+    };
+
+    TouchScriptCompiler baseline;
+    // 从 start_engine_time=0 起共三段 500ms 间隙。
+    CHECK(sum_waits(baseline.compile(actions, config, 0.0, false)) == 1500);
+
+    TouchScriptCompiler slow_device;
+    slow_device.set_rate_correction(0.01);
+    // 设备钟偏慢 1%：宿主 500ms 间隔换算成 495ms 设备等待。
+    CHECK(sum_waits(slow_device.compile(actions, config, 0.0, false)) == 1485);
+
+    TouchScriptCompiler fast_device;
+    fast_device.set_rate_correction(-0.01);
+    CHECK(sum_waits(fast_device.compile(actions, config, 0.0, false)) == 1515);
+    // 速率校正只乘在 w 上，不进入残余偏移，也不会改变下次编译。
+    CHECK(baseline.rate_correction() == 0.0);
+    CHECK(slow_device.rate_correction() == 0.01);
+}
+
 void test_rounding_loss_is_compensated_and_bounded() {
     TouchScriptCompiler compiler;
     EngineConfig config;
@@ -833,6 +858,7 @@ int run_touch_script_tests() {
     test_basic_hold_lifecycle_ordering();
     test_commit_precedes_every_wait();
     test_per_type_offset_shortens_waits_with_clamp();
+    test_rate_correction_scales_waits_without_touching_residual();
     test_rounding_loss_is_compensated_and_bounded();
     test_fractional_windows_do_not_accumulate_rounding_phase();
     test_transient_contact_avoids_active_hold();
