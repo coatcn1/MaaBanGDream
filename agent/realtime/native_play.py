@@ -496,6 +496,11 @@ class NativeMinitouchBackend:
         self._observation_complete = threading.Event()
         self._calibration_chunks = 0
         self._calibration_correction_ms = 0.0
+        # 有符号漂移样本（实际执行时刻 - 计划时刻，毫秒）。校准器只对
+        # “相对上一段的成本变化”起作用，无法抵消探测锚点/时钟偏移造成的
+        # 恒定或随时间增长的偏差；这里另存一条绝对漂移反馈通道。
+        self._signed_drift_ms: deque[float] = deque(maxlen=80)
+        self._drift_reanchor_ms = 0.0
         self._last_observed_offsets = dict(self._frozen_offsets)
         self._final_window_end_s: float | None = None
         self._game_terminal_reason: str | None = None
@@ -603,6 +608,7 @@ class NativeMinitouchBackend:
                     float(getattr(expected.used_offsets, offset_field)),
                 )
         self._compiler.add_residual_ms(correction_ms)
+        self._apply_drift_reanchor()
         self._compiler.set_offsets(offsets)
         self._last_observed_offsets = self._offsets_to_dict(offsets)
         self._calibration_correction_ms += correction_ms
@@ -611,6 +617,28 @@ class NativeMinitouchBackend:
         reset_session = getattr(self._session, "reset_calibration", None)
         if reset_session is not None:
             reset_session()
+
+    def _apply_drift_reanchor(self) -> None:
+        """按最近实测的有符号漂移中位数重锚定后续切片。
+
+        漂移 = 实际 - 计划，正值表示设备执行偏晚。反馈值取中位数以抗单点
+        抖动，每段最多修正 25ms、低于 8ms 不动作，避免与校准器的小步
+        修正互相振荡；残差由编译器在后续等待里逐渐消化。
+        """
+        if len(self._signed_drift_ms) < 8:
+            return
+        ordered = sorted(self._signed_drift_ms)
+        half = len(ordered) // 2
+        median = (
+            ordered[half]
+            if len(ordered) % 2
+            else (ordered[half - 1] + ordered[half]) / 2.0
+        )
+        if abs(median) < 8.0:
+            return
+        reanchor = float(np.clip(median, -25.0, 25.0))
+        self._compiler.add_residual_ms(reanchor)
+        self._drift_reanchor_ms += reanchor
 
     def _observe_new_logs(self) -> None:
         try:
@@ -743,6 +771,9 @@ class NativeMinitouchBackend:
                         self._fail_observation(
                             f"PlaybackSession 拒绝动作回执 token={token}"
                         )
+                    self._signed_drift_ms.append(
+                        (actual_s - planned_s) * 1000.0
+                    )
                     self._observed_action_tokens.add(token)
             if expected.last_in_chunk:
                 self._complete_observed_chunk(expected)
@@ -1580,6 +1611,7 @@ class NativeMinitouchBackend:
             "calibration_chunks": self._calibration_chunks,
             "executed_chunks": self._calibration_chunks,
             "calibration_correction_ms": self._calibration_correction_ms,
+            "drift_reanchor_ms": getattr(self, "_drift_reanchor_ms", 0.0),
             "clock_offset_ms": (
                 self._device_clock_offset_s * 1000.0
                 if self._device_clock_offset_s is not None
