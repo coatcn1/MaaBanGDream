@@ -106,6 +106,66 @@ def test_new_session_immediately_creates_unaccepted_candidate(tmp_path):
     assert session["status"] == "active"
 
 
+def test_current_mode_tolerates_jacket_phash_noise_between_rounds(tmp_path):
+    store = create_store(tmp_path)
+    first = "song-jacket-phash-v2-c43ad1f46ec87873"
+    second = "song-jacket-phash-v2-c43ac1f46ec87877"
+    session = store.start(
+        difficulty="Hard",
+        song_mode="current",
+        environment=signature(),
+        initial_offset_ms=0,
+        current_song_id=first,
+    )
+    session = store.begin_round(session, REHEARSAL_STAGES[0], 0)
+    session = store.finish_round(
+        session,
+        REHEARSAL_STAGES[0],
+        result(first),
+        suggested_offset_ms=4,
+    )
+    session = store.begin_round(session, FORMAL_STAGE, 4)
+    # 同一封面两次采样的 pHash 翻转 2 个 bit，不能误判成换歌。
+    session = store.finish_round(
+        session,
+        FORMAL_STAGE,
+        result(second),
+        suggested_offset_ms=4,
+    )
+    assert session["attempts"][-1]["status"] == "completed"
+    assert session["status"] == "accepted"
+
+
+def test_current_mode_still_rejects_a_really_different_song(tmp_path):
+    store = create_store(tmp_path)
+    first = "song-jacket-phash-v2-0000000000000000"
+    second = "song-jacket-phash-v2-ffffffffffffffff"
+    session = store.start(
+        difficulty="Hard",
+        song_mode="current",
+        environment=signature(),
+        initial_offset_ms=0,
+        current_song_id=first,
+    )
+    session = store.begin_round(session, REHEARSAL_STAGES[0], 0)
+    session = store.finish_round(
+        session,
+        REHEARSAL_STAGES[0],
+        result(first),
+        suggested_offset_ms=4,
+    )
+    session = store.begin_round(session, FORMAL_STAGE, 4)
+    session = store.finish_round(
+        session,
+        FORMAL_STAGE,
+        result(second),
+        suggested_offset_ms=4,
+    )
+    attempt = session["attempts"][-1]
+    assert attempt["status"] == "technical-failure"
+    assert attempt["technical_reason"] == "current song changed during calibration"
+
+
 def test_each_round_begin_and_end_is_atomically_persisted(tmp_path):
     store = create_store(tmp_path)
     session = store.start(
