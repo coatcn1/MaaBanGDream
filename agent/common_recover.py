@@ -4,6 +4,8 @@ import json
 import subprocess
 import time
 import traceback
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from maa.agent.agent_server import AgentServer
@@ -14,10 +16,12 @@ try:
     from .foreground_guard import ForegroundAppMismatch, foreground_package, require_game_foreground
     from .screen_refresh import ScreenRefreshCancelled, capture_image
     from .task_reporting import log_task
+    from .realtime.vision_io import imwrite_unicode
 except ImportError:  # AgentServer loads this module from the agent directory.
     from foreground_guard import ForegroundAppMismatch, foreground_package, require_game_foreground
     from screen_refresh import ScreenRefreshCancelled, capture_image
     from task_reporting import log_task
+    from realtime.vision_io import imwrite_unicode
 
 
 def _params(raw: Any) -> dict[str, Any]:
@@ -639,6 +643,25 @@ class CommonRecover(CustomAction):
             if restart_round < restart_limit:
                 if context.tasker.stopping:
                     return True
+                try:
+                    evidence_dir = Path(__file__).resolve().parents[1] / "debug"
+                    evidence_dir.mkdir(parents=True, exist_ok=True)
+                    evidence_path = evidence_dir / (
+                        "recovery-restart-"
+                        f"{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+                        f"-{restart_round}.png"
+                    )
+                    imwrite_unicode(evidence_path, image)
+                    print(
+                        f"CommonRecover restart_evidence={evidence_path}",
+                        flush=True,
+                    )
+                except Exception as exc:  # noqa: BLE001 - 证据失败不阻断重启
+                    print(
+                        "CommonRecover restart_evidence_failed="
+                        f"{type(exc).__name__}: {exc}",
+                        flush=True,
+                    )
                 controller.post_stop_app(package).wait()
                 if context.tasker.stopping:
                     return True

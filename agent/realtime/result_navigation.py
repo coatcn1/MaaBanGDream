@@ -60,10 +60,15 @@ def _wait_unless_stopping(
     sleeper: Callable[[float], None],
 ) -> bool:
     deadline = clock() + max(0.0, seconds)
-    while clock() < deadline:
+    while True:
+        # 先取剩余时间再检查停止：stopping 的原生调用可能阻塞到越过
+        # deadline，直接 sleep 负值会抛 ValueError 打断整个结算流程。
+        remaining = deadline - clock()
+        if remaining <= 0:
+            break
         if stopping():
             return False
-        sleeper(min(0.1, deadline - clock()))
+        sleeper(min(0.1, remaining))
     return not stopping()
 
 

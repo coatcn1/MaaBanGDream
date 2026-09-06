@@ -5,6 +5,7 @@ import numpy as np
 from agent.realtime.result_navigation import (
     RESULT_ANIMATION_SKIP_POINT,
     ResultNavigationStatus,
+    _wait_unless_stopping,
     navigate_result_pages,
     handle_story_page,
 )
@@ -46,6 +47,33 @@ def test_story_stop_during_recognition_prevents_click():
         click=lambda _point: (_ for _ in ()).throw(AssertionError("停止后仍输入")),
         stopping=lambda: stopped[0],
     )
+
+
+def test_wait_never_sleeps_negative_when_stopping_blocks_past_deadline():
+    t = [100.0]
+
+    def clock() -> float:
+        return t[0]
+
+    def stopping() -> bool:
+        # 模拟 stopping 的原生调用阻塞，把时钟推进到 deadline 之后。
+        t[0] += 1.0
+        return False
+
+    slept: list[float] = []
+
+    def sleeper(seconds: float) -> None:
+        slept.append(seconds)
+        t[0] += seconds
+
+    result = _wait_unless_stopping(
+        0.05,
+        stopping,
+        clock=clock,
+        sleeper=sleeper,
+    )
+    assert result is True
+    assert all(seconds >= 0 for seconds in slept)
 
 
 class Job:
