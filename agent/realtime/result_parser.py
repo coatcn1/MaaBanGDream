@@ -208,16 +208,17 @@ class ResultParser:
             }
             ordered = sorted(by_label, key=by_label.get)
             best_distance = by_label[ordered[0]]
-            # 候选标签 = 分类结果 + 最近两个 + 距离在最近距离 3 倍以内的
-            # 所有标签。细体数字在部分卡片上会把 8 渲染得与样本距离很远
-            # （实测真值 8 排第 6 近、2.94 倍），固定 top-2 会让按谱面
-            # 总数修复的路径永远找不到正确组合，结算读数会卡到超时。
+            # 候选标签 = 分类结果 + 最近两个 + 距离在最近距离 3.5 倍以内的
+            # 所有标签。不同卡面渲染差异很大：实测真值 8 曾排第 6 近
+            # （2.94 倍），真值 6 曾排第 5 近（3.03 倍）。阈值过窄会让
+            # 按谱面总数修复的路径找不到正确组合，结算读数卡到超时
+            # （2026-09-06 611 被读成 311，total 413 对不上 713）。
             labels = [
                 label
                 for label in ordered
                 if (
                     label in {selected, ordered[0], ordered[1]}
-                    or by_label[label] <= best_distance * 3.0
+                    or by_label[label] <= best_distance * 3.5
                 )
             ]
             minimum_cost = min(math.log1p(value) for value in by_label.values())
