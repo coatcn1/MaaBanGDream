@@ -280,6 +280,7 @@ def test_cooperative_templates_are_deployed_and_nonempty():
         "song_unspecified.png",
         "ready_button.png",
         "member_exit_title.png",
+        "connect_failed_body.png",
         "repeat_room_title.png",
         "sss_guide_close.png",
     }

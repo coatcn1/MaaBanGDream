@@ -54,6 +54,7 @@ TEMPLATE_POSITIONS = {
     "song_unspecified": (690, 612),
     "ready_button": (1010, 575),
     "member_exit_title": (399, 158),
+    "connect_failed_body": (580, 345),
     "repeat_room_title": (393, 225),
     "sss_guide_close": (856, 610),
 }
@@ -300,6 +301,18 @@ class CooperativeLiveFlow:
             # 房间选择界面。”，底部居中“确定”按钮。
             self.click((638, 525))
             time.sleep(0.8)
+
+    def dismiss_connect_failed(self, attempts: int = 5) -> bool:
+        """“连接失败”弹窗：有界点击“重试”，直到弹窗消失或尝试耗尽。"""
+        for _ in range(max(1, int(attempts))):
+            image = self.capture()
+            if not self.visible(image, "connect_failed_body", 0.90):
+                return True
+            self.click((748, 527))
+            time.sleep(0.8)
+        return not self.visible(
+            self.capture(), "connect_failed_body", 0.90
+        )
 
     def ensure_room_page(self, timeout: float = 15.0) -> np.ndarray:
         state, image = self.wait_for(("room_search",), timeout=timeout)
