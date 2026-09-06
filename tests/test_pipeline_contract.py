@@ -547,7 +547,8 @@ def test_realtime_multi_live_contract_and_options():
         ]
         params = nodes[play_node]["custom_action_param"]
         assert params["difficulty"] == case["name"]
-        assert params["require_profile"] is False
+        assert params["require_profile"] is True
+        assert params["rehearsal_mode"] is True
         assert params["settings_gate_required"] is True
         assert params["debug_recording"] is False
         assert params["require_completion"] is True
@@ -569,7 +570,7 @@ def test_realtime_multi_live_contract_and_options():
         ]["difficulty"] == case["name"]
         assert override["RealtimeLiveRehearsalSettingsGate"][
             "custom_action_param"
-        ]["require_profile"] is False
+        ]["require_profile"] is True
         assert nodes[play_node]["next"] == ["RealtimeLiveReturnHome"]
 
     song_mode = interface["option"]["RealtimeLiveSongMode"]
