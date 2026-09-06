@@ -270,6 +270,10 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
 
 - **两个引擎同时“变差”先查共享的 Profile timing_offset_ms**：该字段被 Native 与 Legacy 正式局共同读取。它被错误写入（例如原 60 被写成 71）时，两个引擎的正式局会同时整体偏移，表现为“一次修改把两个引擎一起改坏”。排查此类问题优先对比 Profile 的历史值/备份，而不是先怀疑引擎或漂移补偿代码。2026-09-06 的误诊教训：这个 Profile 问题曾多轮没被查出，原因是（1）单人排练 `require_profile=false` 从 offset 0 开始自校准，开局必然整段偏晚、几百个 SLOW/GREAT，表象与引擎时序损坏一致；（2）正式局两个引擎同时变差，把排查引向共享的时钟/漂移补偿代码，而不是共享的 Profile 数据文件；（3）FAST/SLOW 混合和有符号漂移序列呈现“抖动”，进一步把方向带向时钟问题。因此“两个引擎一起坏”的第一动作是对比 `timing_offset_ms` 的历史值或备份，先排除数据被写坏再谈引擎。
 
+- **MuMu Native 漂移是客户机时钟速率偏斜，且逐局可变**：2026-09-07 区分实验结论——同一份代码在雷电 Native `[FULL]FIRE BIRD` 2331 PERFECT/0 GREAT（漂移 p50 5.2ms），MuMu 同环境 Native 漂移按 20 秒分段斜率 1.09→1.47→4.89→5.64ms/s 加速增长、逐局 p50 在 146.8/108/54/88ms 间波动；MuMu 高性能模式（6核/12G）与关主机负载均无效。速率校正实验（`MAABANGDREAM_NATIVE_DRIFT_RATE_CORRECTION=1`）闭环在 MuMu 上会发散（估计值撞限幅、p50 回弹），保持默认关闭，不要把它当 MuMu 解法。真机分工：**雷电走 Native、MuMu 走 Legacy**（MuMu 新号 Legacy 实测 490P/17G/1M、hit 99.8%）。雷电开发实例与 MuMu 便携实例的 Profile 是两份独立副本，正式局会各自回写 offset，本就应按模拟器分开维护，不要互相拷贝。
+
+- **MuMu 12 占用 127.0.0.1 的 5555/7555 会影子住雷电的 adb**：MuMuVMMHeadless 额外监听 5555/7555，雷电 Ld9BoxHeadless 的 7555 被影子后 `emulator-7554` 实际连到 MuMu（指纹/设备名都对，但物理上控制的是 MuMu）。开发 MFA 连雷电前必须关掉 MuMu（或给雷电/多开换端口）；MuMu 开着时勿再对 `emulator-7554` 做任何设备操作。MuMu 主 adb 仍是 `127.0.0.1:16384`。
+
 - **便携包不能假设 ASCII 安装路径**：便携运行时自带的 cv2 对含中文等非 ASCII 字符的路径读写会失败（开演前证据截图报“无法保存实时演奏阶段证据截图”），Native `.pyd` 的窄字符 `std::ifstream` 也会把 UTF-8 谱面路径误解成 ANSI 乱码。图像读写必须走 `agent/realtime/vision_io.py` 的字节级 `imdecode`/`imencode`，新增谱面文件读取在 Windows 必须转 UTF-16 用 `_wfopen`；禁止在 Agent 里直接 `cv2.imread/imwrite`。
 
 - **单人准备页身份复核**：FULL FIRE BIRD 与普通版封面相同但 Expert 为 28/27、本地 ID 为 243/187。单人及其校准在选择乐队页读取左下角标题、难度和等级，必须在 Native 预武装和点击开始前完成；选曲列表不再读标题。准备页等级与选曲页冲突仍硬拒绝，不能用谱面等级填充识别结果。最终封面只复核，首音只定时；不把单人 FULL 规则套到协力或挑战。
