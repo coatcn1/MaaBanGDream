@@ -501,10 +501,10 @@ class RealtimePerformanceSettingsGate(CustomAction):
         before = controller.post_screencap().wait().get()
         if context.tasker.stopping:
             return True
-        if (
-            params.get("confirm_preparation_identity", False)
-            and os.environ.get("MAABANGDREAM_ORDERED_STARTUP", "0") == "1"
-        ):
+        if params.get("confirm_preparation_identity", False):
+            # 单人/校准在“演出开始”按钮出现的准备页左下角复核标题、等级
+            # 与难度；共享封面（如 FIRE BIRD 与 [FULL]FIRE BIRD）必须靠
+            # 这条标题才能安全区分，不再只由 OrderedStartupTrial 启用。
             from .preparation_identity import confirm_preparation_identity
             confirm_preparation_identity(before, difficulty)
             if context.tasker.stopping:

@@ -266,6 +266,10 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
 
 ## 最近交互与任务生命周期陷阱
 
+- **判断“演奏坏了”之前先确认 offset 路径**：单人排练（`require_profile=false`）从 timing offset 0 开始逐帧自校准，开局必然整段偏晚、几百个 SLOW/GREAT；正式与协力才从 Profile 的 timing offset 起步。排练的高 GREAT/SLOW 计数是固有标定行为，不能当作 Legacy 引擎回归的证据；同曲同 offset 起点的“排练对排练”才是引擎对照。
+
+- **两个引擎同时“变差”先查共享的 Profile timing_offset_ms**：该字段被 Native 与 Legacy 正式局共同读取。它被错误写入（例如原 60 被写成 71）时，两个引擎的正式局会同时整体偏移，表现为“一次修改把两个引擎一起改坏”。排查此类问题优先对比 Profile 的历史值/备份，而不是先怀疑引擎或漂移补偿代码。
+
 - **便携包不能假设 ASCII 安装路径**：便携运行时自带的 cv2 对含中文等非 ASCII 字符的路径读写会失败（开演前证据截图报“无法保存实时演奏阶段证据截图”），Native `.pyd` 的窄字符 `std::ifstream` 也会把 UTF-8 谱面路径误解成 ANSI 乱码。图像读写必须走 `agent/realtime/vision_io.py` 的字节级 `imdecode`/`imencode`，新增谱面文件读取在 Windows 必须转 UTF-16 用 `_wfopen`；禁止在 Agent 里直接 `cv2.imread/imwrite`。
 
 - **单人准备页身份复核**：FULL FIRE BIRD 与普通版封面相同但 Expert 为 28/27、本地 ID 为 243/187。单人及其校准在选择乐队页读取左下角标题、难度和等级，必须在 Native 预武装和点击开始前完成；选曲列表不再读标题。准备页等级与选曲页冲突仍硬拒绝，不能用谱面等级填充识别结果。最终封面只复核，首音只定时；不把单人 FULL 规则套到协力或挑战。

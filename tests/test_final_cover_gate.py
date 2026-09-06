@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import cv2
 import numpy as np
 import pytest
 
@@ -11,6 +12,7 @@ from agent.realtime.final_cover import FinalCoverGate, FinalCoverResolver
 from agent.realtime.profile_play_action import wait_for_final_cover
 from agent.realtime.song_identity import (
     FINAL_SONG_JACKET_ROI,
+    detect_full_badge,
     fingerprint_jacket,
 )
 
@@ -110,6 +112,31 @@ def final_cover_frame(seed: int = 7) -> tuple[np.ndarray, str]:
     return image, fingerprint_jacket(jacket).song_id
 
 
+def full_badged_frame(
+    seed: int = 7,
+    with_badge: bool = True,
+) -> tuple[np.ndarray, str]:
+    """构造带/不带 FULL 徽标的最终封面帧，模拟单人 FULL 谱面右上角徽标。"""
+    image, _ = final_cover_frame(seed)
+    if with_badge:
+        x, y, width, height = FINAL_SONG_JACKET_ROI
+        left = x + width - 46
+        image[y:y + 30, left:x + width] = (70, 70, 70)
+        cv2.rectangle(
+            image, (left, y), (x + width - 1, y + 29),
+            (240, 240, 240), 2,
+        )
+        cv2.putText(
+            image, "FULL", (left + 5, y + 22),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1,
+            cv2.LINE_AA,
+        )
+    # 指纹按含徽标的最终画面计算，模拟目录指纹与实时封面在容差内一致。
+    x, y, width, height = FINAL_SONG_JACKET_ROI
+    song_id = fingerprint_jacket(image[y:y + height, x:x + width]).song_id
+    return image, song_id
+
+
 def selection(song_id: str):
     return SimpleNamespace(
         bestdori_song_id=306,
@@ -186,6 +213,81 @@ def test_unique_jacket_does_not_depend_on_noisy_title_ocr():
     )
 
     assert gate.observe(image) is not None
+
+
+def test_shared_jacket_level_unique_allows_broken_title_ocr():
+    image, song_id = final_cover_frame()
+    chart = selection(song_id)
+    chart.shared_jacket = True
+    chart.shared_jacket_level_unique = True
+    gate = FinalCoverGate(
+        chart,
+        difficulty="Expert",
+        observed_level=28,
+        observed_title="E",
+    )
+
+    assert gate.observe(image) is not None
+
+
+def test_shared_jacket_same_level_still_requires_title():
+    image, song_id = final_cover_frame()
+    chart = selection(song_id)
+    chart.shared_jacket = True
+    chart.shared_jacket_level_unique = False
+    gate = FinalCoverGate(
+        chart,
+        difficulty="Expert",
+        observed_level=28,
+        observed_title="E",
+    )
+
+    assert gate.observe(image) is None
+    assert "title" in gate.last_reason
+
+
+def test_full_badge_detection_distinguishes_badged_cover():
+    badged, _ = full_badged_frame(with_badge=True)
+    plain, _ = full_badged_frame(with_badge=False)
+
+    assert detect_full_badge(badged) is True
+    assert detect_full_badge(plain) is False
+
+
+def test_shared_jacket_full_song_uses_cover_badge_when_title_fails():
+    image, song_id = full_badged_frame(with_badge=True)
+    chart = selection(song_id)
+    chart.shared_jacket = True
+    chart.shared_jacket_level_unique = False
+    chart.title = "[FULL]FIRE BIRD"
+    chart.titles = ("[FULL]FIRE BIRD",)
+    gate = FinalCoverGate(
+        chart,
+        difficulty="Expert",
+        observed_level=28,
+        observed_title="E",
+    )
+
+    assert gate.observe(image) is not None
+    assert gate.last_reason == "confirmed"
+
+
+def test_shared_jacket_full_song_without_badge_still_unconfirmed():
+    image, song_id = full_badged_frame(with_badge=False)
+    chart = selection(song_id)
+    chart.shared_jacket = True
+    chart.shared_jacket_level_unique = False
+    chart.title = "[FULL]FIRE BIRD"
+    chart.titles = ("[FULL]FIRE BIRD",)
+    gate = FinalCoverGate(
+        chart,
+        difficulty="Expert",
+        observed_level=28,
+        observed_title="E",
+    )
+
+    assert gate.observe(image) is None
+    assert "badge" in gate.last_reason
 
 
 def test_wait_for_final_cover_uses_the_controller_frame_stream():

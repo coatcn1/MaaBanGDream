@@ -76,3 +76,30 @@ def test_catalog_fingerprints_resolve_uniquely_or_fail_closed_as_ambiguous():
     ambiguous = repository.resolve(duplicate_fingerprint, "Hard")
     assert ambiguous.selection is None
     assert ambiguous.reason == "song fingerprint mapping is ambiguous"
+
+
+def test_catalog_resolves_fire_bird_live_fingerprint_only_with_level_guard():
+    repository = LocalChartRepository(CHART_ROOT)
+    # 选曲页实测到的 [FULL]FIRE BIRD 封面哈希：距目录内共享封面 12 bit，
+    # 严格阈值 8 会误拒；最近的其他歌曲在 18 bit。只有读到等级时才允许
+    # 更宽阈值重试，随后由等级硬约束在 243/187 之间唯一化。
+    live = "song-jacket-phash-v2-d53d6b1e6b1850f2"
+
+    strict = repository.resolve(live, "expert")
+    assert strict.selection is None
+
+    full = repository.resolve(live, "expert", level=28)
+    assert "confirmed" in full.reason
+    assert full.selection.bestdori_song_id == 243
+    assert full.selection.shared_jacket is True
+    assert full.selection.shared_jacket_level_unique is True
+
+    regular = repository.resolve(live, "expert", level=27)
+    assert "confirmed" in regular.reason
+    assert regular.selection.bestdori_song_id == 187
+    assert regular.selection.shared_jacket_level_unique is True
+
+    garbage = repository.resolve(
+        "song-jacket-phash-v2-0000000000000000", "expert", level=28
+    )
+    assert garbage.selection is None
