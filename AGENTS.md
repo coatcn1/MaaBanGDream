@@ -268,7 +268,7 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
 
 - **判断“演奏坏了”之前先确认 offset 路径**：单人排练（`require_profile=false`）从 timing offset 0 开始逐帧自校准，开局必然整段偏晚、几百个 SLOW/GREAT；正式与协力才从 Profile 的 timing offset 起步。排练的高 GREAT/SLOW 计数是固有标定行为，不能当作 Legacy 引擎回归的证据；同曲同 offset 起点的“排练对排练”才是引擎对照。
 
-- **两个引擎同时“变差”先查共享的 Profile timing_offset_ms**：该字段被 Native 与 Legacy 正式局共同读取。它被错误写入（例如原 60 被写成 71）时，两个引擎的正式局会同时整体偏移，表现为“一次修改把两个引擎一起改坏”。排查此类问题优先对比 Profile 的历史值/备份，而不是先怀疑引擎或漂移补偿代码。
+- **两个引擎同时“变差”先查共享的 Profile timing_offset_ms**：该字段被 Native 与 Legacy 正式局共同读取。它被错误写入（例如原 60 被写成 71）时，两个引擎的正式局会同时整体偏移，表现为“一次修改把两个引擎一起改坏”。排查此类问题优先对比 Profile 的历史值/备份，而不是先怀疑引擎或漂移补偿代码。2026-09-06 的误诊教训：这个 Profile 问题曾多轮没被查出，原因是（1）单人排练 `require_profile=false` 从 offset 0 开始自校准，开局必然整段偏晚、几百个 SLOW/GREAT，表象与引擎时序损坏一致；（2）正式局两个引擎同时变差，把排查引向共享的时钟/漂移补偿代码，而不是共享的 Profile 数据文件；（3）FAST/SLOW 混合和有符号漂移序列呈现“抖动”，进一步把方向带向时钟问题。因此“两个引擎一起坏”的第一动作是对比 `timing_offset_ms` 的历史值或备份，先排除数据被写坏再谈引擎。
 
 - **便携包不能假设 ASCII 安装路径**：便携运行时自带的 cv2 对含中文等非 ASCII 字符的路径读写会失败（开演前证据截图报“无法保存实时演奏阶段证据截图”），Native `.pyd` 的窄字符 `std::ifstream` 也会把 UTF-8 谱面路径误解成 ANSI 乱码。图像读写必须走 `agent/realtime/vision_io.py` 的字节级 `imdecode`/`imencode`，新增谱面文件读取在 Windows 必须转 UTF-16 用 `_wfopen`；禁止在 Agent 里直接 `cv2.imread/imwrite`。
 
