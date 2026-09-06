@@ -67,7 +67,8 @@
         "CooperativeDifficulty",
         "CooperativeCount",
         "CooperativeMemberExitPolicy",
-        "CooperativeDebug"
+        "CooperativeDebug",
+        "CooperativeDisconnectJump"
       ]
     },
     {
@@ -364,6 +365,35 @@
               "custom_action_param": {
                 "debug_recording": true,
                 "diagnostic_trace": true
+              }
+            }
+          }
+        }
+      ]
+    },
+    "CooperativeDisconnectJump": {
+      "type": "select",
+      "label": "断网跳车",
+      "default_case": "Off",
+      "cases": [
+        {
+          "name": "Off",
+          "label": "关闭（推荐）",
+          "pipeline_override": {
+            "CooperativeDisconnectJumpConfigure": {
+              "custom_action_param": {
+                "disconnect_jump_enabled": false
+              }
+            }
+          }
+        },
+        {
+          "name": "On",
+          "label": "生命归零断网跳车",
+          "pipeline_override": {
+            "CooperativeDisconnectJumpConfigure": {
+              "custom_action_param": {
+                "disconnect_jump_enabled": true
               }
             }
           }

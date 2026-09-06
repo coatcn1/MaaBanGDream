@@ -354,6 +354,7 @@ def test_cooperative_interface_exposes_requested_modes_and_five_difficulties():
         "CooperativeCount",
         "CooperativeMemberExitPolicy",
         "CooperativeDebug",
+        "CooperativeDisconnectJump",
     ]
     options = interface["option"]
     assert [case["name"] for case in options["CooperativeEntryMethod"]["cases"]] == [
@@ -375,6 +376,17 @@ def test_cooperative_interface_exposes_requested_modes_and_five_difficulties():
     assert [case["name"] for case in options["CooperativeDifficulty"]["cases"]] == [
         "Easy", "Normal", "Hard", "Expert", "Special",
     ]
+    assert [
+        case["name"] for case in options["CooperativeDisconnectJump"]["cases"]
+    ] == ["Off", "On"]
+    assert (
+        options["CooperativeDisconnectJump"]["cases"][1]["pipeline_override"]
+        == {
+            "CooperativeDisconnectJumpConfigure": {
+                "custom_action_param": {"disconnect_jump_enabled": True}
+            }
+        }
+    )
     assert set(COOPERATIVE_DIFFICULTY_TARGETS) == {
         "Easy", "Normal", "Hard", "Expert", "Special",
     }
