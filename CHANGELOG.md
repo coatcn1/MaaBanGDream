@@ -10,6 +10,14 @@
 
 ## 2026-09-06（v1.2.4-dev 本地测试候选，未发布）
 
+- Native 结果 JSON 新增 `execution_timing`：保存动作 token、chunk、相对首拍的计划时间、计划/实际执行时间、有符号漂移及回读时间；完整 chunk 汇总中位数，未完成 chunk 保留已收到的动作证据。内存采集不改变时钟、调度或补偿，真机漂移原因仍待取证。
+
+- Native 编译器和 Agent 新增默认关闭的时钟速率校正实验（`MAABANGDREAM_NATIVE_DRIFT_RATE_CORRECTION=1`）：按最近有符号漂移估计宿主↔设备时钟速率偏斜，编译器把每个 `w` 按 `(1-rate)` 换算成设备时间。与逐命令成本校准正交，不向残差通道叠加补偿；仍待多局真机验收。
+
+- 单人实时演奏的排练模式恢复使用已验收 Profile（`require_profile=true` 且 `rehearsal_mode=true`），开场即沿用 Profile 的 timing offset，不再从 0 自校准；只有“实时演奏校准”任务的排练阶段才关闭 Profile 要求。
+
+- 调试录像目录名增加演奏类型前缀（`coop-*`、`single-formal-*`、`single-rehearsal-*`、`challenge-*`、`calibration-*`、`continuous-*`、`visual-eval-*`），便于直接区分录像来源。
+
 - 合并 v1.2.3：便携包 BOM/Unblock 修复、内置 Native 扩展、无本地谱面回退 Legacy、minitouch 竖屏物理面旋转与内置默认校准 Profile。
 - 汇集结算剧情跳过、Native commit 间隔补偿、准备页身份复核、ordered startup 门控、按实际 `w` 命令数结算等待成本、按底层 Tasker 句柄保存重试预算等候选。
 - 修复中文/非 ASCII 安装路径（如 `D:\下载\`）下便携包无法开演：cv2 图像读写改为字节级 `imdecode`/`imencode`，Native 谱面读取在 Windows 改用 UTF-16 `_wfopen`。
