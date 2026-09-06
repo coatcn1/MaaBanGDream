@@ -16,6 +16,14 @@ from agent.realtime.note_detector import NoteKind, ObservedNote
 from agent.realtime.touch_planner import ActionKind, TouchAction
 
 
+def test_debug_recorder_directory_prefix_reflects_session_kind(tmp_path):
+    recorder = RealtimeDebugRecorder(
+        tmp_path, video_enabled=False, session_kind="single-rehearsal"
+    )
+    assert recorder.output_dir.name.startswith("single-rehearsal-")
+    recorder.close()
+
+
 def test_debug_recorder_writes_lossless_trace_and_replay_summary(tmp_path):
     recorder = RealtimeDebugRecorder(tmp_path, video_fps=30)
     frame = np.zeros((72, 128, 3), dtype=np.uint8)

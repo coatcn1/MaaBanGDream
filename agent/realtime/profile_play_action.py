@@ -518,6 +518,25 @@ def _run_mode(params: dict, *, is_rehearsal: bool) -> str:
     return "rehearsal" if is_rehearsal else "formal"
 
 
+_RECORDING_KIND_BY_RUN_MODE = {
+    "cooperative": "coop",
+    "challenge": "challenge",
+    "formal": "single-formal",
+    "rehearsal": "single-rehearsal",
+    "calibration": "calibration",
+    "calibration-rehearsal": "calibration-rehearsal",
+    "calibration-formal": "calibration-formal",
+    "continuous": "continuous",
+    "visual-evaluation": "visual-eval",
+}
+
+
+def _recording_kind(run_mode: str) -> str:
+    """把演奏类型映射成录像目录前缀；未知值原样保留以便排查。"""
+    value = str(run_mode or "").strip()
+    return _RECORDING_KIND_BY_RUN_MODE.get(value, value or "realtime")
+
+
 def _relative_artifact_path(path) -> str:
     try:
         return path.resolve().relative_to(PROJECT_ROOT.resolve()).as_posix()
@@ -1744,12 +1763,14 @@ class RealtimeProfilePlay(CustomAction):
             )
             if debug_recording:
                 recorder = RealtimeDebugRecorder(
-                    PROJECT_ROOT / "debug" / "recordings"
+                    PROJECT_ROOT / "debug" / "recordings",
+                    session_kind=_recording_kind(run_mode),
                 )
             elif diagnostic_trace:
                 recorder = RealtimeDebugRecorder(
                     PROJECT_ROOT / "debug" / "recordings",
                     video_enabled=False,
+                    session_kind=_recording_kind(run_mode),
                 )
             if recorder is not None:
                 live_run = update_live_run(

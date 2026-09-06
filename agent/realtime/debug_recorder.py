@@ -73,10 +73,14 @@ class RealtimeDebugRecorder:
         video_enabled: bool = True,
         session_metadata: Mapping[str, object] | None = None,
         close_timeout_seconds: float = 2.0,
+        session_kind: str = "realtime",
     ) -> None:
-        # 重试可能在同一秒重新建包，微秒后缀避免诊断功能反过来导致任务失败。
+        # 目录名带演奏类型（单人正式/单人排练/协力/挑战/校准等），便于
+        # 直接区分录像来源；重试可能在同一秒重新建包，微秒后缀避免诊断
+        # 功能反过来导致任务失败。
+        kind = str(session_kind or "realtime").strip() or "realtime"
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        self.output_dir = root / f"realtime-{stamp}"
+        self.output_dir = root / f"{kind}-{stamp}"
         self.output_dir.mkdir(parents=True, exist_ok=False)
         self.video_fps = video_fps
         self.video_enabled = bool(video_enabled)
