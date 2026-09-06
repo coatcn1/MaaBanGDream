@@ -20,6 +20,7 @@ from agent.realtime.cooperative_action import (
     configure_cooperative_settings,
     cooperative_play_params,
     current_cooperative_settings,
+    DEFAULT_SETTINGS,
     should_stay_in_room,
 )
 
@@ -187,6 +188,51 @@ def test_disconnect_jump_out_restores_network_when_popup_times_out(
     assert clicks == []
     assert dismiss_calls == []
     assert gates[0].restored == 1
+
+
+def test_play_runs_disconnect_jump_when_live_run_requests_it(monkeypatch):
+    class Play:
+        def run(self, context, params):
+            # 引擎已因跳车提前返回；这里返回 False 也不应走到失败分支。
+            return False
+
+    monkeypatch.setattr(cooperative_action, "RealtimeProfilePlay", Play)
+    monkeypatch.setattr(
+        cooperative_action,
+        "current_live_run",
+        lambda: SimpleNamespace(disconnect_jump_requested=True),
+    )
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.settings = dict(DEFAULT_SETTINGS)
+    flow.context = object()
+    flow.action_argv = lambda params: params
+    jumps = []
+    flow.disconnect_jump_out = lambda: jumps.append(True)
+
+    assert flow.play() is True
+    assert jumps == [True]
+
+
+def test_play_skips_jump_without_live_run_signal(monkeypatch):
+    class Play:
+        def run(self, context, params):
+            return False
+
+    monkeypatch.setattr(cooperative_action, "RealtimeProfilePlay", Play)
+    monkeypatch.setattr(
+        cooperative_action,
+        "current_live_run",
+        lambda: SimpleNamespace(disconnect_jump_requested=False),
+    )
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.settings = dict(DEFAULT_SETTINGS)
+    flow.context = object()
+    flow.action_argv = lambda params: params
+    jumps = []
+    flow.disconnect_jump_out = lambda: jumps.append(True)
+
+    assert flow.play() is False
+    assert jumps == []
 
 
 @pytest.mark.parametrize(

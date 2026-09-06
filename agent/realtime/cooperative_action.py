@@ -31,7 +31,7 @@ from .game_effect_settings_action import RealtimeGameEffectSettingsGate
 from .game_effect_settings_action import _click as _maa_click
 from .vision_io import imread_unicode
 from .game_effect_settings_action import _swipe as _maa_swipe
-from .live_session import append_current_run_event
+from .live_session import append_current_run_event, current_live_run
 from .life_monitor import LifeDetector
 from .live_visual_gate import MODE_TOGGLE_POINT, live_performance_mode_is_off
 from .performance_settings_action import RealtimePerformanceSettingsGate
@@ -74,6 +74,7 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "max_reconnects": 3,
     "debug_recording": False,
     "diagnostic_trace": True,
+    "disconnect_jump_enabled": False,
 }
 _SETTINGS = dict(DEFAULT_SETTINGS)
 _SETTINGS_LOCK = threading.Lock()
@@ -122,6 +123,9 @@ def cooperative_play_params(settings: dict[str, object]) -> dict[str, object]:
         "confirm_final_cover": True,
         "final_cover_timeout_seconds": MEMBER_DOWNLOAD_TIMEOUT_SECONDS,
         "native_prearm_deferred": True,
+        "life_depleted_jump_request": bool(
+            settings.get("disconnect_jump_enabled", False)
+        ),
     }
 
 
@@ -702,6 +706,12 @@ class CooperativeLiveFlow:
         success = RealtimeProfilePlay().run(
             self.context, self.action_argv(params)
         )
+        run = current_live_run()
+        if run is not None and bool(run.disconnect_jump_requested):
+            # 生命归零跳车：Play 已释放触点并返回，这里执行断网跳车流程；
+            # 按“完成本局”返回，由外层继续回房间/主页导航。
+            self.disconnect_jump_out()
+            return True
         if not success:
             return False
         return True

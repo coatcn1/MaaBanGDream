@@ -1707,6 +1707,15 @@ class RealtimeProfilePlay(CustomAction):
                 params,
                 runtime_options,
             )
+            # 协力“断网跳车”：即使关闭生命保护，也要打开数值生命监视，
+            # 让引擎在生命归零帧发出一次性跳车信号。安全暂停阈值保持关闭，
+            # 避免阈值中止路径抢在跳车信号之前触发。
+            disconnect_jump_request = bool(
+                params.get("life_depleted_jump_request", False)
+            )
+            numeric_life_monitor_enabled = (
+                numeric_life_monitor_enabled or disconnect_jump_request
+            )
             debug_recording = bool(
                 params.get("debug_recording") or debug_enabled()
             )
@@ -2314,6 +2323,10 @@ class RealtimeProfilePlay(CustomAction):
         )
         try:
             stall_safe_capture = StallSafeCapture(controller)
+
+            def request_disconnect_jump(_reading) -> None:
+                update_live_run(disconnect_jump_requested=True)
+
             stats = engine.run(
                 stall_safe_capture,
                 lambda: context.tasker.stopping,
@@ -2323,6 +2336,10 @@ class RealtimeProfilePlay(CustomAction):
                 life_exit_threshold=life_threshold,
                 on_life_safety=(
                     pause_for_life if life_threshold is not None else None
+                ),
+                on_life_depleted=(
+                    request_disconnect_jump
+                    if disconnect_jump_request else None
                 ),
                 startup_timeout_seconds=startup_timeout_seconds,
             )
@@ -2515,6 +2532,29 @@ class RealtimeProfilePlay(CustomAction):
                 "survived": not stats.life_depleted,
                 "completed": bool(stats.completed),
             })
+
+        if stats.jump_requested:
+            # 协力“断网跳车”：本局以“请求跳车”结束，不做结算解析与退出
+            # 导航；跳车流程由外层协力流程读取 live run 信号后执行。
+            print(
+                "RealtimeProfilePlay disconnect_jump_requested=true "
+                "round_ended_early=true",
+                flush=True,
+            )
+            if save_result:
+                _write_json_atomic(
+                    result_report_path,
+                    _result_report_payload(
+                        None,
+                        stats,
+                        timing_offset_ms=timing_offset_ms,
+                        suggested_timing_offset_ms=None,
+                        run_context=live_run,
+                        result_status="disconnect_jump_requested",
+                        reason="生命归零请求断网跳车",
+                    ),
+                )
+            return True
 
         if save_result and stats.life_failed and not stats.stopped:
             # 生命归零：先把失败现场落盘，再有界退出到主页。退出导航失败时
