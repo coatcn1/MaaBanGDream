@@ -50,6 +50,7 @@ class EngineStats:
     completed: bool = False
     life_depleted: bool = False
     life_failed: bool = False
+    jump_requested: bool = False
     timing_feedback_fast: int = 0
     timing_feedback_slow: int = 0
     initial_timing_offset_ms: int = 0
@@ -146,6 +147,7 @@ class RealtimeEngine:
         continue_after_life_depleted: bool = False,
         life_exit_threshold: int | None = None,
         on_life_safety: Callable[[object], None] | None = None,
+        on_life_depleted: Callable[[object], None] | None = None,
         touch_reset_life_threshold: int = 300,
         touch_reset_cooldown_seconds: float = 5.0,
         touch_reset_recent_action_seconds: float = 0.35,
@@ -179,6 +181,7 @@ class RealtimeEngine:
         completed = False
         life_depleted = False
         life_failed = False
+        jump_requested = False
         startup_timed_out = False
         below_threshold_streak = 0
         touch_resets = 0
@@ -344,6 +347,7 @@ class RealtimeEngine:
                 completed=completed,
                 life_depleted=life_depleted,
                 life_failed=life_failed,
+                jump_requested=jump_requested,
                 timing_feedback_fast=(
                     self.timing_controller.fast_samples
                     if self.timing_controller is not None else 0
@@ -632,6 +636,29 @@ class RealtimeEngine:
                             below_threshold_streak = 0
                         if status is LifeStatus.DEAD:
                             life_depleted = True
+                            if on_life_depleted is not None:
+                                # 协力“断网跳车”：生命归零立即请求跳出演奏
+                                # 循环，由外层执行跳车流程。回调只触发一次，
+                                # 随后终止本局，绝不继续向判定线发送按压。
+                                if not jump_requested:
+                                    jump_requested = True
+                                    try:
+                                        on_life_depleted(reading)
+                                    except Exception as exc:  # noqa: BLE001
+                                        print(
+                                            "RealtimeEngine "
+                                            "on_life_depleted_error="
+                                            f"{type(exc).__name__}: {exc}",
+                                            flush=True,
+                                        )
+                                    record_terminal_life_frame(
+                                        image,
+                                        now,
+                                        life_status=status.value,
+                                        life_value=reading.value,
+                                        reason="life-dead-jump-requested",
+                                    )
+                                    break
                             if not continue_after_life_depleted:
                                 aborted_for_life = True
                                 record_terminal_life_frame(
@@ -945,6 +972,8 @@ class RealtimeEngine:
             scheduled_actions.clear()
             if was_stopped:
                 terminal_reason = "用户已停止任务"
+            elif jump_requested:
+                terminal_reason = "生命归零请求断网跳车"
             elif aborted_for_life:
                 terminal_reason = "生命值触发安全停止"
             elif life_failed:

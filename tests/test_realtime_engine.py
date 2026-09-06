@@ -929,6 +929,39 @@ def test_engine_can_continue_after_zero_life_until_completion():
     assert touch.closed == 1
 
 
+def test_engine_requests_disconnect_jump_once_on_zero_life():
+    engine, _, planner, touch, capture = build()
+
+    class Depletes:
+        def __init__(self):
+            self.frames = 0
+
+        def detect(self, image):
+            self.frames += 1
+            return LifeReading(True, 800 if self.frames <= 3 else 0)
+
+    engine.life_detector = Depletes()
+    engine.life_guard = LifeGuard(confirm_frames=3)
+    calls = []
+
+    stats = engine.run(
+        capture,
+        lambda: False,
+        duration_seconds=10,
+        target_fps=60,
+        continue_after_life_depleted=True,
+        on_life_depleted=lambda reading: calls.append(reading.value),
+    )
+
+    assert stats.jump_requested
+    assert stats.life_depleted
+    assert not stats.aborted_for_life
+    assert calls == [0]
+    assert stats.terminal_reason == "生命归零请求断网跳车"
+    assert planner.resets == 1
+    assert touch.closed == 1
+
+
 def test_engine_invokes_life_safety_after_three_frames_below_threshold():
     engine, _, _, touch, capture = build()
     triggered = []
