@@ -53,7 +53,7 @@ TEMPLATE_POSITIONS = {
     "room_wait": (110, 58),
     "song_unspecified": (690, 612),
     "ready_button": (1010, 575),
-    "member_exit_title": (400, 478),
+    "member_exit_title": (399, 158),
     "repeat_room_title": (393, 225),
     "sss_guide_close": (856, 610),
 }
@@ -296,7 +296,9 @@ class CooperativeLiveFlow:
     def dismiss_member_exit(self) -> None:
         image = self.capture()
         if self.visible(image, "member_exit_title", 0.93):
-            self.click((500, 678))
+            # 当前版本弹窗：标题“错误”，正文“由于XX退出房间。将返回
+            # 房间选择界面。”，底部居中“确定”按钮。
+            self.click((638, 525))
             time.sleep(0.8)
 
     def ensure_room_page(self, timeout: float = 15.0) -> np.ndarray:
