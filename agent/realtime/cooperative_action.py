@@ -5,6 +5,7 @@ import threading
 import time
 import traceback
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -32,6 +33,7 @@ from .vision_io import imread_unicode
 from .game_effect_settings_action import _swipe as _maa_swipe
 from .live_session import append_current_run_event
 from .life_monitor import LifeDetector
+from .live_visual_gate import MODE_TOGGLE_POINT, live_performance_mode_is_off
 from .performance_settings_action import RealtimePerformanceSettingsGate
 from .profile_play_action import RealtimeProfilePlay
 from .profile_store import RealtimeProfileStore
@@ -513,11 +515,59 @@ class CooperativeLiveFlow:
             self.context, self.action_argv(performance_params)
         ):
             raise RuntimeError("协力准备页流速复核失败")
+        self.ensure_performance_mode_off()
         self.ready_up_and_verify()
         print(
             f"CooperativeLive ready=true difficulty={difficulty} speed_gate=verified",
             flush=True,
         )
+
+    def ensure_performance_mode_off(self) -> None:
+        """协力房间页关闭 3D/MV 演出表现，防止演出场背景变化提前触发谱面。
+
+        房间页左下角与单人准备页同布局：循环箭头切换按钮位于
+        ``MODE_TOGGLE_POINT``，其右侧标签显示当前模式。标签区域读不到
+        强饱和色即视为 OFF。点击后仍无法确认关闭（例如界面改版或坐标
+        漂移）时不阻断本局：保留证据截图并继续，让既有门控推进演出。
+        """
+        for attempt in range(4):
+            image = self.capture()
+            if live_performance_mode_is_off(image):
+                print(
+                    "CooperativeLive performance_mode=off confirmed=true",
+                    flush=True,
+                )
+                return
+            if attempt == 0:
+                self._save_performance_mode_evidence(image, "before")
+            self.click(MODE_TOGGLE_POINT)
+            time.sleep(0.6)
+        try:
+            self._save_performance_mode_evidence(self.capture(), "after")
+        except InterruptedError:
+            raise
+        print(
+            "CooperativeLive performance_mode=off confirmed=false "
+            "action=continue-with-warning attempts=4",
+            flush=True,
+        )
+
+    def _save_performance_mode_evidence(self, image: np.ndarray, stage: str) -> None:
+        try:
+            evidence_dir = PROJECT_ROOT / "debug"
+            evidence_dir.mkdir(parents=True, exist_ok=True)
+            path = evidence_dir / (
+                "cooperative-performance-mode-"
+                f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{stage}.png"
+            )
+            imwrite_unicode(path, image)
+            print(f"CooperativeLive performance_mode_evidence={path}", flush=True)
+        except Exception as exc:  # noqa: BLE001 - 证据失败不阻断演出流程
+            print(
+                "CooperativeLive performance_mode_evidence_failed="
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
 
     def ready_up_and_verify(self) -> None:
         """点击“准备完毕”并确认按钮消失，防止触控未送达造成空演奏。"""
