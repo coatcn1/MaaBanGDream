@@ -1711,7 +1711,9 @@ def test_backend_feeds_chunk_median_drift_to_rate_estimator():
     backend._calibration_correction_ms = 0.0
     backend._calibration_chunks = 0
     backend._last_observed_offsets = None
-    backend._drift_rate_estimate = 0.0
+    # 已施加的速率必须加回测量残差，闭环才不会只抵消一半。
+    backend._drift_rate_estimate = 0.002
+    backend._drift_rate_max_rate = 0.010
 
     expected = native_play_module._ExpectedCommand(
         command="c",
@@ -1726,7 +1728,7 @@ def test_backend_feeds_chunk_median_drift_to_rate_estimator():
 
     # 一个 chunk 只喂一个中位数点：elapsed 中位数 0.4，漂移中位数 8.0。
     assert backend._drift_rate_estimator.samples == [(0.4, 8.0)]
-    assert backend._compiler.rate_corrections == [0.003]
+    assert backend._compiler.rate_corrections == [0.005]
     assert backend._execution_timing.completed == [7]
     assert backend._chunk_drift_points == {}
 

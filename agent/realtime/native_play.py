@@ -577,6 +577,7 @@ class NativeMinitouchBackend:
         # 实际时刻），逐条回执喂回归会在窗口内得到大幅摆动的斜率甚至符号
         # 翻转；先按 chunk 取中位数再估计，才是稳定的设备钟速率偏斜。
         self._chunk_drift_points: dict[int, list[tuple[float, float]]] = {}
+        self._drift_rate_max_rate = 0.010
         self._device = device or NativeMinitouchDevice(
             adb_path,
             serial,
@@ -760,7 +761,17 @@ class NativeMinitouchBackend:
                     median(point[0] for point in points),
                     median(point[1] for point in points),
                 )
-            self._drift_rate_estimate = self._drift_rate_estimator.update()
+            measured = self._drift_rate_estimator.update()
+            # 估计器看到的是“已经施加校正后”的残差斜率；把当前已施加的
+            # 速率加回才是设备钟的真实偏斜。只按残差设置校正会让闭环只
+            # 抵消一半（残差 = 真实速率 - 已施加速率，固定点为真值的一半）。
+            self._drift_rate_estimate = float(
+                np.clip(
+                    measured + self._drift_rate_estimate,
+                    -self._drift_rate_max_rate,
+                    self._drift_rate_max_rate,
+                )
+            )
             self._compiler.set_rate_correction(self._drift_rate_estimate)
         self._execution_timing.complete_chunk(expected.chunk_sequence)
 
