@@ -11,7 +11,8 @@ import pytest
 import agent.realtime.cooperative_action as cooperative_action
 from agent.realtime.cooperative_action import (
     COOPERATIVE_DIFFICULTY_TARGETS,
-    DISCONNECT_SWITCH_EXIT_POINT,
+    DISCONNECT_CONFIRM_INTERRUPT_POINT,
+    DISCONNECT_CONTINUE_INTERRUPT_POINT,
     MEMBER_DOWNLOAD_TIMEOUT_SECONDS,
     CooperativeLiveFinalize,
     CooperativeLiveFlow,
@@ -99,6 +100,7 @@ def _fake_jump_flow(
 
         def restore(self):
             self.restored += 1
+            return True
 
     gates = []
 
@@ -125,17 +127,24 @@ def test_disconnect_jump_out_switches_dismisses_and_restores(monkeypatch):
     flow, controller, clicks, dismiss_calls, gates = _fake_jump_flow(
         monkeypatch,
         templates={
-            "switch_to_single_title": np.zeros((10, 10, 3), dtype=np.uint8)
+            "disconnect_continue_body": np.zeros((10, 10, 3), dtype=np.uint8),
+            "disconnect_confirm_body": np.zeros((10, 10, 3), dtype=np.uint8),
         },
-        visible_results={"switch_to_single_title": True},
+        visible_results={
+            "disconnect_continue_body": True,
+            "disconnect_confirm_body": True,
+        },
         gate_block=True,
     )
     assert flow.disconnect_jump_out() is True
     assert controller.keys == [3]
     assert controller.started == [cooperative_action.GAME_PACKAGE]
-    assert clicks == [DISCONNECT_SWITCH_EXIT_POINT]
+    assert clicks == [
+        DISCONNECT_CONTINUE_INTERRUPT_POINT,
+        DISCONNECT_CONFIRM_INTERRUPT_POINT,
+    ]
     assert dismiss_calls == [True]
-    assert gates[0].restored == 1
+    assert gates[0].restored == 2
 
 
 def test_disconnect_jump_out_missing_template_fails_before_any_device_action(
@@ -161,7 +170,8 @@ def test_disconnect_jump_out_restores_network_when_gate_block_fails(
     flow, controller, clicks, dismiss_calls, gates = _fake_jump_flow(
         monkeypatch,
         templates={
-            "switch_to_single_title": np.zeros((10, 10, 3), dtype=np.uint8)
+            "disconnect_continue_body": np.zeros((10, 10, 3), dtype=np.uint8),
+            "disconnect_confirm_body": np.zeros((10, 10, 3), dtype=np.uint8),
         },
         visible_results={},
         gate_block=False,
@@ -177,7 +187,8 @@ def test_disconnect_jump_out_restores_network_when_popup_times_out(
     flow, controller, clicks, dismiss_calls, gates = _fake_jump_flow(
         monkeypatch,
         templates={
-            "switch_to_single_title": np.zeros((10, 10, 3), dtype=np.uint8)
+            "disconnect_continue_body": np.zeros((10, 10, 3), dtype=np.uint8),
+            "disconnect_confirm_body": np.zeros((10, 10, 3), dtype=np.uint8),
         },
         visible_results={},
         gate_block=True,
@@ -486,6 +497,8 @@ def test_cooperative_templates_are_deployed_and_nonempty():
         "connect_failed_body.png",
         "repeat_room_title.png",
         "sss_guide_close.png",
+        "disconnect_continue_body.png",
+        "disconnect_confirm_body.png",
     }
     assert required == {path.name for path in image_dir.glob("*.png")}
     assert all(

@@ -58,9 +58,9 @@ TEMPLATE_POSITIONS = {
     "connect_failed_body": (580, 345),
     "repeat_room_title": (393, 225),
     "sss_guide_close": (856, 610),
-    # 断网跳车弹窗：模板与锚点待用户提供真实断网录像后提取；模板缺失时
-    # disconnect_jump_out 在 visible 之前就 fail-closed，不会用到占位坐标。
-    "switch_to_single_title": (0, 0),
+    # 断网跳车：真实弹窗正文（2026-09-07 雷电录像提取）。
+    "disconnect_continue_body": (488, 313),
+    "disconnect_confirm_body": (495, 307),
 }
 
 DEFAULT_SETTINGS: dict[str, object] = {
@@ -95,8 +95,10 @@ COOPERATIVE_DIFFICULTY_TARGETS = {
 MEMBER_DOWNLOAD_TIMEOUT_SECONDS = 60.0
 POST_SCORE_NAVIGATION_TIMEOUT_SECONDS = 60.0
 HOME_LIVE_POINT = (1175, 645)
-# 断网跳车弹窗的“退出”按钮点击点，待用户提供弹窗录像后提取。
-DISCONNECT_SWITCH_EXIT_POINT = (0, 0)
+# 断网跳车按钮点击点：弹窗1“通信已中断。是否继续演出？”点左侧“中断”；
+# 弹窗2“确认中断当前演出返回主页吗？”点右侧粉色“中断”。
+DISCONNECT_CONTINUE_INTERRUPT_POINT = (508, 447)
+DISCONNECT_CONFIRM_INTERRUPT_POINT = (754, 439)
 
 
 def cooperative_play_params(settings: dict[str, object]) -> dict[str, object]:
@@ -333,17 +335,40 @@ class CooperativeLiveFlow:
         except Exception as exc:  # noqa: BLE001 - 任何失败都要 fail-closed
             return -1, str(exc)
 
+    def _wait_and_click(
+        self,
+        name: str,
+        point: tuple[int, int],
+        timeout: float,
+    ) -> bool:
+        """有界等待模板出现并点击一次；超时或停止时失败。"""
+        deadline = time.monotonic() + float(timeout)
+        while time.monotonic() < deadline:
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
+            image = self.capture()
+            if self.visible(image, name, 0.93):
+                self.click(point)
+                return True
+            time.sleep(0.35)
+        return False
+
     def disconnect_jump_out(self, *, popup_timeout_s: float = 25.0) -> bool:
         """生命归零后的断网跳车流程（AGENTS 第 22 条）。
 
-        顺序：按游戏 UID 用 iptables 屏蔽出口流量 → 游戏退后台再切回，触发
-        “已断开连接，是否切换到单人演奏”弹窗 → 点“退出” → “连接失败。”弹窗
-        有界点“重试” → 返回。任何一步失败都在 finally 恢复网络（fail-closed），
-        绝不把模拟器留在断网状态。跳车弹窗模板尚未提取时直接失败，不盲点。
+        真实弹窗顺序（2026-09-07 雷电录像）：按游戏 UID 屏蔽出口流量 → 游戏
+        退后台再切回 → 弹窗1“通信已中断。是否继续演出？”点左侧“中断” →
+        弹窗2“确认中断当前演出返回主页吗？”点右侧“中断” → 恢复网络 →
+        “连接失败。”弹窗有界点“重试”直到回主页。任何一步失败都在 finally
+        恢复网络（fail-closed），绝不把模拟器留在断网状态。
         """
         gate = GameNetworkGate(self._adb_shell)
         try:
-            if "switch_to_single_title" not in self.templates:
+            required = {
+                "disconnect_continue_body",
+                "disconnect_confirm_body",
+            }
+            if not required.issubset(self.templates):
                 # 模板未提取时不做任何网络/前台扰动，直接 fail-closed。
                 print(
                     "CooperativeDisconnectJump popup_template_missing=true",
@@ -360,27 +385,34 @@ class CooperativeLiveFlow:
             self.controller.post_click_key(3).wait()
             time.sleep(0.6)
             self.controller.post_start_app(GAME_PACKAGE).wait()
-            deadline = time.monotonic() + float(popup_timeout_s)
-            detected = False
-            while time.monotonic() < deadline:
-                if self.stopped():
-                    raise InterruptedError("用户已停止任务")
-                image = self.capture()
-                if self.visible(
-                    image,
-                    "switch_to_single_title",
-                    0.93,
-                ):
-                    detected = True
-                    break
-                time.sleep(0.35)
-            if not detected:
+            if not self._wait_and_click(
+                "disconnect_continue_body",
+                DISCONNECT_CONTINUE_INTERRUPT_POINT,
+                popup_timeout_s,
+            ):
                 print(
-                    "CooperativeDisconnectJump popup_not_detected=true",
+                    "CooperativeDisconnectJump continue_popup_missed=true",
                     flush=True,
                 )
                 return False
-            self.click(DISCONNECT_SWITCH_EXIT_POINT)
+            if not self._wait_and_click(
+                "disconnect_confirm_body",
+                DISCONNECT_CONFIRM_INTERRUPT_POINT,
+                10.0,
+            ):
+                print(
+                    "CooperativeDisconnectJump confirm_popup_missed=true",
+                    flush=True,
+                )
+                return False
+            # 先恢复网络，再对“连接失败。”做有界重试；断网状态下点重试
+            # 无效是游戏正常表现。
+            if not gate.restore():
+                print(
+                    "CooperativeDisconnectJump network_restore_failed=true",
+                    flush=True,
+                )
+                return False
             time.sleep(0.8)
             self.dismiss_connect_failed()
             print("CooperativeDisconnectJump completed=true", flush=True)
