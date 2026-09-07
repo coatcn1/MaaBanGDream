@@ -317,13 +317,21 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
 - **MuMu Native 漂移**：定性为客户机时钟速率偏斜且逐局可变，速率校正实验闭环发散；暂不解决，MuMu 用 Legacy、雷电用 Native。见“最近交互”的 MuMu 时钟偏斜条目。
 - **调试文件定时清理**：暂不做应用内自动清理；已有 `.local/clean-recordings.ps1`（保留最新 5 个）。若做，建议按保留天数在任务启动时修剪 `debug/recordings/*`，并留足证据窗口。
 - **双 MFA 进程/配置切换闪退**：上游 Avalonia `external_renderer_ipc.dll` 0xc0000005；暂缓，规避方式为单实例、少切换配置。见第 23 条。
-- **从 GitHub 自动更新（已实现便携包侧）**：`scripts/update.ps1` 通过
-  `releases/latest` 的 HTML 重定向拿最新 tag（避开 GitHub API 60 次/小时
-  未认证限流），本地版本读 `interface.json`；`启动 MaaBanGDream.cmd` 在启动
-  前执行 `update.ps1 -Auto`（离线/已最新时静默跳过，发现新版本则下载
-  `MaaBanGDream-v<ver>-win-x64.zip`、校验 MFAAvalonia.exe、关闭本包内 MFA、
-  覆盖包内容但保留 config/profiles/debug/logs 后重启）。MFA 应用内的更新
-  UI 仍需改定制 MFAAvalonia 仓库，暂不做。
+- **从 GitHub 自动更新（已实现双端）**：
+  - 便携包启动器侧：`scripts/update.ps1`（`releases/latest` HTML 重定向拿
+    tag、避免 API 限流），`启动 MaaBanGDream.cmd` 启动前 `-Auto` 静默检查。
+  - MFA 侧（定制 MFAAvalonia 仓库 `fix/native-realtime-ui-toggle`，
+    `9ea63c3`）：启动 6 秒后静默检查一次；“更新设置”页新增
+    “MaaBanGDream 版本更新”卡片（检查更新/立即更新按钮 + 状态文本）。
+    **增量更新**：发布包根目录 `update-manifest.json`（路径→SHA256，
+    由 `build-windows-release.ps1` 生成并打入 zip）；更新器用 HTTP Range 只
+    拉取 zip 中央目录 + 清单 + 变化条目的字节区间，逐条 SHA256 校验后落盘，
+    谱面等未变内容不重复下载。锁定的程序文件写 `.new` + `update-restart.cmd`
+    重启替换。
+  - 关键坑：GitHub 资产 CDN **不支持 `bytes=-N` 后缀区间**（501），只支持
+    显式起止区间（`bytes=a-b`）；拉 EOCD 前必须先拿 Content-Length 再用
+    `bytes=(size-65557)-(size-1)`。发布 zip 由 `tar.exe -a` 生成：条目用
+    deflate（method 8）、目录条目 method 0，条目名 `<pkg>/…` 前向斜杠。
 - **Special 谱面支持**、**更多演出类型**：未开始。
 
 ## 修改后的最低验收
