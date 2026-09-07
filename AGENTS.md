@@ -317,7 +317,13 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
 - **MuMu Native 漂移**：定性为客户机时钟速率偏斜且逐局可变，速率校正实验闭环发散；暂不解决，MuMu 用 Legacy、雷电用 Native。见“最近交互”的 MuMu 时钟偏斜条目。
 - **调试文件定时清理**：暂不做应用内自动清理；已有 `.local/clean-recordings.ps1`（保留最新 5 个）。若做，建议按保留天数在任务启动时修剪 `debug/recordings/*`，并留足证据窗口。
 - **双 MFA 进程/配置切换闪退**：上游 Avalonia `external_renderer_ipc.dll` 0xc0000005；暂缓，规避方式为单实例、少切换配置。见第 23 条。
-- **从 GitHub 自动更新**：参考其他 MAA 项目在 MFA 侧实现资源/版本自更新（定制 MFA 已跳过 Mirror 更新源）；简单的话可以提前做。
+- **从 GitHub 自动更新（已实现便携包侧）**：`scripts/update.ps1` 通过
+  `releases/latest` 的 HTML 重定向拿最新 tag（避开 GitHub API 60 次/小时
+  未认证限流），本地版本读 `interface.json`；`启动 MaaBanGDream.cmd` 在启动
+  前执行 `update.ps1 -Auto`（离线/已最新时静默跳过，发现新版本则下载
+  `MaaBanGDream-v<ver>-win-x64.zip`、校验 MFAAvalonia.exe、关闭本包内 MFA、
+  覆盖包内容但保留 config/profiles/debug/logs 后重启）。MFA 应用内的更新
+  UI 仍需改定制 MFAAvalonia 仓库，暂不做。
 - **Special 谱面支持**、**更多演出类型**：未开始。
 
 ## 修改后的最低验收

@@ -151,6 +151,7 @@ foreach ($relativePath in @(
     'requirements.txt',
     'runtime-compatibility.json',
     'scripts\start-release.ps1',
+    'scripts\update.ps1',
     'scripts\check_runtime.py',
     'scripts\sync_bestdori_catalog.py',
     'scripts\sync_bestdori_charts.py'
