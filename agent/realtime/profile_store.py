@@ -614,7 +614,7 @@ class RealtimeProfileStore:
             mismatches = self._non_speed_mismatches(saved, current_signature)
             if mismatches:
                 raise ValueError(
-                    "钉选 Profile 与当前非流速环境不匹配："
+                    f"钉选 Profile（{pinned}）与当前非流速环境不匹配："
                     + "；".join(mismatches)
                 )
             return self.resolve(

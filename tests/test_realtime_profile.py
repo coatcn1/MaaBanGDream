@@ -132,7 +132,7 @@ def test_select_for_settings_gate_reports_pinned_mismatch_fields(tmp_path):
     ))
     store.pin("Expert", path.name)
 
-    with pytest.raises(ValueError, match=r"TAP EFFECT 1 ≠ 4"):
+    with pytest.raises(ValueError, match=r"TAP EFFECT 1 ≠ 4") as excinfo:
         store.resolve_latest_for_environment(
             difficulty="Expert",
             current_signature=EnvironmentSignature(
@@ -140,6 +140,8 @@ def test_select_for_settings_gate_reports_pinned_mismatch_fields(tmp_path):
                 note_skin_type=1, tap_effect=4, judgement_assist_effect=False,
             ),
         )
+    # 报错必须点名具体 Profile 文件，避免用户把新 Profile 钉错难度槽位。
+    assert path.name in str(excinfo.value)
 
 
 def test_select_for_settings_gate_reports_unpinned_mismatch_fields(tmp_path):
