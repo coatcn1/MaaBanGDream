@@ -638,6 +638,7 @@ class CooperativeLiveFlow:
             raise RuntimeError("协力准备页流速复核失败")
         self.ensure_performance_mode_off()
         self.ready_up_and_verify()
+        self.watch_member_exit_before_black()
         print(
             f"CooperativeLive ready=true difficulty={difficulty} speed_gate=verified",
             flush=True,
@@ -708,6 +709,29 @@ class CooperativeLiveFlow:
             self.click((left + width // 2, top + height // 2))
             time.sleep(2.0)
         raise RuntimeError("点击准备完毕后按钮仍在，触控可能未送达")
+
+    def watch_member_exit_before_black(self, timeout: float = 12.0) -> None:
+        """准备完毕到黑场转场之间的成员退出弹窗窗口。
+
+        点击“准备完毕”后、进入演奏的整屏黑场之前，其他成员退出时仍会弹出
+        “错误/由于XX退出房间。”；此时已离开房间等待页，常规 wait_for 的
+        成员退出检测不再覆盖，弹窗会挡住转场导致整局卡死。这里高频轮询到
+        黑场出现为止：看到弹窗就点“确定”并按成员退出策略处理；看到黑场
+        说明转场已开始，弹窗不再可能，立即退出本窗口。
+        """
+        deadline = time.monotonic() + float(timeout)
+        while time.monotonic() < deadline:
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
+            image = self.capture()
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            if float(gray.mean()) < 6.0 and float(gray.std()) < 6.0:
+                # 整屏黑场转场已经开始，成员退出弹窗窗口已过。
+                return
+            if self.visible(image, "member_exit_title", 0.93):
+                self.dismiss_member_exit()
+                raise MemberExited("协力成员退出房间")
+            time.sleep(0.1)
 
     def jump_after_download_timeout(self) -> None:
         require_game_foreground(self.controller)

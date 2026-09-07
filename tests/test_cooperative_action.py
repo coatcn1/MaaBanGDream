@@ -246,6 +246,49 @@ def test_play_skips_jump_without_live_run_signal(monkeypatch):
     assert jumps == []
 
 
+def _fake_member_exit_watch_flow(frame, timeout):
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    dismissed = []
+    flow.capture = lambda: frame.copy()
+    flow.visible = (
+        lambda image, name, threshold=0.9: name == "member_exit_title"
+    )
+    flow.dismiss_member_exit = lambda: dismissed.append(True)
+    flow.watch_member_exit_before_black(timeout=timeout)
+    return dismissed
+
+
+def test_member_exit_watch_dismisses_popup_before_black():
+    frame = np.full((720, 1280, 3), 255, dtype=np.uint8)
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    dismissed = []
+    flow.capture = lambda: frame.copy()
+    flow.visible = (
+        lambda image, name, threshold=0.9: name == "member_exit_title"
+    )
+    flow.dismiss_member_exit = lambda: dismissed.append(True)
+    with pytest.raises(MemberExited):
+        flow.watch_member_exit_before_black(timeout=2.0)
+    assert dismissed == [True]
+
+
+def test_member_exit_watch_returns_immediately_on_black_transition():
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+    dismissed = _fake_member_exit_watch_flow(frame, timeout=2.0)
+    assert dismissed == []
+
+
+def test_member_exit_watch_times_out_without_popup_or_black():
+    frame = np.full((720, 1280, 3), 128, dtype=np.uint8)
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    flow.capture = lambda: frame.copy()
+    flow.visible = lambda image, name, threshold=0.9: False
+    flow.watch_member_exit_before_black(timeout=0.25)
+
+
 @pytest.mark.parametrize(
     ("target", "initial_hue", "target_hue", "start", "end"),
     [
