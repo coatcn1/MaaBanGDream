@@ -19,16 +19,31 @@ AdbShell = Callable[[Sequence[str]], tuple[int, str]]
 
 
 def resolve_game_uid(shell: AdbShell) -> int | None:
-    """从 dumpsys 解析游戏进程的 Linux uid；失败返回 None。"""
+    """解析游戏进程的 Linux uid；``dumpsys`` 失败/超时时回退到 /proc。"""
     code, output = shell(("dumpsys", "package", GAME_PACKAGE))
+    if code == 0:
+        for line in output.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("userId="):
+                try:
+                    return int(stripped.split("=", 1)[1].split()[0])
+                except ValueError:
+                    return None
+    # 演奏中 dumpsys package 可能超时或输出被截断，导致“无法解析游戏
+    # UID”进而门禁 fail-closed。回退到更轻量的 pidof + /proc/<pid>/status，
+    # 它不需要包管理器、输出也小得多。
+    code, output = shell(("pidof", GAME_PACKAGE))
+    if code != 0 or not output.strip():
+        return None
+    pid = output.strip().split()[0]
+    code, status = shell(("cat", f"/proc/{pid}/status"))
     if code != 0:
         return None
-    for line in output.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("userId="):
+    for line in status.splitlines():
+        if line.startswith("Uid:"):
             try:
-                return int(stripped.split("=", 1)[1].split()[0])
-            except ValueError:
+                return int(line.split()[1])
+            except (IndexError, ValueError):
                 return None
     return None
 

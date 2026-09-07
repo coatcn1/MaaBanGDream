@@ -818,9 +818,20 @@ class CooperativeLiveFlow:
         )
         run = current_live_run()
         if run is not None and bool(run.disconnect_jump_requested):
-            # 生命归零跳车：Play 已释放触点并返回，这里执行断网跳车流程；
-            # 按“完成本局”返回，由外层继续回房间/主页导航。
-            self.disconnect_jump_out()
+            # 生命归零跳车：Play 已释放触点并返回，这里执行断网跳车流程。
+            # 跳车成功时按“完成本局”返回，由外层继续回房间/主页导航；
+            # 跳车失败（例如无法解析游戏 UID、设备无 root）时游戏仍在
+            # 空血状态继续播放，不能把本局当作已结算去导航——那会让外层
+            # 在演奏场反复按返回、任务卡住不结束。此时清理回主页/房间
+            # 选择，本局仍按完成计入。
+            if not self.disconnect_jump_out():
+                print(
+                    "CooperativeLive disconnect_jump_failed=true recover=true",
+                    flush=True,
+                )
+                self.recover_after_play_failure(
+                    "断网跳车失败，无法退出当前演出"
+                )
             return True
         if not success:
             return False

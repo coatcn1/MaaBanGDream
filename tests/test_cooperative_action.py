@@ -221,10 +221,34 @@ def test_play_runs_disconnect_jump_when_live_run_requests_it(monkeypatch):
     flow.context = object()
     flow.action_argv = lambda params: params
     jumps = []
-    flow.disconnect_jump_out = lambda: jumps.append(True)
+    flow.disconnect_jump_out = lambda: jumps.append(True) or True
 
     assert flow.play() is True
     assert jumps == [True]
+
+
+def test_play_recovers_home_when_disconnect_jump_fails(monkeypatch):
+    class Play:
+        def run(self, context, params):
+            return False
+
+    monkeypatch.setattr(cooperative_action, "RealtimeProfilePlay", Play)
+    monkeypatch.setattr(
+        cooperative_action,
+        "current_live_run",
+        lambda: SimpleNamespace(disconnect_jump_requested=True),
+    )
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.settings = dict(DEFAULT_SETTINGS)
+    flow.context = object()
+    flow.action_argv = lambda params: params
+    flow.disconnect_jump_out = lambda: False
+    recoveries = []
+    flow.recover_after_play_failure = lambda reason: recoveries.append(reason)
+
+    assert flow.play() is True
+    assert len(recoveries) == 1
+    assert "断网跳车失败" in recoveries[0]
 
 
 def test_play_skips_jump_without_live_run_signal(monkeypatch):
