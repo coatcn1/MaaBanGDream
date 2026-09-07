@@ -273,6 +273,17 @@ if (Test-Path -LiteralPath $seedProfiles -PathType Container) {
     Copy-Item -Path (Join-Path $seedProfiles '*') -Destination $packageProfiles -Force
 }
 
+# 增量更新清单：相对路径 -> SHA256。MFA 内置的 GitHub 更新器用它和远端
+# 清单 diff，只下载发生变化的条目，避免每次重下本地谱面。
+$updateManifest = [ordered]@{ version = $Version; files = [ordered]@{} }
+Get-ChildItem -LiteralPath $packageRoot -Recurse -File | Sort-Object FullName | ForEach-Object {
+    $relative = $_.FullName.Substring($packageRoot.Length + 1).Replace('\', '/')
+    $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    $updateManifest.files[$relative] = $hash
+}
+$updateManifest | ConvertTo-Json -Depth 5 |
+    Set-Content -LiteralPath (Join-Path $packageRoot 'update-manifest.json') -Encoding utf8
+
 $zipPath = Join-Path $outputFull "$packageName.zip"
 $shaPath = "$zipPath.sha256"
 foreach ($oldArtifact in @($zipPath, $shaPath)) {
