@@ -93,6 +93,13 @@ ACTIVITY_POINTS_TEMPLATE = (
 ACHIEVEMENT_LIST_CLOSE_TEMPLATE = (
     PROJECT_ROOT / "resource" / "image" / "common_close.png"
 )
+QUIT_CONFIRM_CANCEL_TEMPLATE = (
+    PROJECT_ROOT / "resource" / "image" / "quit_confirm_cancel.png"
+)
+# “要退出游戏吗”确认框里“取消”按钮所在的归一化区域（对应 pipeline 的
+# QuitConfirmCancel ROI [360,510,560,140]），用于在主页结算导航时点取消
+# 而不是继续按返回键来回切换。
+QUIT_CONFIRM_CANCEL_REGION = (0.28, 0.71, 0.72, 0.90)
 # Kept as a compatibility alias for callers/tests that override this template.
 RESULT_NEXT_TEMPLATE = RESULT_RANK_NEXT_TEMPLATE
 REWARD_TEMPLATE_THRESHOLD = 0.85
@@ -787,6 +794,29 @@ def _template_click_point(
     return best_point
 
 
+def _dismiss_quit_confirm(
+    image,
+    controller,
+    *,
+    stopping,
+    before_input=lambda: None,
+) -> bool:
+    """主页“要退出游戏吗”确认框：点“取消”而非按返回键，避免来回切换。"""
+    point = _template_click_point(
+        image,
+        (QUIT_CONFIRM_CANCEL_TEMPLATE,),
+        0.9,
+        center_region=QUIT_CONFIRM_CANCEL_REGION,
+    )
+    if point is None:
+        return False
+    if stopping():
+        return True
+    before_input()
+    controller.post_click(*point).wait()
+    return True
+
+
 def _activity_points_confirm_point(
     image,
     template_path,
@@ -1012,6 +1042,28 @@ def collect_result(
             image = controller.post_screencap().wait().get()
         last_image = image
         now = clock()
+        if _dismiss_quit_confirm(
+            image,
+            controller,
+            stopping=stopping,
+            before_input=before_input,
+        ):
+            page_state = "quit-confirm"
+            candidate = None
+            print("RealtimeResult state=quit-confirm action=cancel", flush=True)
+            if not _wait_until(
+                min(deadline, now + medium_interval_seconds),
+                stopping,
+                clock=clock,
+                sleeper=sleeper,
+            ):
+                return ResultCollectionOutcome(
+                    ResultCollectionStatus.STOPPED,
+                    elapsed_seconds=clock() - started_at,
+                    page_state=page_state,
+                    reason="user stopped result collection",
+                )
+            continue
         details_marker_visible = (
             judgement_details_template is not None
             and _template_click_point(
