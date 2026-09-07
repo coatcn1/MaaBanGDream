@@ -96,6 +96,7 @@ def _fake_jump_flow(
         def __init__(self, shell):
             self.shell = shell
             self.restored = 0
+            self.last_error = None
 
         def block(self):
             return gate_block

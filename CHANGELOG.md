@@ -16,6 +16,10 @@
 
 - 协力把 Profile 环境解析从“准备页流速门禁”提前到任务一开始：签名不匹配（例如任务执行过程中手动改过 TAP EFFECT）时立即作为任务失败返回并写入具体原因，不再先导航进房间、在准备页才被拒，也不再空转 `play_failure_retry_count` 次重试；截图不可用时回退到准备页的既有门禁。
 
+## 2026-09-07（协力断网跳车：非 root shell 提权）
+
+- 修复生命归零跳车在雷电上 `gate_block_failed`：adb shell 默认是 uid 2000，`iptables` 会报 Permission denied；`GameNetworkGate` 现在先探测 `id -u`，非 root 时用 `su -c "<命令>"` 提权，并在失败时携带可读原因（fail-closed 语义不变）。已在雷电真机验证：非 root shell 下 REJECT/恢复端到端通过。
+
 ## 2026-09-07（v1.3.0 本地开发候选，未发布）
 
 - **Native 漂移定案**：同一份代码在雷电模拟器 Native `[FULL]FIRE BIRD` 2331 PERFECT/0 GREAT（漂移 p50 5.2ms），MuMu 漂移按 20 秒分段 1.09→1.47→4.89→5.64ms/s 加速增长、逐局 p50 146.8/108/54/88ms 波动，高性能模式与关闭主机负载均无效；速率校正实验闭环在 MuMu 发散，保持默认关闭。分工：雷电走 Native、MuMu 走 Legacy（MuMu 新号 Legacy 490P/17G/1M，hit 99.8%）。有符号漂移证据新增按 chunk 中位数估计速率并闭环补偿。

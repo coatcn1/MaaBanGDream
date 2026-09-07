@@ -9,7 +9,13 @@ from agent.realtime.cooperative_network import (
 )
 
 
-def _fake_shell(uid: int | None, deny_iptables: bool = False):
+def _fake_shell(
+    uid: int | None,
+    *,
+    deny_iptables: bool = False,
+    root: bool = True,
+    su_available: bool = True,
+):
     calls: list[tuple[str, ...]] = []
     rules: set[str] = set()
     chains: set[str] = set()
@@ -19,6 +25,13 @@ def _fake_shell(uid: int | None, deny_iptables: bool = False):
         if args[0] == "dumpsys":
             body = f"userId={uid} appId=10123" if uid is not None else ""
             return (0, body)
+        if args[0] == "id":
+            return (0, "0" if root else "2000")
+        if args[0] == "su":
+            if not su_available:
+                return (127, "su: not found")
+            # su -c 把整条命令作为单个字符串参数，这里拆回原始命令执行。
+            return shell(tuple(args[2].strip('"').split()))
         if args[0] == "iptables":
             if deny_iptables:
                 return (127, "Permission denied")
@@ -83,10 +96,34 @@ def test_gate_restores_network_via_context_manager_on_exception():
 
 
 def test_gate_fails_closed_without_root_or_uid():
-    no_root = GameNetworkGate(_fake_shell(uid=10123, deny_iptables=True)[0])
-    assert no_root.block() is False
-    assert no_root.restore() is True
+    no_iptables = GameNetworkGate(_fake_shell(uid=10123, deny_iptables=True)[0])
+    assert no_iptables.block() is False
+    assert no_iptables.last_error is not None
+    assert no_iptables.restore() is True
 
     no_uid = GameNetworkGate(_fake_shell(uid=None)[0])
     assert no_uid.block() is False
+    assert no_uid.last_error == "无法解析游戏 UID"
     assert no_uid.restore() is True
+
+
+def test_gate_escalates_via_su_when_shell_is_not_root():
+    shell, calls, rules = _fake_shell(uid=10123, root=False)
+    gate = GameNetworkGate(shell)
+
+    assert gate.block() is True
+    assert any("REJECT" in rule for rule in rules)
+    # 提权路径必须走 su -c，而不是直接执行 iptables。
+    assert any(call[0] == "su" for call in calls)
+
+    assert gate.restore() is True
+
+
+def test_gate_fails_closed_without_su_on_unrooted_shell():
+    gate = GameNetworkGate(
+        _fake_shell(uid=10123, root=False, su_available=False)[0]
+    )
+
+    assert gate.block() is False
+    assert gate.last_error is not None
+    assert gate.restore() is True
