@@ -46,6 +46,7 @@ from .profile_store import (
     EnvironmentSignature,
     RealtimeProfileStore,
     RuntimeSettings,
+    engine_from_native_flag,
 )
 from .rehearsal_action import frame_resolution
 from .result_navigation import (
@@ -1421,6 +1422,9 @@ def resolve_profile_for_settings_gate(
         note_skin_type,
         tap_effect,
         judgement_assist_effect,
+        engine_from_native_flag(
+            store.runtime_options().get("native_realtime_enabled", False)
+        ),
     )
     resolver = (
         store.resolve_latest_for_visual_evaluation_environment
@@ -1461,6 +1465,9 @@ def resolve_profile(context: Context, params: dict, *, controller=None):
         note_skin_type,
         tap_effect,
         judgement_assist_effect,
+        engine_from_native_flag(
+            store.runtime_options().get("native_realtime_enabled", False)
+        ),
     )
     visual_evaluation = bool(params.get("visual_evaluation", False))
     if verified is not None and verified.profile:

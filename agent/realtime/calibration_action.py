@@ -16,7 +16,11 @@ except ImportError:  # AgentServer imports realtime as a top-level package.
     from task_reporting import log_task, record_failure_reason
 
 from .profile_action import PROJECT_ROOT
-from .profile_store import EnvironmentSignature, RealtimeProfileStore
+from .profile_store import (
+    EnvironmentSignature,
+    RealtimeProfileStore,
+    engine_from_native_flag,
+)
 from .calibration_session import (
     CalibrationSessionStore,
     FORMAL_STAGE,
@@ -333,6 +337,9 @@ class RealtimeCalibration(CustomAction):
             visual.note_skin_type,
             visual.tap_effect,
             visual.judgement_assist_effect,
+            engine_from_native_flag(
+                runtime_options.get("native_realtime_enabled", False)
+            ),
         )
         session_store = CalibrationSessionStore(
             PROJECT_ROOT / "profiles" / "calibration-sessions",

@@ -39,7 +39,11 @@ from .life_monitor import LifeDetector
 from .live_visual_gate import MODE_TOGGLE_POINT, live_performance_mode_is_off
 from .performance_settings_action import RealtimePerformanceSettingsGate
 from .profile_play_action import RealtimeProfilePlay
-from .profile_store import EnvironmentSignature, RealtimeProfileStore
+from .profile_store import (
+    EnvironmentSignature,
+    RealtimeProfileStore,
+    engine_from_native_flag,
+)
 from .rehearsal_action import frame_resolution
 from .native_prearm import discard_prearmed_backend
 from .cooperative_network import GameNetworkGate
@@ -205,6 +209,9 @@ def cooperative_profile_preflight(context: Context, difficulty: str) -> str | No
         bool(visual.judgement_assist_effect)
         if visual is not None
         else bool(options["judgement_assist_effect"]),
+        engine_from_native_flag(
+            options.get("native_realtime_enabled", False)
+        ),
     )
     try:
         store.resolve_latest_for_environment(
