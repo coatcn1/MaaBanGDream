@@ -229,6 +229,7 @@ if ($LASTEXITCODE -ne 0) {
 
 $maaCommit = (& git -C $projectRoot rev-parse HEAD).Trim()
 $mfaCommit = (& git -C $MfaSourceRoot rev-parse HEAD).Trim()
+$mfaBranch = (& git -C $MfaSourceRoot rev-parse --abbrev-ref HEAD).Trim()
 $buildInfo = [ordered]@{
     package = $packageName
     version = $Version
@@ -236,7 +237,7 @@ $buildInfo = [ordered]@{
     maa_repository = 'https://github.com/coatcn1/MaaBanGDream'
     maa_commit = $maaCommit
     mfa_repository = 'https://github.com/coatcn1/MFAAvalonia'
-    mfa_branch = 'feature/performance-visual-settings'
+    mfa_branch = $mfaBranch
     mfa_commit = $mfaCommit
     mfaavalonia = '2.12.0-custom'
     maafw = '5.10.2'
