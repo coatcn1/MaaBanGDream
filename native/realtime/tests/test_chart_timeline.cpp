@@ -1,9 +1,15 @@
 #include <cmath>
+#include <cstdio>
 #include <string>
 
 #include "maabangdream/chart_timeline.hpp"
 #include "maabangdream/types.hpp"
 #include "test_macros.hpp"
+
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#endif
 
 using namespace mbdr;
 
@@ -144,6 +150,39 @@ void test_invalid_inputs() {
     CHECK(threw);
 }
 
+void test_non_ascii_path_chart_file() {
+    // 安装目录含中文等非 ASCII 字符时，窄字符 fopen 按 ANSI 代码页解释
+    // 路径，曾把 UTF-8 路径误解成乱码导致谱面读取失败。
+    const std::string filename = "谱面测试.json";
+#ifdef _WIN32
+    const int wide_len = MultiByteToWideChar(
+        CP_UTF8, 0, filename.c_str(), -1, nullptr, 0);
+    CHECK(wide_len > 0);
+    std::wstring wide_path(static_cast<size_t>(wide_len), L'\0');
+    MultiByteToWideChar(
+        CP_UTF8, 0, filename.c_str(), -1, wide_path.data(), wide_len);
+    FILE* file = _wfopen(wide_path.c_str(), L"wb");
+#else
+    FILE* file = std::fopen(filename.c_str(), "wb");
+#endif
+    CHECK(file != nullptr);
+    if (file == nullptr) {
+        return;
+    }
+    const std::string payload(kBasicChart);
+    std::fwrite(payload.data(), 1, payload.size(), file);
+    std::fclose(file);
+
+    ChartTimeline timeline = ChartTimeline::from_json_file(filename);
+    CHECK_EQ(timeline.judgements.size(), static_cast<std::size_t>(6));
+
+#ifdef _WIN32
+    _wremove(wide_path.c_str());
+#else
+    std::remove(filename.c_str());
+#endif
+}
+
 }  // namespace
 
 int run_chart_timeline_tests() {
@@ -152,5 +191,6 @@ int run_chart_timeline_tests() {
     test_schema_v1_and_metadata();
     test_hidden_trim_and_single_point();
     test_invalid_inputs();
+    test_non_ascii_path_chart_file();
     return 0;
 }

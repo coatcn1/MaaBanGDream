@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 import traceback
 from functools import lru_cache
@@ -154,10 +155,12 @@ def read_song_level(
         (best_score, digit), (runner_up, _) = scores[:2]
         score_margin = runner_up - best_score
         score_ratio = runner_up / max(best_score, 0.05)
+        # 小字号 8 与 6 的距离比接近；绝对形状距离足够小且保有差值时，
+        # 不再额外用比例否决。较差形状仍必须同时满足比例与差值门槛。
         if (
             best_score > 0.65
             or score_margin < 0.04
-            or score_ratio < 1.22
+            or (score_ratio < 1.22 and best_score > 0.35)
         ):
             return None
         digits.append(digit)
@@ -291,10 +294,16 @@ class RealtimeDifficultySelect(CustomAction):
                         song_level = read_song_level(identity_image, level_roi)
                         title_reading = None
                         try:
-                            title_reading = recognize_song_title(
-                                identity_image,
-                                **({"roi": title_roi} if title_roi is not None else {}),
+                            # 准备页复核随开演候选显式启用，普通启动保留原身份流程。
+                            defer_title = (
+                                params.get("defer_song_title_to_preparation", False)
+                                and os.environ.get("MAABANGDREAM_ORDERED_STARTUP", "0") == "1"
                             )
+                            if not defer_title:
+                                title_reading = recognize_song_title(
+                                    identity_image,
+                                    **({"roi": title_roi} if title_roi is not None else {}),
+                                )
                         except (OSError, ValueError, RuntimeError) as exc:
                             print(
                                 "RealtimeDifficultySelect title_ocr=unavailable "
@@ -312,8 +321,8 @@ class RealtimeDifficultySelect(CustomAction):
                             song_title,
                         )
                         reading_score = (
-                            chart_resolution.selection is not None,
                             song_level is not None,
+                            chart_resolution.selection is not None,
                             song_title is not None,
                             identity.method != "unknown",
                             float(getattr(
@@ -340,7 +349,7 @@ class RealtimeDifficultySelect(CustomAction):
                             f"chart_preflight={chart_resolution.reason}",
                             flush=True,
                         )
-                        if not _should_retry_song_identity(chart_resolution):
+                        if song_level is not None and not _should_retry_song_identity(chart_resolution):
                             break
                         if identity_attempt >= identity_attempts:
                             break

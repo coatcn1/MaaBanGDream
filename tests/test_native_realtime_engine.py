@@ -124,6 +124,25 @@ def _compile_full_touch_script(actions, *, end_time_s: float) -> list[str]:
     ))
 
 
+@requires_native
+def test_submillisecond_event_gaps_do_not_charge_nonexistent_waits():
+    compiler = native_engine.touch_script_compiler(offsets={"wait_ms": 0.7})
+    actions = [{"kind": "tap", "lane": lane, "due_s": i * 0.1 + lane * 0.0001,
+                "contact": -1, "target_x": -1.0, "flick_direction": None}
+               for i in range(100) for lane in (0, 1)]
+    script = compiler.compile(actions, {"judgement_y": 590.0}, 0, 10.1, True)
+    elapsed_ms = 0.0
+    downs = 0
+    for line in script:
+        if line.startswith("w "):
+            elapsed_ms += float(line.split()[1]) + 0.7
+        if line.startswith("d "):
+            due_ms = (downs // 2) * 100 + (downs % 2) * 0.1
+            assert abs(elapsed_ms - due_ms) < 3
+            downs += 1
+    assert downs == 200
+
+
 def _assert_protocol_lifecycle(script: list[str]) -> None:
     active: set[int] = set()
     for raw in script:
@@ -789,6 +808,34 @@ def test_cooperative_photogate_blocks_broad_prepare_dim():
     assert "broad-change-blocked" in event_names
 
 
+def test_legacy_lifecycle_waits_for_popup_and_first_note_before_completion():
+    from agent.realtime.playfield_monitor import PlayfieldLifecycleMonitor
+
+    playfield = _synthetic_playfield()
+    absent = np.zeros_like(playfield)
+    popup = [False]
+    gate = NativeStartPhotogate(
+        stable_duration_ms=100, grace_ms=0,
+        mode="cooperative-playfield-confirmed",
+        popup_detector=lambda _: popup[0],
+    )
+    monitor = PlayfieldLifecycleMonitor(
+        start_gate=gate, missing_checks=2, active_check_interval_seconds=0,
+    )
+    assert monitor.observe(playfield, 0) == "waiting"
+    popup[0] = True
+    assert monitor.observe(playfield, 0.2) == "waiting"
+    assert monitor.observe(absent, 0.3) == "waiting"
+    popup[0] = False
+    for now in (0.4, 0.5, 0.7, 0.9):
+        assert monitor.observe(playfield, now) == "waiting"
+    note = playfield.copy()
+    note[510:536, 600:680] = 200
+    assert monitor.observe(note, 1.0) == "active"
+    assert monitor.observe(absent, 1.1) == "missing"
+    assert monitor.observe(absent, 1.2) == "completed"
+
+
 def test_single_photogate_does_not_enable_prepare_popup_gate():
     gate = NativeStartPhotogate(
         stable_duration_ms=120.0,
@@ -1285,6 +1332,22 @@ def test_native_backend_publishes_first_chunk_from_photogate_anchor(monkeypatch)
     assert backend.report()["timing_gate_passed"] is False
     assert backend.report()["release_confirmed"] is True
     assert len(sessions[0].execution_observations) == 2
+    timing = backend.report()["execution_timing"]
+    assert timing["sample_count"] == 2
+    assert timing["samples"][0][1] == timing["samples"][1][1] == 1
+    assert [row[2] for row in timing["samples"]] == pytest.approx([0.0, 0.5])
+    for row, (planned, actual) in zip(
+        timing["samples"], sessions[0].execution_observations, strict=True
+    ):
+        assert row[3:6] == pytest.approx(
+            [planned, actual, (actual - planned) * 1000.0]
+        )
+    assert [row[1] for row in timing["chunks"]] == [2, 0]
+    assert timing["chunks"][0][4] == pytest.approx(
+        np.median([row[5] for row in timing["samples"]])
+    )
+    assert timing["chunks"][1][4] is None
+    assert backend.report()["execution_timing"] == timing
     # 两条同相位 DOWN 只有一次 commit，设备可见时刻必须完全相同。
     assert (
         sessions[0].execution_observations[0][1]
@@ -1488,6 +1551,7 @@ def test_native_report_rejects_absolute_drift_when_clock_uncertainty_exceeds_1ms
     backend._game_terminal_reason = "completed"
     backend._cancelled_pending_commands = 0
     backend._cancelled_pending_actions = 0
+    backend._execution_timing = native_play_module._ExecutionTimingTrace()
 
     report = backend.report()
 
@@ -1497,6 +1561,176 @@ def test_native_report_rejects_absolute_drift_when_clock_uncertainty_exceeds_1ms
     assert report["conservative_drift_p95_ms"] is None
     assert report["conservative_drift_max_ms"] is None
     assert report["timing_gate_passed"] is False
+
+
+def test_execution_timing_preserves_signed_partial_samples_and_snapshots():
+    timing = native_play_module._ExecutionTimingTrace()
+    timing.observe(1, 7, 100.0, 100.0, 99.990, 105.0)
+    timing.observe(2, 7, 100.0, 101.0, 101.030, 105.0)
+    partial = timing.report()
+    assert partial["chunks"] == []
+    assert [row[5] for row in partial["samples"]] == pytest.approx([-10, 30])
+    timing.complete_chunk(7)
+    timing.observe(3, 8, 100.0, 102.0, 102.050, 109.0)
+    final = timing.report()
+    assert final["sample_count"] == 3
+    assert final["chunks"][0] == pytest.approx((7, 2, 0.0, 1.0, 10.0))
+    assert final["samples"][-1][2] == 2.0
+    assert len(partial["samples"]) == 2
+    assert partial["chunks"] == []
+    assert json.loads(json.dumps(final))["sample_count"] == 3
+
+
+def test_drift_rate_estimator_waits_for_enough_span():
+    estimator = native_play_module._DriftRateEstimator(min_samples=8)
+    for step in range(7):
+        estimator.observe(step * 0.1, step * 0.1)
+    assert estimator.update() == 0.0
+    assert estimator.rate == 0.0
+    assert estimator.last_slope_ms_per_s is None
+
+
+def test_drift_rate_estimator_converges_to_growing_late_drift():
+    estimator = native_play_module._DriftRateEstimator(
+        window_s=20.0, min_samples=12, min_span_s=3.0, ema_alpha=1.0
+    )
+    for step in range(60):
+        elapsed = step * 0.2
+        # 漂移以 3ms/s 增长：斜率 /1000 = 0.003。
+        estimator.observe(elapsed, 4.0 + 3.0 * elapsed)
+    rate = estimator.update()
+    assert rate == pytest.approx(0.003, abs=0.0004)
+    assert estimator.last_slope_ms_per_s == pytest.approx(3.0, abs=0.4)
+
+
+def test_drift_rate_estimator_clamps_rate():
+    estimator = native_play_module._DriftRateEstimator(
+        window_s=10.0, min_samples=8, min_span_s=1.0,
+        max_rate=0.002, ema_alpha=1.0,
+    )
+    for step in range(20):
+        elapsed = step * 0.25
+        estimator.observe(elapsed, 50.0 * elapsed)
+    assert estimator.update() == 0.002
+
+
+def test_drift_rate_estimator_ignores_stall_spikes():
+    estimator = native_play_module._DriftRateEstimator(
+        window_s=20.0, min_samples=12, min_span_s=3.0, ema_alpha=1.0
+    )
+    for step in range(50):
+        elapsed = step * 0.2
+        drift = 3.0 * elapsed
+        # 8 秒处注入一次 60ms 停顿尖峰；中位数斜率不应被它拉偏。
+        if 7.8 <= elapsed <= 8.0:
+            drift += 60.0
+        estimator.observe(elapsed, drift)
+    rate = estimator.update()
+    assert rate == pytest.approx(0.003, abs=0.0006)
+
+
+def test_drift_rate_estimator_dead_zone_suppresses_tiny_slope():
+    estimator = native_play_module._DriftRateEstimator(
+        window_s=10.0, min_samples=8, min_span_s=1.0,
+        dead_zone_ms_per_s=0.5, ema_alpha=1.0,
+    )
+    for step in range(16):
+        estimator.observe(step * 0.25, 0.2 * step * 0.25)
+    assert estimator.update() == 0.0
+
+
+def test_backend_feeds_chunk_median_drift_to_rate_estimator():
+    """速率估计必须吃 chunk 中位数，而不是同 commit 的成簇回执。
+
+    真实设备回执成簇到达：同一 chunk 内所有动作共享 actual_s，逐条回执
+    喂最小二乘会把斜率带偏甚至翻符号（MuMu 实测曾估计出负速率，反而把
+    w 拉长）。这里验证每个 chunk 只贡献一个中位数样本。
+    """
+    class Calibrator:
+        event_count = 2
+
+        def __init__(self):
+            self.offsets = SimpleNamespace(
+                down_ms=3.0, up_ms=2.0, move_ms=1.0,
+                wait_ms=0.5, interval_ms=0.0,
+            )
+            self.reset_calls = 0
+
+        def correction_ms(self, used_offsets):
+            return 1.5
+
+        def sample_counts(self):
+            return {
+                "down": 1, "up": 1, "move": 1,
+                "wait": 1, "interval": 1,
+            }
+
+        def reset(self):
+            self.reset_calls += 1
+
+    class Compiler:
+        def __init__(self):
+            self.rate_corrections = []
+            self.residuals = []
+
+        def add_residual_ms(self, value):
+            self.residuals.append(value)
+
+        def set_offsets(self, offsets):
+            pass
+
+        def set_rate_correction(self, rate):
+            self.rate_corrections.append(rate)
+
+    class Recorder:
+        def __init__(self):
+            self.completed = []
+
+        def complete_chunk(self, sequence):
+            self.completed.append(sequence)
+
+    class Estimator:
+        def __init__(self):
+            self.samples = []
+
+        def observe(self, elapsed_s, drift_ms):
+            self.samples.append((elapsed_s, drift_ms))
+
+        def update(self):
+            return 0.003
+
+    backend = object.__new__(native_play_module.NativeMinitouchBackend)
+    backend._chunk_drift_points = {7: [(0.2, 4.0), (0.4, 8.0), (0.6, 12.0)]}
+    backend._drift_rate_estimator = Estimator()
+    backend._calibrator = Calibrator()
+    backend._compiler = Compiler()
+    backend._session = SimpleNamespace(
+        reset_calibration=lambda: None,
+    )
+    backend._execution_timing = Recorder()
+    backend._calibration_correction_ms = 0.0
+    backend._calibration_chunks = 0
+    backend._last_observed_offsets = None
+    # 已施加的速率必须加回测量残差，闭环才不会只抵消一半。
+    backend._drift_rate_estimate = 0.002
+    backend._drift_rate_max_rate = 0.010
+
+    expected = native_play_module._ExpectedCommand(
+        command="c",
+        chunk_sequence=7,
+        used_offsets=SimpleNamespace(
+            down_ms=3.0, up_ms=2.0, move_ms=1.0,
+            wait_ms=0.5, interval_ms=0.0,
+        ),
+        last_in_chunk=True,
+    )
+    backend._complete_observed_chunk(expected)
+
+    # 一个 chunk 只喂一个中位数点：elapsed 中位数 0.4，漂移中位数 8.0。
+    assert backend._drift_rate_estimator.samples == [(0.4, 8.0)]
+    assert backend._compiler.rate_corrections == [0.005]
+    assert backend._execution_timing.completed == [7]
+    assert backend._chunk_drift_points == {}
 
 
 def test_native_device_emergency_stop_avoids_adb_cleanup(monkeypatch):

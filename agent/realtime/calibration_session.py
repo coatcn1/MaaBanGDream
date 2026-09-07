@@ -16,6 +16,7 @@ from typing import Any
 from uuid import uuid4
 
 from .profile_store import EnvironmentSignature, RealtimeProfileStore
+from .song_identity import same_song
 
 
 # 局内 FAST/SLOW 自适应控制已能在一首歌内收敛（实测 0→35ms），且结算后
@@ -106,8 +107,14 @@ class CalibrationSessionStore:
             return False
         if song_mode == "current":
             before = session.get("current_song_id")
-            if before and current_song_id and before != current_song_id:
-                return False
+            if before and current_song_id:
+                # 封面 pHash 两次采样会翻转少数 bit；谱面身份必须容忍这一
+                # 噪声。非 pHash 身份仍按精确相等比较。
+                if (
+                    before != current_song_id
+                    and not same_song(before, current_song_id)
+                ):
+                    return False
         return True
 
     def start(
@@ -325,15 +332,19 @@ class CalibrationSessionStore:
         if session.get("song_mode") == "current":
             expected_song = session.get("current_song_id")
             actual_song = result.get("song_id")
-            if expected_song and actual_song and expected_song != actual_song:
-                attempt["status"] = "technical-failure"
-                attempt["technical_reason"] = "current song changed during calibration"
-                session["status"] = "paused"
-                session["terminal_reason"] = attempt["technical_reason"]
-                session["next_stage"] = stage
-                self._save(session)
-                self._update_candidate(session)
-                return session
+            if expected_song and actual_song:
+                if (
+                    expected_song != actual_song
+                    and not same_song(expected_song, actual_song)
+                ):
+                    attempt["status"] = "technical-failure"
+                    attempt["technical_reason"] = "current song changed during calibration"
+                    session["status"] = "paused"
+                    session["terminal_reason"] = attempt["technical_reason"]
+                    session["next_stage"] = stage
+                    self._save(session)
+                    self._update_candidate(session)
+                    return session
             if not expected_song and actual_song:
                 session["current_song_id"] = actual_song
 

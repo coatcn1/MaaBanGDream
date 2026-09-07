@@ -30,6 +30,7 @@ from .performance_settings_action import (
 )
 from .profile_action import PROJECT_ROOT
 from .profile_store import RealtimeProfileStore
+from .vision_io import imwrite_unicode
 
 
 # Canonical MaaFramework coordinates for the 1280x720 Bilibili client.
@@ -329,7 +330,7 @@ def _tap_effect_click_plan(actual: int, expected: int) -> tuple[str, int]:
 def _save_readback_failure(image: np.ndarray, stage: str) -> str:
     path = PROJECT_ROOT / "debug" / f"game-effect-{stage}-readback.png"
     path.parent.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(path), image)
+    imwrite_unicode(path, image)
     return str(path)
 
 

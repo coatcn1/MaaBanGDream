@@ -11,6 +11,8 @@ import pytest
 import agent.realtime.cooperative_action as cooperative_action
 from agent.realtime.cooperative_action import (
     COOPERATIVE_DIFFICULTY_TARGETS,
+    DISCONNECT_CONFIRM_INTERRUPT_POINT,
+    DISCONNECT_CONTINUE_INTERRUPT_POINT,
     MEMBER_DOWNLOAD_TIMEOUT_SECONDS,
     CooperativeLiveFinalize,
     CooperativeLiveFlow,
@@ -19,6 +21,7 @@ from agent.realtime.cooperative_action import (
     configure_cooperative_settings,
     cooperative_play_params,
     current_cooperative_settings,
+    DEFAULT_SETTINGS,
     should_stay_in_room,
 )
 
@@ -36,12 +39,254 @@ def room_frame(hue: int) -> np.ndarray:
     return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
 
 
+def _fake_jump_flow(
+    monkeypatch,
+    *,
+    templates,
+    visible_results,
+    gate_block,
+):
+    """构造只含断网跳车所需成员的 CooperativeLiveFlow 与假控制器。"""
+    class Job:
+        def __init__(self, value):
+            self._value = value
+
+        def wait(self):
+            return self
+
+        def get(self):
+            return self._value
+
+    class Controller:
+        def __init__(self):
+            self.shell_calls = []
+            self.keys = []
+            self.started = []
+
+        def post_shell(self, command, timeout=20000):
+            self.shell_calls.append(command)
+            return Job("")
+
+        def post_click_key(self, key):
+            self.keys.append(key)
+            return Job(None)
+
+        def post_start_app(self, package):
+            self.started.append(package)
+            return Job(None)
+
+    controller = Controller()
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=controller)
+    )
+    flow.templates = dict(templates)
+    clicks: list[tuple[int, int]] = []
+    dismiss_calls: list[bool] = []
+    flow.capture = lambda: np.zeros((720, 1280, 3), dtype=np.uint8)
+    flow.visible = (
+        lambda image, name, threshold=0.9: visible_results.get(name, False)
+    )
+    flow.click = clicks.append
+    flow.dismiss_connect_failed = lambda: dismiss_calls.append(True)
+
+    class Gate:
+        def __init__(self, shell):
+            self.shell = shell
+            self.restored = 0
+
+        def block(self):
+            return gate_block
+
+        def restore(self):
+            self.restored += 1
+            return True
+
+    gates = []
+
+    def gate_factory(shell):
+        gate = Gate(shell)
+        gates.append(gate)
+        return gate
+
+    monkeypatch.setattr(
+        cooperative_action, "GameNetworkGate", gate_factory
+    )
+    return flow, controller, clicks, dismiss_calls, gates
+
+
 def test_room_tier_classifier_covers_all_four_carousel_cards():
     assert classify_room_tier(room_frame(90)) == "free"
     assert classify_room_tier(room_frame(174)) == "beginner"
     assert classify_room_tier(room_frame(103)) == "chief"
     assert classify_room_tier(room_frame(19)) == "legend"
     assert classify_room_tier(room_frame(55)) is None
+
+
+def test_disconnect_jump_out_switches_dismisses_and_restores(monkeypatch):
+    flow, controller, clicks, dismiss_calls, gates = _fake_jump_flow(
+        monkeypatch,
+        templates={
+            "disconnect_continue_body": np.zeros((10, 10, 3), dtype=np.uint8),
+            "disconnect_confirm_body": np.zeros((10, 10, 3), dtype=np.uint8),
+        },
+        visible_results={
+            "disconnect_continue_body": True,
+            "disconnect_confirm_body": True,
+        },
+        gate_block=True,
+    )
+    assert flow.disconnect_jump_out() is True
+    assert controller.keys == [3]
+    assert controller.started == [cooperative_action.GAME_PACKAGE]
+    assert clicks == [
+        DISCONNECT_CONTINUE_INTERRUPT_POINT,
+        DISCONNECT_CONFIRM_INTERRUPT_POINT,
+    ]
+    assert dismiss_calls == [True]
+    assert gates[0].restored == 2
+
+
+def test_disconnect_jump_out_missing_template_fails_before_any_device_action(
+    monkeypatch,
+):
+    flow, controller, clicks, dismiss_calls, gates = _fake_jump_flow(
+        monkeypatch,
+        templates={},
+        visible_results={},
+        gate_block=True,
+    )
+    assert flow.disconnect_jump_out() is False
+    assert controller.keys == []
+    assert controller.started == []
+    assert clicks == []
+    assert dismiss_calls == []
+    assert gates[0].restored == 1
+
+
+def test_disconnect_jump_out_restores_network_when_gate_block_fails(
+    monkeypatch,
+):
+    flow, controller, clicks, dismiss_calls, gates = _fake_jump_flow(
+        monkeypatch,
+        templates={
+            "disconnect_continue_body": np.zeros((10, 10, 3), dtype=np.uint8),
+            "disconnect_confirm_body": np.zeros((10, 10, 3), dtype=np.uint8),
+        },
+        visible_results={},
+        gate_block=False,
+    )
+    assert flow.disconnect_jump_out() is False
+    assert controller.keys == []
+    assert gates[0].restored == 1
+
+
+def test_disconnect_jump_out_restores_network_when_popup_times_out(
+    monkeypatch,
+):
+    flow, controller, clicks, dismiss_calls, gates = _fake_jump_flow(
+        monkeypatch,
+        templates={
+            "disconnect_continue_body": np.zeros((10, 10, 3), dtype=np.uint8),
+            "disconnect_confirm_body": np.zeros((10, 10, 3), dtype=np.uint8),
+        },
+        visible_results={},
+        gate_block=True,
+    )
+    assert flow.disconnect_jump_out(popup_timeout_s=0.2) is False
+    assert controller.keys == [3]
+    assert controller.started == [cooperative_action.GAME_PACKAGE]
+    assert clicks == []
+    assert dismiss_calls == []
+    assert gates[0].restored == 1
+
+
+def test_play_runs_disconnect_jump_when_live_run_requests_it(monkeypatch):
+    class Play:
+        def run(self, context, params):
+            # 引擎已因跳车提前返回；这里返回 False 也不应走到失败分支。
+            return False
+
+    monkeypatch.setattr(cooperative_action, "RealtimeProfilePlay", Play)
+    monkeypatch.setattr(
+        cooperative_action,
+        "current_live_run",
+        lambda: SimpleNamespace(disconnect_jump_requested=True),
+    )
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.settings = dict(DEFAULT_SETTINGS)
+    flow.context = object()
+    flow.action_argv = lambda params: params
+    jumps = []
+    flow.disconnect_jump_out = lambda: jumps.append(True)
+
+    assert flow.play() is True
+    assert jumps == [True]
+
+
+def test_play_skips_jump_without_live_run_signal(monkeypatch):
+    class Play:
+        def run(self, context, params):
+            return False
+
+    monkeypatch.setattr(cooperative_action, "RealtimeProfilePlay", Play)
+    monkeypatch.setattr(
+        cooperative_action,
+        "current_live_run",
+        lambda: SimpleNamespace(disconnect_jump_requested=False),
+    )
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.settings = dict(DEFAULT_SETTINGS)
+    flow.context = object()
+    flow.action_argv = lambda params: params
+    jumps = []
+    flow.disconnect_jump_out = lambda: jumps.append(True)
+
+    assert flow.play() is False
+    assert jumps == []
+
+
+def _fake_member_exit_watch_flow(frame, timeout):
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    dismissed = []
+    flow.capture = lambda: frame.copy()
+    flow.visible = (
+        lambda image, name, threshold=0.9: name == "member_exit_title"
+    )
+    flow.dismiss_member_exit = lambda: dismissed.append(True)
+    flow.watch_member_exit_before_black(timeout=timeout)
+    return dismissed
+
+
+def test_member_exit_watch_dismisses_popup_before_black():
+    frame = np.full((720, 1280, 3), 255, dtype=np.uint8)
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    dismissed = []
+    flow.capture = lambda: frame.copy()
+    flow.visible = (
+        lambda image, name, threshold=0.9: name == "member_exit_title"
+    )
+    flow.dismiss_member_exit = lambda: dismissed.append(True)
+    with pytest.raises(MemberExited):
+        flow.watch_member_exit_before_black(timeout=2.0)
+    assert dismissed == [True]
+
+
+def test_member_exit_watch_returns_immediately_on_black_transition():
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+    dismissed = _fake_member_exit_watch_flow(frame, timeout=2.0)
+    assert dismissed == []
+
+
+def test_member_exit_watch_times_out_without_popup_or_black():
+    frame = np.full((720, 1280, 3), 128, dtype=np.uint8)
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    flow.capture = lambda: frame.copy()
+    flow.visible = lambda image, name, threshold=0.9: False
+    flow.watch_member_exit_before_black(timeout=0.25)
 
 
 @pytest.mark.parametrize(
@@ -163,6 +408,7 @@ def test_cooperative_interface_exposes_requested_modes_and_five_difficulties():
         "CooperativeCount",
         "CooperativeMemberExitPolicy",
         "CooperativeDebug",
+        "CooperativeDisconnectJump",
     ]
     options = interface["option"]
     assert [case["name"] for case in options["CooperativeEntryMethod"]["cases"]] == [
@@ -184,6 +430,17 @@ def test_cooperative_interface_exposes_requested_modes_and_five_difficulties():
     assert [case["name"] for case in options["CooperativeDifficulty"]["cases"]] == [
         "Easy", "Normal", "Hard", "Expert", "Special",
     ]
+    assert [
+        case["name"] for case in options["CooperativeDisconnectJump"]["cases"]
+    ] == ["Off", "On"]
+    assert (
+        options["CooperativeDisconnectJump"]["cases"][1]["pipeline_override"]
+        == {
+            "CooperativeDisconnectJumpConfigure": {
+                "custom_action_param": {"disconnect_jump_enabled": True}
+            }
+        }
+    )
     assert set(COOPERATIVE_DIFFICULTY_TARGETS) == {
         "Easy", "Normal", "Hard", "Expert", "Special",
     }
@@ -280,8 +537,11 @@ def test_cooperative_templates_are_deployed_and_nonempty():
         "song_unspecified.png",
         "ready_button.png",
         "member_exit_title.png",
+        "connect_failed_body.png",
         "repeat_room_title.png",
         "sss_guide_close.png",
+        "disconnect_continue_body.png",
+        "disconnect_confirm_body.png",
     }
     assert required == {path.name for path in image_dir.glob("*.png")}
     assert all(
@@ -670,6 +930,7 @@ def test_return_to_room_selection_accelerates_each_page_without_extra_match():
 
 def test_post_score_wait_ignores_member_exit_template(monkeypatch):
     flow = object.__new__(CooperativeLiveFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
     flow.capture = lambda: np.zeros((720, 1280, 3), dtype=np.uint8)
 
     def visible(image, name, threshold=0.9):
@@ -683,6 +944,54 @@ def test_post_score_wait_ignores_member_exit_template(monkeypatch):
         ("room_search", "live_entry"),
         timeout=0.01,
     ) is None
+
+
+@pytest.mark.parametrize("stay", [False, True])
+def test_post_score_story_chain_does_not_cancel_confirm_or_wait_for_exit(stay):
+    flow = object.__new__(CooperativeLiveFlow)
+    actions = []
+    class Job:
+        def wait(self):
+            return self
+    class Controller:
+        def post_click_key(self, key):
+            actions.append(("key", key))
+            return Job()
+    flow.context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=Controller())
+    )
+    flow.settings = {"entry_method": "private"}
+    frames = iter(["menu", "skip", "confirm", "exit", "room_wait"])
+    flow.capture = lambda: next(frames)
+    flow.visible = lambda image, name, threshold=0.9: (
+        image == "exit" and name == ("repeat_room_title" if stay else "room_search")
+        or image == "room_wait" and name == "room_wait"
+    )
+    story = {"menu": "AutoLiveStoryMenu", "skip": "AutoLiveStorySkip",
+             "confirm": "AutoLiveStorySkipConfirmLarge"}
+    flow.pipeline_box = lambda image, node: (
+        SimpleNamespace(x=10, y=20, w=20, h=10)
+        if story.get(image) == node else None
+    )
+    flow.click = lambda point: actions.append(("click", point))
+    if stay:
+        flow.stay_in_room()
+    else:
+        flow.return_to_room_selection()
+    assert actions[:3] == [("click", (20, 25))] * 3
+    assert not any(kind == "key" for kind, _ in actions)
+
+
+def test_post_score_exit_checks_one_frame_without_nested_timeout():
+    flow = object.__new__(CooperativeLiveFlow)
+    seen = []
+    def wait_for(names, *, timeout, detect_member_exit):
+        seen.append((timeout, detect_member_exit, flow._post_score_refresh))
+        return "room_search", None
+    flow.wait_for = wait_for
+    assert flow.wait_for_post_score_destination(("room_search",), timeout=2) == "room_search"
+    assert seen == [(0.0, False, True)]
+    assert flow._post_score_refresh is False
 
 
 def test_return_to_room_selection_recognizes_home_and_reenters_before_next_round():

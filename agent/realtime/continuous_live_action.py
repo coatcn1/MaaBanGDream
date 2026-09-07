@@ -22,6 +22,7 @@ except ImportError:
 from .life_monitor import LifeDetector
 from .game_effect_settings_action import verified_game_visual_settings
 from .profile_play_action import RealtimeProfilePlay, resolve_profile_for_settings_gate
+from .vision_io import imwrite_unicode
 
 
 CONTINUOUS_VISUAL_VERIFICATION_MAX_AGE_SECONDS = 15 * 60
@@ -67,7 +68,7 @@ class ListenerDiagnosticCapture:
         )
         output.mkdir(parents=True, exist_ok=False)
         image_path = output / "last-frame.png"
-        if not cv2.imwrite(str(image_path), self._latest):
+        if not imwrite_unicode(image_path, self._latest):
             raise OSError(f"unable to save listener diagnostic: {image_path}")
         (output / "metadata.json").write_text(
             json.dumps({"reason": reason}, ensure_ascii=False, indent=2) + "\n",

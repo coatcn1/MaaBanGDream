@@ -10,6 +10,17 @@ from agent.realtime.chart_repository import LocalChartRepository
 from agent.realtime.song_identity import UNKNOWN_SONG_ID
 
 
+def test_explicit_full_title_disambiguates_shared_fire_bird_jacket():
+    repository = LocalChartRepository(Path(__file__).resolve().parents[1] / "resource/charts")
+    fingerprint = "song-jacket-phash-v2-c52d4b1e6a1ab5e3"
+    full = repository.resolve(fingerprint, "Expert", title="[FULL]FIRE BIRD")
+    assert full.selection is not None
+    assert full.selection.bestdori_song_id == 243
+    assert repository.resolve(fingerprint, "Expert", level=27,
+                              title="[FULL]FIRE BIRD").selection is None
+    assert repository.resolve(fingerprint, "Expert", title="FIRE BIRD").selection is None
+
+
 FINGERPRINT = "song-jacket-phash-v2-0123456789abcdef"
 
 

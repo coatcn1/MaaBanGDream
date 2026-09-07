@@ -1,10 +1,13 @@
 param(
     [string]$MfaRoot,
     [string]$CondaRoot,
-    [string]$EnvironmentName = 'maabangdream'
+    [string]$EnvironmentName = 'maabangdream',
+    [switch]$OrderedStartupTrial
 )
 
 $ErrorActionPreference = 'Stop'
+# 候选行为仅由本次启动显式启用；普通启动保留已发布行为，便于真机对照。
+$env:MAABANGDREAM_ORDERED_STARTUP = if ($OrderedStartupTrial) { '1' } else { '0' }
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $workspaceRoot = Split-Path -Parent $projectRoot
 if (-not $MfaRoot) {
@@ -176,6 +179,7 @@ try {
     Start-Process -FilePath $mfaExe -WorkingDirectory $MfaRoot
 }
 finally {
+    Remove-Item Env:MAABANGDREAM_ORDERED_STARTUP -ErrorAction SilentlyContinue
     Remove-Item Env:MAABANGDREAM_MFA_SESSION_ID -ErrorAction SilentlyContinue
     Remove-Item Env:MAABANGDREAM_MFA_ROOT -ErrorAction SilentlyContinue
 }
@@ -184,3 +188,4 @@ Write-Host "MFAAvalonia started with MaaBanGDream $($interface.version)"
 Write-Host "Project: $projectRoot"
 Write-Host "Deployment: $MfaRoot"
 Write-Host "Conda environment: $EnvironmentName ($python)"
+Write-Host "Ordered startup trial: $([bool]$OrderedStartupTrial)"

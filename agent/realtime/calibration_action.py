@@ -131,6 +131,7 @@ def calibration_round_plan(
         },
         "RealtimeLiveDifficulty": {
             "custom_action_param": {
+                "defer_song_title_to_preparation": True,
                 "difficulty": difficulty,
                 "max_attempts": 3,
                 "mode": (
@@ -143,6 +144,7 @@ def calibration_round_plan(
         },
         "RealtimeLiveFormalSettingsGate": {
             "custom_action_param": {
+                "confirm_preparation_identity": True,
                 "difficulty": difficulty,
                 "require_profile": False,
                 "dpi": 240,
@@ -152,6 +154,7 @@ def calibration_round_plan(
         },
         "RealtimeLiveRehearsalSettingsGate": {
             "custom_action_param": {
+                "confirm_preparation_identity": True,
                 "difficulty": difficulty,
                 "require_profile": False,
                 "dpi": 240,

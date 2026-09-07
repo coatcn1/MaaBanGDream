@@ -10,7 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from .chart_timeline import ChartTimeline
-from .song_identity import UNKNOWN_SONG_ID, same_song
+from .song_identity import (
+    LOOSE_SAME_SONG_DISTANCE,
+    UNKNOWN_SONG_ID,
+    same_song,
+)
 from .song_title_ocr import title_similarity
 
 
@@ -26,6 +30,9 @@ class ChartSelection:
     titles: tuple[str, ...] = ()
     fingerprints: tuple[str, ...] = ()
     shared_jacket: bool = False
+    # 共享封面组内该难度等级是否唯一：唯一时等级即可区分 FULL/普通等
+    # 同封面谱面，最终封面确认无需再依赖经常失败的标题 OCR。
+    shared_jacket_level_unique: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +60,11 @@ class LocalChartRepository:
     ) -> ChartResolution:
         manifest = self._load_manifest()
         songs = manifest["songs"]
+        if title and _FULL_TITLE_PREFIX.match(re.sub(r"['\"‘’]", "", str(title))):
+            # 明确读到 FULL 就是版本证据，不能被首尾噪声裁剪抹成普通版。
+            songs = [song for song in songs if any(
+                _FULL_TITLE_PREFIX.match(str(value)) for value in song.get("titles", ())
+            )]
         normalized_difficulty = str(difficulty).strip().lower()
         fingerprint_matches = [
             song for song in songs
@@ -61,6 +73,20 @@ class LocalChartRepository:
                 for confirmed in song["fingerprints"]
             )
         ]
+        if not fingerprint_matches and level is not None:
+            # 选曲页封面裁切/边框会让个别谱面稳定多翻转几 bit；只有同时
+            # 读到等级时才用更宽阈值重试，随后仍由等级硬约束唯一化。
+            fingerprint_matches = [
+                song for song in songs
+                if any(
+                    same_song(
+                        song_fingerprint,
+                        confirmed,
+                        max_distance=LOOSE_SAME_SONG_DISTANCE,
+                    )
+                    for confirmed in song["fingerprints"]
+                )
+            ]
         matches = fingerprint_matches
         level_scope = songs
         matched_by_level = False
@@ -142,6 +168,13 @@ class LocalChartRepository:
             "expected_notes",
             payload.get("difficulty", {}).get("expected_notes"),
         )
+        selected_level = _difficulty_level(song, normalized_difficulty)
+        same_level_shared = sum(
+            1
+            for candidate in fingerprint_matches
+            if _difficulty_level(candidate, normalized_difficulty)
+            == selected_level
+        )
         return ChartResolution(
             ChartSelection(
                 bestdori_song_id=song["bestdori_song_id"],
@@ -152,12 +185,13 @@ class LocalChartRepository:
                 expected_notes=(
                     int(expected_notes) if expected_notes is not None else None
                 ),
-                level=_difficulty_level(song, normalized_difficulty),
+                level=selected_level,
                 titles=tuple(str(value) for value in song.get("titles", ())),
                 fingerprints=tuple(
                     str(value) for value in song.get("fingerprints", ())
                 ),
                 shared_jacket=len(fingerprint_matches) > 1,
+                shared_jacket_level_unique=same_level_shared == 1,
             ),
             (
                 "confirmed local chart by song title"

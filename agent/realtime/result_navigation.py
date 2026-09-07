@@ -14,6 +14,27 @@ import numpy as np
 # inside that button and could accidentally start another navigation flow.
 RESULT_ANIMATION_SKIP_POINT = (1279, 719)
 
+STORY_NODES = (
+    "AutoLiveStorySkipConfirmLarge", "AutoLiveStorySkipConfirm",
+    "AutoLiveStorySkip", "AutoLiveStoryMenu",
+)
+
+
+def handle_story_page(image, *, recognise, click, stopping) -> bool:
+    """只点击已识别的剧情控件；每次输入后交还外层重新截图。"""
+    for node in STORY_NODES:
+        if stopping():
+            return False
+        box = recognise(image, node)
+        if box is None:
+            continue
+        if stopping():
+            return False
+        click((int(box.x + box.w // 2), int(box.y + box.h // 2)))
+        print(f"ResultNavigation state=story action={node}", flush=True)
+        return True
+    return False
+
 
 class ResultNavigationStatus(str, Enum):
     IDENTIFIED = "identified"
@@ -39,10 +60,15 @@ def _wait_unless_stopping(
     sleeper: Callable[[float], None],
 ) -> bool:
     deadline = clock() + max(0.0, seconds)
-    while clock() < deadline:
+    while True:
+        # 先取剩余时间再检查停止：stopping 的原生调用可能阻塞到越过
+        # deadline，直接 sleep 负值会抛 ValueError 打断整个结算流程。
+        remaining = deadline - clock()
+        if remaining <= 0:
+            break
         if stopping():
             return False
-        sleeper(min(0.1, deadline - clock()))
+        sleeper(min(0.1, remaining))
     return not stopping()
 
 
@@ -111,6 +137,7 @@ def navigate_result_pages(
     identify: Callable[[np.ndarray], str | None],
     *,
     before_input: Callable[[], None] = lambda: None,
+    handle_intermediate: Callable[[np.ndarray], bool] = lambda _image: False,
     timeout_seconds: float = 180.0,
     settle_seconds: float = 0.15,
     retry_interval_seconds: float = 0.85,
@@ -181,6 +208,13 @@ def navigate_result_pages(
                 back_attempts=attempts,
             )
 
+        if stopping():
+            continue
+        if handle_intermediate(image):
+            # 剧情确认框不支持通用 BACK；点击后只重新采样，防止取消跳过。
+            continue
+        if stopping():
+            continue
         back_then_click(
             controller,
             before_input=before_input,

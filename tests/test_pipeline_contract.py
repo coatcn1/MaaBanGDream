@@ -23,7 +23,7 @@ def test_all_pipeline_clicks_use_the_foreground_guard():
 def test_interface_references_existing_entry_and_resource():
     interface = load(ROOT / "interface.json")
     assert interface["interface_version"] == 2
-    assert interface["version"] == "1.2.3"
+    assert interface["version"] == "1.3.0"
     assert [task["name"] for task in interface["task"]] == [
         "AutoLive", "RealtimeLive", "CooperativeLive", "ContinuousRealtimeLive",
         "RealtimeCalibration", "DailyFreeGacha", "ChallengeLive",
@@ -122,14 +122,14 @@ def test_recovery_is_bounded_and_shared():
         "recognition": "DirectHit",
         "action": "DoNothing",
     }
-    assert common["HomeMarker"]["threshold"] == 0.82
+    assert common["HomeMarker"]["threshold"] == 0.75
 
 
 def test_all_home_markers_accept_the_current_home_screen_score():
     for path in (ROOT / "resource" / "pipeline").glob("*.json"):
         for node in load(path).values():
             if node.get("template") == "home_marker.png":
-                assert node["threshold"] == 0.82
+                assert node["threshold"] == 0.75
 
 
 def test_all_pipeline_references_exist_and_nodes_are_unique():
@@ -517,7 +517,10 @@ def test_realtime_multi_live_contract_and_options():
         target, play_node = expected[case["name"]]
         override = case["pipeline_override"]
         selection = override["RealtimeLiveDifficulty"]["custom_action_param"]
-        assert selection == {"difficulty": case["name"], "max_attempts": 3}
+        assert selection == {
+            "difficulty": case["name"], "max_attempts": 3,
+            "defer_song_title_to_preparation": True,
+        }
         assert target == tuple(DIFFICULTY_TARGETS[case["name"]])
         assert override["RealtimeLiveRehearsalStart"]["next"] == [
             "RealtimeLiveRehearsalPostStart"
@@ -544,7 +547,8 @@ def test_realtime_multi_live_contract_and_options():
         ]
         params = nodes[play_node]["custom_action_param"]
         assert params["difficulty"] == case["name"]
-        assert params["require_profile"] is False
+        assert params["require_profile"] is True
+        assert params["rehearsal_mode"] is True
         assert params["settings_gate_required"] is True
         assert params["debug_recording"] is False
         assert params["require_completion"] is True
@@ -566,7 +570,7 @@ def test_realtime_multi_live_contract_and_options():
         ]["difficulty"] == case["name"]
         assert override["RealtimeLiveRehearsalSettingsGate"][
             "custom_action_param"
-        ]["require_profile"] is False
+        ]["require_profile"] is True
         assert nodes[play_node]["next"] == ["RealtimeLiveReturnHome"]
 
     song_mode = interface["option"]["RealtimeLiveSongMode"]

@@ -160,6 +160,7 @@ def test_visual_evaluation_keeps_experimental_profile_checks_with_every_difficul
         assert merged["RealtimeLiveVisualEvaluationSettingsGate"][
             "custom_action_param"
         ] == {
+            "confirm_preparation_identity": True,
             "difficulty": difficulty,
             "require_profile": True,
             "dpi": 240,
@@ -234,6 +235,7 @@ def test_formal_mode_keeps_strict_profile_checks_with_every_difficulty():
         assert merged["RealtimeLiveFormalSettingsGate"][
             "custom_action_param"
         ] == {
+            "confirm_preparation_identity": True,
             "difficulty": difficulty,
             "require_profile": True,
             "dpi": 240,

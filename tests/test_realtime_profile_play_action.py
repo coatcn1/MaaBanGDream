@@ -19,6 +19,7 @@ from agent.realtime.profile_play_action import (
     _effective_native_chart_selection,
     _result_report_payload,
     _write_calibration_report,
+    _recording_kind,
     collect_result,
     pause_overlay_changed,
     resolve_life_monitor_enabled,
@@ -27,6 +28,16 @@ from agent.realtime.profile_play_action import (
 from agent.realtime.result_parser import LiveResult
 from agent.realtime.performance_settings_action import clear_verified_settings
 from agent.realtime.live_session import reset_live_run, update_live_run
+
+
+def test_recording_kind_distinguishes_play_types():
+    assert _recording_kind("cooperative") == "coop"
+    assert _recording_kind("formal") == "single-formal"
+    assert _recording_kind("rehearsal") == "single-rehearsal"
+    assert _recording_kind("challenge") == "challenge"
+    assert _recording_kind("calibration-rehearsal") == "calibration-rehearsal"
+    assert _recording_kind("continuous") == "continuous"
+    assert _recording_kind("unknown-mode") == "unknown-mode"
 
 
 class Job:
@@ -658,7 +669,7 @@ def test_profile_play_stop_during_preflight_is_neutral_and_writes_nothing(
     recorder_constructions = []
     monkeypatch.setattr(
         "agent.realtime.profile_play_action.RealtimeDebugRecorder",
-        lambda root: recorder_constructions.append(root),
+        lambda root, **kwargs: recorder_constructions.append(root),
     )
     failure_reasons = []
     monkeypatch.setattr(
@@ -1160,7 +1171,7 @@ def test_profile_resolution_failure_writes_correlated_preflight_result(
     recorder_constructions = []
     monkeypatch.setattr(
         "agent.realtime.profile_play_action.RealtimeDebugRecorder",
-        lambda root: recorder_constructions.append(root),
+        lambda root, **kwargs: recorder_constructions.append(root),
     )
     failure_reasons = []
     monkeypatch.setattr(
@@ -1240,7 +1251,7 @@ def test_late_preflight_failure_preserves_verified_visual_and_speed(
     recorder_constructions = []
     monkeypatch.setattr(
         "agent.realtime.profile_play_action.RealtimeDebugRecorder",
-        lambda root: recorder_constructions.append(root),
+        lambda root, **kwargs: recorder_constructions.append(root),
     )
     argv = SimpleNamespace(custom_action_param=json.dumps({
         "difficulty": "Normal",
@@ -1289,7 +1300,7 @@ def test_foreground_failure_still_starts_preflight_debug_recorder(monkeypatch, t
     recorder_constructions = []
     monkeypatch.setattr(
         "agent.realtime.profile_play_action.RealtimeDebugRecorder",
-        lambda _root: recorder_constructions.append(_root),
+        lambda _root, **kwargs: recorder_constructions.append(_root),
     )
     argv = SimpleNamespace(custom_action_param=json.dumps({
         "difficulty": "Easy",
@@ -1329,7 +1340,7 @@ def test_touch_construction_failure_still_starts_preflight_debug_recorder(
     recorder_constructions = []
     monkeypatch.setattr(
         "agent.realtime.profile_play_action.RealtimeDebugRecorder",
-        lambda _root: recorder_constructions.append(_root),
+        lambda _root, **kwargs: recorder_constructions.append(_root),
     )
     argv = SimpleNamespace(custom_action_param=json.dumps({
         "difficulty": "Easy",
@@ -1395,7 +1406,7 @@ def test_preflight_failure_closes_unowned_debug_recorder(
     recorder = Recorder()
     monkeypatch.setattr(
         "agent.realtime.profile_play_action.RealtimeDebugRecorder",
-        lambda _root: recorder,
+        lambda _root, **kwargs: recorder,
     )
     if failure_point == "construction":
         monkeypatch.setattr(
@@ -1586,7 +1597,7 @@ def _completed_play_harness(
         return True
 
     monkeypatch.setattr(
-        "agent.realtime.profile_play_action.cv2.imwrite",
+        "agent.realtime.profile_play_action.imwrite_unicode",
         fake_imwrite,
     )
 

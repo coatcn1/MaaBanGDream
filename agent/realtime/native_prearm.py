@@ -22,6 +22,12 @@ DEFAULT_TTL_SECONDS = 30.0
 DEFAULT_READY_TIMEOUT_SECONDS = 10.0
 
 
+def _env_flag(name: str) -> bool:
+    """读取 opt-in 实验开关；普通启动默认关闭。"""
+    value = os.environ.get(name, "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 class NativePrearmError(RuntimeError):
     """预武装缓存缺失、过期或身份不匹配。"""
 
@@ -368,6 +374,9 @@ def prepare_native_for_settings_gate(
         run_id=live_run.run_id,
         jlog_path=(
             root / "debug" / "native-jlog" / f"{live_run.run_id}.jsonl"
+        ),
+        drift_rate_correction_enabled=_env_flag(
+            "MAABANGDREAM_NATIVE_DRIFT_RATE_CORRECTION"
         ),
     )
     try:

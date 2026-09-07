@@ -74,6 +74,24 @@ def test_song_level_reader_fails_closed_without_digits():
     assert read_song_level(difficulty_frame("Expert")) is None
 
 
+def test_song_level_reader_covers_all_supported_levels():
+    for level in range(5, 41):
+        assert read_song_level(difficulty_frame_with_level("Expert", level)) == level
+
+
+def test_compact_eight_with_close_six_score_is_read():
+    rows = ["...###....", ".#######..", ".##....##.", "##.....##.",
+            "##.....##.", "##.....##.", ".##....#..", "..######..",
+            "..##..##..", ".#.....##.", "##......##", "#.......##",
+            "#.......##", "##......##", ".##....##.", "..######.."]
+    image = np.full((720, 1280, 3), 255, dtype=np.uint8)
+    for y, row in enumerate(rows):
+        for x, pixel in enumerate(row):
+            if pixel == "#":
+                image[459 + y, 1220 + x] = 0
+    assert read_song_level(image) == 8
+
+
 class ImmediateJob:
     def __init__(self, result=None):
         self.result = result
@@ -119,7 +137,7 @@ def test_successful_difficulty_verification_resets_and_identifies_the_round(monk
     stale = reset_live_run(mode="formal", difficulty="Easy")
     monkeypatch.setattr(difficulty_action, "require_game_foreground", lambda _: None)
     monkeypatch.setattr(difficulty_action.time, "sleep", lambda _: None)
-    monkeypatch.setattr(difficulty_action, "recognize_song_title", lambda _: None)
+    monkeypatch.setattr(difficulty_action, "recognize_song_title", lambda _, **kwargs: None)
 
     assert RealtimeDifficultySelect().run(context, argv)
 
@@ -130,7 +148,8 @@ def test_successful_difficulty_verification_resets_and_identifies_the_round(monk
     assert current.difficulty == "Expert"
     assert current.song_id.startswith(f"{SONG_ID_METHOD}-")
     assert current.song_id_method == SONG_ID_METHOD
-    assert controller.screencaps == 1
+    assert controller.screencaps == 4
+    assert controller.clicks == [DIFFICULTY_TARGETS["Expert"]]
 
 
 def test_formal_round_can_continue_with_unknown_song_without_stale_identity(monkeypatch):
@@ -150,7 +169,7 @@ def test_formal_round_can_continue_with_unknown_song_without_stale_identity(monk
     )
     monkeypatch.setattr(difficulty_action, "require_game_foreground", lambda _: None)
     monkeypatch.setattr(difficulty_action.time, "sleep", lambda _: None)
-    monkeypatch.setattr(difficulty_action, "recognize_song_title", lambda _: None)
+    monkeypatch.setattr(difficulty_action, "recognize_song_title", lambda _, **kwargs: None)
 
     assert RealtimeDifficultySelect().run(context, argv)
 
@@ -193,7 +212,7 @@ def test_level_disambiguated_expert_does_not_fallback(monkeypatch):
             song_id, difficulty, song_level
         ),
     )
-    monkeypatch.setattr(difficulty_action, "recognize_song_title", lambda _: None)
+    monkeypatch.setattr(difficulty_action, "recognize_song_title", lambda _, **kwargs: None)
 
     assert RealtimeDifficultySelect().run(context, argv)
 
@@ -245,7 +264,7 @@ def test_ambiguous_shared_jacket_retries_level_and_title_without_reclick(
     monkeypatch.setattr(
         difficulty_action,
         "recognize_song_title",
-        lambda image: (
+        lambda image, **kwargs: (
             SimpleNamespace(text="ON YOUR MARK", confidence=0.95)
             if read_song_level(image) == 26 else None
         ),

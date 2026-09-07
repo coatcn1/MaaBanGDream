@@ -5,6 +5,7 @@ import threading
 import time
 import traceback
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -28,14 +29,17 @@ except ImportError:
 from .difficulty_action import RealtimeDifficultySelect
 from .game_effect_settings_action import RealtimeGameEffectSettingsGate
 from .game_effect_settings_action import _click as _maa_click
+from .vision_io import imread_unicode
 from .game_effect_settings_action import _swipe as _maa_swipe
-from .live_session import append_current_run_event
+from .live_session import append_current_run_event, current_live_run
 from .life_monitor import LifeDetector
+from .live_visual_gate import MODE_TOGGLE_POINT, live_performance_mode_is_off
 from .performance_settings_action import RealtimePerformanceSettingsGate
 from .profile_play_action import RealtimeProfilePlay
 from .profile_store import RealtimeProfileStore
 from .native_prearm import discard_prearmed_backend
-from .result_navigation import RESULT_ANIMATION_SKIP_POINT
+from .cooperative_network import GameNetworkGate
+from .result_navigation import RESULT_ANIMATION_SKIP_POINT, handle_story_page
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -50,9 +54,13 @@ TEMPLATE_POSITIONS = {
     "room_wait": (110, 58),
     "song_unspecified": (690, 612),
     "ready_button": (1010, 575),
-    "member_exit_title": (400, 478),
+    "member_exit_title": (399, 158),
+    "connect_failed_body": (580, 345),
     "repeat_room_title": (393, 225),
     "sss_guide_close": (856, 610),
+    # 断网跳车：真实弹窗正文（2026-09-07 雷电录像提取）。
+    "disconnect_continue_body": (488, 313),
+    "disconnect_confirm_body": (495, 307),
 }
 
 DEFAULT_SETTINGS: dict[str, object] = {
@@ -66,6 +74,7 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "max_reconnects": 3,
     "debug_recording": False,
     "diagnostic_trace": True,
+    "disconnect_jump_enabled": False,
 }
 _SETTINGS = dict(DEFAULT_SETTINGS)
 _SETTINGS_LOCK = threading.Lock()
@@ -86,6 +95,10 @@ COOPERATIVE_DIFFICULTY_TARGETS = {
 MEMBER_DOWNLOAD_TIMEOUT_SECONDS = 60.0
 POST_SCORE_NAVIGATION_TIMEOUT_SECONDS = 60.0
 HOME_LIVE_POINT = (1175, 645)
+# 断网跳车按钮点击点：弹窗1“通信已中断。是否继续演出？”点左侧“中断”；
+# 弹窗2“确认中断当前演出返回主页吗？”点右侧粉色“中断”。
+DISCONNECT_CONTINUE_INTERRUPT_POINT = (508, 447)
+DISCONNECT_CONFIRM_INTERRUPT_POINT = (754, 439)
 
 
 def cooperative_play_params(settings: dict[str, object]) -> dict[str, object]:
@@ -112,6 +125,9 @@ def cooperative_play_params(settings: dict[str, object]) -> dict[str, object]:
         "confirm_final_cover": True,
         "final_cover_timeout_seconds": MEMBER_DOWNLOAD_TIMEOUT_SECONDS,
         "native_prearm_deferred": True,
+        "life_depleted_jump_request": bool(
+            settings.get("disconnect_jump_enabled", False)
+        ),
     }
 
 
@@ -191,7 +207,7 @@ class CooperativeLiveFlow:
         self.progress_callback = progress_callback
         self.detector = LifeDetector()
         self.templates = {
-            path.stem: cv2.imread(str(path), cv2.IMREAD_COLOR)
+            path.stem: imread_unicode(path, cv2.IMREAD_COLOR)
             for path in TEMPLATE_DIR.glob("*.png")
         }
         missing = [name for name, image in self.templates.items() if image is None]
@@ -214,6 +230,8 @@ class CooperativeLiveFlow:
         if self.stopped():
             raise InterruptedError("用户已停止任务")
         try:
+            if getattr(self, "_post_score_refresh", False):
+                return capture_image(self.context, node="ResultRefreshScreen")
             return capture_image(self.context)
         except ScreenRefreshCancelled as exc:
             raise InterruptedError("用户已停止任务") from exc
@@ -291,8 +309,116 @@ class CooperativeLiveFlow:
     def dismiss_member_exit(self) -> None:
         image = self.capture()
         if self.visible(image, "member_exit_title", 0.93):
-            self.click((500, 678))
+            # 当前版本弹窗：标题“错误”，正文“由于XX退出房间。将返回
+            # 房间选择界面。”，底部居中“确定”按钮。
+            self.click((638, 525))
             time.sleep(0.8)
+
+    def dismiss_connect_failed(self, attempts: int = 5) -> bool:
+        """“连接失败”弹窗：有界点击“重试”，直到弹窗消失或尝试耗尽。"""
+        for _ in range(max(1, int(attempts))):
+            image = self.capture()
+            if not self.visible(image, "connect_failed_body", 0.90):
+                return True
+            self.click((748, 527))
+            time.sleep(0.8)
+        return not self.visible(
+            self.capture(), "connect_failed_body", 0.90
+        )
+
+    def _adb_shell(self, args) -> tuple[int, str]:
+        """把 MaaFramework 控制器 shell 通道适配成 (returncode, output)。"""
+        command = " ".join(str(part) for part in args)
+        try:
+            output = self.controller.post_shell(command, 8000).wait().get()
+            return 0, str(output or "")
+        except Exception as exc:  # noqa: BLE001 - 任何失败都要 fail-closed
+            return -1, str(exc)
+
+    def _wait_and_click(
+        self,
+        name: str,
+        point: tuple[int, int],
+        timeout: float,
+    ) -> bool:
+        """有界等待模板出现并点击一次；超时或停止时失败。"""
+        deadline = time.monotonic() + float(timeout)
+        while time.monotonic() < deadline:
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
+            image = self.capture()
+            if self.visible(image, name, 0.93):
+                self.click(point)
+                return True
+            time.sleep(0.35)
+        return False
+
+    def disconnect_jump_out(self, *, popup_timeout_s: float = 25.0) -> bool:
+        """生命归零后的断网跳车流程（AGENTS 第 22 条）。
+
+        真实弹窗顺序（2026-09-07 雷电录像）：按游戏 UID 屏蔽出口流量 → 游戏
+        退后台再切回 → 弹窗1“通信已中断。是否继续演出？”点左侧“中断” →
+        弹窗2“确认中断当前演出返回主页吗？”点右侧“中断” → 恢复网络 →
+        “连接失败。”弹窗有界点“重试”直到回主页。任何一步失败都在 finally
+        恢复网络（fail-closed），绝不把模拟器留在断网状态。
+        """
+        gate = GameNetworkGate(self._adb_shell)
+        try:
+            required = {
+                "disconnect_continue_body",
+                "disconnect_confirm_body",
+            }
+            if not required.issubset(self.templates):
+                # 模板未提取时不做任何网络/前台扰动，直接 fail-closed。
+                print(
+                    "CooperativeDisconnectJump popup_template_missing=true",
+                    flush=True,
+                )
+                return False
+            if not gate.block():
+                print(
+                    "CooperativeDisconnectJump gate_block_failed=true",
+                    flush=True,
+                )
+                return False
+            # 退后台再切回；断网状态下切回会触发“是否切换到单人演奏”弹窗。
+            self.controller.post_click_key(3).wait()
+            time.sleep(0.6)
+            self.controller.post_start_app(GAME_PACKAGE).wait()
+            if not self._wait_and_click(
+                "disconnect_continue_body",
+                DISCONNECT_CONTINUE_INTERRUPT_POINT,
+                popup_timeout_s,
+            ):
+                print(
+                    "CooperativeDisconnectJump continue_popup_missed=true",
+                    flush=True,
+                )
+                return False
+            if not self._wait_and_click(
+                "disconnect_confirm_body",
+                DISCONNECT_CONFIRM_INTERRUPT_POINT,
+                10.0,
+            ):
+                print(
+                    "CooperativeDisconnectJump confirm_popup_missed=true",
+                    flush=True,
+                )
+                return False
+            # 先恢复网络，再对“连接失败。”做有界重试；断网状态下点重试
+            # 无效是游戏正常表现。
+            if not gate.restore():
+                print(
+                    "CooperativeDisconnectJump network_restore_failed=true",
+                    flush=True,
+                )
+                return False
+            time.sleep(0.8)
+            self.dismiss_connect_failed()
+            print("CooperativeDisconnectJump completed=true", flush=True)
+            return True
+        finally:
+            gate.restore()
 
     def ensure_room_page(self, timeout: float = 15.0) -> np.ndarray:
         state, image = self.wait_for(("room_search",), timeout=timeout)
@@ -510,11 +636,60 @@ class CooperativeLiveFlow:
             self.context, self.action_argv(performance_params)
         ):
             raise RuntimeError("协力准备页流速复核失败")
+        self.ensure_performance_mode_off()
         self.ready_up_and_verify()
+        self.watch_member_exit_before_black()
         print(
             f"CooperativeLive ready=true difficulty={difficulty} speed_gate=verified",
             flush=True,
         )
+
+    def ensure_performance_mode_off(self) -> None:
+        """协力房间页关闭 3D/MV 演出表现，防止演出场背景变化提前触发谱面。
+
+        房间页左下角与单人准备页同布局：循环箭头切换按钮位于
+        ``MODE_TOGGLE_POINT``，其右侧标签显示当前模式。标签区域读不到
+        强饱和色即视为 OFF。点击后仍无法确认关闭（例如界面改版或坐标
+        漂移）时不阻断本局：保留证据截图并继续，让既有门控推进演出。
+        """
+        for attempt in range(4):
+            image = self.capture()
+            if live_performance_mode_is_off(image):
+                print(
+                    "CooperativeLive performance_mode=off confirmed=true",
+                    flush=True,
+                )
+                return
+            if attempt == 0:
+                self._save_performance_mode_evidence(image, "before")
+            self.click(MODE_TOGGLE_POINT)
+            time.sleep(0.6)
+        try:
+            self._save_performance_mode_evidence(self.capture(), "after")
+        except InterruptedError:
+            raise
+        print(
+            "CooperativeLive performance_mode=off confirmed=false "
+            "action=continue-with-warning attempts=4",
+            flush=True,
+        )
+
+    def _save_performance_mode_evidence(self, image: np.ndarray, stage: str) -> None:
+        try:
+            evidence_dir = PROJECT_ROOT / "debug"
+            evidence_dir.mkdir(parents=True, exist_ok=True)
+            path = evidence_dir / (
+                "cooperative-performance-mode-"
+                f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{stage}.png"
+            )
+            imwrite_unicode(path, image)
+            print(f"CooperativeLive performance_mode_evidence={path}", flush=True)
+        except Exception as exc:  # noqa: BLE001 - 证据失败不阻断演出流程
+            print(
+                "CooperativeLive performance_mode_evidence_failed="
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
 
     def ready_up_and_verify(self) -> None:
         """点击“准备完毕”并确认按钮消失，防止触控未送达造成空演奏。"""
@@ -534,6 +709,29 @@ class CooperativeLiveFlow:
             self.click((left + width // 2, top + height // 2))
             time.sleep(2.0)
         raise RuntimeError("点击准备完毕后按钮仍在，触控可能未送达")
+
+    def watch_member_exit_before_black(self, timeout: float = 12.0) -> None:
+        """准备完毕到黑场转场之间的成员退出弹窗窗口。
+
+        点击“准备完毕”后、进入演奏的整屏黑场之前，其他成员退出时仍会弹出
+        “错误/由于XX退出房间。”；此时已离开房间等待页，常规 wait_for 的
+        成员退出检测不再覆盖，弹窗会挡住转场导致整局卡死。这里高频轮询到
+        黑场出现为止：看到弹窗就点“确定”并按成员退出策略处理；看到黑场
+        说明转场已开始，弹窗不再可能，立即退出本窗口。
+        """
+        deadline = time.monotonic() + float(timeout)
+        while time.monotonic() < deadline:
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
+            image = self.capture()
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            if float(gray.mean()) < 6.0 and float(gray.std()) < 6.0:
+                # 整屏黑场转场已经开始，成员退出弹窗窗口已过。
+                return
+            if self.visible(image, "member_exit_title", 0.93):
+                self.dismiss_member_exit()
+                raise MemberExited("协力成员退出房间")
+            time.sleep(0.1)
 
     def jump_after_download_timeout(self) -> None:
         require_game_foreground(self.controller)
@@ -564,6 +762,12 @@ class CooperativeLiveFlow:
         success = RealtimeProfilePlay().run(
             self.context, self.action_argv(params)
         )
+        run = current_live_run()
+        if run is not None and bool(run.disconnect_jump_requested):
+            # 生命归零跳车：Play 已释放触点并返回，这里执行断网跳车流程；
+            # 按“完成本局”返回，由外层继续回房间/主页导航。
+            self.disconnect_jump_out()
+            return True
         if not success:
             return False
         return True
@@ -583,15 +787,23 @@ class CooperativeLiveFlow:
         """
         # 演出结束后的结算页面不会再出现“成员退出”弹窗；此处关闭该检查，
         # 避免结算导航被残留模板命中打断，把弹窗处理限制在房间/准备阶段。
-        state, image = self.wait_for(
-            names,
-            timeout=timeout,
-            detect_member_exit=False,
-        )
+        # 一帧同时检查出口和剧情，不为尚未到达的房间页空等两轮超时。
+        self._post_score_refresh = True
+        try:
+            state, image = self.wait_for(
+                names, timeout=0.0, detect_member_exit=False,
+            )
+        finally:
+            self._post_score_refresh = False
         if state is not None:
             return state
         if self.pipeline_box(image, "CooperativeHomeMarker") is not None:
             return "home"
+        if handle_story_page(
+            image, recognise=self.pipeline_box, click=self.click,
+            stopping=self.stopped,
+        ):
+            return "story"
         return None
 
     def advance_post_score_once(
@@ -610,7 +822,8 @@ class CooperativeLiveFlow:
         # Keep the user-requested click-before/after-Back cadence.  This is now
         # the literal bottom-right pixel, so it stays input-neutral even when
         # the intervening recognition says Back has already reached Home.
-        self.click(RESULT_ANIMATION_SKIP_POINT)
+        if state != "story":
+            self.click(RESULT_ANIMATION_SKIP_POINT)
         return state
 
     def navigate_to_cooperative_room_selection(self, origin: str) -> None:
@@ -682,6 +895,8 @@ class CooperativeLiveFlow:
                 ("room_search", "live_entry"),
                 timeout=min(2.0, remaining),
             )
+            if state == "story":
+                continue
             if state == "room_search":
                 print(
                     "CooperativeLive state=room-selection "
@@ -734,6 +949,8 @@ class CooperativeLiveFlow:
                 ("repeat_room_title", "room_search", "live_entry"),
                 timeout=min(2.0, remaining),
             )
+            if state == "story":
+                continue
             if state == "repeat_room_title":
                 break
             if state in {"home", "room_search", "live_entry"}:

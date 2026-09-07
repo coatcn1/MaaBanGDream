@@ -10,6 +10,7 @@ import math
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
+from statistics import median
 from typing import Any, Callable
 
 import numpy as np
@@ -58,6 +59,135 @@ class _ExpectedCommand:
     receipts: tuple[dict[str, object], ...] = ()
     last_in_chunk: bool = False
     used_offsets: Any | None = None
+
+
+class _ExecutionTimingTrace:
+    """只记录设备执行证据，不参与调度或补偿。"""
+
+    def __init__(self) -> None:
+        self._samples: list[tuple] = []
+        self._chunks: list[tuple] = []
+        self._chunk_start = 0
+
+    def observe(
+        self, token: int, chunk: int, anchor_s: float,
+        planned_s: float, actual_s: float, received_s: float,
+    ) -> None:
+        # 使用谱面计划时间作为横轴；回读线程或 owner 延迟不能改变漂移走势。
+        # 元组发布后不再修改，report 只复制列表，不在演奏期间逐条写盘。
+        self._samples.append((
+            token, chunk, planned_s - anchor_s, planned_s, actual_s,
+            (actual_s - planned_s) * 1000.0, received_s,
+        ))
+
+    def complete_chunk(self, sequence: int) -> None:
+        samples = self._samples[self._chunk_start:]
+        self._chunks.append((
+            sequence, len(samples),
+            samples[0][2] if samples else None,
+            samples[-1][2] if samples else None,
+            median(row[5] for row in samples) if samples else None,
+        ))
+        self._chunk_start = len(self._samples)
+
+    def report(self) -> dict[str, object]:
+        # 单 owner 追加不可变行；先快照完整 chunk，再快照样本，保证每个
+        # 已发布 chunk 的样本都在报告中。末尾未完成 chunk 的回执仍保留。
+        chunks = list(self._chunks)
+        samples = list(self._samples)
+        return {
+            "schema_version": 1,
+            "sign_convention": "positive-late-negative-early",
+            "elapsed_basis": "planned-minus-first-action-anchor",
+            "sample_columns": [
+                "action_token", "chunk_sequence", "elapsed_s",
+                "planned_engine_s", "actual_engine_s", "signed_drift_ms",
+                "received_engine_s",
+            ],
+            "chunk_columns": [
+                "chunk_sequence", "sample_count", "elapsed_start_s",
+                "elapsed_end_s", "median_signed_drift_ms",
+            ],
+            "sample_count": len(samples),
+            "samples": samples,
+            "chunks": chunks,
+        }
+
+
+class _DriftRateEstimator:
+    """从有符号漂移序列估计设备时钟相对宿主的速率偏斜。
+
+    只输出一个平滑比例 rate（正值=设备钟偏慢），交给 TouchScriptCompiler
+    把宿主时间轴上的 w 按 (1 - rate) 换算成设备时间；这里不向编译器注入
+    逐片残差，避免与 LatencyCalibrator 的逐命令成本校准互相叠加形成正反馈。
+    """
+
+    def __init__(
+        self,
+        *,
+        window_s: float = 25.0,
+        min_samples: int = 40,
+        min_span_s: float = 8.0,
+        max_rate: float = 0.010,
+        dead_zone_ms_per_s: float = 0.2,
+        ema_alpha: float = 0.25,
+    ) -> None:
+        self._window_s = max(5.0, float(window_s))
+        self._min_samples = max(4, int(min_samples))
+        self._min_span_s = max(1.0, float(min_span_s))
+        self._max_rate = max(0.0, float(max_rate))
+        self._dead_zone_ms_per_s = max(0.0, float(dead_zone_ms_per_s))
+        self._ema_alpha = min(1.0, max(0.0, float(ema_alpha)))
+        self._samples: deque[tuple[float, float]] = deque()
+        self._rate = 0.0
+        self._started = False
+        self._last_slope_ms_per_s: float | None = None
+
+    def observe(self, elapsed_s: float, signed_drift_ms: float) -> None:
+        self._samples.append((float(elapsed_s), float(signed_drift_ms)))
+        cutoff = self._samples[-1][0] - self._window_s
+        while self._samples and self._samples[0][0] < cutoff:
+            self._samples.popleft()
+
+    def update(self) -> float:
+        if len(self._samples) < self._min_samples:
+            return self._rate
+        xs = np.asarray([s[0] for s in self._samples], dtype=float)
+        ys = np.asarray([s[1] for s in self._samples], dtype=float)
+        span = float(xs[-1] - xs[0])
+        if span < self._min_span_s:
+            return self._rate
+        # 先最小二乘、再剔除偏离最大的 20% 样本重估：对真实速率保持
+        # 响应速度，同时不让偶发停顿尖峰把斜率整体拉偏。
+        coefficient = np.polyfit(xs, ys, 1)
+        residual = np.abs(ys - np.polyval(coefficient, xs))
+        keep = residual <= np.percentile(residual, 80)
+        if int(keep.sum()) >= 4:
+            coefficient = np.polyfit(xs[keep], ys[keep], 1)
+        slope_ms_per_s = float(coefficient[0])
+        if abs(slope_ms_per_s) < self._dead_zone_ms_per_s:
+            slope_ms_per_s = 0.0
+        self._last_slope_ms_per_s = slope_ms_per_s
+        raw_rate = float(
+            np.clip(slope_ms_per_s / 1000.0, -self._max_rate, self._max_rate)
+        )
+        if not self._started:
+            self._rate = raw_rate
+            self._started = True
+        else:
+            self._rate += self._ema_alpha * (raw_rate - self._rate)
+        self._rate = float(
+            np.clip(self._rate, -self._max_rate, self._max_rate)
+        )
+        return self._rate
+
+    @property
+    def rate(self) -> float:
+        return self._rate
+
+    @property
+    def last_slope_ms_per_s(self) -> float | None:
+        return self._last_slope_ms_per_s
 
 
 class NativeStartPhotogate:
@@ -406,6 +536,7 @@ class NativeMinitouchBackend:
         jlog_path: str | Path | None = None,
         publisher_poll_ms: float = 20.0,
         require_probe: bool | None = None,
+        drift_rate_correction_enabled: bool = False,
     ) -> None:
         if not native_engine.available():
             raise RuntimeError(
@@ -442,6 +573,11 @@ class NativeMinitouchBackend:
         self._calibrator = native_engine.latency_calibrator()
         self._run_id = run_id or str(uuid.uuid4())
         self._jlog_path = Path(jlog_path) if jlog_path is not None else None
+        # 速率估计按 chunk 聚合：设备回执成簇到达（同一 commit 的动作共享
+        # 实际时刻），逐条回执喂回归会在窗口内得到大幅摆动的斜率甚至符号
+        # 翻转；先按 chunk 取中位数再估计，才是稳定的设备钟速率偏斜。
+        self._chunk_drift_points: dict[int, list[tuple[float, float]]] = {}
+        self._drift_rate_max_rate = 0.010
         self._device = device or NativeMinitouchDevice(
             adb_path,
             serial,
@@ -496,6 +632,11 @@ class NativeMinitouchBackend:
         self._observation_complete = threading.Event()
         self._calibration_chunks = 0
         self._calibration_correction_ms = 0.0
+        self._execution_timing = _ExecutionTimingTrace()
+        self._drift_rate_estimator = (
+            _DriftRateEstimator() if drift_rate_correction_enabled else None
+        )
+        self._drift_rate_estimate = 0.0
         self._last_observed_offsets = dict(self._frozen_offsets)
         self._final_window_end_s: float | None = None
         self._game_terminal_reason: str | None = None
@@ -611,6 +752,28 @@ class NativeMinitouchBackend:
         reset_session = getattr(self._session, "reset_calibration", None)
         if reset_session is not None:
             reset_session()
+        if self._drift_rate_estimator is not None:
+            points = self._chunk_drift_points.pop(
+                int(expected.chunk_sequence), []
+            )
+            if points:
+                self._drift_rate_estimator.observe(
+                    median(point[0] for point in points),
+                    median(point[1] for point in points),
+                )
+            measured = self._drift_rate_estimator.update()
+            # 估计器看到的是“已经施加校正后”的残差斜率；把当前已施加的
+            # 速率加回才是设备钟的真实偏斜。只按残差设置校正会让闭环只
+            # 抵消一半（残差 = 真实速率 - 已施加速率，固定点为真值的一半）。
+            self._drift_rate_estimate = float(
+                np.clip(
+                    measured + self._drift_rate_estimate,
+                    -self._drift_rate_max_rate,
+                    self._drift_rate_max_rate,
+                )
+            )
+            self._compiler.set_rate_correction(self._drift_rate_estimate)
+        self._execution_timing.complete_chunk(expected.chunk_sequence)
 
     def _observe_new_logs(self) -> None:
         try:
@@ -744,6 +907,18 @@ class NativeMinitouchBackend:
                             f"PlaybackSession 拒绝动作回执 token={token}"
                         )
                     self._observed_action_tokens.add(token)
+                    self._execution_timing.observe(
+                        token, expected.chunk_sequence,
+                        self._first_action_anchor_s,
+                        planned_s, actual_s, float(received_s),
+                    )
+                    if self._drift_rate_estimator is not None:
+                        self._chunk_drift_points.setdefault(
+                            int(expected.chunk_sequence), []
+                        ).append((
+                            planned_s - self._first_action_anchor_s,
+                            (actual_s - planned_s) * 1000.0,
+                        ))
             if expected.last_in_chunk:
                 self._complete_observed_chunk(expected)
         if self._playback_observation_started:
@@ -1565,6 +1740,7 @@ class NativeMinitouchBackend:
             "state": self._state,
             "session_state": self._session_state,
             "first_action_anchor_s": self._first_action_anchor_s,
+            "execution_timing": self._execution_timing.report(),
             "touch_y": float(
                 getattr(self, "_config", {}).get("judgement_y", TOUCH_Y)
             ),
@@ -1580,6 +1756,19 @@ class NativeMinitouchBackend:
             "calibration_chunks": self._calibration_chunks,
             "executed_chunks": self._calibration_chunks,
             "calibration_correction_ms": self._calibration_correction_ms,
+            "drift_rate_correction_enabled": (
+                getattr(self, "_drift_rate_estimator", None) is not None
+            ),
+            "drift_rate_estimate": getattr(
+                self, "_drift_rate_estimate", None
+            ),
+            "drift_rate_slope_ms_per_s": (
+                getattr(
+                    self, "_drift_rate_estimator", None
+                ).last_slope_ms_per_s
+                if getattr(self, "_drift_rate_estimator", None) is not None
+                else None
+            ),
             "clock_offset_ms": (
                 self._device_clock_offset_s * 1000.0
                 if self._device_clock_offset_s is not None

@@ -16,6 +16,7 @@ import numpy as np
 
 from .note_detector import ObservedNote
 from .touch_planner import TouchAction
+from .vision_io import imwrite_unicode
 
 
 _SENTINEL = None
@@ -72,10 +73,14 @@ class RealtimeDebugRecorder:
         video_enabled: bool = True,
         session_metadata: Mapping[str, object] | None = None,
         close_timeout_seconds: float = 2.0,
+        session_kind: str = "realtime",
     ) -> None:
-        # 重试可能在同一秒重新建包，微秒后缀避免诊断功能反过来导致任务失败。
+        # 目录名带演奏类型（单人正式/单人排练/协力/挑战/校准等），便于
+        # 直接区分录像来源；重试可能在同一秒重新建包，微秒后缀避免诊断
+        # 功能反过来导致任务失败。
+        kind = str(session_kind or "realtime").strip() or "realtime"
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        self.output_dir = root / f"realtime-{stamp}"
+        self.output_dir = root / f"{kind}-{stamp}"
         self.output_dir.mkdir(parents=True, exist_ok=False)
         self.video_fps = video_fps
         self.video_enabled = bool(video_enabled)
@@ -200,7 +205,7 @@ class RealtimeDebugRecorder:
             relative = Path("checkpoints") / (
                 f"{index:03d}-{safe_phase}-{safe_status}.png"
             )
-            if not cv2.imwrite(str(self.output_dir / relative), image):
+            if not imwrite_unicode(self.output_dir / relative, image):
                 raise OSError("无法保存实时演奏阶段证据截图")
             payload = {
                 "index": index,
@@ -525,7 +530,7 @@ class RealtimeDebugRecorder:
         relative = Path("events") / (
             f"frame-{self._trace_frames:06d}-{kind}-lane-{lane}.png"
         )
-        if not cv2.imwrite(str(self.output_dir / relative), image):
+        if not imwrite_unicode(self.output_dir / relative, image):
             raise OSError("无法保存实时演奏异常截图")
         self._events.write(json.dumps({
             "frame": self._trace_frames,

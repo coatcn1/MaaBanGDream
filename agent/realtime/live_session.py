@@ -32,9 +32,14 @@ class LiveRunContext:
     final_cover_song_id: str | None = None
     final_cover_status: str = "not-observed"
     final_cover_reason: str | None = None
+    # 本局生命归零并已请求“断网跳车”；仅作为 Play 与外层协力流程之间的
+    # 一次性信号，不进入序列化会话元数据。
+    disconnect_jump_requested: bool = False
     # Internal one-shot handoff from a verified difficulty screen to Play.
     # Deliberately omitted from serialized session metadata.
     prepared_for_play: bool = False
+    # 保留本局准备页证据，待演奏记录器建立后归入同一个证据包，不序列化像素。
+    preparation_identity_image: object | None = None
 
     def to_mapping(self) -> dict:
         return {

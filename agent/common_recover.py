@@ -4,6 +4,8 @@ import json
 import subprocess
 import time
 import traceback
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from maa.agent.agent_server import AgentServer
@@ -14,10 +16,12 @@ try:
     from .foreground_guard import ForegroundAppMismatch, foreground_package, require_game_foreground
     from .screen_refresh import ScreenRefreshCancelled, capture_image
     from .task_reporting import log_task
+    from .realtime.vision_io import imwrite_unicode
 except ImportError:  # AgentServer loads this module from the agent directory.
     from foreground_guard import ForegroundAppMismatch, foreground_package, require_game_foreground
     from screen_refresh import ScreenRefreshCancelled, capture_image
     from task_reporting import log_task
+    from realtime.vision_io import imwrite_unicode
 
 
 def _params(raw: Any) -> dict[str, Any]:
@@ -183,6 +187,17 @@ class CommonRecover(CustomAction):
         adb_serial = str(params.get("adb_serial", "emulator-7554"))
         startup_grace = int(params.get("startup_grace_ms", 0)) / 1000
         click_nodes = [str(node) for node in params.get("click_nodes", [])]
+        story_click_nodes = [
+            str(node)
+            for node in params.get(
+                "story_click_nodes",
+                [
+                    "AutoLiveStorySkipConfirmLarge",
+                    "AutoLiveStorySkipConfirm",
+                    "AutoLiveStorySkip",
+                ],
+            )
+        ]
         resource_download_click_node = str(
             params.get("resource_download_click_node", "ResourceDownloadConfirm")
         )
@@ -513,6 +528,34 @@ class CommonRecover(CustomAction):
                 if (back_only and restart_round == 0) or login_recovery_active:
                     if context.tasker.stopping:
                         return True
+                    # 登录/弹窗点击后进入的 ESC 恢复阶段仍可能落在剧情页：
+                    # ESC 会在剧情页与“跳过”确认框之间来回切换。先处理
+                    # 剧情跳过/关闭节点，命中则点击并继续，不进入 ESC 循环。
+                    if login_recovery_active and not back_only:
+                        story_handled = False
+                        for node in story_click_nodes:
+                            result = context.run_recognition(node, image)
+                            if not result or not result.hit or not result.box:
+                                continue
+                            if context.tasker.stopping:
+                                return True
+                            box = result.box
+                            controller.post_click(
+                                box.x + box.w // 2,
+                                box.y + box.h // 2,
+                            ).wait()
+                            story_handled = True
+                            log_task(
+                                "游戏启动",
+                                "主页恢复",
+                                "INFO",
+                                f"处理剧情节点：{node}",
+                            )
+                            break
+                        if story_handled:
+                            if not _wait_unless_stopping(context, interval):
+                                return True
+                            continue
                     accelerate_back = (
                         back_only
                         and restart_round == 0
@@ -639,6 +682,25 @@ class CommonRecover(CustomAction):
             if restart_round < restart_limit:
                 if context.tasker.stopping:
                     return True
+                try:
+                    evidence_dir = Path(__file__).resolve().parents[1] / "debug"
+                    evidence_dir.mkdir(parents=True, exist_ok=True)
+                    evidence_path = evidence_dir / (
+                        "recovery-restart-"
+                        f"{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+                        f"-{restart_round}.png"
+                    )
+                    imwrite_unicode(evidence_path, image)
+                    print(
+                        f"CommonRecover restart_evidence={evidence_path}",
+                        flush=True,
+                    )
+                except Exception as exc:  # noqa: BLE001 - 证据失败不阻断重启
+                    print(
+                        "CommonRecover restart_evidence_failed="
+                        f"{type(exc).__name__}: {exc}",
+                        flush=True,
+                    )
                 controller.post_stop_app(package).wait()
                 if context.tasker.stopping:
                     return True

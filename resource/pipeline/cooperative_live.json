@@ -116,13 +116,23 @@
       "debug_recording": false,
       "diagnostic_trace": true
     },
+    "next": ["CooperativeDisconnectJumpConfigure"],
+    "on_error": ["CooperativeFailure"]
+  },
+  "CooperativeDisconnectJumpConfigure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "CooperativeLiveConfigure",
+    "custom_action_param": {
+      "disconnect_jump_enabled": false
+    },
     "next": ["CooperativeHomeLive"],
     "on_error": ["CooperativeFailure"]
   },
   "CooperativeHomeMarker": {
     "recognition": "TemplateMatch",
     "template": "home_marker.png",
-    "threshold": 0.82,
+    "threshold": 0.75,
     "action": "DoNothing"
   },
   "CooperativeHomeLive": {

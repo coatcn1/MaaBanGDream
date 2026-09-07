@@ -1,4 +1,7 @@
-param([switch]$NoLaunch)
+param(
+    [switch]$NoLaunch,
+    [switch]$OrderedStartupTrial
+)
 
 $ErrorActionPreference = 'Stop'
 $packageRoot = Split-Path -Parent $PSScriptRoot
@@ -176,6 +179,10 @@ if ($NoLaunch) {
 
 $env:MAABANGDREAM_MFA_SESSION_ID = [Guid]::NewGuid().ToString('N')
 $env:MAABANGDREAM_MFA_ROOT = $packageRoot
+if ($OrderedStartupTrial) {
+    # 与开发启动脚本一致：候选行为仅本次进程显式启用，普通启动保持默认。
+    $env:MAABANGDREAM_ORDERED_STARTUP = '1'
+}
 try {
     # 浏览器下载的压缩包会给 MFAAvalonia.exe 打上 Zone.Identifier
     # 标记，ShellExecute 启动会弹 SmartScreen 并被取消；先解除该标记。
@@ -185,5 +192,7 @@ try {
 finally {
     Remove-Item Env:MAABANGDREAM_MFA_SESSION_ID -ErrorAction SilentlyContinue
     Remove-Item Env:MAABANGDREAM_MFA_ROOT -ErrorAction SilentlyContinue
+    Remove-Item Env:MAABANGDREAM_ORDERED_STARTUP -ErrorAction SilentlyContinue
 }
 Write-Host "MaaBanGDream started: $packageRoot"
+Write-Host "Ordered startup trial: $([bool]$OrderedStartupTrial)"

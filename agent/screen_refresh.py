@@ -9,7 +9,7 @@ class ScreenRefreshCancelled(RuntimeError):
     pass
 
 
-def capture_image(context: Context) -> Any:
+def capture_image(context: Context, *, node: str = "CommonRefreshScreen") -> Any:
     """Ask MaaFramework to refresh once, then read the cached screenshot.
 
     Agent callbacks must not call ``post_screencap`` directly on this runtime:
@@ -20,7 +20,7 @@ def capture_image(context: Context) -> Any:
 
     if context.tasker.stopping:
         raise ScreenRefreshCancelled("task is stopping")
-    detail = context.run_task("CommonRefreshScreen")
+    detail = context.run_task(node)
     if context.tasker.stopping:
         raise ScreenRefreshCancelled("task stopped during screen refresh")
     if not detail or not detail.status.succeeded:

@@ -45,15 +45,20 @@ def title_similarity(observed: str, expected: str) -> float:
     if not left or not right:
         return 0.0
     best = float(SequenceMatcher(None, left, right).ratio())
+    max_noise = max(2, len(right) // 2)
     # 固定宽度 OCR 常把标题右/左侧的难度或提示文字一并解码（例如把省略号
-    # “…”读成“今の”），也可能裁掉首尾字符。用所有前缀/后缀与候选曲名的
-    # 最高相似度容忍这类首尾噪声，避免标题本可确认却整局回退 Legacy。
+    # “…”读成“今の”），也可能裁掉首尾字符。裁剪长度必须受候选曲名限制，
+    # 不能把任意乱码截成一个字母后确认成《R》这样的短曲名。
     for end in range(1, len(left)):
+        if len(left) - end > max_noise:
+            continue
         best = max(
             best,
             float(SequenceMatcher(None, left[:end], right).ratio()),
         )
     for start in range(1, len(left)):
+        if start > max_noise:
+            continue
         best = max(
             best,
             float(SequenceMatcher(None, left[start:], right).ratio()),

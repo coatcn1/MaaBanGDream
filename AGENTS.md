@@ -7,7 +7,7 @@
 基于 MaaFramework 的 BanG Dream! 自动化项目。通过 MFAAvalonia GUI 加载 Python Agent，控制 Android 模拟器完成自动演出、实时触控演奏、校准和挑战演出。
 
 - 仓库：`https://github.com/coatcn1/MaaBanGDream`
-- 当前版本：`v1.2.3`
+- 当前版本：`v1.3.0`（本地开发候选，未发布）
 - 许可证：GPL-3.0-only
 
 ## MaaBanGDream 运行布局
@@ -266,9 +266,30 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
 
 ## 最近交互与任务生命周期陷阱
 
+- **判断“演奏坏了”之前先确认 offset 路径**：单人排练（`require_profile=false`）从 timing offset 0 开始逐帧自校准，开局必然整段偏晚、几百个 SLOW/GREAT；正式与协力才从 Profile 的 timing offset 起步。排练的高 GREAT/SLOW 计数是固有标定行为，不能当作 Legacy 引擎回归的证据；同曲同 offset 起点的“排练对排练”才是引擎对照。
+
+- **两个引擎同时“变差”先查共享的 Profile timing_offset_ms**：该字段被 Native 与 Legacy 正式局共同读取。它被错误写入（例如原 60 被写成 71）时，两个引擎的正式局会同时整体偏移，表现为“一次修改把两个引擎一起改坏”。排查此类问题优先对比 Profile 的历史值/备份，而不是先怀疑引擎或漂移补偿代码。2026-09-06 的误诊教训：这个 Profile 问题曾多轮没被查出，原因是（1）单人排练 `require_profile=false` 从 offset 0 开始自校准，开局必然整段偏晚、几百个 SLOW/GREAT，表象与引擎时序损坏一致；（2）正式局两个引擎同时变差，把排查引向共享的时钟/漂移补偿代码，而不是共享的 Profile 数据文件；（3）FAST/SLOW 混合和有符号漂移序列呈现“抖动”，进一步把方向带向时钟问题。因此“两个引擎一起坏”的第一动作是对比 `timing_offset_ms` 的历史值或备份，先排除数据被写坏再谈引擎。
+
+- **MuMu Native 漂移是客户机时钟速率偏斜，且逐局可变**：2026-09-07 区分实验结论——同一份代码在雷电 Native `[FULL]FIRE BIRD` 2331 PERFECT/0 GREAT（漂移 p50 5.2ms），MuMu 同环境 Native 漂移按 20 秒分段斜率 1.09→1.47→4.89→5.64ms/s 加速增长、逐局 p50 在 146.8/108/54/88ms 间波动；MuMu 高性能模式（6核/12G）与关主机负载均无效。速率校正实验（`MAABANGDREAM_NATIVE_DRIFT_RATE_CORRECTION=1`）闭环在 MuMu 上会发散（估计值撞限幅、p50 回弹），保持默认关闭，不要把它当 MuMu 解法。真机分工：**雷电走 Native、MuMu 走 Legacy**（MuMu 新号 Legacy 实测 490P/17G/1M、hit 99.8%）。雷电开发实例与 MuMu 便携实例的 Profile 是两份独立副本，正式局会各自回写 offset，本就应按模拟器分开维护，不要互相拷贝。
+
+- **MuMu 12 占用 127.0.0.1 的 5555/7555 会影子住雷电的 adb**：MuMuVMMHeadless 额外监听 5555/7555，雷电 Ld9BoxHeadless 的 7555 被影子后 `emulator-7554` 实际连到 MuMu（指纹/设备名都对，但物理上控制的是 MuMu）。开发 MFA 连雷电前必须关掉 MuMu（或给雷电/多开换端口）；MuMu 开着时勿再对 `emulator-7554` 做任何设备操作。MuMu 主 adb 仍是 `127.0.0.1:16384`。
+
+- **便携包不能假设 ASCII 安装路径**：便携运行时自带的 cv2 对含中文等非 ASCII 字符的路径读写会失败（开演前证据截图报“无法保存实时演奏阶段证据截图”），Native `.pyd` 的窄字符 `std::ifstream` 也会把 UTF-8 谱面路径误解成 ANSI 乱码。图像读写必须走 `agent/realtime/vision_io.py` 的字节级 `imdecode`/`imencode`，新增谱面文件读取在 Windows 必须转 UTF-16 用 `_wfopen`；禁止在 Agent 里直接 `cv2.imread/imwrite`。
+
+- **单人准备页身份复核**：FULL FIRE BIRD 与普通版封面相同但 Expert 为 28/27、本地 ID 为 243/187。单人及其校准在选择乐队页读取左下角标题、难度和等级，必须在 Native 预武装和点击开始前完成；选曲列表不再读标题。准备页等级与选曲页冲突仍硬拒绝，不能用谱面等级填充识别结果。最终封面只复核，首音只定时；不把单人 FULL 规则套到协力或挑战。
+- **重试身份不能使用包装对象地址**：Maa Custom Action 回调会重建 Tasker 包装对象，使用底层句柄保持单局预算；耗尽不能清零，须由下一局入口显式 reset。
+- **Custom Action 参数覆盖是整块替换**：在基础 Pipeline 新增参数时，必须同步所有 interface 难度选项和校准 override；只检查部署的基础 JSON 不足以证明实际回调参数。用独立进程中的真实 MaaFramework 应用覆盖后读取节点验证，避免 AgentServer 绑定无法创建 Resource。
+- **Native 等待成本按实际命令计数**：亚毫秒理想等待可能舍入为零，长等待可能拆成多条 `w`；预估一条后必须按实际条数归还或补记成本，否则高密度谱面会累积提前。设备 jlog 必须与谱面逐段对齐，绝对漂移百分位不能代替有符号趋势。
+
+- **开演顺序必须由本局转场证明**：准备页 → 全黑开演转场 → 歌曲封面 → 完整演奏场 → 等待其他成员弹窗消失（如有）→ 首音 → 演奏结束。准备页可能同时误命中生命条与六轨白色标记，黑场前不得据此启动；首音前的黑场/演奏场消失也不得算结算。候选使用 `launch-mfa.ps1 -OrderedStartupTrial` 显式启用，普通启动默认关闭；启动证据缺失必须记录具体阶段并有界失败。封面身份无法解析时仍按可信准备谱面/整局 Legacy 的既有降级规则处理，不得绕过黑场与首音门控。
+
 1. **Pipeline override 坐标**：Custom Action 必须使用 MaaFramework 解析后的 `argv.box`。重新读取源 JSON 的 `target` 会丢弃用户选择的难度覆盖，例如 Expert 被点击成 Easy。
 2. **状态节点不能滥用 `DirectHit`**：带模板、ROI 或阈值的状态判断必须使用实际识别算法。`DirectHit` 会无条件命中，例如把“还剩 10 次”误报成自动演出次数耗尽。
-3. **主页模板阈值需要真图校验**：当前主页样本得分约 `0.837`，阈值 `0.88` 会漏识别并继续按 ESC，最终弹出关闭游戏确认。所有主页 marker 当前统一为 `0.82`，调整时必须同时更新所有 Pipeline 和契约测试。
+3. **主页模板阈值需要真图校验**：主页样本得分随活动轮播横幅和按钮角标变化，
+   2026-09-06 实测约 `0.8177`，旧阈值 `0.82` 会漏识别并在主页反复 ESC→退出确认
+   取消→ESC，最终重启游戏；非主页页面（准备页/选曲页/结算页/协力房间）最高仅
+   `0.36`。所有 `home_marker` 节点当前统一为 `0.75`，调整时必须同时更新所有
+   Pipeline 和契约测试。
 4. **停止不是业务失败**：Custom Action 观察到 `context.tasker.stopping` 时应立即停止输入并返回中性成功；不要继续截图、点击、嵌套任务或记录业务失败原因。
 5. **正式演奏时限**：旧的 300 秒上限会在长曲仍演奏时强制失败。正式演奏节点当前为 600 秒，并应在超时、生命保护、用户停止、结算识别等终态记录具体原因。
 6. **禁止含糊日志**：不要写“详情见上一条日志”。终态日志必须包含当前阶段和可执行的具体原因；运行时原因通过 `TaskOutcome` 的 latest failure reason 传递。
@@ -286,6 +307,32 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
 18. **协力黑场转场不能被当成“没有封面”**：准备完成后游戏会先整屏黑一下，随后封面或演奏场淡入；final cover 等待在黑场时进入无 sleep 的密集采样窗口，并在该窗口结束前不因演奏场出现而放弃。标题 OCR 还会把省略号或右侧提示读成杂字（如“…”→“今の”），`title_similarity` 必须容忍首尾噪声，否则准备页谱面无法确认。
 19. **跳过演出设置页不能跳过 Native 预武装**：`game_effect_settings_enabled=false` 时 `RealtimePerformanceSettingsGate` 直接返回，但单人非 deferred 流程的 Native 预武装就在这个门禁里；跳过时仍必须调用 `prepare_native_for_settings_gate`（或按 `defer_native_prearm` 推迟），否则开演前消费会报“预武装不存在或已被消费”，整局零输入。
 20. **协力结算后识别不到房间页不能终止任务**：成员退出弹窗关闭后往往还在结算页，重连不能直接 `ensure_room_page`；应先继续推进结算回房间/主页，仍失败走 `CommonRecover` 重启游戏再进。非 stay 路径结算回不去时把本局计入完成并恢复主页继续下一局，最后一局 stay 失败直接按完成返回。演出结束后的结算导航不识别成员退出弹窗：`wait_for_post_score_destination` 必须传 `detect_member_exit=False`，成员退出检测只保留在房间/准备阶段。
+21. **成员退出弹窗只在进入演奏前出现**：该弹窗只会在进入演奏前（整屏黑场转场之前）的房间/准备阶段出现，演奏过程中和结算画面绝对不会出现。检测只应保留在房间/准备阶段（当前 `wait_for_post_score_destination` 已传 `detect_member_exit=False`）。当前版本弹窗标题是“错误”（正文“由于XX退出房间。将返回房间选择界面。”，底部居中“确定”），`member_exit_title.png` 已替换为完整的“错误”标题（56×27，1280×720 实拍提取），锚点 `(399,158)`、确定按钮点击 `(638,525)`；因“错误”是通用标题，模板检测必须继续限制在房间/准备阶段。2026-09-07 用户实测补充：点“准备完毕”之后、黑场转场之前的窗口里成员退出弹窗仍会出现（此时已离开房间等待页，常规检测不覆盖），会挡住转场导致整局卡死；已加 `watch_member_exit_before_black()`——准备完毕后高频轮询到黑场出现，看到弹窗点“确定”并按成员退出策略处理，看到黑场立即退出窗口。
+22. **协力生命归零的“断网跳车”流程（真实弹窗已提取，MuMu 断网机制受限）**：生命归零后按顺序执行：切断游戏网络 → 游戏退后台再切回 → 弹窗1“通信已中断。是否继续演出？※本次演出将变为单人演出※”点**左侧“中断”** `(508,447)` → 弹窗2“确认中断当前演出返回主页吗？※中断当前演出的话，将不会获得演出报酬。”点**右侧粉色“中断”** `(754,439)` → 恢复网络 → “连接失败。”弹窗有界点“重试”直到回主页。模板 `disconnect_continue_body.png`（锚点 488,313）与 `disconnect_confirm_body.png`（锚点 495,307）已从 2026-09-07 雷电录像提取。关键约束：**禁止用 `svc wifi` / 飞行模式开关网络**——实测（2026-09-06 与 2026-09-07 两次）`svc wifi disable` 和 `settings put global airplane_mode_on 1`+广播都会打断 MuMu 的 adb 通道（设备离线），因为 MuMu 客户机只有 `wlan0` 一张网卡，游戏流量和 adb 的 NAT 转发同路，任何真实断网都会连带杀掉引擎的截图/触控通道。**MuMu 按 UID 断网目前不可行**：Android 12 内核无 `xt_owner` 匹配模块、无 `nft`、无 `bpftool`，`cmd netpolicy` 也没有 `set uid-policy`。**iptables 门禁已在雷电实测可用**：`adb root` 后 shell uid 0，owner 模块存在，`GameNetworkGate` 对游戏 UID 的 REJECT/恢复端到端验证通过（2026-09-07）；MuMu 上会 fail-closed。MuMu root 已开（`root_permission=true`）。已实现：`cooperative_network.py` 按 UID 屏蔽/恢复、`connect_failed_body.png`、`dismiss_connect_failed`、`disconnect_jump_out()` 两段弹窗编排（全程 finally 恢复、模板缺失直接 fail-closed、带单元测试）、引擎生命归零钩子与 UI“断网跳车”选项。MuMu 上的可行路线待用户定：手动断网后自动化处理弹窗，或找 MuMu 主机侧网络开关；`mumu-cli control --vmindex 0 tool cmd -c "<guest cmd>"` 是独立于客户机网络的宿主机通道，adb 断掉时可用它执行 `settings put global airplane_mode_on 0` 恢复。
+23. **MFA 双进程/配置切换闪退是上游 Avalonia 崩溃**：2026-09-07 用户实测同时开两个 MFA（本机+便携）或快速来回切换配置时，`MFAAvalonia.exe` 以 `0xc0000005` 崩溃在已卸载的 `external_renderer_ipc.dll`（Windows Application 事件日志 11:00:30、11:03:20）。这不是 Agent 代码问题，修复需要改定制 MFAAvalonia 源码/上游；暂按“单实例 + 少切换配置”规避。“配置2连雷电但输入派发到 MuMu”是既有 `emulator-7554` 端口影子问题（MuMu 运行时占用 127.0.0.1:7555），关 MuMu 后恢复正常，与本条目无关。
+24. **协力最终封面能读到却不认识＝歌曲不在本地曲库**：trace 里若出现大量“final cover jacket does not match selected chart / song fingerprint is not confirmed”而 playfield 已可见，通常是游戏新增歌曲未同步进 `resource/charts` 目录（选曲页同样 song=unknown）。此时协力没有可信准备页谱面可回退，只能整局视觉演出；修复是重跑 `scripts/sync_bestdori_catalog.py` 同步曲库。`CooperativePreparePopupDetector` 是像素启发式（白色圆角条+左侧粉色图标），不依赖模板，`live_prepare.png` 只用于单人/自动/挑战的演出准备节点，与协力等待弹窗无关。
+
+## 后续开发方向（已记录，暂缓或未开始）
+
+- **MuMu Native 漂移**：定性为客户机时钟速率偏斜且逐局可变，速率校正实验闭环发散；暂不解决，MuMu 用 Legacy、雷电用 Native。见“最近交互”的 MuMu 时钟偏斜条目。
+- **调试文件定时清理**：暂不做应用内自动清理；已有 `.local/clean-recordings.ps1`（保留最新 5 个）。若做，建议按保留天数在任务启动时修剪 `debug/recordings/*`，并留足证据窗口。
+- **双 MFA 进程/配置切换闪退**：上游 Avalonia `external_renderer_ipc.dll` 0xc0000005；暂缓，规避方式为单实例、少切换配置。见第 23 条。
+- **从 GitHub 自动更新（已实现双端）**：
+  - 便携包启动器侧：`scripts/update.ps1`（`releases/latest` HTML 重定向拿
+    tag、避免 API 限流），`启动 MaaBanGDream.cmd` 启动前 `-Auto` 静默检查。
+  - MFA 侧（定制 MFAAvalonia 仓库 `fix/native-realtime-ui-toggle`，
+    `9ea63c3`）：启动 6 秒后静默检查一次；“更新设置”页新增
+    “MaaBanGDream 版本更新”卡片（检查更新/立即更新按钮 + 状态文本）。
+    **增量更新**：发布包根目录 `update-manifest.json`（路径→SHA256，
+    由 `build-windows-release.ps1` 生成并打入 zip）；更新器用 HTTP Range 只
+    拉取 zip 中央目录 + 清单 + 变化条目的字节区间，逐条 SHA256 校验后落盘，
+    谱面等未变内容不重复下载。锁定的程序文件写 `.new` + `update-restart.cmd`
+    重启替换。
+  - 关键坑：GitHub 资产 CDN **不支持 `bytes=-N` 后缀区间**（501），只支持
+    显式起止区间（`bytes=a-b`）；拉 EOCD 前必须先拿 Content-Length 再用
+    `bytes=(size-65557)-(size-1)`。发布 zip 由 `tar.exe -a` 生成：条目用
+    deflate（method 8）、目录条目 method 0，条目名 `<pkg>/…` 前向斜杠。
+- **Special 谱面支持**、**更多演出类型**：未开始。
 
 ## 修改后的最低验收
 

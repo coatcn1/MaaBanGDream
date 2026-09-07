@@ -84,6 +84,14 @@ public:
     }
     TouchLatencyOffsets offsets() const noexcept { return offsets_; }
 
+    // 设备时钟相对宿主的速率偏斜（无符号比例，正值=设备钟偏慢）。
+    // 编译器把宿主时间轴上的等待按 (1 - rate) 换算成设备时间，以抵消
+    // 虚拟化/负载导致的时钟速率漂移；恒定命令成本仍由 offsets 处理。
+    void set_rate_correction(double rate) noexcept {
+        rate_correction_ = std::max(-0.02, std::min(0.02, rate));
+    }
+    double rate_correction() const noexcept { return rate_correction_; }
+
     // 切片边界追加补偿（例如 LatencyCalibrator 统计出的上一切片欠账）。
     void add_residual_ms(double ms) noexcept {
         residual_offset_ms_ += ms;
@@ -118,6 +126,8 @@ public:
 
 private:
     TouchLatencyOffsets offsets_;
+    // 速率偏斜校正；只乘在 w 上，不参与残差/取整损失结算。
+    double rate_correction_ = 0.0;
     // 尚未通过缩短 w 清偿的补偿，跨 compile() 调用保留。
     double residual_offset_ms_ = 0.0;
     // 上次 w 取整后的欠账，跨 compile() 调用保留。

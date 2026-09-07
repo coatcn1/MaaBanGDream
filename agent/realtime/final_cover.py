@@ -4,9 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+import unicodedata
 
 from .chart_repository import LocalChartRepository
-from .song_identity import UNKNOWN_SONG_ID, identify_final_song, same_song
+from .song_identity import (
+    UNKNOWN_SONG_ID,
+    detect_full_badge,
+    identify_final_song,
+    same_song,
+)
 from .song_title_ocr import title_similarity
 
 
@@ -21,6 +27,18 @@ class FinalCoverConfirmation:
 class FinalCoverResolution:
     confirmation: FinalCoverConfirmation
     selection: Any
+
+
+def _is_full_song(selection: Any) -> bool:
+    """标题（任意语言/全角变体）是否带 [FULL] 前缀。"""
+    titles = tuple(getattr(selection, "titles", ()))
+    if not titles:
+        titles = (str(getattr(selection, "title", "")),)
+    for title in titles:
+        normalized = unicodedata.normalize("NFKC", str(title)).casefold()
+        if normalized.startswith("[full]"):
+            return True
+    return False
 
 
 class FinalCoverGate:
@@ -45,6 +63,7 @@ class FinalCoverGate:
         self.confirmed = False
         self.frames = 0
         self.last_reason = "final cover has not been observed"
+        self._pending_full_badge = False
 
     def evidence_reason(self) -> str | None:
         expected_difficulty = str(
@@ -58,20 +77,38 @@ class FinalCoverGate:
         if expected_level is None or int(expected_level) != self.observed_level:
             return "preparation song level conflicts with selected chart"
         if bool(getattr(self.selection, "shared_jacket", False)):
-            if not self.observed_title:
-                return "shared jacket requires preparation song title"
-            titles = tuple(getattr(self.selection, "titles", ()))
-            if not titles:
-                titles = (str(getattr(self.selection, "title", "")),)
-            score = max(
-                (
-                    title_similarity(self.observed_title, title)
-                    for title in titles
-                ),
-                default=0.0,
+            level_unique = bool(
+                getattr(
+                    self.selection,
+                    "shared_jacket_level_unique",
+                    False,
+                )
             )
-            if score < 0.68:
-                return "preparation song title conflicts with shared jacket"
+            if not level_unique:
+                # 共享封面组内同等级还有别的谱面（如 HELL! or HELL? 与其
+                # SPECIAL 版本同为 28），等级无法区分，必须依赖标题。
+                if not self.observed_title:
+                    return "shared jacket requires preparation song title"
+                titles = tuple(getattr(self.selection, "titles", ()))
+                if not titles:
+                    titles = (str(getattr(self.selection, "title", "")),)
+                score = max(
+                    (
+                        title_similarity(self.observed_title, title)
+                        for title in titles
+                    ),
+                    default=0.0,
+                )
+                if score < 0.68:
+                    # 标题 OCR 失败时，若是 FULL 谱面，留给封面右上角的
+                    # FULL 徽标复核；非 FULL 仍按标题硬失败。
+                    if _is_full_song(self.selection):
+                        self._pending_full_badge = True
+                    else:
+                        return (
+                            "preparation song title conflicts "
+                            "with shared jacket"
+                        )
         fingerprints = tuple(getattr(self.selection, "fingerprints", ()))
         if not fingerprints:
             return "selected chart has no confirmed jacket fingerprints"
@@ -83,6 +120,14 @@ class FinalCoverGate:
         if evidence_reason is not None:
             self.last_reason = evidence_reason
             return None
+        if self._pending_full_badge:
+            if not detect_full_badge(image):
+                self.last_reason = (
+                    "shared jacket FULL badge not detected after "
+                    "title OCR failure"
+                )
+                return None
+            self._pending_full_badge = False
         identity = identify_final_song(image)
         if identity.song_id == UNKNOWN_SONG_ID:
             self.last_reason = "final cover jacket is not visible"
@@ -135,6 +180,8 @@ class FinalCoverResolver:
         self.last_reason = "final cover has not been observed"
         self._candidate_song_id = UNKNOWN_SONG_ID
         self._candidate_frames = 0
+        # 退化诊断：每个新指纹只打一条日志，避免逐帧刷屏。
+        self._logged_fingerprints: set[str] = set()
 
     def evidence_reason(self) -> str | None:
         if not self.difficulty:
@@ -184,6 +231,16 @@ class FinalCoverResolver:
             title=self.observed_title,
         )
         if resolution.selection is None:
+            if identity.song_id not in self._logged_fingerprints:
+                self._logged_fingerprints.add(identity.song_id)
+                print(
+                    "FinalCover resolve_failed "
+                    f"fingerprint={identity.song_id} "
+                    f"level={self.observed_level} "
+                    f"title={self.observed_title!r} "
+                    f"reason={resolution.reason}",
+                    flush=True,
+                )
             self.last_reason = resolution.reason
             return None
         gate = FinalCoverGate(
@@ -195,6 +252,19 @@ class FinalCoverResolver:
         confirmation = gate.observe(image)
         self.last_reason = gate.last_reason
         if confirmation is None:
+            if (
+                gate.last_reason == "final cover jacket does not match selected chart"
+                and identity.song_id not in self._logged_fingerprints
+            ):
+                self._logged_fingerprints.add(identity.song_id)
+                print(
+                    "FinalCover gate_mismatch "
+                    f"fingerprint={identity.song_id} "
+                    f"selected_bestdori_id="
+                    f"{resolution.selection.bestdori_song_id} "
+                    f"level={self.observed_level}",
+                    flush=True,
+                )
             return None
         self.gate = gate
         return FinalCoverResolution(

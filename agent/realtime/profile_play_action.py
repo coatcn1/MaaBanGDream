@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import time
 import traceback
 from dataclasses import dataclass, replace
@@ -39,6 +40,7 @@ from .live_session import (
     update_live_run,
 )
 from .note_detector import NoteDetector
+from .vision_io import imread_unicode, imwrite_unicode
 from .profile_action import PROJECT_ROOT
 from .profile_store import (
     EnvironmentSignature,
@@ -52,6 +54,7 @@ from .result_navigation import (
     accelerated_back,
     back_then_click,
     navigate_result_pages,
+    handle_story_page,
 )
 from .result_parser import LiveResult, ResultParser, adjusted_timing_offset
 from .run_reporting import (
@@ -293,6 +296,8 @@ def wait_for_final_cover(
     poll_interval_seconds: float = 0.02,
     observer=None,
     fallback_selection_available: bool | None = None,
+    require_black_transition: bool = False,
+    initial_image=None,
 ) -> FinalCoverWaitOutcome:
     """确认最终封面；识别缺失时保留准备页谱面或降级到视觉演奏。"""
     if not 1 <= float(timeout_seconds) <= 180:
@@ -313,6 +318,7 @@ def wait_for_final_cover(
     playfield_detector = PlayfieldDetector()
     playfield_streak = 0
     black_burst_until = float("-inf")
+    black_seen = False
     last_image = None
     can_keep_selection = (
         selection is not None
@@ -323,15 +329,32 @@ def wait_for_final_cover(
     while time.monotonic() < deadline:
         if stopping():
             raise InterruptedError("用户已停止任务")
-        image = controller.post_screencap().wait().get()
+        if initial_image is not None:
+            image, initial_image = initial_image, None
+        else:
+            image = controller.post_screencap().wait().get()
         last_image = image
         now_mono = time.monotonic()
         if _frame_is_black(image):
+            black_seen = True
             # 协力在封面出现前会先整屏黑一下，随后封面或演奏场淡入。黑场
             # 清空演奏场计数，并进入一小段无 sleep 的密集采样窗口，给短暂
             # 出现的封面留出匹配机会，而不是在淡入首帧就放弃。
             playfield_streak = 0
             black_burst_until = now_mono + BLACK_BURST_SECONDS
+        if require_black_transition and (not black_seen or _frame_is_black(image)):
+            # 准备页也可能同时命中生命条与白色轨道，不能用它提前启动或结束。
+            if observer is not None:
+                observer(image, now_mono, {
+                    "event": "final_cover_observation",
+                    "status": "black-transition" if black_seen else "waiting-black",
+                    "frames": resolver.frames,
+                    "playfield_streak": 0,
+                    "reason": "等待全黑后的歌曲封面" if black_seen else "尚未观察到全黑开演转场",
+                })
+            if not black_seen and poll_interval_seconds > 0:
+                time.sleep(float(poll_interval_seconds))
+            continue
         resolution = resolver.observe(image)
         playfield_streak = (
             playfield_streak + 1 if playfield_detector(image) else 0
@@ -384,6 +407,9 @@ def wait_for_final_cover(
             )
         if poll_interval_seconds > 0 and now_mono >= black_burst_until:
             time.sleep(float(poll_interval_seconds))
+    if require_black_transition:
+        stage = "全黑开演转场" if not black_seen else "黑场后的歌曲封面或完整演奏场"
+        raise RuntimeError(f"启动阶段超时：{float(timeout_seconds):g} 秒内未确认{stage}；未启动输入或结算")
     status = (
         "degraded-selected-chart"
         if can_keep_selection else "degraded-visual-legacy"
@@ -490,6 +516,25 @@ def _run_mode(params: dict, *, is_rehearsal: bool) -> str:
     if params.get("ignore_note_speed"):
         return "continuous"
     return "rehearsal" if is_rehearsal else "formal"
+
+
+_RECORDING_KIND_BY_RUN_MODE = {
+    "cooperative": "coop",
+    "challenge": "challenge",
+    "formal": "single-formal",
+    "rehearsal": "single-rehearsal",
+    "calibration": "calibration",
+    "calibration-rehearsal": "calibration-rehearsal",
+    "calibration-formal": "calibration-formal",
+    "continuous": "continuous",
+    "visual-evaluation": "visual-eval",
+}
+
+
+def _recording_kind(run_mode: str) -> str:
+    """把演奏类型映射成录像目录前缀；未知值原样保留以便排查。"""
+    value = str(run_mode or "").strip()
+    return _RECORDING_KIND_BY_RUN_MODE.get(value, value or "realtime")
 
 
 def _relative_artifact_path(path) -> str:
@@ -701,7 +746,7 @@ def _template_click_point(
     best_score = threshold
     best_point = None
     for template_path in template_paths:
-        template = cv2.imread(str(template_path))
+        template = imread_unicode(template_path)
         if template is None:
             continue
         if (
@@ -794,7 +839,7 @@ def _advance_result_rank_page(
     threshold: float = RESULT_NEXT_TEMPLATE_THRESHOLD,
 ) -> bool:
     """Advance a recognised rank page through Android Back, never a click."""
-    template = cv2.imread(str(template_path))
+    template = imread_unicode(template_path)
     if template is None:
         return False
     matched = cv2.matchTemplate(image, template, cv2.TM_CCOEFF_NORMED)
@@ -852,6 +897,7 @@ def collect_result(
     maximum_notes: int = 3000,
     cooperative_mode: bool = False,
     robust_navigation: bool = False,
+    handle_intermediate=lambda _image: False,
 ) -> ResultCollectionOutcome:
     """Reach PGGBM, read single-live counts, and advance result pages.
 
@@ -901,6 +947,7 @@ def collect_result(
             stopping,
             identify_terminal,
             before_input=before_input,
+            handle_intermediate=handle_intermediate,
             timeout_seconds=max(0.0, deadline - clock()),
             clock=clock,
             sleeper=sleeper,
@@ -1562,6 +1609,8 @@ class RealtimeProfilePlay(CustomAction):
                     params.get("settings_gate_required", False),
                 )
             ) and not ignore_note_speed
+            ordered_startup = os.environ.get("MAABANGDREAM_ORDERED_STARTUP", "0") == "1"
+            preflight_image = None
             native_prearm_deferred = bool(
                 native_requested
                 and final_cover_required
@@ -1658,6 +1707,15 @@ class RealtimeProfilePlay(CustomAction):
                 params,
                 runtime_options,
             )
+            # 协力“断网跳车”：即使关闭生命保护，也要打开数值生命监视，
+            # 让引擎在生命归零帧发出一次性跳车信号。安全暂停阈值保持关闭，
+            # 避免阈值中止路径抢在跳车信号之前触发。
+            disconnect_jump_request = bool(
+                params.get("life_depleted_jump_request", False)
+            )
+            numeric_life_monitor_enabled = (
+                numeric_life_monitor_enabled or disconnect_jump_request
+            )
             debug_recording = bool(
                 params.get("debug_recording") or debug_enabled()
             )
@@ -1714,12 +1772,14 @@ class RealtimeProfilePlay(CustomAction):
             )
             if debug_recording:
                 recorder = RealtimeDebugRecorder(
-                    PROJECT_ROOT / "debug" / "recordings"
+                    PROJECT_ROOT / "debug" / "recordings",
+                    session_kind=_recording_kind(run_mode),
                 )
             elif diagnostic_trace:
                 recorder = RealtimeDebugRecorder(
                     PROJECT_ROOT / "debug" / "recordings",
                     video_enabled=False,
+                    session_kind=_recording_kind(run_mode),
                 )
             if recorder is not None:
                 live_run = update_live_run(
@@ -1741,6 +1801,12 @@ class RealtimeProfilePlay(CustomAction):
                     },
                 )
                 try:
+                    if live_run.preparation_identity_image is not None:
+                        _recorder_checkpoint(
+                            recorder, live_run.preparation_identity_image,
+                            "preparation-identity", "confirmed",
+                            details={"title": live_run.song_title, "level": live_run.song_level},
+                        )
                     preflight_image = controller.post_screencap().wait().get()
                     _recorder_checkpoint(
                         recorder,
@@ -1776,10 +1842,9 @@ class RealtimeProfilePlay(CustomAction):
                 cover_selection = (
                     None if live_run.mode == "cooperative" else selected_chart
                 )
-                cover_checkpoint_saved = False
+                cover_checkpoint_stages = set()
 
                 def observe_final_cover(image, timestamp, diagnostic) -> None:
-                    nonlocal cover_checkpoint_saved
                     assert recorder is not None
                     record_phase = getattr(recorder, "record_phase", None)
                     if callable(record_phase):
@@ -1789,15 +1854,16 @@ class RealtimeProfilePlay(CustomAction):
                             "final-cover",
                             diagnostics=[diagnostic],
                         )
-                    if not cover_checkpoint_saved:
+                    stage = diagnostic["status"]
+                    if stage not in cover_checkpoint_stages:
                         _recorder_checkpoint(
                             recorder,
                             image,
                             "final-cover",
-                            "started",
+                            stage,
                             details=diagnostic,
                         )
-                        cover_checkpoint_saved = True
+                        cover_checkpoint_stages.add(stage)
 
                 cover_outcome = wait_for_final_cover(
                     controller,
@@ -1818,6 +1884,8 @@ class RealtimeProfilePlay(CustomAction):
                         observe_final_cover if recorder is not None else None
                     ),
                     fallback_selection_available=selected_chart is not None,
+                    require_black_transition=ordered_startup,
+                    initial_image=preflight_image if ordered_startup else None,
                 )
                 if recorder is not None and cover_outcome.image is not None:
                     _recorder_checkpoint(
@@ -2061,9 +2129,9 @@ class RealtimeProfilePlay(CustomAction):
                 lambda: context.tasker.stopping,
             )
             playfield_monitor = None
-            if final_cover_required and not numeric_life_monitor_enabled:
+            if final_cover_required and (ordered_startup or not numeric_life_monitor_enabled):
                 completion_missing_checks = None
-                if params.get("wait_for_completion"):
+                if params.get("wait_for_completion") and not numeric_life_monitor_enabled:
                     completion_seconds = (
                         int(params.get("completion_missing_frames", 120))
                         / max(1, target_fps)
@@ -2072,7 +2140,18 @@ class RealtimeProfilePlay(CustomAction):
                         3,
                         math.ceil(completion_seconds / 0.2),
                     )
+                start_gate = None
+                if ordered_startup and not native_requested:
+                    # Legacy 也必须等演奏场、等待弹窗消失和首音，才能接管输入与结算。
+                    from .native_play import NativeStartPhotogate, resolve_native_start_gate_policy
+                    policy = resolve_native_start_gate_policy(live_run.mode)
+                    start_gate = NativeStartPhotogate(
+                        mode=policy.mode,
+                        stable_duration_ms=policy.stable_duration_ms,
+                        grace_ms=policy.grace_ms,
+                    )
                 playfield_monitor = PlayfieldLifecycleMonitor(
+                    start_gate=start_gate,
                     confirm_checks=2,
                     missing_checks=completion_missing_checks,
                     active_check_interval_seconds=0.2,
@@ -2244,6 +2323,10 @@ class RealtimeProfilePlay(CustomAction):
         )
         try:
             stall_safe_capture = StallSafeCapture(controller)
+
+            def request_disconnect_jump(_reading) -> None:
+                update_live_run(disconnect_jump_requested=True)
+
             stats = engine.run(
                 stall_safe_capture,
                 lambda: context.tasker.stopping,
@@ -2253,6 +2336,10 @@ class RealtimeProfilePlay(CustomAction):
                 life_exit_threshold=life_threshold,
                 on_life_safety=(
                     pause_for_life if life_threshold is not None else None
+                ),
+                on_life_depleted=(
+                    request_disconnect_jump
+                    if disconnect_jump_request else None
                 ),
                 startup_timeout_seconds=startup_timeout_seconds,
             )
@@ -2291,6 +2378,16 @@ class RealtimeProfilePlay(CustomAction):
                 native_report = dict(stats.native_report)
                 native_failures = _native_execution_gate_failures(
                     native_report
+                )
+                print(
+                    "RealtimeProfilePlay native_timing "
+                    f"gate_passed={native_report.get('timing_gate_passed')} "
+                    f"absolute_valid={native_report.get('absolute_drift_valid')} "
+                    f"drift_p95_ms={native_report.get('drift_p95_ms')} "
+                    f"drift_max_ms={native_report.get('drift_max_ms')} "
+                    f"clock_uncertainty_ms={native_report.get('clock_uncertainty_ms')} "
+                    "scope=device-execution-not-game-judgements",
+                    flush=True,
                 )
                 if native_failures:
                     native_error = RuntimeError(
@@ -2436,6 +2533,29 @@ class RealtimeProfilePlay(CustomAction):
                 "completed": bool(stats.completed),
             })
 
+        if stats.jump_requested:
+            # 协力“断网跳车”：本局以“请求跳车”结束，不做结算解析与退出
+            # 导航；跳车流程由外层协力流程读取 live run 信号后执行。
+            print(
+                "RealtimeProfilePlay disconnect_jump_requested=true "
+                "round_ended_early=true",
+                flush=True,
+            )
+            if save_result:
+                _write_json_atomic(
+                    result_report_path,
+                    _result_report_payload(
+                        None,
+                        stats,
+                        timing_offset_ms=timing_offset_ms,
+                        suggested_timing_offset_ms=None,
+                        run_context=live_run,
+                        result_status="disconnect_jump_requested",
+                        reason="生命归零请求断网跳车",
+                    ),
+                )
+            return True
+
         if save_result and stats.life_failed and not stats.stopped:
             # 生命归零：先把失败现场落盘，再有界退出到主页。退出导航失败时
             # 不掩盖“演出失败”这一真实原因，后续 CommonRecover 仍可兜底。
@@ -2518,8 +2638,8 @@ class RealtimeProfilePlay(CustomAction):
                     f"realtime-startup-timeout-{result_stamp}.png"
                 )
                 try:
-                    if cv2.imwrite(
-                        str(startup_diagnostic), stall_safe_capture.last_image,
+                    if imwrite_unicode(
+                        startup_diagnostic, stall_safe_capture.last_image,
                     ):
                         failed_payload["startup_diagnostic_frame"] = str(
                             startup_diagnostic.relative_to(PROJECT_ROOT).as_posix()
@@ -2539,6 +2659,17 @@ class RealtimeProfilePlay(CustomAction):
         if stats.completed and not stats.cleanup_failed and save_result:
             result_output.mkdir(parents=True, exist_ok=True)
             try:
+                def recognise_story(image, node):
+                    result = context.run_recognition(node, image)
+                    return result.box if result and result.hit else None
+
+                def click_story(point):
+                    if context.tasker.stopping:
+                        return
+                    require_game_foreground(controller)
+                    if not context.tasker.stopping:
+                        controller.post_click(*point).wait()
+
                 outcome = collect_result(
                     controller,
                     lambda: context.tasker.stopping,
@@ -2550,6 +2681,10 @@ class RealtimeProfilePlay(CustomAction):
                     ),
                     cooperative_mode=(run_mode == "cooperative"),
                     robust_navigation=True,
+                    handle_intermediate=lambda image: handle_story_page(
+                        image, recognise=recognise_story, click=click_story,
+                        stopping=lambda: context.tasker.stopping,
+                    ),
                 )
                 if recorder is not None and outcome.image is not None:
                     _recorder_checkpoint(
@@ -2623,7 +2758,7 @@ class RealtimeProfilePlay(CustomAction):
                 if outcome.image is not None:
                     try:
                         diagnostic_saved = bool(
-                            cv2.imwrite(str(diagnostic), outcome.image)
+                            imwrite_unicode(diagnostic, outcome.image)
                         )
                         if not diagnostic_saved:
                             diagnostic_error = (
@@ -2693,7 +2828,7 @@ class RealtimeProfilePlay(CustomAction):
             screenshot_error = None
             if save_screenshot:
                 try:
-                    if not cv2.imwrite(str(screenshot_path), result):
+                    if not imwrite_unicode(screenshot_path, result):
                         screenshot_error = (
                             f"无法保存结算截图: {screenshot_path}"
                         )

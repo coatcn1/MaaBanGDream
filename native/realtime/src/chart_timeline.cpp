@@ -7,6 +7,12 @@
 #include <sstream>
 #include <stdexcept>
 
+#ifdef _WIN32
+// windows.h 的 min/max 宏会破坏 std::min/std::max 的令牌展开。
+#define NOMINMAX
+#include <windows.h>
+#endif
+
 #include "nlohmann/json.hpp"
 
 namespace mbdr {
@@ -102,14 +108,43 @@ int direction_of(const json& note) {
 }
 
 // 读取文件并剥离 UTF-8 BOM（与 Python utf-8-sig 一致）。
+// Windows 的窄字符 fopen 按 ANSI 代码页解释路径，安装目录含中文等非 ASCII
+// 字符时会把 UTF-8 路径误解成乱码而打开失败；这里先转成 UTF-16 再走
+// _wfopen。POSIX 平台窄字符路径本身就是 UTF-8，维持 std::ifstream。
 std::string read_file_stripped_bom(const std::string& path) {
+    std::string text;
+#ifdef _WIN32
+    const int wide_len = MultiByteToWideChar(
+        CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
+    if (wide_len <= 0) {
+        throw ChartParseError("cannot read chart file: " + path);
+    }
+    std::wstring wide_path(static_cast<size_t>(wide_len), L'\0');
+    MultiByteToWideChar(
+        CP_UTF8, 0, path.c_str(), -1, wide_path.data(), wide_len);
+    FILE* file = _wfopen(wide_path.c_str(), L"rb");
+    if (file == nullptr) {
+        throw ChartParseError("cannot read chart file: " + path);
+    }
+    char buffer[65536];
+    size_t count = 0;
+    while ((count = std::fread(buffer, 1, sizeof(buffer), file)) > 0) {
+        text.append(buffer, count);
+    }
+    const bool read_failed = std::ferror(file) != 0;
+    std::fclose(file);
+    if (read_failed) {
+        throw ChartParseError("cannot read chart file: " + path);
+    }
+#else
     std::ifstream stream(path, std::ios::binary);
     if (!stream) {
         throw ChartParseError("cannot read chart file: " + path);
     }
     std::ostringstream buffer;
     buffer << stream.rdbuf();
-    std::string text = buffer.str();
+    text = buffer.str();
+#endif
     if (text.size() >= 3 &&
         static_cast<unsigned char>(text[0]) == 0xEF &&
         static_cast<unsigned char>(text[1]) == 0xBB &&

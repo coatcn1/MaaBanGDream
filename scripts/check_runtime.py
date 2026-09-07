@@ -18,8 +18,9 @@ INTERFACE_PATH = ROOT / "interface.json"
 
 
 def load_json(path: Path) -> dict[str, Any]:
-    # 便携包首次启动后 interface.json 可能带 UTF-8 BOM，读取时需用
-    # utf-8-sig，避免二次启动在兼容检查处报 “Unexpected UTF-8 BOM”。
+    # 便携包首次启动时 interface.json 可能由 Windows PowerShell 5.1 的
+    # Set-Content -Encoding utf8 写出，带 UTF-8 BOM；用 utf-8-sig 读取，
+    # 避免二次启动在兼容检查处报 “Unexpected UTF-8 BOM”。
     return json.loads(path.read_text(encoding="utf-8-sig"))
 
 

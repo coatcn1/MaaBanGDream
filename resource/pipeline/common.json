@@ -17,7 +17,7 @@
   "HomeMarker": {
     "recognition": "TemplateMatch",
     "template": "home_marker.png",
-    "threshold": 0.82,
+    "threshold": 0.75,
     "action": "DoNothing"
   },
   "LoginTapToStart": {
@@ -219,6 +219,12 @@
   "CommonRefreshScreen": {
     "recognition": "DirectHit",
     "action": "DoNothing"
+  },
+  "ResultRefreshScreen": {
+    "recognition": "DirectHit",
+    "action": "DoNothing",
+    "pre_delay": 0,
+    "post_delay": 150
   },
   "TaskReportVisible": {
     "recognition": "DirectHit",
