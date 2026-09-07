@@ -27,7 +27,10 @@ except ImportError:
     from task_reporting import TaskProgress, record_failure_reason
 
 from .difficulty_action import RealtimeDifficultySelect
-from .game_effect_settings_action import RealtimeGameEffectSettingsGate
+from .game_effect_settings_action import (
+    RealtimeGameEffectSettingsGate,
+    verified_game_visual_settings,
+)
 from .game_effect_settings_action import _click as _maa_click
 from .vision_io import imread_unicode
 from .game_effect_settings_action import _swipe as _maa_swipe
@@ -36,7 +39,8 @@ from .life_monitor import LifeDetector
 from .live_visual_gate import MODE_TOGGLE_POINT, live_performance_mode_is_off
 from .performance_settings_action import RealtimePerformanceSettingsGate
 from .profile_play_action import RealtimeProfilePlay
-from .profile_store import RealtimeProfileStore
+from .profile_store import EnvironmentSignature, RealtimeProfileStore
+from .rehearsal_action import frame_resolution
 from .native_prearm import discard_prearmed_backend
 from .cooperative_network import GameNetworkGate
 from .result_navigation import RESULT_ANIMATION_SKIP_POINT, handle_story_page
@@ -44,6 +48,11 @@ from .result_navigation import RESULT_ANIMATION_SKIP_POINT, handle_story_page
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE_DIR = PROJECT_ROOT / "resource" / "image" / "cooperative"
+# 与 prepare() 传给流速门禁的环境参数保持一致：这些值同时用于开局前的
+# Profile 预检，避免两处硬编码漂移。
+COOPERATIVE_DPI = 240
+COOPERATIVE_GAME_FPS = 60
+COOPERATIVE_RENDER_QUALITY = "standard"
 TEMPLATE_POSITIONS = {
     "live_entry": (975, 448),
     "room_search": (565, 620),
@@ -157,6 +166,50 @@ def configure_cooperative_settings(params: dict[str, object]) -> dict[str, objec
 def current_cooperative_settings() -> dict[str, object]:
     with _SETTINGS_LOCK:
         return dict(_SETTINGS)
+
+
+def cooperative_profile_preflight(context: Context, difficulty: str) -> str | None:
+    """任务一开始就校验 Profile 与环境签名，失败返回可读原因。
+
+    原实现把 Profile 解析放在准备页的流速门禁里：环境不匹配（例如任务
+    执行过程中手动改过 TAP EFFECT）时，自动化已经完成了主页→演出选择→
+    协力入口→房间→准备页的整段导航，才在准备页被拒，用户只看到“没点
+    开始”。这里用与门禁相同的签名构造（截图分辨率 + 固定 DPI/帧率/画质
+    + 运行时演出选项）提前做一次解析：失败立刻作为任务错误返回，导航
+    一步都不做；截图不可用时回退到准备页的既有门禁。
+    """
+    store = RealtimeProfileStore(PROJECT_ROOT / "profiles")
+    try:
+        image = context.tasker.controller.post_screencap().wait().get()
+    except Exception:
+        # 控制器尚未就绪时无法构造签名，交给准备页门禁处理。
+        return None
+    visual = verified_game_visual_settings()
+    options = store.runtime_options()
+    signature = EnvironmentSignature(
+        frame_resolution(image),
+        COOPERATIVE_DPI,
+        COOPERATIVE_GAME_FPS,
+        COOPERATIVE_RENDER_QUALITY,
+        1.0,
+        int(visual.note_skin_type)
+        if visual is not None
+        else int(options["note_skin_type"]),
+        int(visual.tap_effect)
+        if visual is not None
+        else int(options["tap_effect"]),
+        bool(visual.judgement_assist_effect)
+        if visual is not None
+        else bool(options["judgement_assist_effect"]),
+    )
+    try:
+        store.resolve_latest_for_environment(
+            difficulty=difficulty,
+            current_signature=signature,
+        )
+    except ValueError as exc:
+        return f"开局前 Profile 环境校验失败：{exc}"
+    return None
 
 
 def should_stay_in_room(settings: dict[str, object]) -> bool:
@@ -626,9 +679,9 @@ class CooperativeLiveFlow:
         performance_params = {
             "difficulty": difficulty,
             "require_profile": True,
-            "dpi": 240,
-            "game_fps": 60,
-            "render_quality": "standard",
+            "dpi": COOPERATIVE_DPI,
+            "game_fps": COOPERATIVE_GAME_FPS,
+            "render_quality": COOPERATIVE_RENDER_QUALITY,
             "coordinates": {"gear": (946, 650)},
             "defer_native_prearm": True,
         }
@@ -1294,6 +1347,16 @@ class CooperativeLiveAction(CustomAction):
                     PROJECT_ROOT / "profiles"
                 ).runtime_options().get("play_failure_retry_count", 1)
             )
+            preflight_error = cooperative_profile_preflight(
+                context, str(settings["difficulty"])
+            )
+            if preflight_error is not None:
+                record_failure_reason(preflight_error)
+                print(
+                    f"[任务][协力演出][流程][ERROR] {preflight_error}",
+                    flush=True,
+                )
+                return False
 
             def progress_argv(phase: str, total: int):
                 return SimpleNamespace(

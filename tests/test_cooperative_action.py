@@ -15,11 +15,13 @@ from agent.realtime.cooperative_action import (
     DISCONNECT_CONTINUE_INTERRUPT_POINT,
     MEMBER_DOWNLOAD_TIMEOUT_SECONDS,
     CooperativeLiveFinalize,
+    CooperativeLiveAction,
     CooperativeLiveFlow,
     MemberExited,
     classify_room_tier,
     configure_cooperative_settings,
     cooperative_play_params,
+    cooperative_profile_preflight,
     current_cooperative_settings,
     DEFAULT_SETTINGS,
     should_stay_in_room,
@@ -1150,3 +1152,105 @@ def test_finalize_private_stay_does_not_leave_or_reenter_room(monkeypatch):
     assert CooperativeLiveFinalize().run(
         context, SimpleNamespace(custom_action_param="{}")
     ) is True
+
+
+def _preflight_fakes(reason: str | None = None):
+    """构造预检所需的假 store / controller / context。"""
+    class Job:
+        def __init__(self, value):
+            self._value = value
+
+        def wait(self):
+            return self
+
+        def get(self):
+            return self._value
+
+    class FakeStore:
+        def __init__(self, root):
+            self.root = root
+
+        def runtime_options(self):
+            return {
+                "note_skin_type": 1,
+                "tap_effect": 4,
+                "judgement_assist_effect": False,
+            }
+
+        def resolve_latest_for_environment(self, *, difficulty, current_signature):
+            if reason is not None:
+                raise ValueError(reason)
+            return object()
+
+    class Controller:
+        def post_screencap(self):
+            return Job(np.zeros((720, 1280, 3), dtype=np.uint8))
+
+    class Tasker:
+        controller = Controller()
+        stopping = False
+
+    class Ctx:
+        tasker = Tasker()
+
+    return FakeStore, Ctx()
+
+
+def test_profile_preflight_reports_env_mismatch_before_navigation(monkeypatch):
+    fake_store, context = _preflight_fakes(
+        reason="钉选 Profile 与当前非流速环境不匹配：TAP EFFECT 1 ≠ 4"
+    )
+    monkeypatch.setattr(cooperative_action, "RealtimeProfileStore", fake_store)
+    monkeypatch.setattr(
+        cooperative_action, "verified_game_visual_settings", lambda: None
+    )
+
+    reason = cooperative_profile_preflight(context, "Expert")
+
+    assert reason is not None
+    assert "开局前" in reason
+    assert "TAP EFFECT 1 ≠ 4" in reason
+
+
+def test_profile_preflight_passes_when_environment_matches(monkeypatch):
+    fake_store, context = _preflight_fakes(reason=None)
+    monkeypatch.setattr(cooperative_action, "RealtimeProfileStore", fake_store)
+    monkeypatch.setattr(
+        cooperative_action, "verified_game_visual_settings", lambda: None
+    )
+
+    assert cooperative_profile_preflight(context, "Expert") is None
+
+
+def test_live_action_fails_immediately_on_preflight_error(monkeypatch):
+    monkeypatch.setattr(
+        cooperative_action,
+        "current_cooperative_settings",
+        lambda: {"difficulty": "Expert"},
+    )
+
+    class FakeStore:
+        def __init__(self, root):
+            pass
+
+        def runtime_options(self):
+            return {"play_failure_retry_count": 2}
+
+    monkeypatch.setattr(cooperative_action, "RealtimeProfileStore", FakeStore)
+    monkeypatch.setattr(
+        cooperative_action,
+        "cooperative_profile_preflight",
+        lambda context, difficulty: (
+            "开局前 Profile 环境校验失败：TAP EFFECT 1 ≠ 4"
+        ),
+    )
+    failures = []
+    monkeypatch.setattr(
+        cooperative_action, "record_failure_reason", failures.append
+    )
+    context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+
+    assert CooperativeLiveAction().run(
+        context, SimpleNamespace(custom_action_param="{}")
+    ) is False
+    assert failures == ["开局前 Profile 环境校验失败：TAP EFFECT 1 ≠ 4"]
