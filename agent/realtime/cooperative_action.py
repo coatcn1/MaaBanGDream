@@ -377,7 +377,8 @@ class CooperativeLiveFlow:
                 return False
             if not gate.block():
                 print(
-                    "CooperativeDisconnectJump gate_block_failed=true",
+                    "CooperativeDisconnectJump gate_block_failed=true "
+                    f"reason={gate.last_error or 'unknown'}",
                     flush=True,
                 )
                 return False
