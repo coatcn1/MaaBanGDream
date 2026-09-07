@@ -40,33 +40,67 @@ class GameNetworkGate:
         self._shell = shell
         self._chain = f"OUTPUT_{chain_suffix}"
         self._blocked = False
+        # 设备 shell 是否为 root 的探测结果缓存；None 表示尚未探测。
+        self._root_shell_available: bool | None = None
+        # 最近一次失败的可读原因，供上层把 fail-closed 的细节交给用户。
+        self.last_error: str | None = None
 
     def _shell_ok(self, args: Sequence[str]) -> bool:
         code, _ = self._shell(args)
+        return code == 0
+
+    def _root_shell(self, args: Sequence[str]) -> tuple[int, str]:
+        """执行需要 root 的命令；非 root shell 下用 ``su -c`` 提权。
+
+        雷电等模拟器的 adb shell 默认是 uid 2000，iptables 会直接报
+        "Permission denied"。这里先探测一次 ``id -u``，不是 root 就
+        把整条命令交给 ``su -c``；设备没有 su 或拒绝提权时返回失败，
+        保持 fail-closed。探测结果按实例缓存，避免每条命令多一次往返。
+        """
+        if self._root_shell_available is None:
+            code, output = self._shell(("id", "-u"))
+            self._root_shell_available = (
+                code == 0 and output.strip() == "0"
+            )
+        if self._root_shell_available:
+            return self._shell(args)
+        # adb shell 会按空白把参数拆开，su -c 只收一个命令参数；这里把
+        # 整条命令用引号包成一个 token，避免 `su -c iptables -L ...`
+        # 被拆成多个选项。
+        joined = " ".join(str(part) for part in args)
+        return self._shell(("su", "-c", f'"{joined}"'))
+
+    def _root_shell_ok(self, args: Sequence[str]) -> bool:
+        code, _ = self._root_shell(args)
         return code == 0
 
     def block(self) -> bool:
         """把游戏 UID 的出口流量 REJECT；重复调用是幂等的。"""
         if self._blocked:
             return True
+        self.last_error = None
         uid = resolve_game_uid(self._shell)
         if uid is None:
+            self.last_error = "无法解析游戏 UID"
             return False
         # 自建链便于精确恢复，不污染用户既有 OUTPUT 规则。
-        if not self._shell_ok(
+        if not self._root_shell_ok(
             ("iptables", "-N", self._chain)
         ):
             # 链已存在视为幂等成功。
-            code, _ = self._shell(("iptables", "-L", self._chain))
+            code, output = self._root_shell(("iptables", "-L", self._chain))
             if code != 0:
+                self.last_error = (
+                    f"缺少 root 权限或 iptables 不可用：{output.strip()}"
+                )
                 return False
-        created = self._shell_ok(
+        created = self._root_shell_ok(
             (
                 "iptables", "-I", "OUTPUT", "1",
                 "-j", self._chain,
             )
         )
-        rejected = self._shell_ok(
+        rejected = self._root_shell_ok(
             (
                 "iptables", "-A", self._chain,
                 "-m", "owner", "--uid-owner", str(uid),
@@ -74,17 +108,19 @@ class GameNetworkGate:
             )
         )
         self._blocked = created and rejected
+        if not self._blocked:
+            self.last_error = "iptables 屏蔽规则写入失败"
         return self._blocked
 
     def restore(self) -> bool:
         """恢复网络：删除规则并清空自建链，容忍部分命令失败。"""
         if not self._blocked:
             return True
-        self._shell(("iptables", "-F", self._chain))
-        self._shell(("iptables", "-D", "OUTPUT", "-j", self._chain))
-        self._shell(("iptables", "-X", self._chain))
+        self._root_shell(("iptables", "-F", self._chain))
+        self._root_shell(("iptables", "-D", "OUTPUT", "-j", self._chain))
+        self._root_shell(("iptables", "-X", self._chain))
         self._blocked = False
-        code, _ = self._shell(("iptables", "-L", self._chain))
+        code, _ = self._root_shell(("iptables", "-L", self._chain))
         return code != 0  # 链已删除才算恢复成功
 
     def __enter__(self) -> "GameNetworkGate":

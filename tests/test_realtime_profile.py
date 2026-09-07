@@ -121,6 +121,49 @@ def test_select_for_settings_gate_still_rejects_non_speed_environment_drift(tmp_
         )
 
 
+def test_select_for_settings_gate_reports_pinned_mismatch_fields(tmp_path):
+    store = RealtimeProfileStore(tmp_path)
+    path = store.write(payload(
+        difficulty="Expert",
+        environment=EnvironmentSignature(
+            (1280, 720), 240, 60, "standard", 5.0,
+            note_skin_type=1, tap_effect=1, judgement_assist_effect=False,
+        ).to_mapping(),
+    ))
+    store.pin("Expert", path.name)
+
+    with pytest.raises(ValueError, match=r"TAP EFFECT 1 ≠ 4") as excinfo:
+        store.resolve_latest_for_environment(
+            difficulty="Expert",
+            current_signature=EnvironmentSignature(
+                (1280, 720), 240, 60, "standard", 2.0,
+                note_skin_type=1, tap_effect=4, judgement_assist_effect=False,
+            ),
+        )
+    # 报错必须点名具体 Profile 文件，避免用户把新 Profile 钉错难度槽位。
+    assert path.name in str(excinfo.value)
+
+
+def test_select_for_settings_gate_reports_unpinned_mismatch_fields(tmp_path):
+    store = RealtimeProfileStore(tmp_path)
+    store.write(payload(
+        difficulty="Expert",
+        environment=EnvironmentSignature(
+            (1280, 720), 240, 60, "standard", 5.0,
+            note_skin_type=1, tap_effect=1, judgement_assist_effect=False,
+        ).to_mapping(),
+    ))
+
+    with pytest.raises(ValueError, match=r"TAP EFFECT 1 ≠ 4"):
+        store.resolve_latest_for_environment(
+            difficulty="Expert",
+            current_signature=EnvironmentSignature(
+                (1280, 720), 240, 60, "standard", 2.0,
+                note_skin_type=1, tap_effect=4, judgement_assist_effect=False,
+            ),
+        )
+
+
 def test_runtime_options_accept_game_note_speed_upper_bound(tmp_path):
     store = RealtimeProfileStore(tmp_path)
     options = store.runtime_options()

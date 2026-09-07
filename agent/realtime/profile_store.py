@@ -562,16 +562,39 @@ class RealtimeProfileStore:
         saved: EnvironmentSignature,
         current: EnvironmentSignature,
     ) -> bool:
-        return (
-            saved.resolution == current.resolution
-            and saved.dpi == current.dpi
-            and saved.game_fps == current.game_fps
-            and saved.render_quality == current.render_quality
-            and saved.note_skin_type == current.note_skin_type
-            and saved.tap_effect == current.tap_effect
-            and saved.judgement_assist_effect
-            == current.judgement_assist_effect
-        )
+        return not RealtimeProfileStore._non_speed_mismatches(saved, current)
+
+    @staticmethod
+    def _non_speed_mismatches(
+        saved: EnvironmentSignature,
+        current: EnvironmentSignature,
+    ) -> list[str]:
+        """列出除音符流速外不一致的签名字段，供拒绝信息直接提示用户。"""
+        mismatches: list[str] = []
+        if saved.resolution != current.resolution:
+            mismatches.append(f"分辨率 {saved.resolution} ≠ {current.resolution}")
+        if saved.dpi != current.dpi:
+            mismatches.append(f"DPI {saved.dpi} ≠ {current.dpi}")
+        if saved.game_fps != current.game_fps:
+            mismatches.append(f"帧率 {saved.game_fps} ≠ {current.game_fps}")
+        if saved.render_quality != current.render_quality:
+            mismatches.append(
+                f"画质 {saved.render_quality!r} ≠ {current.render_quality!r}"
+            )
+        if saved.note_skin_type != current.note_skin_type:
+            mismatches.append(
+                f"音符皮肤 {saved.note_skin_type} ≠ {current.note_skin_type}"
+            )
+        if saved.tap_effect != current.tap_effect:
+            mismatches.append(
+                f"TAP EFFECT {saved.tap_effect} ≠ {current.tap_effect}"
+            )
+        if saved.judgement_assist_effect != current.judgement_assist_effect:
+            mismatches.append(
+                f"判定辅助 {saved.judgement_assist_effect} ≠ "
+                f"{current.judgement_assist_effect}"
+            )
+        return mismatches
 
     def resolve_latest_for_environment(
         self,
@@ -588,13 +611,18 @@ class RealtimeProfileStore:
             if profile.get("difficulty") not in self.compatible_difficulties(difficulty):
                 raise ValueError("钉选 Profile 难度不兼容")
             saved = EnvironmentSignature.from_mapping(profile.get("environment", {}))
-            if not self._same_non_speed_environment(saved, current_signature):
-                raise ValueError("钉选 Profile 与当前非流速环境不匹配")
+            mismatches = self._non_speed_mismatches(saved, current_signature)
+            if mismatches:
+                raise ValueError(
+                    f"钉选 Profile（{pinned}）与当前非流速环境不匹配："
+                    + "；".join(mismatches)
+                )
             return self.resolve(
                 pinned,
                 difficulty=difficulty,
                 current_signature=saved,
             )
+        latest_mismatches: list[str] = []
         for source in self.compatible_difficulties(difficulty):
             candidates = [
                 profile
@@ -605,14 +633,18 @@ class RealtimeProfileStore:
                 saved = EnvironmentSignature.from_mapping(
                     profile.get("environment", {})
                 )
-                if self._same_non_speed_environment(saved, current_signature):
+                mismatches = self._non_speed_mismatches(saved, current_signature)
+                if not mismatches:
                     return self.resolve(
                         profile["_path"].name,
                         difficulty=difficulty,
                         current_signature=saved,
                     )
+                latest_mismatches = mismatches
+        detail = "；".join(latest_mismatches)
         raise ValueError(
             f"没有已验收且非流速环境匹配的 {difficulty} Profile"
+            + (f"：{detail}" if detail else "")
         )
 
     def update_settings(self, value: str | Path, *, target_fps: int, timing_offset_ms: int,
