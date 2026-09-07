@@ -144,6 +144,10 @@ class MemberExited(RuntimeError):
     pass
 
 
+class JumpOutUnavailable(RuntimeError):
+    """生命归零后无法自动断网跳车，应结束任务让用户手动处理。"""
+
+
 def configure_cooperative_settings(params: dict[str, object]) -> dict[str, object]:
     with _SETTINGS_LOCK:
         candidate = (
@@ -259,6 +263,8 @@ class CooperativeLiveFlow:
         self.settings = settings
         self.progress_callback = progress_callback
         self.detector = LifeDetector()
+        # 连续生命归零跳车计数：连续两局都触发跳车时主动结束任务。
+        self._consecutive_jumps = 0
         self.templates = {
             path.stem: imread_unicode(path, cv2.IMREAD_COLOR)
             for path in TEMPLATE_DIR.glob("*.png")
@@ -818,21 +824,24 @@ class CooperativeLiveFlow:
         )
         run = current_live_run()
         if run is not None and bool(run.disconnect_jump_requested):
-            # 生命归零跳车：Play 已释放触点并返回，这里执行断网跳车流程。
-            # 跳车成功时按“完成本局”返回，由外层继续回房间/主页导航；
-            # 跳车失败（例如无法解析游戏 UID、设备无 root）时游戏仍在
-            # 空血状态继续播放，不能把本局当作已结算去导航——那会让外层
-            # 在演奏场反复按返回、任务卡住不结束。此时清理回主页/房间
-            # 选择，本局仍按完成计入。
-            if not self.disconnect_jump_out():
-                print(
-                    "CooperativeLive disconnect_jump_failed=true recover=true",
-                    flush=True,
+            # 生命归零跳车（item 0）：先回主界面再切回游戏，接着判断
+            # 能不能关网；能就继续跳车，不能就结束任务让用户手动处理。
+            # 连续两局都触发跳车也主动结束任务。
+            self._consecutive_jumps += 1
+            if self._consecutive_jumps >= 2:
+                raise JumpOutUnavailable(
+                    "连续两局生命归零，主动结束任务，请手动断网跳车"
                 )
-                self.recover_after_play_failure(
-                    "断网跳车失败，无法退出当前演出"
+            self.controller.post_click_key(3).wait()
+            time.sleep(0.6)
+            self.controller.post_start_app(GAME_PACKAGE).wait()
+            time.sleep(0.8)
+            if not self.disconnect_jump_out():
+                raise JumpOutUnavailable(
+                    "无法关闭游戏网络或未出现跳车弹窗，请手动断网跳车"
                 )
             return True
+        self._consecutive_jumps = 0
         if not success:
             return False
         return True
@@ -1191,6 +1200,14 @@ class CooperativeLiveFlow:
                 reconnects = next_reconnects
                 reuse_room = False
                 continue
+            except JumpOutUnavailable as exc:
+                # 无法自动断网跳车或连续两局跳车：结束任务，交用户手动处理。
+                record_failure_reason(str(exc))
+                print(
+                    f"[任务][协力演出][流程][ERROR] {exc}",
+                    flush=True,
+                )
+                return False
             except Exception as exc:
                 if play_failures >= retry_count:
                     raise
