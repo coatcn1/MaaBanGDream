@@ -8,7 +8,13 @@
 - Native Realtime Engine V2 仍是未发布、默认关闭的实验路径；离线实现不代表真机成绩，验收前不会替代 Python Legacy。
 - 当前待验收项：Native V2 连续 10 局 Expert 真机门槛、共享封面歌曲的 Normal 真机复验，以及完整校准断点续跑；v1.2.0 的协力弹窗门控、末尾漏键、结算恢复与单人跳过设置页预武装仍需真机复验。
 
-## 2026-09-07（v1.3.0 本地开发候选，未发布）
+## 2026-09-07（仓库门禁修订：分支清理与 merge 策略）
+
+- 合并策略由 Squash 改为 Merge（`--no-ff`，创建合并提交）：`main` 保留每个 feature/fix 分支的完整提交历史，发布变更可直接由 `git log` 范围得到，不再依赖手工整理的交接记录。
+- 清理 22 个已合并/已发布的本地残留 feature、fix、docs 分支（均有已合并 PR，或为已合并分支的祖先；`fix/realtime-calibration-recovery` 的 PR #20 已关闭且两条改动各自被 revert）。保留 `main`、`release/v1.2.1`、`backup/local-main-before-v0.8`、`codex/release-v0.8.0`。
+- AGENTS.md：删除过时的“统一开发分支 `feature/cooperative-safety`”，改为“从 `main` 拉分支、验收后 merge 回 `main`、部署从 `main` 进行、合并后删分支”；发布门禁与禁止提交清单不变。
+
+## 2026-09-07（v1.3.0，已发布）
 
 - **Native 漂移定案**：同一份代码在雷电模拟器 Native `[FULL]FIRE BIRD` 2331 PERFECT/0 GREAT（漂移 p50 5.2ms），MuMu 漂移按 20 秒分段 1.09→1.47→4.89→5.64ms/s 加速增长、逐局 p50 146.8/108/54/88ms 波动，高性能模式与关闭主机负载均无效；速率校正实验闭环在 MuMu 发散，保持默认关闭。分工：雷电走 Native、MuMu 走 Legacy（MuMu 新号 Legacy 490P/17G/1M，hit 99.8%）。有符号漂移证据新增按 chunk 中位数估计速率并闭环补偿。
 - **FULL 谱面身份**：准备页（带演出开始按钮的页面）左下角读标题/等级/难度；最终封面右上角新增 FULL 徽标检测作为标题 OCR 失败的补充证据；仅同时读到等级时放宽 pHash 阈值到 14 bit。`[FULL]FIRE BIRD` 真机 2326P/1G/4M。

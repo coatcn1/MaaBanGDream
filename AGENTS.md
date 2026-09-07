@@ -47,8 +47,9 @@ Python:   D:\Documents\workplace\.tools\Miniconda3\envs\maabangdream\python.exe 
 
 ```
 main                                      ← 发布主线
-feature/cooperative-safety                ← 当前统一开发分支（已合并抽卡、登录下载与协力改动）
 ```
+
+功能与修复一律从 `main` 最新提交拉取 `feature/*` / `fix/*` 分支，验收后合并回 `main` 并删除分支；不再维护跨版本累积的“统一开发分支”。
 
 定制 MFAAvalonia 独立开发分支为 `feature/performance-visual-settings`；两个仓库必须分别提交和推送。
 
@@ -80,9 +81,9 @@ docs/                   # 额外文档
 
 ## 关键约定
 
-- **分支命名**：`feature/*` 做功能，`fix/*` 做修复
-- **合并方式**：Squash Merge 到 `main`
-- **PR 流程**：Draft PR → 检查通过 → Ready → Squash Merge
+- **分支命名**：`feature/*` 做功能，`fix/*` 做修复；完成验收并合并回 `main` 后删除分支
+- **合并方式**：Merge 到 `main`（`--no-ff`，创建合并提交，保留分支完整提交历史），不用 squash 压平历史
+- **PR 流程**：Draft PR → 检查通过 → Ready → Merge（创建合并提交）
 - **禁止提交**：ADB 路径、设备序列号、日志、截图、Profile、`.venv`、MFA 运行目录
 - **发布门禁**：`verify.ps1` 全部通过 + 工作树干净 + 真机门禁满足
 - **歌曲模式**：仅支持当前曲目和随机选曲，不支持按名称指定
@@ -294,7 +295,7 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
 5. **正式演奏时限**：旧的 300 秒上限会在长曲仍演奏时强制失败。正式演奏节点当前为 600 秒，并应在超时、生命保护、用户停止、结算识别等终态记录具体原因。
 6. **禁止含糊日志**：不要写“详情见上一条日志”。终态日志必须包含当前阶段和可执行的具体原因；运行时原因通过 `TaskOutcome` 的 latest failure reason 传递。
 7. **启动恢复必须有界**：未知界面最多按 ESC 恢复 60 秒；仍无法识别主页才重启游戏。登录画面应先识别“点击任意处/开始”，登录阶段不得过早发送 ESC。
-8. **部署必须从包含所有未合并功能的分支进行**：`launch-mfa.ps1` 用当前工作树的 `interface.json` 和 Agent 覆盖运行目录。多个未合并 feature 分支并存时，从缺少某功能的旧分支部署，会把该功能从 MFA 里“部署丢”。当前统一工作分支是 `feature/cooperative-safety`。
+8. **部署必须从包含所有已合并功能的分支进行**：`launch-mfa.ps1` 用当前工作树的 `interface.json` 和 Agent 覆盖运行目录。功能合并回 `main` 后一律从 `main` 部署；多个未合并 feature 分支并存时，从缺少某功能的旧分支部署，会把该功能从 MFA 里“部署丢”。合并并部署完成后删除 feature/fix 分支，避免残留分支误导后续工作。
 9. **MFA 任务列表有“用户删除记忆”**：某次部署的 interface 缺少某个任务时，MFA 会把它记进 `config/instances/default.json` 的 `CurrentTasks`（`任务名<|||>Entry` 键）当作“用户已删除”，之后 interface 恢复该任务也不会加回。恢复方法：停止 MFA，从 `CurrentTasks` 删掉对应键再启动；不要在 MFA 运行时直接改该文件（内存会覆盖）。
 10. **演出设置自动保存会覆盖用户设置**：MFA 演出设置页在读取 Profile 失败时会把界面默认值整体写回 `profiles/selection.json`，清空用户运行时选项（Native、演出特效、TAP EFFECT、判定辅助、重试次数、校准流速等）。MFA 侧已加“读取成功前禁止自动保存”的保护。新增运行时选项必须四处同步：`profile_store.py` 的 `DEFAULT_RUNTIME_OPTIONS` 与 `_validated_runtime_options`、MFA `PerformanceProfileSettingsUserControlModel.cs` 的属性/加载/Capture、AXAML 开关。
 11. **登录下载确认框会被退出确认的取消模板误命中**：下载框与退出确认框都有灰色“取消”按钮，`quit_confirm_cancel.png` 在下载框上得分 0.952（阈值 0.9）。下载确认必须先于通用模态取消处理；下载进行中用进度标记被动等待，不发送 BACK/ESC。
