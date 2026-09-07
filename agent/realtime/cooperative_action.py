@@ -507,17 +507,25 @@ class CooperativeLiveFlow:
             time.sleep(0.2)
 
     def select_normal_room(self) -> None:
+        started = time.monotonic()
         image = self.ensure_room_page()
         target = str(self.settings["room_tier"])
         if target not in ROOM_TIER_INDEX:
             raise ValueError(f"不支持的协力房间档位：{target}")
         actual = classify_room_tier(image)
+        print(
+            "CooperativeLive select_room reached_selection "
+            f"target={target} actual={actual or 'unknown'} "
+            f"elapsed={time.monotonic() - started:.2f}s",
+            flush=True,
+        )
 
         # Never reset the carousel to Free before selecting another room.
         # Free and Legend are the two endpoints, so swipe straight toward that
         # endpoint.  If the game snaps only one card per gesture, repeat in the
         # same direction and re-read the centre card; never traverse the wrong
         # way first.  Middle tiers use the current classified index directly.
+        swipes = 0
         for _ in range(4):
             if actual == target:
                 break
@@ -542,6 +550,7 @@ class CooperativeLiveFlow:
                 else:
                     start, end, duration = (1050, 360), (250, 360), 500
             _maa_swipe(self.context, start, end, duration)
+            swipes += 1
             time.sleep(0.45)
             image = self.capture()
             actual = classify_room_tier(image)
@@ -552,9 +561,20 @@ class CooperativeLiveFlow:
             )
         if target == "legend":
             self.close_sss_guide()
+        print(
+            "CooperativeLive select_room ready_to_click "
+            f"target={target} swipes={swipes} "
+            f"elapsed={time.monotonic() - started:.2f}s",
+            flush=True,
+        )
         self.click((1060, 650))
         self.verify_room_entry(
             "点击所选协力房间后仍停留在房间选择页，未开始匹配"
+        )
+        print(
+            "CooperativeLive select_room room_entry_confirmed "
+            f"elapsed={time.monotonic() - started:.2f}s",
+            flush=True,
         )
 
     def verify_room_entry(self, failure_reason: str) -> None:
