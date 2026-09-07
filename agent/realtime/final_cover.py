@@ -180,6 +180,8 @@ class FinalCoverResolver:
         self.last_reason = "final cover has not been observed"
         self._candidate_song_id = UNKNOWN_SONG_ID
         self._candidate_frames = 0
+        # 退化诊断：每个新指纹只打一条日志，避免逐帧刷屏。
+        self._logged_fingerprints: set[str] = set()
 
     def evidence_reason(self) -> str | None:
         if not self.difficulty:
@@ -229,6 +231,16 @@ class FinalCoverResolver:
             title=self.observed_title,
         )
         if resolution.selection is None:
+            if identity.song_id not in self._logged_fingerprints:
+                self._logged_fingerprints.add(identity.song_id)
+                print(
+                    "FinalCover resolve_failed "
+                    f"fingerprint={identity.song_id} "
+                    f"level={self.observed_level} "
+                    f"title={self.observed_title!r} "
+                    f"reason={resolution.reason}",
+                    flush=True,
+                )
             self.last_reason = resolution.reason
             return None
         gate = FinalCoverGate(
@@ -240,6 +252,19 @@ class FinalCoverResolver:
         confirmation = gate.observe(image)
         self.last_reason = gate.last_reason
         if confirmation is None:
+            if (
+                gate.last_reason == "final cover jacket does not match selected chart"
+                and identity.song_id not in self._logged_fingerprints
+            ):
+                self._logged_fingerprints.add(identity.song_id)
+                print(
+                    "FinalCover gate_mismatch "
+                    f"fingerprint={identity.song_id} "
+                    f"selected_bestdori_id="
+                    f"{resolution.selection.bestdori_song_id} "
+                    f"level={self.observed_level}",
+                    flush=True,
+                )
             return None
         self.gate = gate
         return FinalCoverResolution(

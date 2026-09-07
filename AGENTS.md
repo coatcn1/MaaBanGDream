@@ -7,7 +7,7 @@
 基于 MaaFramework 的 BanG Dream! 自动化项目。通过 MFAAvalonia GUI 加载 Python Agent，控制 Android 模拟器完成自动演出、实时触控演奏、校准和挑战演出。
 
 - 仓库：`https://github.com/coatcn1/MaaBanGDream`
-- 当前版本：`v1.2.4-dev`（本地测试候选，未发布）
+- 当前版本：`v1.3.0`（本地开发候选，未发布）
 - 许可证：GPL-3.0-only
 
 ## MaaBanGDream 运行布局
@@ -311,6 +311,14 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
 22. **协力生命归零的“断网跳车”流程（真实弹窗已提取，MuMu 断网机制受限）**：生命归零后按顺序执行：切断游戏网络 → 游戏退后台再切回 → 弹窗1“通信已中断。是否继续演出？※本次演出将变为单人演出※”点**左侧“中断”** `(508,447)` → 弹窗2“确认中断当前演出返回主页吗？※中断当前演出的话，将不会获得演出报酬。”点**右侧粉色“中断”** `(754,439)` → 恢复网络 → “连接失败。”弹窗有界点“重试”直到回主页。模板 `disconnect_continue_body.png`（锚点 488,313）与 `disconnect_confirm_body.png`（锚点 495,307）已从 2026-09-07 雷电录像提取。关键约束：**禁止用 `svc wifi` / 飞行模式开关网络**——实测（2026-09-06 与 2026-09-07 两次）`svc wifi disable` 和 `settings put global airplane_mode_on 1`+广播都会打断 MuMu 的 adb 通道（设备离线），因为 MuMu 客户机只有 `wlan0` 一张网卡，游戏流量和 adb 的 NAT 转发同路，任何真实断网都会连带杀掉引擎的截图/触控通道。**MuMu 按 UID 断网目前不可行**：Android 12 内核无 `xt_owner` 匹配模块、无 `nft`、无 `bpftool`，`cmd netpolicy` 也没有 `set uid-policy`。**iptables 门禁已在雷电实测可用**：`adb root` 后 shell uid 0，owner 模块存在，`GameNetworkGate` 对游戏 UID 的 REJECT/恢复端到端验证通过（2026-09-07）；MuMu 上会 fail-closed。MuMu root 已开（`root_permission=true`）。已实现：`cooperative_network.py` 按 UID 屏蔽/恢复、`connect_failed_body.png`、`dismiss_connect_failed`、`disconnect_jump_out()` 两段弹窗编排（全程 finally 恢复、模板缺失直接 fail-closed、带单元测试）、引擎生命归零钩子与 UI“断网跳车”选项。MuMu 上的可行路线待用户定：手动断网后自动化处理弹窗，或找 MuMu 主机侧网络开关；`mumu-cli control --vmindex 0 tool cmd -c "<guest cmd>"` 是独立于客户机网络的宿主机通道，adb 断掉时可用它执行 `settings put global airplane_mode_on 0` 恢复。
 23. **MFA 双进程/配置切换闪退是上游 Avalonia 崩溃**：2026-09-07 用户实测同时开两个 MFA（本机+便携）或快速来回切换配置时，`MFAAvalonia.exe` 以 `0xc0000005` 崩溃在已卸载的 `external_renderer_ipc.dll`（Windows Application 事件日志 11:00:30、11:03:20）。这不是 Agent 代码问题，修复需要改定制 MFAAvalonia 源码/上游；暂按“单实例 + 少切换配置”规避。“配置2连雷电但输入派发到 MuMu”是既有 `emulator-7554` 端口影子问题（MuMu 运行时占用 127.0.0.1:7555），关 MuMu 后恢复正常，与本条目无关。
 24. **协力最终封面能读到却不认识＝歌曲不在本地曲库**：trace 里若出现大量“final cover jacket does not match selected chart / song fingerprint is not confirmed”而 playfield 已可见，通常是游戏新增歌曲未同步进 `resource/charts` 目录（选曲页同样 song=unknown）。此时协力没有可信准备页谱面可回退，只能整局视觉演出；修复是重跑 `scripts/sync_bestdori_catalog.py` 同步曲库。`CooperativePreparePopupDetector` 是像素启发式（白色圆角条+左侧粉色图标），不依赖模板，`live_prepare.png` 只用于单人/自动/挑战的演出准备节点，与协力等待弹窗无关。
+
+## 后续开发方向（已记录，暂缓或未开始）
+
+- **MuMu Native 漂移**：定性为客户机时钟速率偏斜且逐局可变，速率校正实验闭环发散；暂不解决，MuMu 用 Legacy、雷电用 Native。见“最近交互”的 MuMu 时钟偏斜条目。
+- **调试文件定时清理**：暂不做应用内自动清理；已有 `.local/clean-recordings.ps1`（保留最新 5 个）。若做，建议按保留天数在任务启动时修剪 `debug/recordings/*`，并留足证据窗口。
+- **双 MFA 进程/配置切换闪退**：上游 Avalonia `external_renderer_ipc.dll` 0xc0000005；暂缓，规避方式为单实例、少切换配置。见第 23 条。
+- **从 GitHub 自动更新**：参考其他 MAA 项目在 MFA 侧实现资源/版本自更新（定制 MFA 已跳过 Mirror 更新源）；简单的话可以提前做。
+- **Special 谱面支持**、**更多演出类型**：未开始。
 
 ## 修改后的最低验收
 
