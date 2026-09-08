@@ -124,11 +124,18 @@ $staging = Join-Path $tempRoot 'staging'
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 try {
     Write-Host "读取 $assetName 的 SHA256 校验值 ..."
-    $shaText = (Invoke-WebRequest `
+    $shaContent = (Invoke-WebRequest `
         -Uri $shaUrl `
         -UseBasicParsing `
         -TimeoutSec 20 `
         -UserAgent 'MaaBanGDream-Updater').Content
+    # GitHub 把 .sha256 按 application/octet-stream 返回，PowerShell 5.1
+    # 会把响应体解析成字节数组；这里统一还原成文本再匹配哈希。
+    $shaText = if ($shaContent -is [byte[]]) {
+        [System.Text.Encoding]::UTF8.GetString($shaContent)
+    } else {
+        [string]$shaContent
+    }
     if ($shaText -notmatch '\b([0-9a-fA-F]{64})\b') {
         throw '发布包缺少可解析的 SHA256 校验值，已中止更新。'
     }
