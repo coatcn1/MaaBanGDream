@@ -319,21 +319,28 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
 - **MuMu Native 漂移**：定性为客户机时钟速率偏斜且逐局可变，速率校正实验闭环发散；暂不解决，MuMu 用 Legacy、雷电用 Native。见“最近交互”的 MuMu 时钟偏斜条目。
 - **调试文件定时清理**：暂不做应用内自动清理；已有 `.local/clean-recordings.ps1`（保留最新 5 个）。若做，建议按保留天数在任务启动时修剪 `debug/recordings/*`，并留足证据窗口。
 - **双 MFA 进程/配置切换闪退**：上游 Avalonia `external_renderer_ipc.dll` 0xc0000005；暂缓，规避方式为单实例、少切换配置。见第 23 条。
-- **从 GitHub 自动更新（已实现双端）**：
-  - 便携包启动器侧：`scripts/update.ps1`（`releases/latest` HTML 重定向拿
-    tag、避免 API 限流），`启动 MaaBanGDream.cmd` 启动前 `-Auto` 静默检查。
-  - MFA 侧（定制 MFAAvalonia 仓库 `fix/native-realtime-ui-toggle`，
-    `9ea63c3`）：启动 6 秒后静默检查一次；“更新设置”页新增
-    “MaaBanGDream 版本更新”卡片（检查更新/立即更新按钮 + 状态文本）。
-    **增量更新**：发布包根目录 `update-manifest.json`（路径→SHA256，
-    由 `build-windows-release.ps1` 生成并打入 zip）；更新器用 HTTP Range 只
-    拉取 zip 中央目录 + 清单 + 变化条目的字节区间，逐条 SHA256 校验后落盘，
-    谱面等未变内容不重复下载。锁定的程序文件写 `.new` + `update-restart.cmd`
-    重启替换。
-  - 关键坑：GitHub 资产 CDN **不支持 `bytes=-N` 后缀区间**（501），只支持
-    显式起止区间（`bytes=a-b`）；拉 EOCD 前必须先拿 Content-Length 再用
-    `bytes=(size-65557)-(size-1)`。发布 zip 由 `tar.exe -a` 生成：条目用
-    deflate（method 8）、目录条目 method 0，条目名 `<pkg>/…` 前向斜杠。
+- **纯 GitHub 整包更新（v1.3.3 起，已实现双端）**：早期“逐文件 Range 增量”
+  方案已废弃（354MB Python 运行库归档每次都进 diff、国内网络卡在 7%、中断后
+  无法续传）。现行为：整包下载到 `.part`（HTTP Range 断点续传）→ 与发布附带
+  `.zip.sha256` 校验 → 重启辅助脚本在进程退出后覆盖解压（保留
+  config/profiles/logs/debug/screencap）→ 直接 ShellExecute 启动器重启；
+  版本依据为 `update-manifest.json`（只在完整应用成功后写入）。更新包
+  `MaaBanGDream-vX-win-x64-update.zip` 不含 Python 运行库归档与
+  `resource/charts`（谱面走“演出设置 → 谱面辅助 → 同步”独立通道），约
+  143MB；本机 `runtime/python/python.exe` 缺失才回退完整包。首启解压后删除
+  `runtime/maabangdream-python.zip`。升级后安装目录名自动跟随版本（
+  `MaaBanGDream-v1.3.3-win-x64` → `MaaBanGDream-v1.3.4-win-x64`），由
+  update.ps1 的脱离启动器辅助进程改名（启动器退出码 2 协议），自定义目录名
+  不改。关键坑：中文路径别经 `cmd /c` 转 ANSI 代码页（用 ShellExecute 直启
+  `.cmd`）；生成的 `.ps1` 必须写 UTF-8 BOM；`SHA256.HashData(Stream)` 不关闭
+  流，必须 `using`。
+- **复用 MFA 原生 GitHub 更新界面（计划，暂缓）**：现自绘“MaaBanGDream 版本
+  更新”卡片与状态文本较简陋。MFA 上游自带 GitHub 下载源
+  （`VersionChecker.GetLatestVersionAndDownloadUrlFromGithubAsync` + 下载源
+  下拉框 + 任务队列下载进度条 + Toast，不依赖 Mirror酱）。计划：`interface.json`
+  补 `controller.github` 指向本仓库 → 复用上游“检查/下载/进度/Toast”整套 UI，
+  只把“解压进 resource/”替换成“整包覆盖 + 重启脚本”；保留现有断点续传、sha256
+  校验与目录改名逻辑。动定制 MFAAvalonia 的更新设置页，需要单独验收。
 - **Special 谱面支持**、**更多演出类型**：未开始。
 
 ## 修改后的最低验收
