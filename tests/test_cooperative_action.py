@@ -210,7 +210,7 @@ class _FakeJob:
         return self
 
 
-def _make_play_flow(monkeypatch, *, jump_requested, disconnect_result):
+def _make_play_flow(monkeypatch, *, jump_requested):
     class Play:
         def run(self, context, params):
             return False
@@ -224,7 +224,6 @@ def _make_play_flow(monkeypatch, *, jump_requested, disconnect_result):
     flow = object.__new__(CooperativeLiveFlow)
     flow.settings = dict(DEFAULT_SETTINGS)
     flow.action_argv = lambda params: params
-    flow._consecutive_jumps = 0
     keys = []
     started = []
 
@@ -240,50 +239,23 @@ def _make_play_flow(monkeypatch, *, jump_requested, disconnect_result):
     flow.context = SimpleNamespace(
         tasker=SimpleNamespace(controller=Controller())
     )
-    jumps = []
-    flow.disconnect_jump_out = lambda: jumps.append(True) or disconnect_result
-    return flow, jumps, keys, started
+    return flow, keys, started
 
 
-def test_play_runs_disconnect_jump_when_live_run_requests_it(monkeypatch):
-    flow, jumps, keys, started = _make_play_flow(
-        monkeypatch, jump_requested=True, disconnect_result=True
-    )
+def test_play_ends_task_when_live_run_requests_jump(monkeypatch):
+    flow, keys, started = _make_play_flow(monkeypatch, jump_requested=True)
 
-    assert flow.play() is True
-    assert jumps == [True]
-    # item 0：跳车前先回主页（HOME）再切回游戏（start_app）。
+    with pytest.raises(JumpOutUnavailable):
+        flow.play()
+    # 生命归零：先回主页（HOME）再切回游戏，然后直接结束任务。
     assert keys == [3]
     assert started == [cooperative_action.GAME_PACKAGE]
 
 
-def test_play_ends_task_when_disconnect_jump_fails(monkeypatch):
-    flow, _, _, _ = _make_play_flow(
-        monkeypatch, jump_requested=True, disconnect_result=False
-    )
-
-    with pytest.raises(JumpOutUnavailable):
-        flow.play()
-
-
-def test_play_ends_task_after_two_consecutive_jumps(monkeypatch):
-    flow, jumps, _, _ = _make_play_flow(
-        monkeypatch, jump_requested=True, disconnect_result=True
-    )
-    flow._consecutive_jumps = 1
-
-    with pytest.raises(JumpOutUnavailable):
-        flow.play()
-    assert jumps == []
-
-
 def test_play_skips_jump_without_live_run_signal(monkeypatch):
-    flow, jumps, _, _ = _make_play_flow(
-        monkeypatch, jump_requested=False, disconnect_result=True
-    )
+    flow, _, _ = _make_play_flow(monkeypatch, jump_requested=False)
 
     assert flow.play() is False
-    assert jumps == []
 
 
 def _fake_member_exit_watch_flow(frame, timeout):

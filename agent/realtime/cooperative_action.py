@@ -270,8 +270,6 @@ class CooperativeLiveFlow:
         self.settings = settings
         self.progress_callback = progress_callback
         self.detector = LifeDetector()
-        # 连续生命归零跳车计数：连续两局都触发跳车时主动结束任务。
-        self._consecutive_jumps = 0
         self.templates = {
             path.stem: imread_unicode(path, cv2.IMREAD_COLOR)
             for path in TEMPLATE_DIR.glob("*.png")
@@ -851,24 +849,13 @@ class CooperativeLiveFlow:
         )
         run = current_live_run()
         if run is not None and bool(run.disconnect_jump_requested):
-            # 生命归零跳车（item 0）：先回主界面再切回游戏，接着判断
-            # 能不能关网；能就继续跳车，不能就结束任务让用户手动处理。
-            # 连续两局都触发跳车也主动结束任务。
-            self._consecutive_jumps += 1
-            if self._consecutive_jumps >= 2:
-                raise JumpOutUnavailable(
-                    "连续两局生命归零，主动结束任务，请手动断网跳车"
-                )
+            # 生命归零：不再自动断网跳车（门禁/弹窗在不同设备上不可靠）。
+            # 回主页 → 切回游戏 → 直接结束任务，由用户手动断网跳车。
             self.controller.post_click_key(3).wait()
             time.sleep(0.6)
             self.controller.post_start_app(GAME_PACKAGE).wait()
             time.sleep(0.8)
-            if not self.disconnect_jump_out():
-                raise JumpOutUnavailable(
-                    "无法关闭游戏网络或未出现跳车弹窗，请手动断网跳车"
-                )
-            return True
-        self._consecutive_jumps = 0
+            raise JumpOutUnavailable("生命归零，请手动断网跳车后重试")
         if not success:
             return False
         return True
