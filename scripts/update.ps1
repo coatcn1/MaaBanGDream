@@ -6,19 +6,15 @@
 $ErrorActionPreference = 'Stop'
 $packageRoot = Split-Path -Parent $PSScriptRoot
 
-# 本地版本以 interface.json 为准；找不到时回退 BUILD-INFO.json。
+# 本地版本以 update-manifest.json 为准：它只在一次完整应用成功后才被
+# 替换，中断的半更新状态不会把版本误报成新版本；找不到时依次回退
+# BUILD-INFO.json、interface.json，兼容旧版便携包。
 function Get-LocalVersion {
-    $interface = Join-Path $packageRoot 'interface.json'
-    if (Test-Path -LiteralPath $interface) {
+    foreach ($name in @('update-manifest.json', 'BUILD-INFO.json', 'interface.json')) {
+        $path = Join-Path $packageRoot $name
+        if (-not (Test-Path -LiteralPath $path)) { continue }
         try {
-            $version = (Get-Content -LiteralPath $interface -Raw | ConvertFrom-Json).version
-            if ($version) { return [string]$version }
-        } catch { }
-    }
-    $buildInfo = Join-Path $packageRoot 'BUILD-INFO.json'
-    if (Test-Path -LiteralPath $buildInfo) {
-        try {
-            $version = (Get-Content -LiteralPath $buildInfo -Raw | ConvertFrom-Json).version
+            $version = (Get-Content -LiteralPath $path -Raw | ConvertFrom-Json).version
             if ($version) { return [string]$version }
         } catch { }
     }
@@ -87,7 +83,7 @@ function Stop-PackageMfa {
 
 $currentVersion = Get-LocalVersion
 if (-not $currentVersion) {
-    throw '无法从 interface.json / BUILD-INFO.json 读取本地版本。'
+    throw '无法从 update-manifest.json / BUILD-INFO.json / interface.json 读取本地版本。'
 }
 Write-Host "本地版本：$currentVersion"
 
@@ -119,16 +115,54 @@ if (-not $Auto) {
 
 $assetName = "MaaBanGDream-v$latestVersion-win-x64.zip"
 $assetUrl = "https://github.com/coatcn1/MaaBanGDream/releases/download/$latestTag/$assetName"
+$shaUrl = "$assetUrl.sha256"
 $tempRoot = Join-Path $env:TEMP "maabangdream-update-$latestVersion"
 $zipPath = Join-Path $tempRoot $assetName
+$partPath = "$zipPath.part"
 $staging = Join-Path $tempRoot 'staging'
 
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 try {
-    Write-Host "下载 $assetName ..."
-    $client = New-Object System.Net.WebClient
-    $client.Headers.Add('User-Agent', 'MaaBanGDream-Updater')
-    $client.DownloadFile($assetUrl, $zipPath)
+    Write-Host "读取 $assetName 的 SHA256 校验值 ..."
+    $shaText = (Invoke-WebRequest `
+        -Uri $shaUrl `
+        -UseBasicParsing `
+        -TimeoutSec 20 `
+        -UserAgent 'MaaBanGDream-Updater').Content
+    if ($shaText -notmatch '\b([0-9a-fA-F]{64})\b') {
+        throw '发布包缺少可解析的 SHA256 校验值，已中止更新。'
+    }
+    $expectedSha = $Matches[1].ToLowerInvariant()
+
+    function Invoke-Download {
+        param([string]$Url, [string]$Output)
+        # curl -C - 从已有 .part 的末尾断点续传；Windows 10/11 自带 curl。
+        if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
+            & curl.exe -L --fail --retry 5 --retry-all-errors --retry-delay 3 -C - -o $Output $Url
+            if ($LASTEXITCODE -ne 0) {
+                throw "curl 下载失败（退出码 $LASTEXITCODE），已中止更新。"
+            }
+        } else {
+            $client = New-Object System.Net.WebClient
+            $client.Headers.Add('User-Agent', 'MaaBanGDream-Updater')
+            $client.DownloadFile($Url, $Output)
+        }
+    }
+
+    $attempts = 0
+    while ($true) {
+        Write-Host "下载 $assetName（支持断点续传）..."
+        Invoke-Download -Url $assetUrl -Output $partPath
+        $actualSha = (Get-FileHash -LiteralPath $partPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actualSha -eq $expectedSha) { break }
+        if ($attempts -ge 1) {
+            throw '下载文件 SHA256 校验失败，已中止更新。'
+        }
+        Write-Host 'SHA256 校验失败：删除不完整文件后重新完整下载。'
+        Remove-Item -LiteralPath $partPath -Force -ErrorAction SilentlyContinue
+        $attempts++
+    }
+    Move-Item -LiteralPath $partPath -Destination $zipPath -Force
 
     if (Test-Path -LiteralPath $staging) {
         Remove-Item -LiteralPath $staging -Recurse -Force
