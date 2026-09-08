@@ -647,7 +647,10 @@ class RealtimeGameEffectSettingsGate(CustomAction):
         options = RealtimeProfileStore(
             PROJECT_ROOT / "profiles"
         ).runtime_options()
-        apply_changes = bool(options["game_effect_settings_enabled"])
+        # 校准任务强制确认游戏内演出特效（item 4）：即使全局“跳过特效”
+        # 已勾选，只要本次调用显式 force，就照常打开游戏设置页确认/修正。
+        force_confirm = bool(params.get("force", False))
+        apply_changes = force_confirm or bool(options["game_effect_settings_enabled"])
         expected_assist = bool(options["judgement_assist_effect"])
         expected_note_skin = int(options["note_skin_type"])
         expected_tap = int(options["tap_effect"])

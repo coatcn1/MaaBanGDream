@@ -39,7 +39,11 @@ from .life_monitor import LifeDetector
 from .live_visual_gate import MODE_TOGGLE_POINT, live_performance_mode_is_off
 from .performance_settings_action import RealtimePerformanceSettingsGate
 from .profile_play_action import RealtimeProfilePlay
-from .profile_store import EnvironmentSignature, RealtimeProfileStore
+from .profile_store import (
+    EnvironmentSignature,
+    RealtimeProfileStore,
+    engine_from_native_flag,
+)
 from .rehearsal_action import frame_resolution
 from .native_prearm import discard_prearmed_backend
 from .cooperative_network import GameNetworkGate
@@ -144,6 +148,10 @@ class MemberExited(RuntimeError):
     pass
 
 
+class JumpOutUnavailable(RuntimeError):
+    """生命归零后无法自动断网跳车，应结束任务让用户手动处理。"""
+
+
 def configure_cooperative_settings(params: dict[str, object]) -> dict[str, object]:
     with _SETTINGS_LOCK:
         candidate = (
@@ -201,6 +209,9 @@ def cooperative_profile_preflight(context: Context, difficulty: str) -> str | No
         bool(visual.judgement_assist_effect)
         if visual is not None
         else bool(options["judgement_assist_effect"]),
+        engine_from_native_flag(
+            options.get("native_realtime_enabled", False)
+        ),
     )
     try:
         store.resolve_latest_for_environment(
@@ -481,30 +492,39 @@ class CooperativeLiveFlow:
         return image
 
     def close_sss_guide(self) -> None:
+        # 调用前 select_normal_room 已确认传说卡居中选中；一次性 SSS
+        # 引导若存在会立即出现。没有引导关闭按钮说明本账号早已关过，
+        # 直接返回，不再按固定 8 帧空等（实测每局浪费约 8 秒）。
         for attempt in range(8):
             image = self.capture()
             if self.visible(image, "sss_guide_close"):
                 self.click((980, 648))
                 time.sleep(0.7)
                 return
-            # Once the carousel itself is readable for several settled frames,
-            # this account has already dismissed the one-time guide.
-            if attempt >= 5 and classify_room_tier(image) == "legend":
+            if classify_room_tier(image) == "legend":
                 return
             time.sleep(0.2)
 
     def select_normal_room(self) -> None:
+        started = time.monotonic()
         image = self.ensure_room_page()
         target = str(self.settings["room_tier"])
         if target not in ROOM_TIER_INDEX:
             raise ValueError(f"不支持的协力房间档位：{target}")
         actual = classify_room_tier(image)
+        print(
+            "CooperativeLive select_room reached_selection "
+            f"target={target} actual={actual or 'unknown'} "
+            f"elapsed={time.monotonic() - started:.2f}s",
+            flush=True,
+        )
 
         # Never reset the carousel to Free before selecting another room.
         # Free and Legend are the two endpoints, so swipe straight toward that
         # endpoint.  If the game snaps only one card per gesture, repeat in the
         # same direction and re-read the centre card; never traverse the wrong
         # way first.  Middle tiers use the current classified index directly.
+        swipes = 0
         for _ in range(4):
             if actual == target:
                 break
@@ -529,6 +549,7 @@ class CooperativeLiveFlow:
                 else:
                     start, end, duration = (1050, 360), (250, 360), 500
             _maa_swipe(self.context, start, end, duration)
+            swipes += 1
             time.sleep(0.45)
             image = self.capture()
             actual = classify_room_tier(image)
@@ -539,9 +560,20 @@ class CooperativeLiveFlow:
             )
         if target == "legend":
             self.close_sss_guide()
+        print(
+            "CooperativeLive select_room ready_to_click "
+            f"target={target} swipes={swipes} "
+            f"elapsed={time.monotonic() - started:.2f}s",
+            flush=True,
+        )
         self.click((1060, 650))
         self.verify_room_entry(
             "点击所选协力房间后仍停留在房间选择页，未开始匹配"
+        )
+        print(
+            "CooperativeLive select_room room_entry_confirmed "
+            f"elapsed={time.monotonic() - started:.2f}s",
+            flush=True,
         )
 
     def verify_room_entry(self, failure_reason: str) -> None:
@@ -818,10 +850,13 @@ class CooperativeLiveFlow:
         )
         run = current_live_run()
         if run is not None and bool(run.disconnect_jump_requested):
-            # 生命归零跳车：Play 已释放触点并返回，这里执行断网跳车流程；
-            # 按“完成本局”返回，由外层继续回房间/主页导航。
-            self.disconnect_jump_out()
-            return True
+            # 生命归零：不再自动断网跳车（门禁/弹窗在不同设备上不可靠）。
+            # 回主页 → 切回游戏 → 直接结束任务，由用户手动断网跳车。
+            self.controller.post_click_key(3).wait()
+            time.sleep(0.6)
+            self.controller.post_start_app(GAME_PACKAGE).wait()
+            time.sleep(0.8)
+            raise JumpOutUnavailable("生命归零，请手动断网跳车后重试")
         if not success:
             return False
         return True
@@ -853,6 +888,17 @@ class CooperativeLiveFlow:
             return state
         if self.pipeline_box(image, "CooperativeHomeMarker") is not None:
             return "home"
+        # 主页“要退出游戏吗”确认框：点“取消”并像剧情页一样跳过本帧
+        # 的返回键，否则弹窗与返回键来回切换，结算导航卡满超时。
+        quit_box = self.pipeline_box(image, "QuitConfirmCancel")
+        if quit_box is not None:
+            self.click(
+                (
+                    int(quit_box.x + quit_box.w // 2),
+                    int(quit_box.y + quit_box.h // 2),
+                )
+            )
+            return "story"
         if handle_story_page(
             image, recognise=self.pipeline_box, click=self.click,
             stopping=self.stopped,
@@ -894,6 +940,18 @@ class CooperativeLiveFlow:
                     flush=True,
                 )
                 return
+
+            quit_box = self.pipeline_box(image, "QuitConfirmCancel")
+            if quit_box is not None:
+                # 弹窗会挡住主页“演出”按钮；点取消后再重试导航。
+                self.click(
+                    (
+                        int(quit_box.x + quit_box.w // 2),
+                        int(quit_box.y + quit_box.h // 2),
+                    )
+                )
+                time.sleep(0.5)
+                continue
 
             close_box = self.pipeline_box(image, "CooperativeNavigationClose")
             if close_box is not None:
@@ -1180,6 +1238,14 @@ class CooperativeLiveFlow:
                 reconnects = next_reconnects
                 reuse_room = False
                 continue
+            except JumpOutUnavailable as exc:
+                # 无法自动断网跳车或连续两局跳车：结束任务，交用户手动处理。
+                record_failure_reason(str(exc))
+                print(
+                    f"[任务][协力演出][流程][ERROR] {exc}",
+                    flush=True,
+                )
+                return False
             except Exception as exc:
                 if play_failures >= retry_count:
                     raise

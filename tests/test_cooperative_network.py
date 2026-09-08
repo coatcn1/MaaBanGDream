@@ -67,6 +67,19 @@ def test_resolve_game_uid_returns_none_when_missing():
     assert resolve_game_uid(shell) is None
 
 
+def test_resolve_game_uid_falls_back_to_proc_status_when_dumpsys_fails():
+    def shell(args):
+        if args[0] == "dumpsys":
+            return (127, "dumpsys failed")
+        if args[0] == "pidof":
+            return (0, "6757 6931")
+        if args[0] == "cat":
+            return (0, "Uid:\t10052\t10052\t10052\t10052\nGid:\t10052\n")
+        return (0, "")
+
+    assert resolve_game_uid(shell) == 10052
+
+
 def test_gate_blocks_and_restores_game_traffic():
     shell, calls, rules = _fake_shell(uid=10123)
     gate = GameNetworkGate(shell)

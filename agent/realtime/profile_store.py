@@ -19,6 +19,7 @@ class EnvironmentSignature:
     note_skin_type: int = 1
     tap_effect: int = 1
     judgement_assist_effect: bool = True
+    engine: str = "legacy"
 
     @classmethod
     def from_mapping(cls, value: dict[str, Any]) -> "EnvironmentSignature":
@@ -29,6 +30,7 @@ class EnvironmentSignature:
             judgement_assist_effect = value.get(
                 "judgement_assist_effect", True
             )
+            engine = value.get("engine", "legacy")
             if isinstance(note_skin_type, bool) or isinstance(tap_effect, bool):
                 raise TypeError("visual setting numbers cannot be boolean")
             if (
@@ -45,6 +47,7 @@ class EnvironmentSignature:
                 note_skin_type=int(note_skin_type),
                 tap_effect=int(tap_effect),
                 judgement_assist_effect=judgement_assist_effect,
+                engine=engine,
             )
         except (KeyError, IndexError, TypeError, ValueError) as exc:
             raise ValueError(f"环境签名不完整: {exc}") from exc
@@ -77,11 +80,18 @@ class EnvironmentSignature:
             raise ValueError("tap_effect 必须是 1..5 的整数")
         if not isinstance(self.judgement_assist_effect, bool):
             raise ValueError("judgement_assist_effect 必须是布尔值")
+        if self.engine not in {"native", "legacy"}:
+            raise ValueError("engine 必须是 native 或 legacy")
 
     def to_mapping(self) -> dict[str, Any]:
         data = asdict(self)
         data["resolution"] = list(self.resolution)
         return data
+
+
+def engine_from_native_flag(native_realtime_enabled: object) -> str:
+    """把运行时 native_realtime_enabled 布尔选项映射为环境签名引擎名。"""
+    return "native" if bool(native_realtime_enabled) else "legacy"
 
 
 @dataclass(frozen=True)
@@ -396,6 +406,7 @@ class RealtimeProfileStore:
             and saved.game_fps == current.game_fps
             and saved.render_quality == current.render_quality
             and saved.note_speed == current.note_speed
+            and saved.engine == current.engine
         )
 
     def resolve_for_visual_evaluation(
@@ -504,6 +515,7 @@ class RealtimeProfileStore:
             and saved.dpi == current.dpi
             and saved.game_fps == current.game_fps
             and saved.render_quality == current.render_quality
+            and saved.engine == current.engine
         )
 
     def resolve_latest_for_visual_evaluation_environment(
@@ -594,6 +606,8 @@ class RealtimeProfileStore:
                 f"判定辅助 {saved.judgement_assist_effect} ≠ "
                 f"{current.judgement_assist_effect}"
             )
+        if saved.engine != current.engine:
+            mismatches.append(f"引擎 {saved.engine} ≠ {current.engine}")
         return mismatches
 
     def resolve_latest_for_environment(

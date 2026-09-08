@@ -43,6 +43,7 @@ class RealtimePlanner:
         chart_timeline: ChartTimeline | None = None,
         chart_prediction: bool = False,
         chart_predict_presses: bool = False,
+        chart_prelude_window_s: float = 12.0,
     ):
         self._config = PlannerConfig(
             judgement_y=float(judgement_y),
@@ -68,6 +69,7 @@ class RealtimePlanner:
                 judgement_y=float(judgement_y),
                 predict_presses=chart_predict_presses,
                 press_bias_ms=timing_offset_ms,
+                calibration_early_window_s=chart_prelude_window_s,
             )
             if chart_timeline is not None and chart_prediction
             else None
@@ -364,6 +366,20 @@ class RealtimePlanner:
         return (
             self._chart_predictor.disable_reason
             if self._chart_predictor is not None else None
+        )
+
+    @property
+    def chart_matched_crossing_samples(self) -> int:
+        return (
+            self._chart_predictor._matched_crossing_samples
+            if self._chart_predictor is not None else 0
+        )
+
+    @property
+    def chart_unmatched_crossing_samples(self) -> int:
+        return (
+            self._chart_predictor._unmatched_crossing_samples
+            if self._chart_predictor is not None else 0
         )
 
     @property

@@ -141,6 +141,7 @@ def replay(
     chart: ChartTimeline | None = None,
     chart_prediction: bool = False,
     chart_predict_presses: bool = False,
+    chart_prelude_window_s: float = 12.0,
 ) -> dict[str, object]:
     planner = RealtimePlanner(
         judgement_y=565,
@@ -150,6 +151,7 @@ def replay(
         chart_timeline=chart,
         chart_prediction=chart_prediction,
         chart_predict_presses=chart_predict_presses,
+        chart_prelude_window_s=chart_prelude_window_s,
     )
     recorded: list[TouchAction] = []
     replayed: list[TouchAction] = []
@@ -208,6 +210,10 @@ def replay(
             "song_offset_ms": planner.chart_song_offset_ms,
             "disabled_for_run": planner.chart_disabled_for_run,
             "disable_reason": planner.chart_disable_reason,
+            "matched_crossing_samples": planner.chart_matched_crossing_samples,
+            "unmatched_crossing_samples": (
+                planner.chart_unmatched_crossing_samples
+            ),
         }
         if chart_prediction else None
     )
@@ -372,6 +378,12 @@ def main() -> None:
         help="Also predict imminent tap presses (default: tail releases only)",
     )
     parser.add_argument(
+        "--chart-prelude-window",
+        type=float,
+        default=12.0,
+        help="Calibration early window in seconds (default: 12.0)",
+    )
+    parser.add_argument(
         "--inject-gap-ms",
         type=int,
         default=0,
@@ -433,6 +445,7 @@ def main() -> None:
                 chart=chart,
                 chart_prediction=args.chart_prediction,
                 chart_predict_presses=args.chart_predict_presses,
+                chart_prelude_window_s=args.chart_prelude_window,
             )
             times.append(time.perf_counter() - started)
         print(json.dumps({
@@ -454,6 +467,7 @@ def main() -> None:
         chart=chart,
         chart_prediction=args.chart_prediction,
         chart_predict_presses=args.chart_predict_presses,
+        chart_prelude_window_s=args.chart_prelude_window,
     )
     if args.dump_actions is not None:
         payload = {

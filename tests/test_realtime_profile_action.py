@@ -41,4 +41,5 @@ def test_profile_draft_is_never_accepted_automatically():
         "note_skin_type": 1,
         "tap_effect": 1,
         "judgement_assist_effect": True,
+        "engine": "legacy",
     }

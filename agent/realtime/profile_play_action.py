@@ -46,6 +46,7 @@ from .profile_store import (
     EnvironmentSignature,
     RealtimeProfileStore,
     RuntimeSettings,
+    engine_from_native_flag,
 )
 from .rehearsal_action import frame_resolution
 from .result_navigation import (
@@ -66,6 +67,10 @@ from .run_reporting import (
 from .timing_feedback import AdaptiveTimingController, TimingFeedbackDetector
 from .touch_planner import RealtimePlanner, sliding_holds_enabled
 from .runtime_options import debug_enabled, diagnostic_trace_enabled
+from .song_title_ocr import (
+    FINAL_COVER_TITLE_ROI,
+    recognize_song_title,
+)
 from .performance_settings_action import verified_settings
 from .chart_repository import ChartResolution, LocalChartRepository
 from .native_prearm import (
@@ -92,6 +97,13 @@ ACTIVITY_POINTS_TEMPLATE = (
 ACHIEVEMENT_LIST_CLOSE_TEMPLATE = (
     PROJECT_ROOT / "resource" / "image" / "common_close.png"
 )
+QUIT_CONFIRM_CANCEL_TEMPLATE = (
+    PROJECT_ROOT / "resource" / "image" / "quit_confirm_cancel.png"
+)
+# “要退出游戏吗”确认框里“取消”按钮所在的归一化区域（对应 pipeline 的
+# QuitConfirmCancel ROI [360,510,560,140]），用于在主页结算导航时点取消
+# 而不是继续按返回键来回切换。
+QUIT_CONFIRM_CANCEL_REGION = (0.28, 0.71, 0.72, 0.90)
 # Kept as a compatibility alias for callers/tests that override this template.
 RESULT_NEXT_TEMPLATE = RESULT_RANK_NEXT_TEMPLATE
 REWARD_TEMPLATE_THRESHOLD = 0.85
@@ -306,6 +318,11 @@ def wait_for_final_cover(
         difficulty=difficulty,
         observed_level=live_run.song_level,
         observed_title=live_run.song_title,
+        observed_title_confidence=(
+            float(getattr(live_run, "song_title_confidence", None))
+            if getattr(live_run, "song_title_confidence", None) is not None
+            else 0.0
+        ),
         selection=selection,
         repository=(
             repository
@@ -355,6 +372,23 @@ def wait_for_final_cover(
             if not black_seen and poll_interval_seconds > 0:
                 time.sleep(float(poll_interval_seconds))
             continue
+        if (
+            not _frame_is_black(image)
+            and repository is not None
+            and resolver.observed_title_confidence < 0.9
+        ):
+            # 最终歌曲信息页封面下方还有一行标题，字体比协力准备页清晰；
+            # 用它在两三秒的展示窗口内刷新准备页可能读乱的标题，辅助
+            # 谱面身份解析（拿到高置信度读数后本局不再重复 OCR）。
+            title_reading = recognize_song_title(
+                image,
+                roi=FINAL_COVER_TITLE_ROI,
+            )
+            if title_reading is not None:
+                resolver.refresh_observed_title(
+                    title_reading.text,
+                    title_reading.confidence,
+                )
         resolution = resolver.observe(image)
         playfield_streak = (
             playfield_streak + 1 if playfield_detector(image) else 0
@@ -786,6 +820,29 @@ def _template_click_point(
     return best_point
 
 
+def _dismiss_quit_confirm(
+    image,
+    controller,
+    *,
+    stopping,
+    before_input=lambda: None,
+) -> bool:
+    """主页“要退出游戏吗”确认框：点“取消”而非按返回键，避免来回切换。"""
+    point = _template_click_point(
+        image,
+        (QUIT_CONFIRM_CANCEL_TEMPLATE,),
+        0.9,
+        center_region=QUIT_CONFIRM_CANCEL_REGION,
+    )
+    if point is None:
+        return False
+    if stopping():
+        return True
+    before_input()
+    controller.post_click(*point).wait()
+    return True
+
+
 def _activity_points_confirm_point(
     image,
     template_path,
@@ -1011,6 +1068,28 @@ def collect_result(
             image = controller.post_screencap().wait().get()
         last_image = image
         now = clock()
+        if _dismiss_quit_confirm(
+            image,
+            controller,
+            stopping=stopping,
+            before_input=before_input,
+        ):
+            page_state = "quit-confirm"
+            candidate = None
+            print("RealtimeResult state=quit-confirm action=cancel", flush=True)
+            if not _wait_until(
+                min(deadline, now + medium_interval_seconds),
+                stopping,
+                clock=clock,
+                sleeper=sleeper,
+            ):
+                return ResultCollectionOutcome(
+                    ResultCollectionStatus.STOPPED,
+                    elapsed_seconds=clock() - started_at,
+                    page_state=page_state,
+                    reason="user stopped result collection",
+                )
+            continue
         details_marker_visible = (
             judgement_details_template is not None
             and _template_click_point(
@@ -1421,6 +1500,9 @@ def resolve_profile_for_settings_gate(
         note_skin_type,
         tap_effect,
         judgement_assist_effect,
+        engine_from_native_flag(
+            store.runtime_options().get("native_realtime_enabled", False)
+        ),
     )
     resolver = (
         store.resolve_latest_for_visual_evaluation_environment
@@ -1461,6 +1543,9 @@ def resolve_profile(context: Context, params: dict, *, controller=None):
         note_skin_type,
         tap_effect,
         judgement_assist_effect,
+        engine_from_native_flag(
+            store.runtime_options().get("native_realtime_enabled", False)
+        ),
     )
     visual_evaluation = bool(params.get("visual_evaluation", False))
     if verified is not None and verified.profile:
@@ -2170,6 +2255,13 @@ class RealtimeProfilePlay(CustomAction):
                     chart_predict_presses=(
                         chart_predict_presses
                         and chart_prediction_enabled
+                    ),
+                    # 协力局演奏场出现后还要等“其他成员准备中”结束，歌曲
+                    # 可能晚十几秒才开始；放宽校准候选窗的下限，否则真实
+                    # 相位被排除后会在周期性段落锁到假相位。单人/挑战等
+                    # 模式演奏场与歌曲几乎同时开始，保持默认 12 秒。
+                    chart_prelude_window_s=(
+                        60.0 if run_mode == "cooperative" else 12.0
                     ),
                 ),
                 touch,

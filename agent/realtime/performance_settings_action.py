@@ -23,7 +23,11 @@ except ImportError:
     from task_reporting import record_failure_reason
 
 from .profile_action import PROJECT_ROOT
-from .profile_store import EnvironmentSignature, RealtimeProfileStore
+from .profile_store import (
+    EnvironmentSignature,
+    RealtimeProfileStore,
+    engine_from_native_flag,
+)
 from .rehearsal_action import frame_resolution
 from .live_session import current_live_run
 from .native_prearm import (
@@ -272,6 +276,9 @@ def _expected_speed(context: Context, params: dict, image) -> tuple[float, str |
             note_skin_type,
             tap_effect,
             judgement_assist_effect,
+            engine_from_native_flag(
+                runtime_options.get("native_realtime_enabled", False)
+            ),
         )
         resolver = (
             store.resolve_latest_for_visual_evaluation_environment

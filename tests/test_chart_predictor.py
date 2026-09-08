@@ -178,6 +178,85 @@ def test_upstream_tracks_on_only_one_lane_do_not_take_chart_control():
     assert not predictor.calibrated
 
 
+def test_cooperative_prelude_beyond_default_window_can_lock_with_wider_window():
+    # 协力局演奏场出现后，歌曲可能还要等十几秒“其他成员准备中”才开。
+    # 默认 12 秒候选窗会把真实相位排除在外；放宽后同一批轨迹必须锁到
+    # 真实相位而不是假相位。
+    judgements = [
+        ChartJudgement(time_s, lane, "tap", index)
+        for index, (time_s, lane) in enumerate([
+            (1.0, 0), (1.5, 1), (2.0, 2), (2.5, 3),
+            (3.0, 4), (3.5, 5), (4.0, 6), (4.5, 0),
+        ])
+    ]
+    chart = ChartTimeline(judgements, bpm=120.0)
+    prelude = 13.44
+
+    def feed(predictor: ChartPredictor) -> None:
+        predictor._anchor_time = 100.0
+        for index, judgement in enumerate(judgements, 1):
+            now = 100.0 + judgement.time_s + prelude - 0.5
+            predictor.observe_tracks([
+                _phase_track(index, judgement.lane, now),
+            ], now)
+
+    narrow = ChartPredictor(
+        chart,
+        min_calibration_samples=6,
+        calibration_early_window_s=12.0,
+    )
+    feed(narrow)
+    assert not narrow.calibrated
+
+    wide = ChartPredictor(
+        chart,
+        min_calibration_samples=6,
+        calibration_early_window_s=60.0,
+    )
+    feed(wide)
+    assert wide.calibrated
+    assert abs(wide.song_offset_s + prelude) <= 0.020
+
+
+def test_large_unverifiable_phase_disables_chart_input():
+    # 整段相位锁错（例如被周期性假相位接管）时，可信投影匹配不到同 lane
+    # 判定；滑动窗口内不匹配比例过高必须放弃 chart 输入，而不是继续盲压。
+    chart = ChartTimeline([
+        ChartJudgement(1.0 + index * 0.5, index % 7, "tap", index)
+        for index in range(30)
+    ], bpm=120.0)
+    predictor = ChartPredictor(chart)
+    predictor.calibrated = True
+    predictor._anchor_time = 100.0
+    # 投影落在相邻音符之间：最近的同 lane 判定相隔 3.5 秒，±0.35s 内必然
+    # 没有判定。
+    for index in range(24):
+        now = 100.0 + 1.0 + index * 0.5 + 0.45 - 0.45
+        predictor.observe_tracks([
+            _phase_track(index + 1, index % 7, now, crossing_in=0.45),
+        ], now)
+
+    assert predictor.disabled_for_run
+    assert "unverifiable" in (predictor.disable_reason or "")
+
+
+def test_matched_phase_does_not_disable_chart_input():
+    chart = ChartTimeline([
+        ChartJudgement(1.0 + index * 0.5, index % 7, "tap", index)
+        for index in range(30)
+    ], bpm=120.0)
+    predictor = ChartPredictor(chart)
+    predictor.calibrated = True
+    predictor._anchor_time = 100.0
+    for index in range(24):
+        now = 100.0 + 1.0 + index * 0.5 - 0.45
+        predictor.observe_tracks([
+            _phase_track(index + 1, index % 7, now, crossing_in=0.45),
+        ], now)
+
+    assert not predictor.disabled_for_run
+
+
 def test_prelock_phase_evidence_rescues_matching_below_line_fragment():
     """Exact-chart evidence may confirm a fragment without taking control.
 

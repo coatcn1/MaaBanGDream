@@ -17,6 +17,7 @@ from agent.realtime.cooperative_action import (
     CooperativeLiveFinalize,
     CooperativeLiveAction,
     CooperativeLiveFlow,
+    JumpOutUnavailable,
     MemberExited,
     classify_room_tier,
     configure_cooperative_settings,
@@ -204,49 +205,57 @@ def test_disconnect_jump_out_restores_network_when_popup_times_out(
     assert gates[0].restored == 1
 
 
-def test_play_runs_disconnect_jump_when_live_run_requests_it(monkeypatch):
+class _FakeJob:
+    def wait(self):
+        return self
+
+
+def _make_play_flow(monkeypatch, *, jump_requested):
     class Play:
         def run(self, context, params):
-            # 引擎已因跳车提前返回；这里返回 False 也不应走到失败分支。
             return False
 
     monkeypatch.setattr(cooperative_action, "RealtimeProfilePlay", Play)
     monkeypatch.setattr(
         cooperative_action,
         "current_live_run",
-        lambda: SimpleNamespace(disconnect_jump_requested=True),
+        lambda: SimpleNamespace(disconnect_jump_requested=jump_requested),
     )
     flow = object.__new__(CooperativeLiveFlow)
     flow.settings = dict(DEFAULT_SETTINGS)
-    flow.context = object()
     flow.action_argv = lambda params: params
-    jumps = []
-    flow.disconnect_jump_out = lambda: jumps.append(True)
+    keys = []
+    started = []
 
-    assert flow.play() is True
-    assert jumps == [True]
+    class Controller:
+        def post_click_key(self, key):
+            keys.append(key)
+            return _FakeJob()
+
+        def post_start_app(self, package):
+            started.append(package)
+            return _FakeJob()
+
+    flow.context = SimpleNamespace(
+        tasker=SimpleNamespace(controller=Controller())
+    )
+    return flow, keys, started
+
+
+def test_play_ends_task_when_live_run_requests_jump(monkeypatch):
+    flow, keys, started = _make_play_flow(monkeypatch, jump_requested=True)
+
+    with pytest.raises(JumpOutUnavailable):
+        flow.play()
+    # 生命归零：先回主页（HOME）再切回游戏，然后直接结束任务。
+    assert keys == [3]
+    assert started == [cooperative_action.GAME_PACKAGE]
 
 
 def test_play_skips_jump_without_live_run_signal(monkeypatch):
-    class Play:
-        def run(self, context, params):
-            return False
-
-    monkeypatch.setattr(cooperative_action, "RealtimeProfilePlay", Play)
-    monkeypatch.setattr(
-        cooperative_action,
-        "current_live_run",
-        lambda: SimpleNamespace(disconnect_jump_requested=False),
-    )
-    flow = object.__new__(CooperativeLiveFlow)
-    flow.settings = dict(DEFAULT_SETTINGS)
-    flow.context = object()
-    flow.action_argv = lambda params: params
-    jumps = []
-    flow.disconnect_jump_out = lambda: jumps.append(True)
+    flow, _, _ = _make_play_flow(monkeypatch, jump_requested=False)
 
     assert flow.play() is False
-    assert jumps == []
 
 
 def _fake_member_exit_watch_flow(frame, timeout):

@@ -6,9 +6,17 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .realtime.profile_store import EnvironmentSignature, RealtimeProfileStore
+    from .realtime.profile_store import (
+        EnvironmentSignature,
+        RealtimeProfileStore,
+        engine_from_native_flag,
+    )
 except ImportError:
-    from realtime.profile_store import EnvironmentSignature, RealtimeProfileStore
+    from realtime.profile_store import (
+        EnvironmentSignature,
+        RealtimeProfileStore,
+        engine_from_native_flag,
+    )
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -68,6 +76,15 @@ def handle_request(request: dict[str, Any], *, root: str | Path = PROJECT_ROOT /
         effective_environment.setdefault(
             "judgement_assist_effect",
             runtime_options["judgement_assist_effect"],
+        )
+        # 引擎是运行时选项（native_realtime_enabled）派生值，MFA 的静态
+        # 环境配置不含它；不补默认就会按 legacy 比较，导致 Native 校准
+        # 出的 Profile 在演出设置里永远显示“不匹配”。
+        effective_environment.setdefault(
+            "engine",
+            engine_from_native_flag(
+                runtime_options.get("native_realtime_enabled", False)
+            ),
         )
         signature = EnvironmentSignature.from_mapping(effective_environment)
     else:
