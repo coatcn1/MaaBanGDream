@@ -120,8 +120,10 @@ $tempRoot = Join-Path $env:TEMP "maabangdream-update-$latestVersion"
 $zipPath = Join-Path $tempRoot $assetName
 $partPath = "$zipPath.part"
 $staging = Join-Path $tempRoot 'staging'
+$stagingRoot = $staging
 
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+$success = $false
 try {
     Write-Host "读取 $assetName 的 SHA256 校验值 ..."
     $shaContent = (Invoke-WebRequest `
@@ -191,13 +193,18 @@ try {
         Copy-Item -LiteralPath $_.FullName -Destination $packageRoot -Recurse -Force
     }
     Write-Host "更新完成：$currentVersion -> $latestVersion"
+    $success = $true
 
     $launcher = Join-Path $packageRoot '启动 MaaBanGDream.cmd'
     if ($Auto -and (Test-Path -LiteralPath $launcher)) {
         Start-Process -FilePath $launcher
     }
 } finally {
-    if (Test-Path -LiteralPath $tempRoot) {
+    if (Test-Path -LiteralPath $stagingRoot) {
+        Remove-Item -LiteralPath $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if ($success -and (Test-Path -LiteralPath $tempRoot)) {
         Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
+    # 失败时保留 .part：下次运行从断点继续下载，而不是从头再来。
 }
