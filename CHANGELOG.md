@@ -18,6 +18,7 @@
 
 - `Little Busters!`（bestdori 46，Expert 25）最终封面实测 pHash 稳定在 10 bit：`LocalChartRepository.resolve` 已按“14 bit + 等级硬约束”正确解析出谱面，但 `FinalCoverGate` 仍用 8 bit 严格复核同一张封面，把刚解析出的谱面重新拒绝，最终 `degraded-visual-legacy`，Native 拿不到谱面、视觉 Legacy 打空血（2026-09-08 14:39 录像）。
 - 封面门控在与等级硬约束一致时改用与仓库相同的 14 bit 宽阈值，不再出现“仓库宽阈值解析、门控 8 bit 复核否决”的不一致；离线用该局真实封面帧验证：`c7b9cb102fcfb04a`（距 46 的 `c7bac9172dceb062` 10 bit）现确认 Little Busters! 并选中 `bestdori/46/expert.json`。
+- 开演前最终歌曲信息页封面下方的标题行（ROI `(480,485,318,70)`，实测 Little Busters! 置信度 0.93+）接入谱面解析：协力准备页标题常读乱，最终页标题在延迟解析路径里刷新 resolver 的标题证据，用于指纹歧义时按“标题 + 等级”唯一化。只有该读数能在当前难度等级下唯一匹配本地曲目时才替换，加载页的“目标得分”等无关文字一律忽略，不覆盖准备页已可靠的标题。
 
 ## 2026-09-08（断网跳车：UID 解析回退 + 失败后清理回主页）
 

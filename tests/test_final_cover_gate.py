@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from types import SimpleNamespace
 
 import cv2
@@ -7,13 +9,17 @@ import numpy as np
 import pytest
 
 from agent.realtime import profile_play_action
-from agent.realtime.chart_repository import ChartResolution
+from agent.realtime.chart_repository import ChartResolution, LocalChartRepository
 from agent.realtime.final_cover import FinalCoverGate, FinalCoverResolver
 from agent.realtime.profile_play_action import wait_for_final_cover
 from agent.realtime.song_identity import (
     FINAL_SONG_JACKET_ROI,
     detect_full_badge,
     fingerprint_jacket,
+)
+from agent.realtime.song_title_ocr import (
+    FINAL_COVER_TITLE_ROI,
+    TitleReading,
 )
 
 
@@ -371,6 +377,158 @@ def test_wait_for_final_cover_uses_the_controller_frame_stream():
     assert outcome.status == "confirmed"
     assert outcome.resolution.confirmation.bestdori_song_id == 306
     assert outcome.resolution.selection.bestdori_song_id == 306
+
+
+def test_refresh_observed_title_only_upgrades_validated_confidence(tmp_path):
+    chart = [
+        {"type": "BPM", "beat": 0, "bpm": 120},
+        {"type": "Single", "beat": 1, "lane": 2},
+    ]
+    digest = hashlib.sha256(
+        json.dumps(
+            chart,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    (tmp_path / "bestdori" / "50").mkdir(parents=True)
+    (tmp_path / "bestdori" / "50" / "expert.json").write_text(
+        json.dumps({
+            "schema_version": 1,
+            "source": {"provider": "bestdori", "chart_sha256": digest},
+            "song": {"bestdori_id": 50, "titles": ["FIRE BIRD"]},
+            "difficulty": {"name": "expert", "level": 28},
+            "chart": chart,
+        }),
+        encoding="utf-8",
+    )
+    (tmp_path / "manifest.json").write_text(json.dumps({
+        "schema_version": 1,
+        "songs": [{
+            "bestdori_song_id": 50,
+            "display_title": "FIRE BIRD",
+            "titles": ["FIRE BIRD"],
+            "fingerprints": ["song-jacket-phash-v2-0123456789abcdef"],
+            "difficulties": {
+                "expert": {
+                    "path": "bestdori/50/expert.json",
+                    "level": 28,
+                    "chart_sha256": digest,
+                }
+            },
+        }],
+    }), encoding="utf-8")
+    resolver = FinalCoverResolver(
+        difficulty="Expert",
+        observed_level=28,
+        observed_title="E",
+        observed_title_confidence=0.3,
+        repository=LocalChartRepository(tmp_path),
+    )
+
+    assert resolver.observed_title == "E"
+    assert resolver.refresh_observed_title("FIRE BIRD", 0.9) is True
+    assert resolver.observed_title == "FIRE BIRD"
+    # 相同文本或更低置信度都不覆盖；无法唯一匹配曲目的垃圾读数也忽略。
+    assert resolver.refresh_observed_title("FIRE BIRD", 0.99) is False
+    assert resolver.refresh_observed_title("OTHER", 0.5) is False
+    assert resolver.refresh_observed_title("目标得分", 0.99) is False
+    assert resolver.observed_title == "FIRE BIRD"
+
+
+def test_wait_for_final_cover_refreshes_title_from_final_page(
+    monkeypatch,
+    tmp_path,
+):
+    # 仓库里两首歌共享同一封面指纹和同一等级，只有标题能消歧；准备页
+    # 标题是乱码，最终封面页 OCR 出正确标题后必须重新解析并确认。
+    cover, song_id = final_cover_frame()
+    chart = [
+        {"type": "BPM", "beat": 0, "bpm": 120},
+        {"type": "Single", "beat": 1, "lane": 2},
+    ]
+    digest = hashlib.sha256(
+        json.dumps(
+            chart,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    songs = []
+    for bestdori_id, title in ((101, "Alpha Song"), (102, "Beta Song")):
+        (tmp_path / "bestdori" / str(bestdori_id)).mkdir(parents=True)
+        (tmp_path / "bestdori" / str(bestdori_id) / "expert.json").write_text(
+            json.dumps({
+                "schema_version": 1,
+                "source": {"provider": "bestdori", "chart_sha256": digest},
+                "song": {"bestdori_id": bestdori_id, "titles": [title]},
+                "difficulty": {"name": "expert", "level": 20},
+                "chart": chart,
+            }),
+            encoding="utf-8",
+        )
+        songs.append({
+            "bestdori_song_id": bestdori_id,
+            "display_title": title,
+            "titles": [title],
+            "fingerprints": [song_id],
+            "difficulties": {
+                "expert": {
+                    "path": f"bestdori/{bestdori_id}/expert.json",
+                    "level": 20,
+                    "chart_sha256": digest,
+                }
+            },
+        })
+    (tmp_path / "manifest.json").write_text(json.dumps({
+        "schema_version": 1,
+        "songs": songs,
+    }), encoding="utf-8")
+    repository = LocalChartRepository(tmp_path)
+
+    class Job:
+        def wait(self):
+            return self
+
+        def get(self):
+            return cover
+
+    class Controller:
+        def post_screencap(self):
+            return Job()
+
+    def fake_recognize(image, roi=None):
+        calls.append(roi)
+        return TitleReading("Beta Song", 0.95)
+
+    calls = []
+    monkeypatch.setattr(
+        profile_play_action,
+        "recognize_song_title",
+        fake_recognize,
+    )
+
+    outcome = wait_for_final_cover(
+        Controller(),
+        SimpleNamespace(
+            song_level=20,
+            song_title="zzz",
+            song_title_confidence=0.1,
+        ),
+        None,
+        "Expert",
+        lambda: False,
+        repository=repository,
+        timeout_seconds=1,
+        poll_interval_seconds=0,
+    )
+
+    assert outcome.status == "confirmed"
+    assert outcome.resolution.confirmation.bestdori_song_id == 102
+    assert len(calls) == 1
+    assert calls[0] == FINAL_COVER_TITLE_ROI
 
 
 def test_wait_for_final_cover_matches_cover_after_black_transition():

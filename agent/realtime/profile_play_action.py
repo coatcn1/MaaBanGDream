@@ -67,6 +67,10 @@ from .run_reporting import (
 from .timing_feedback import AdaptiveTimingController, TimingFeedbackDetector
 from .touch_planner import RealtimePlanner, sliding_holds_enabled
 from .runtime_options import debug_enabled, diagnostic_trace_enabled
+from .song_title_ocr import (
+    FINAL_COVER_TITLE_ROI,
+    recognize_song_title,
+)
 from .performance_settings_action import verified_settings
 from .chart_repository import ChartResolution, LocalChartRepository
 from .native_prearm import (
@@ -314,6 +318,11 @@ def wait_for_final_cover(
         difficulty=difficulty,
         observed_level=live_run.song_level,
         observed_title=live_run.song_title,
+        observed_title_confidence=(
+            float(getattr(live_run, "song_title_confidence", None))
+            if getattr(live_run, "song_title_confidence", None) is not None
+            else 0.0
+        ),
         selection=selection,
         repository=(
             repository
@@ -363,6 +372,23 @@ def wait_for_final_cover(
             if not black_seen and poll_interval_seconds > 0:
                 time.sleep(float(poll_interval_seconds))
             continue
+        if (
+            not _frame_is_black(image)
+            and repository is not None
+            and resolver.observed_title_confidence < 0.9
+        ):
+            # 最终歌曲信息页封面下方还有一行标题，字体比协力准备页清晰；
+            # 用它在两三秒的展示窗口内刷新准备页可能读乱的标题，辅助
+            # 谱面身份解析（拿到高置信度读数后本局不再重复 OCR）。
+            title_reading = recognize_song_title(
+                image,
+                roi=FINAL_COVER_TITLE_ROI,
+            )
+            if title_reading is not None:
+                resolver.refresh_observed_title(
+                    title_reading.text,
+                    title_reading.confidence,
+                )
         resolution = resolver.observe(image)
         playfield_streak = (
             playfield_streak + 1 if playfield_detector(image) else 0

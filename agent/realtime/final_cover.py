@@ -168,6 +168,7 @@ class FinalCoverResolver:
         difficulty: str,
         observed_level: int | None,
         observed_title: str | None,
+        observed_title_confidence: float = 0.0,
         selection: Any | None = None,
         repository: LocalChartRepository | None = None,
     ) -> None:
@@ -180,6 +181,7 @@ class FinalCoverResolver:
         self.observed_title = (
             None if observed_title is None else str(observed_title).strip()
         )
+        self._observed_title_confidence = float(observed_title_confidence or 0.0)
         self.repository = repository
         self.gate = (
             FinalCoverGate(
@@ -196,6 +198,43 @@ class FinalCoverResolver:
         self._candidate_frames = 0
         # 退化诊断：每个新指纹只打一条日志，避免逐帧刷屏。
         self._logged_fingerprints: set[str] = set()
+
+    @property
+    def observed_title_confidence(self) -> float:
+        return self._observed_title_confidence
+
+    def refresh_observed_title(self, text: str, confidence: float) -> bool:
+        """用最终封面页自身的标题 OCR 刷新准备页标题。
+
+        协力房间准备页的标题行字体小且常被读乱；最终歌曲信息页封面下方
+        的标题字体更清晰。该刷新只用于“准备页没有可信谱面、开演前按封面
+        解析”的延迟路径（此时才有 repository）；准备页已经选定谱面的门控
+        路径保持准备页标题，避免被加载页文字覆盖。
+
+        协力的开演前加载还会经过“目标得分”等页面，同一 ROI 会读到与
+        歌曲无关的文字；只有该读数能在当前难度等级下唯一匹配本地曲目时
+        才替换，垃圾读数一律忽略，也不会覆盖准备页已经可靠的标题。
+        """
+        if (
+            self.repository is None
+            or not text
+            or float(confidence) <= self._observed_title_confidence
+        ):
+            return False
+        normalized = str(text).strip()
+        if not normalized or normalized == self.observed_title:
+            return False
+        probe = self.repository.resolve(
+            UNKNOWN_SONG_ID,
+            self.difficulty,
+            level=self.observed_level,
+            title=normalized,
+        )
+        if probe.selection is None:
+            return False
+        self.observed_title = normalized
+        self._observed_title_confidence = float(confidence)
+        return True
 
     def evidence_reason(self) -> str | None:
         if not self.difficulty:

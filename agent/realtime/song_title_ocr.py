@@ -22,6 +22,10 @@ CONFIG_PATH = MODEL_DIR / "inference.yml"
 # recognizer itself accepts any ROI so multiplayer can supply its own title
 # location without duplicating model or matching logic.
 SINGLE_LIVE_TITLE_ROI = (120, 260, 440, 90)
+# 开演前最终歌曲信息页里，封面下方浅灰长条内的标题文字。该页面在正式
+# 开演前只展示两三秒，且字体比协力房间准备页清晰，适合作为谱面身份
+# 解析的补充证据（Little Busters! 实测置信度 0.93+）。
+FINAL_COVER_TITLE_ROI = (480, 485, 318, 70)
 
 
 @dataclass(frozen=True, slots=True)
