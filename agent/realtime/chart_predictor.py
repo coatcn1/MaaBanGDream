@@ -18,9 +18,9 @@ stays disabled for the whole run (a different song is being played).
 from __future__ import annotations
 
 import statistics
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
-from .chart_timeline import ChartJudgement, ChartTimeline
+from .chart_timeline import ChartHoldPath, ChartJudgement, ChartTimeline
 from .note_detector import NoteKind, ObservedNote
 from .note_tracker import TrackedNote
 from .touch_planner.actions import ActionKind, TouchAction
@@ -70,6 +70,56 @@ PROVISIONAL_MAD_LIMIT_S = 0.08
 PROVISIONAL_CROSSING_WINDOW_S = 0.06
 PRELOCK_SEMANTIC_OFFSET_WINDOW_S = 0.06
 MIN_ADJACENT_ZIGZAG_TRANSITIONS = 3
+HOLD_ALIGNMENT_CHORD_WINDOW_S = 0.050
+HOLD_ALIGNMENT_HEAD_WINDOW_S = 0.090
+HOLD_ALIGNMENT_TRANSITION_WINDOW_S = 0.120
+HOLD_ALIGNMENT_OFFSET_CLUSTER_S = 0.080
+HOLD_ALIGNMENT_MIN_MATCHED_NODES = 4
+HOLD_ALIGNMENT_MIN_EVENT_GROUPS = 2
+HOLD_ALIGNMENT_MAX_RESIDUAL_MAD_S = 0.025
+HOLD_ALIGNMENT_MIN_CONFIDENCE = 0.85
+HOLD_ALIGNMENT_HEAD_REASONS = frozenset({
+    "crossing",
+    "rescue",
+    "paired-rescue",
+})
+
+
+@dataclass(frozen=True, slots=True)
+class _HoldHeadEvent:
+    event_id: int
+    time_s: float
+    contacts: tuple[tuple[int, int], ...]
+
+    @property
+    def lanes(self) -> tuple[int, ...]:
+        return tuple(sorted(lane for _contact, lane in self.contacts))
+
+
+@dataclass(frozen=True, slots=True)
+class _HoldTransitionEvent:
+    event_id: int
+    head_event_id: int
+    time_s: float
+    contact: int
+    from_lane: int
+    to_lane: int
+
+
+@dataclass(frozen=True, slots=True)
+class _HoldAlignmentSolution:
+    offset_s: float
+    residual_mad_s: float
+    confidence: float
+    matched_nodes: int
+    matched_event_ids: frozenset[int]
+    matched_note_indices: frozenset[int]
+    matched_head_events: int
+    matched_transition_contacts: int
+    source: str
+    head_matches: tuple[
+        tuple[_HoldHeadEvent, tuple[ChartHoldPath, ...]], ...
+    ]
 
 
 def _adjacent_zigzag_anchor(
@@ -177,6 +227,24 @@ class ChartPredictor:
         self._prelock_semantic_offset_s: float | None = None
         self._prelock_semantic_judgement_indices: set[int] = set()
         self._pending_opening_semantic_lock: dict | None = None
+        self._chart_hold_head_groups = self._build_chart_hold_head_groups()
+        self._chart_hold_groups_by_lanes: dict[
+            tuple[int, ...], list[tuple[int, tuple[ChartHoldPath, ...]]]
+        ] = {}
+        for index, group in enumerate(self._chart_hold_head_groups):
+            self._chart_hold_groups_by_lanes.setdefault(
+                self._chart_head_lanes(group), [],
+            ).append((index, group))
+        self._pending_hold_head_actions: list[TouchAction] = []
+        self._hold_head_events: list[_HoldHeadEvent] = []
+        self._hold_transition_events: list[_HoldTransitionEvent] = []
+        self._hold_contact_head_event: dict[int, int] = {}
+        self._hold_contact_lane: dict[int, int] = {}
+        self._next_hold_alignment_event_id = 1
+        self._pending_alignment_diagnostics: list[dict[str, object]] = []
+        self._last_alignment_candidate_signature: tuple[object, ...] | None = None
+        self._alignment_lock_source: str | None = None
+        self._pending_bootstrap_hold_actions: list[TouchAction] = []
 
     def reset(self) -> None:
         self.calibrated = False
@@ -218,12 +286,26 @@ class ChartPredictor:
         self._prelock_semantic_offset_s = None
         self._prelock_semantic_judgement_indices = set()
         self._pending_opening_semantic_lock = None
+        self._pending_hold_head_actions = []
+        self._hold_head_events = []
+        self._hold_transition_events = []
+        self._hold_contact_head_event = {}
+        self._hold_contact_lane = {}
+        self._next_hold_alignment_event_id = 1
+        self._pending_alignment_diagnostics = []
+        self._last_alignment_candidate_signature = None
+        self._alignment_lock_source = None
+        self._pending_bootstrap_hold_actions = []
 
     def recover_touch_state(self) -> None:
         """Forget chart contacts released outside the normal planner flow."""
         self.expected_hold_tail.clear()
         self._chart_tail_flick.clear()
         self._pending_tail_rescue.clear()
+        self._pending_hold_head_actions.clear()
+        self._hold_contact_head_event.clear()
+        self._hold_contact_lane.clear()
+        self._pending_bootstrap_hold_actions.clear()
 
     def _relative(self, engine_time: float) -> float:
         """Convert an absolute monotonic engine time to song-relative time."""
@@ -282,20 +364,394 @@ class ChartPredictor:
             self._mistimed_lanes[lane] = (engine_time, next_judgement.time_s)
         return False
 
-    def observe_visual_actions(self, actions: list[TouchAction]) -> None:
-        """Use trusted visual actions for initial lock and ongoing phase lock.
+    def _build_chart_hold_head_groups(
+        self,
+    ) -> tuple[tuple[ChartHoldPath, ...], ...]:
+        """按谱面时刻聚合可离散识别的 HOLD/Slide 头。"""
+        groups: list[list[ChartHoldPath]] = []
+        for path in sorted(
+            self.chart.hold_paths,
+            key=lambda item: (item.head.time_s, item.head.lane, item.note_index),
+        ):
+            lane = round(path.head.lane)
+            if path.head.hidden or abs(path.head.lane - lane) > 0.01:
+                continue
+            if (
+                not groups
+                or abs(groups[-1][0].head.time_s - path.head.time_s) > 0.001
+            ):
+                groups.append([path])
+            else:
+                groups[-1].append(path)
+        return tuple(tuple(group) for group in groups)
 
-        After calibration, repeated visual/chart disagreement disables chart
-        input for the rest of the song.  Small matched residuals adjust the
-        offset gradually, keeping device/capture drift in a closed loop.
-        """
-        if self.disabled_for_run:
+    def _finalize_pending_hold_head(self) -> bool:
+        if not self._pending_hold_head_actions:
+            return False
+        actions = sorted(
+            self._pending_hold_head_actions,
+            key=lambda action: (action.timestamp, action.lane),
+        )
+        self._pending_hold_head_actions = []
+        contacts: dict[int, int] = {}
+        for action in actions:
+            contact = action.lane if action.contact is None else action.contact
+            contacts[int(contact)] = action.lane
+        event = _HoldHeadEvent(
+            self._next_hold_alignment_event_id,
+            self._relative(float(statistics.median(
+                action.timestamp for action in actions
+            ))) - self.press_bias_s,
+            tuple(sorted(contacts.items())),
+        )
+        self._next_hold_alignment_event_id += 1
+        self._hold_head_events.append(event)
+        self._hold_head_events = self._hold_head_events[-24:]
+        for contact, lane in event.contacts:
+            self._hold_contact_head_event[contact] = event.event_id
+            self._hold_contact_lane[contact] = lane
+        return True
+
+    @staticmethod
+    def _chart_head_lanes(group: tuple[ChartHoldPath, ...]) -> tuple[int, ...]:
+        return tuple(sorted(round(path.head.lane) for path in group))
+
+    def _evaluate_hold_alignment(
+        self,
+        anchor_offset_s: float,
+    ) -> _HoldAlignmentSolution | None:
+        used_groups: set[int] = set()
+        head_matches: list[
+            tuple[_HoldHeadEvent, tuple[ChartHoldPath, ...]]
+        ] = []
+        offsets: list[float] = []
+        matched_event_ids: set[int] = set()
+        matched_note_indices: set[int] = set()
+        previous_chart_time = float("-inf")
+        for event in self._hold_head_events:
+            eligible = [
+                (index, group)
+                for index, group in self._chart_hold_groups_by_lanes.get(
+                    event.lanes, [],
+                )
+                if index not in used_groups
+                and group[0].head.time_s >= previous_chart_time - 0.001
+                and abs(
+                    group[0].head.time_s - (event.time_s + anchor_offset_s)
+                ) <= HOLD_ALIGNMENT_HEAD_WINDOW_S
+            ]
+            if not eligible:
+                continue
+            index, group = min(
+                eligible,
+                key=lambda item: abs(
+                    item[1][0].head.time_s
+                    - (event.time_s + anchor_offset_s)
+                ),
+            )
+            used_groups.add(index)
+            previous_chart_time = group[0].head.time_s
+            head_matches.append((event, group))
+            offsets.append(group[0].head.time_s - event.time_s)
+            matched_event_ids.add(event.event_id)
+            matched_note_indices.update(path.note_index for path in group)
+
+        if not head_matches:
+            return None
+        center = float(statistics.median(offsets))
+        transition_contacts: set[int] = set()
+        transition_nodes = 0
+        for head_event, group in head_matches:
+            paths_by_lane: dict[int, list[ChartHoldPath]] = {}
+            for path in group:
+                paths_by_lane.setdefault(round(path.head.lane), []).append(path)
+            for contact, start_lane in head_event.contacts:
+                paths = paths_by_lane.get(start_lane, [])
+                if len(paths) != 1:
+                    # 同 lane 多条路径无法把视觉 contact 唯一映射到谱面拓扑。
+                    continue
+                path = paths[0]
+                point_index = 0
+                chart_lane = start_lane
+                transitions = sorted(
+                    (
+                        event for event in self._hold_transition_events
+                        if event.head_event_id == head_event.event_id
+                        and event.contact == contact
+                    ),
+                    key=lambda event: event.time_s,
+                )
+                for event in transitions:
+                    if event.from_lane != chart_lane:
+                        continue
+                    eligible_points = [
+                        (index, point)
+                        for index, point in enumerate(
+                            path.points[point_index + 1:], point_index + 1,
+                        )
+                        if not point.hidden
+                        and abs(point.lane - round(point.lane)) <= 0.01
+                        and round(point.lane) == event.to_lane
+                        and abs(
+                            point.time_s - (event.time_s + center)
+                        ) <= HOLD_ALIGNMENT_TRANSITION_WINDOW_S
+                    ]
+                    if not eligible_points:
+                        continue
+                    point_index, point = min(
+                        eligible_points,
+                        key=lambda item: abs(
+                            item[1].time_s - (event.time_s + center)
+                        ),
+                    )
+                    chart_lane = event.to_lane
+                    offsets.append(point.time_s - event.time_s)
+                    matched_event_ids.add(event.event_id)
+                    transition_contacts.add(contact)
+                    transition_nodes += 1
+
+        offset_s = float(statistics.median(offsets))
+        residuals = [abs(value - offset_s) for value in offsets]
+        residual_mad_s = float(statistics.median(residuals))
+        matched_nodes = sum(len(group) for _event, group in head_matches)
+        matched_nodes += transition_nodes
+        evidence_score = min(1.0, matched_nodes / HOLD_ALIGNMENT_MIN_MATCHED_NODES)
+        event_score = min(
+            1.0,
+            len(matched_event_ids) / HOLD_ALIGNMENT_MIN_EVENT_GROUPS,
+        )
+        path_score = min(1.0, len(matched_note_indices) / 2.0)
+        residual_score = max(
+            0.0,
+            1.0 - residual_mad_s / HOLD_ALIGNMENT_HEAD_WINDOW_S,
+        )
+        confidence = (
+            evidence_score * 0.35
+            + event_score * 0.25
+            + path_score * 0.15
+            + residual_score * 0.25
+        )
+        return _HoldAlignmentSolution(
+            offset_s=offset_s,
+            residual_mad_s=residual_mad_s,
+            confidence=confidence,
+            matched_nodes=matched_nodes,
+            matched_event_ids=frozenset(matched_event_ids),
+            matched_note_indices=frozenset(matched_note_indices),
+            matched_head_events=len(head_matches),
+            matched_transition_contacts=len(transition_contacts),
+            source=(
+                "hold-slide-topology"
+                if transition_nodes else "hold-head-combination"
+            ),
+            head_matches=tuple(head_matches),
+        )
+
+    def _rank_hold_alignment_solutions(
+        self,
+    ) -> list[_HoldAlignmentSolution]:
+        solutions: list[_HoldAlignmentSolution] = []
+        for event in self._hold_head_events:
+            for _index, group in self._chart_hold_groups_by_lanes.get(
+                event.lanes, [],
+            ):
+                offset_s = group[0].head.time_s - event.time_s
+                if not (
+                    -self.calibration_early_window_s <= offset_s <= 3.0
+                ):
+                    continue
+                solution = self._evaluate_hold_alignment(offset_s)
+                if solution is not None:
+                    solutions.append(solution)
+        solutions.sort(key=lambda item: (
+            -len(item.matched_event_ids),
+            -item.matched_nodes,
+            -item.confidence,
+            item.residual_mad_s,
+        ))
+        ranked: list[_HoldAlignmentSolution] = []
+        for solution in solutions:
+            if any(
+                abs(solution.offset_s - known.offset_s)
+                < HOLD_ALIGNMENT_OFFSET_CLUSTER_S
+                for known in ranked
+            ):
+                continue
+            ranked.append(solution)
+        return ranked
+
+    def _try_hold_bootstrap_alignment(self, engine_time: float) -> None:
+        if self.calibrated or self.calibration_failed:
             return
-        # Action timestamps are deliberately ignored for both initial and
-        # ongoing phase.  The detector triggers above the judgement line, so
-        # treating TAP/DOWN as an over-line timestamp creates a stable
-        # 80-150 ms bias.  Only projected crossings in ``observe_tracks`` may
-        # establish or adjust song phase.
+        ranked = self._rank_hold_alignment_solutions()
+        if not ranked:
+            return
+        best = ranked[0]
+        runner_up = ranked[1] if len(ranked) > 1 else None
+        ambiguous = (
+            runner_up is not None
+            and runner_up.matched_nodes >= best.matched_nodes - 1
+            and len(runner_up.matched_event_ids) >= len(best.matched_event_ids)
+        )
+        candidate_signature = (
+            best.source,
+            round(best.offset_s * 1000, 1),
+            round(best.confidence, 3),
+            best.matched_nodes,
+            round(best.residual_mad_s * 1000, 1),
+            ambiguous,
+        )
+        if candidate_signature != self._last_alignment_candidate_signature:
+            self._pending_alignment_diagnostics.append({
+                "event": "alignment_candidate",
+                "timestamp": engine_time,
+                "alignment_candidate_source": best.source,
+                "alignment_candidate_offset_ms": candidate_signature[1],
+                "alignment_candidate_confidence": candidate_signature[2],
+                "alignment_candidate_matched_nodes": best.matched_nodes,
+                "alignment_candidate_residual_ms": candidate_signature[4],
+                "alignment_candidate_ambiguous": ambiguous,
+            })
+            self._last_alignment_candidate_signature = candidate_signature
+        topology_confirmed = (
+            best.matched_transition_contacts >= 2
+            and best.matched_head_events >= 1
+        )
+        if (
+            ambiguous
+            or best.matched_nodes < HOLD_ALIGNMENT_MIN_MATCHED_NODES
+            or len(best.matched_event_ids) < HOLD_ALIGNMENT_MIN_EVENT_GROUPS
+            or len(best.matched_note_indices) < 2
+            or (
+                best.matched_head_events < 2
+                and not topology_confirmed
+            )
+            or best.residual_mad_s > HOLD_ALIGNMENT_MAX_RESIDUAL_MAD_S
+            or best.confidence < HOLD_ALIGNMENT_MIN_CONFIDENCE
+        ):
+            return
+
+        self.song_offset_s = best.offset_s
+        self.calibrated = True
+        self._calibrated_at_relative_s = self._relative(engine_time)
+        self._alignment_lock_source = best.source
+        bootstrap_actions: list[TouchAction] = []
+        samples: list[tuple[float, int, str, float]] = []
+        for event, group in best.head_matches:
+            paths_by_lane = {round(path.head.lane): path for path in group}
+            for contact, lane in event.contacts:
+                path = paths_by_lane.get(lane)
+                if path is None:
+                    continue
+                bootstrap_actions.append(TouchAction(
+                    ActionKind.DOWN,
+                    lane,
+                    event.time_s + self.press_bias_s
+                    + (self._anchor_time or 0.0),
+                    contact,
+                    "hold-bootstrap-alignment",
+                ))
+                samples.append((
+                    event.time_s,
+                    lane,
+                    "hold-slide-head",
+                    path.head.time_s - event.time_s,
+                ))
+                self._consumed_judgements.add((path.note_index, "hold-head"))
+        self.calibration_samples = samples
+        self._pending_bootstrap_hold_actions = bootstrap_actions
+        self._pending_alignment_diagnostics.append({
+            "event": "alignment_lock",
+            "timestamp": engine_time,
+            "alignment_lock_source": best.source,
+            "alignment_lock_latency_ms": round(
+                self._relative(engine_time) * 1000, 1,
+            ),
+            "alignment_lock_offset_ms": round(best.offset_s * 1000, 1),
+        })
+
+    def observe_visual_actions(
+        self,
+        actions: list[TouchAction],
+        now: float | None = None,
+    ) -> None:
+        """从离散 HOLD/Slide 动作取得开局相位，保留既有投影闭环。"""
+        if self.disabled_for_run or self.calibrated:
+            return
+        ordered = sorted(actions, key=lambda action: action.timestamp)
+        changed = False
+        for action in ordered:
+            if (
+                action.kind == ActionKind.DOWN
+                and action.reason in HOLD_ALIGNMENT_HEAD_REASONS
+            ):
+                if (
+                    self._pending_hold_head_actions
+                    and action.timestamp
+                    - self._pending_hold_head_actions[0].timestamp
+                    > HOLD_ALIGNMENT_CHORD_WINDOW_S
+                ):
+                    changed = self._finalize_pending_hold_head() or changed
+                self._pending_hold_head_actions.append(action)
+                contact = action.lane if action.contact is None else action.contact
+                self._hold_contact_lane[int(contact)] = action.lane
+                continue
+            if (
+                self._pending_hold_head_actions
+                and action.timestamp
+                - self._pending_hold_head_actions[0].timestamp
+                > HOLD_ALIGNMENT_CHORD_WINDOW_S
+            ):
+                changed = self._finalize_pending_hold_head() or changed
+            if (
+                action.kind == ActionKind.MOVE
+                and action.reason == "hold-follow"
+                and action.contact is not None
+            ):
+                contact = int(action.contact)
+                previous_lane = self._hold_contact_lane.get(contact)
+                head_event_id = self._hold_contact_head_event.get(contact)
+                if (
+                    previous_lane is not None
+                    and head_event_id is not None
+                    and previous_lane != action.lane
+                ):
+                    self._hold_transition_events.append(_HoldTransitionEvent(
+                        self._next_hold_alignment_event_id,
+                        head_event_id,
+                        self._relative(action.timestamp) - self.press_bias_s,
+                        contact,
+                        previous_lane,
+                        action.lane,
+                    ))
+                    self._next_hold_alignment_event_id += 1
+                    self._hold_transition_events = (
+                        self._hold_transition_events[-64:]
+                    )
+                    changed = True
+                self._hold_contact_lane[contact] = action.lane
+            elif (
+                action.kind in {ActionKind.UP, ActionKind.FLICK}
+                and action.contact is not None
+            ):
+                contact = int(action.contact)
+                self._hold_contact_head_event.pop(contact, None)
+                self._hold_contact_lane.pop(contact, None)
+
+        flush_at = now
+        if flush_at is None and ordered:
+            flush_at = ordered[-1].timestamp
+        if (
+            flush_at is not None
+            and self._pending_hold_head_actions
+            and flush_at - self._pending_hold_head_actions[0].timestamp
+            > HOLD_ALIGNMENT_CHORD_WINDOW_S
+        ):
+            changed = self._finalize_pending_hold_head() or changed
+        if changed:
+            self._try_hold_bootstrap_alignment(
+                flush_at if flush_at is not None else ordered[-1].timestamp,
+            )
 
     def _try_early_phase_relock(self, relative_time_s: float | None) -> bool:
         """Apply one bounded low-MAD correction shortly after initial lock.
@@ -2144,7 +2600,19 @@ class ChartPredictor:
             )
             self._pending_phase_relock = None
         if not visual_observed:
-            self.observe_visual_actions(actions)
+            self.observe_visual_actions(actions, now)
+        if self._pending_alignment_diagnostics:
+            for diagnostic in self._pending_alignment_diagnostics:
+                fields = {
+                    key: value for key, value in diagnostic.items()
+                    if key not in {"event", "timestamp"}
+                }
+                state.record_diagnostic(
+                    str(diagnostic["event"]),
+                    float(diagnostic["timestamp"]),
+                    **fields,
+                )
+            self._pending_alignment_diagnostics = []
         if self.disabled_for_run:
             self._fall_back_to_visual(now, actions, state, holds)
             if not self._disabled_diagnosed:
@@ -2170,8 +2638,23 @@ class ChartPredictor:
                 now,
                 offset_ms=round(self.song_offset_s * 1000, 1),
                 samples=len(self.calibration_samples),
+                source=self._alignment_lock_source or "track-crossing",
             )
             self._calibration_diagnosed = True
+        if self._pending_bootstrap_hold_actions:
+            # 锁相发生在和弦聚合窗口之后；补登记仍处于按下状态的视觉 Slide，
+            # 让现有谱面尾部和路径执行器接管，但绝不重复派发 DOWN。
+            active_contacts = set(state._active_hold_tail)
+            latest_by_contact: dict[int, TouchAction] = {}
+            for action in self._pending_bootstrap_hold_actions:
+                if action.contact not in active_contacts:
+                    continue
+                previous = latest_by_contact.get(int(action.contact))
+                if previous is None or action.timestamp > previous.timestamp:
+                    latest_by_contact[int(action.contact)] = action
+            bootstrap_actions = list(latest_by_contact.values())
+            self._schedule_hold_tails(bootstrap_actions, state)
+            self._pending_bootstrap_hold_actions = []
         self._retire_visually_released_holds(actions, state)
         # Free lanes for due hold heads regardless of press prediction: the
         # normal hold pipeline can then start the real head next frame.

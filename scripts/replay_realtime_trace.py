@@ -165,6 +165,11 @@ def replay(
         drop_frames=drop_frames,
         fault_after_frame=fault_after_frame,
     ):
+            phase = frame.get("phase")
+            if isinstance(phase, str) and phase != "engine":
+                # 录制包还含最终封面等引擎外阶段；线上 Planner 此时尚未创建，
+                # 回放若把它喂进去会把谱面锚点人为提前数秒。
+                continue
             now = float(frame["timestamp"])
             last_now = now
             timing_feedback = frame.get("timing_feedback")

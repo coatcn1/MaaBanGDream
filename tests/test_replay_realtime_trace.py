@@ -107,6 +107,38 @@ def test_replay_reports_residual_hold_cleanup_state(tmp_path):
     assert result["cleanup_up_actions"] == 0
 
 
+def test_replay_ignores_recording_phases_before_legacy_engine(tmp_path):
+    trace = tmp_path / "trace.jsonl"
+    rows = [
+        {
+            "timestamp": 1.0,
+            "phase": "final-cover",
+            "notes": [],
+            "actions": [{
+                "kind": "tap",
+                "lane": 0,
+                "timestamp": 1.0,
+                "reason": "not-engine-input",
+            }],
+        },
+        {
+            "timestamp": 5.0,
+            "phase": "engine",
+            "notes": [],
+            "actions": [],
+        },
+    ]
+    trace.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+    result = replay(trace)
+
+    assert result["recorded_actions"] == 0
+    assert result["replayed_actions"] == 0
+
+
 def test_replay_applies_recorded_timing_feedback_per_frame(tmp_path, monkeypatch):
     trace = tmp_path / "trace.jsonl"
     rows = []
