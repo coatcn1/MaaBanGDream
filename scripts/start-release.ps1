@@ -22,7 +22,6 @@ $chartRoot = Join-Path $packageRoot 'resource\charts'
 $chartManifest = Join-Path $chartRoot 'manifest.json'
 
 foreach ($required in @(
-    $runtimeArchive,
     $mfa,
     $interfaceTemplate,
     $agent,
@@ -36,9 +35,24 @@ foreach ($required in @(
     }
 }
 
-if (
+# 运行库未就绪且随包归档也不在（例如用户删掉了运行库又下载了更新包）时，
+# 给出明确指引而不是让 Expand-Archive 报难懂的路径错误。
+$runtimeMissing = (
     -not (Test-Path -LiteralPath $python -PathType Leaf) -or
     -not (Test-Path -LiteralPath $runtimeReady -PathType Leaf)
+)
+if (
+    $runtimeMissing -and
+    -not (Test-Path -LiteralPath $runtimeArchive -PathType Leaf)
+) {
+    throw (
+        'Bundled Python runtime is missing; ' +
+        'please re-download the full package (MaaBanGDream-v*-win-x64.zip).'
+    )
+}
+
+if (
+    $runtimeMissing
 ) {
     $partialRoot = Join-Path $runtimeDirectory 'python.partial'
     foreach ($oldRoot in @($partialRoot, $pythonRoot)) {
@@ -68,6 +82,12 @@ if (
         "MaaBanGDream portable Python runtime ready`r`n",
         [System.Text.UTF8Encoding]::new($false)
     )
+}
+
+# 首次解压完成后删除随包的 conda-pack 归档：运行库已经落到 runtime/python，
+# 归档留着只会白占约 350MB 磁盘，而且会让后续更新误以为需要重新下载它。
+if (Test-Path -LiteralPath $runtimeArchive -PathType Leaf) {
+    Remove-Item -LiteralPath $runtimeArchive -Force
 }
 
 & $python $runtimeCheck --portable --mfa-root $packageRoot

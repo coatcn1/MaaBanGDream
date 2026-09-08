@@ -274,8 +274,8 @@ if (Test-Path -LiteralPath $seedProfiles -PathType Container) {
     Copy-Item -Path (Join-Path $seedProfiles '*') -Destination $packageProfiles -Force
 }
 
-# 增量更新清单：相对路径 -> SHA256。MFA 内置的 GitHub 更新器用它和远端
-# 清单 diff，只下载发生变化的条目，避免每次重下本地谱面。
+# 版本依据清单：version 是更新器判断本地版本、后续版本号的唯一来源；
+# files（相对路径 -> SHA256）保留作包内容诊断，不再参与逐文件增量 diff。
 $updateManifest = [ordered]@{ version = $Version; files = [ordered]@{} }
 Get-ChildItem -LiteralPath $packageRoot -Recurse -File | Sort-Object FullName | ForEach-Object {
     $relative = $_.FullName.Substring($packageRoot.Length + 1).Replace('\', '/')
@@ -303,9 +303,35 @@ $zipHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash
     [System.Text.UTF8Encoding]::new($false)
 )
 
+# 更新包：不含 Python 运行时归档。首次启动后该归档会被解压并删除，
+# 更新时无需再下载约 350MB 运行库；只有本机运行库缺失时才回退下载完整包。
+$updateZipPath = Join-Path $outputFull "$packageName-update.zip"
+$updateShaPath = "$updateZipPath.sha256"
+foreach ($oldArtifact in @($updateZipPath, $updateShaPath)) {
+    if (Test-Path -LiteralPath $oldArtifact) {
+        Remove-Item -LiteralPath $oldArtifact -Force
+    }
+}
+$runtimeArchiveRelative = "$packageName/runtime/maabangdream-python.zip"
+tar.exe -a -c -f $updateZipPath `
+    --exclude "$runtimeArchiveRelative" `
+    -C $outputFull $packageName
+if ($LASTEXITCODE -ne 0) {
+    throw 'Unable to create Windows update ZIP.'
+}
+$updateZipHash = (Get-FileHash -LiteralPath $updateZipPath -Algorithm SHA256).Hash
+[System.IO.File]::WriteAllText(
+    $updateShaPath,
+    "$updateZipHash  $packageName-update.zip`r`n",
+    [System.Text.UTF8Encoding]::new($false)
+)
+
 [pscustomobject]@{
     PackageRoot = $packageRoot
     Zip = $zipPath
     Sha256 = $zipHash
     Bytes = (Get-Item -LiteralPath $zipPath).Length
+    UpdateZip = $updateZipPath
+    UpdateSha256 = $updateZipHash
+    UpdateBytes = (Get-Item -LiteralPath $updateZipPath).Length
 }
