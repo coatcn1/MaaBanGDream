@@ -201,6 +201,53 @@ def test_final_cover_does_not_accept_a_distinct_jacket():
     assert gate.confirmed is False
 
 
+def test_final_cover_accepts_small_jacket_flip_when_level_matches():
+    # 最终封面裁切/缩放会让个别谱面稳定多翻转几 bit（Little Busters!
+    # 实测 10 bit）；等级硬约束已通过时应与仓库宽阈值一致，而不是用
+    # 8 bit 复核把同一首歌拒绝掉。
+    image, song_id = final_cover_frame()
+
+    def flipped_digest(bits: int) -> str:
+        prefix, digest = song_id.rsplit("-", 1)
+        value = int(digest, 16)
+        for index in range(bits):
+            value ^= 1 << index
+        return f"{prefix}-{value:016x}"
+
+    chart = selection(song_id)
+    chart.fingerprints = (flipped_digest(10),)
+    gate = FinalCoverGate(
+        chart,
+        difficulty="Expert",
+        observed_level=28,
+        observed_title="SAVIOR OF SONG",
+    )
+
+    confirmation = gate.observe(image)
+
+    assert confirmation is not None
+    assert gate.last_reason == "confirmed"
+
+
+def test_final_cover_rejects_jacket_flip_beyond_loose_threshold():
+    image, song_id = final_cover_frame()
+    prefix, digest = song_id.rsplit("-", 1)
+    value = int(digest, 16)
+    for index in range(20):
+        value ^= 1 << index
+    chart = selection(song_id)
+    chart.fingerprints = (f"{prefix}-{value:016x}",)
+    gate = FinalCoverGate(
+        chart,
+        difficulty="Expert",
+        observed_level=28,
+        observed_title="SAVIOR OF SONG",
+    )
+
+    assert gate.observe(image) is None
+    assert "does not match" in gate.last_reason
+
+
 def test_unique_jacket_does_not_depend_on_noisy_title_ocr():
     image, song_id = final_cover_frame()
     chart = selection(song_id)

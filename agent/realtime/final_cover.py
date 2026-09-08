@@ -8,6 +8,7 @@ import unicodedata
 
 from .chart_repository import LocalChartRepository
 from .song_identity import (
+    LOOSE_SAME_SONG_DISTANCE,
     UNKNOWN_SONG_ID,
     detect_full_badge,
     identify_final_song,
@@ -133,7 +134,20 @@ class FinalCoverGate:
             self.last_reason = "final cover jacket is not visible"
             return None
         fingerprints = tuple(getattr(self.selection, "fingerprints", ()))
-        if not any(same_song(identity.song_id, item) for item in fingerprints):
+        # 走到这里说明 evidence_reason 已确认等级硬约束（难度、等级与
+        # 准备页读数一致）。最终封面裁切/缩放会让个别谱面稳定多翻转几
+        # bit（Little Busters! 实测 10 bit、FIRE BIRD 实测 12 bit），
+        # 必须与 LocalChartRepository.resolve 的宽阈值语义一致，否则
+        # 仓库刚按 14 bit + 等级解析出的谱面会被这里 8 bit 复核直接拒绝，
+        # 整局降级成视觉 Legacy。宽阈值只在等级匹配时启用，不能单独放宽。
+        if not any(
+            same_song(
+                identity.song_id,
+                item,
+                max_distance=LOOSE_SAME_SONG_DISTANCE,
+            )
+            for item in fingerprints
+        ):
             self.last_reason = "final cover jacket does not match selected chart"
             return None
         self.confirmed = True

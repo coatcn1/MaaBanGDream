@@ -14,6 +14,11 @@
 - 协力模式把校准候选窗下限放宽到 60 秒（其余模式保持 12 秒）；离线重放 2026-09-08 失败录像确认从假相位 -4522ms 改锁真实相位 -13530ms，预测按压全部落在同 lane 视觉音符上；正常局（-3033ms）不受影响。
 - 新增锁定后“相位不可验证”fail-closed：滑动窗口 24 个可信投影中 ≥65% 在同 lane ±350ms 内找不到任何谱面判定时，放弃 chart 输入回退纯视觉并记录原因，防止候选窗仍然不够宽（等待超过 60 秒）或歌曲身份错误时继续盲压。
 
+## 2026-09-08（协力最终封面 8 bit 复核过严：Native 被错误降级）
+
+- `Little Busters!`（bestdori 46，Expert 25）最终封面实测 pHash 稳定在 10 bit：`LocalChartRepository.resolve` 已按“14 bit + 等级硬约束”正确解析出谱面，但 `FinalCoverGate` 仍用 8 bit 严格复核同一张封面，把刚解析出的谱面重新拒绝，最终 `degraded-visual-legacy`，Native 拿不到谱面、视觉 Legacy 打空血（2026-09-08 14:39 录像）。
+- 封面门控在与等级硬约束一致时改用与仓库相同的 14 bit 宽阈值，不再出现“仓库宽阈值解析、门控 8 bit 复核否决”的不一致；离线用该局真实封面帧验证：`c7b9cb102fcfb04a`（距 46 的 `c7bac9172dceb062` 10 bit）现确认 Little Busters! 并选中 `bestdori/46/expert.json`。
+
 ## 2026-09-08（断网跳车：UID 解析回退 + 失败后清理回主页）
 
 - `resolve_game_uid` 在 `dumpsys package` 失败/超时时回退到 `pidof` + `/proc/<pid>/status`，避免演奏中因“无法解析游戏 UID”导致门禁 fail-closed。
