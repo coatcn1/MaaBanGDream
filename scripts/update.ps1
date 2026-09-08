@@ -114,7 +114,10 @@ foreach (`$attempt in 1..30) {
     }
 }
 `$launchRoot = if (Test-Path -LiteralPath '$newRootLiteral') { '$newRootLiteral' } else { '$rootLiteral' }
-Start-Process -FilePath 'cmd.exe' -WorkingDirectory '$parentLiteral' -ArgumentList '/c','"`$launchRoot\启动 MaaBanGDream.cmd"'
+`$launcher = Join-Path `$launchRoot '启动 MaaBanGDream.cmd'
+# 直接 ShellExecute 启动 .cmd：经 cmd /c 包装会把中文路径按 ANSI 代码页
+# 转码，个别系统上变成乱码导致静默失败。
+Start-Process -FilePath `$launcher -WorkingDirectory `$launchRoot
 "@
     Set-Content -LiteralPath $helperPath -Value $helper -Encoding utf8
     Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden `
