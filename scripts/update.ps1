@@ -153,7 +153,14 @@ if (-not $Auto) {
     }
 }
 
-$assetName = "MaaBanGDream-v$latestVersion-win-x64.zip"
+# 运行库已解压到 runtime/python 时下载不含 350MB Python 归档的更新包；
+# 运行库缺失才回退下载完整包。
+$runtimeReady = Test-Path (Join-Path $packageRoot 'runtime\python\python.exe')
+$assetName = if ($runtimeReady) {
+    "MaaBanGDream-v$latestVersion-win-x64-update.zip"
+} else {
+    "MaaBanGDream-v$latestVersion-win-x64.zip"
+}
 $assetUrl = "https://github.com/coatcn1/MaaBanGDream/releases/download/$latestTag/$assetName"
 $shaUrl = "$assetUrl.sha256"
 $tempRoot = Join-Path $env:TEMP "maabangdream-update-$latestVersion"
