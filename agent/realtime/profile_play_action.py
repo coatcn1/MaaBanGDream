@@ -2230,6 +2230,13 @@ class RealtimeProfilePlay(CustomAction):
                         chart_predict_presses
                         and chart_prediction_enabled
                     ),
+                    # 协力局演奏场出现后还要等“其他成员准备中”结束，歌曲
+                    # 可能晚十几秒才开始；放宽校准候选窗的下限，否则真实
+                    # 相位被排除后会在周期性段落锁到假相位。单人/挑战等
+                    # 模式演奏场与歌曲几乎同时开始，保持默认 12 秒。
+                    chart_prelude_window_s=(
+                        60.0 if run_mode == "cooperative" else 12.0
+                    ),
                 ),
                 touch,
                 life_detector=(

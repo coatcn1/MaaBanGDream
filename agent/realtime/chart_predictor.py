@@ -43,6 +43,16 @@ TRUSTED_CALIBRATION_REASONS = {
 # behaviour for a genuinely wrong chart without abandoning a correct chart on
 # the nine-action burst observed in the Hard representative trace.
 MAX_CONSECUTIVE_VISUAL_CHART_MISMATCHES = 8
+# 锁定后的相位校验窗口只有 ±0.35s。整段相位锁错（例如协力等待成员过久，
+# 真实相位超出候选窗，被周期性假相位接管）时，视觉投影与谱面错开远超
+# 0.35s，既匹配不到同一 lane 的判定，也不会产生可计入的同向残差，旧逻辑
+# 完全看不见。此时可信投影里“同一 lane 附近没有任何谱面判定”的比例会
+# 明显高于健康锁定（健康锁定只有极少数噪声碎片不匹配）；用滑动窗口里的
+# 不匹配比例识别整段相位错误，达到阈值就放弃 chart 输入回退纯视觉，
+# 而不是继续按错误相位盲压。
+POST_LOCK_MATCH_WINDOW = 24
+POST_LOCK_MIN_UNMATCHED_FRACTION = 0.65
+MIN_UNMATCHED_CROSSING_LANES = 2
 MAX_EARLY_PHASE_RELOCKS = 1
 EARLY_PHASE_RELOCK_WINDOW_S = 12.0
 PHASE_RELOCK_MAD_LIMIT_S = 0.020
@@ -104,6 +114,11 @@ class ChartPredictor:
         min_calibration_samples: int = 6,
         predict_presses: bool = False,
         press_bias_ms: int = 0,
+        # 校准候选窗的下限：谱面音符可以比引擎锚点晚多久。单人局引擎锚点
+        # 与演奏场几乎同时出现，12 秒足够；协力局要先等“其他成员准备中”
+        # 结束，演奏场出现后歌曲可能还要等十几秒才开始，过窄的窗口会把
+        # 真实相位排除在外，让周期性段落里更晚的假相位锁定谱面时钟。
+        calibration_early_window_s: float = 12.0,
     ) -> None:
         self.chart = chart
         self.judgement_y = float(judgement_y)
@@ -111,6 +126,7 @@ class ChartPredictor:
         self.predict_presses = bool(predict_presses)
         self.press_bias_s = 0.0
         self.set_press_bias_ms(press_bias_ms)
+        self.calibration_early_window_s = float(calibration_early_window_s)
         self.calibrated = False
         self.song_offset_s = 0.0
         self.calibration_samples: list[tuple[float, int, str, float]] = []
@@ -154,6 +170,10 @@ class ChartPredictor:
         self._consumed_judgements: set[tuple[int, str]] = set()
         self._phase_validation_track_ids: set[int] = set()
         self._phase_validation_judgement_indices: set[int] = set()
+        self._post_lock_match_history: list[tuple[int, bool]] = []
+        self._matched_crossing_samples = 0
+        self._unmatched_crossing_samples = 0
+        self._unmatched_crossing_diagnosed = False
         self._prelock_semantic_offset_s: float | None = None
         self._prelock_semantic_judgement_indices: set[int] = set()
         self._pending_opening_semantic_lock: dict | None = None
@@ -191,6 +211,10 @@ class ChartPredictor:
         self._consumed_judgements = set()
         self._phase_validation_track_ids = set()
         self._phase_validation_judgement_indices = set()
+        self._post_lock_match_history = []
+        self._matched_crossing_samples = 0
+        self._unmatched_crossing_samples = 0
+        self._unmatched_crossing_diagnosed = False
         self._prelock_semantic_offset_s = None
         self._prelock_semantic_judgement_indices = set()
         self._pending_opening_semantic_lock = None
@@ -387,6 +411,28 @@ class ChartPredictor:
             self.song_offset_s += adjustment
             self._phase_refinement_total += adjustment
 
+    def _maybe_disable_unverifiable_phase(self) -> None:
+        """锁定后大量可信投影匹配不到同 lane 谱面判定时放弃 chart 输入。"""
+        if self._unmatched_crossing_diagnosed:
+            return
+        history = self._post_lock_match_history
+        if len(history) < POST_LOCK_MATCH_WINDOW:
+            return
+        unmatched = [lane for lane, matched in history if not matched]
+        if (
+            len(unmatched) >= POST_LOCK_MATCH_WINDOW
+            * POST_LOCK_MIN_UNMATCHED_FRACTION
+            and len({lane for lane in unmatched})
+            >= MIN_UNMATCHED_CROSSING_LANES
+        ):
+            self._unmatched_crossing_diagnosed = True
+            self.disabled_for_run = True
+            self.disable_reason = (
+                f"{len(unmatched)}/{len(history)} trusted crossings have no "
+                "same-lane chart judgement within 350ms; chart phase is "
+                "unverifiable"
+            )
+
     def observe_tracks(
         self,
         tracked_notes: list[TrackedNote],
@@ -429,8 +475,35 @@ class ChartPredictor:
                     crossing_song_time,
                     window_s=0.35,
                 )
-                if judgement is None or judgement.kind != "tap":
+                if judgement is None:
+                    # 同一 lane 附近没有任何谱面判定：视觉和谱面时钟对不上。
+                    self._unmatched_crossing_samples += 1
+                    self._post_lock_match_history.append(
+                        (tracked.note.lane, False)
+                    )
+                    self._post_lock_match_history = (
+                        self._post_lock_match_history[-POST_LOCK_MATCH_WINDOW:]
+                    )
+                    self._maybe_disable_unverifiable_phase()
                     continue
+                if judgement.kind != "tap":
+                    # 视觉投影落在同 lane 的 hold-head 等判定附近，仍说明
+                    # 谱面时钟与视觉一致；只是不参与 tap 残差统计。
+                    self._matched_crossing_samples += 1
+                    self._post_lock_match_history.append(
+                        (tracked.note.lane, True)
+                    )
+                    self._post_lock_match_history = (
+                        self._post_lock_match_history[-POST_LOCK_MATCH_WINDOW:]
+                    )
+                    continue
+                self._matched_crossing_samples += 1
+                self._post_lock_match_history.append(
+                    (tracked.note.lane, True)
+                )
+                self._post_lock_match_history = (
+                    self._post_lock_match_history[-POST_LOCK_MATCH_WINDOW:]
+                )
                 if (
                     judgement.note_index
                     in self._phase_validation_judgement_indices
@@ -480,7 +553,11 @@ class ChartPredictor:
                 for judgement in self.chart.judgements
                 if judgement.lane == tracked.note.lane
                 and judgement.kind == "tap"
-                and -12.0 <= judgement.time_s - crossing_relative <= 3.0
+                and (
+                    -self.calibration_early_window_s
+                    <= judgement.time_s - crossing_relative
+                    <= 3.0
+                )
             ]
             if candidates:
                 self._sampled_track_ids.add(tracked.track_id)
