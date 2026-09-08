@@ -492,15 +492,16 @@ class CooperativeLiveFlow:
         return image
 
     def close_sss_guide(self) -> None:
+        # 调用前 select_normal_room 已确认传说卡居中选中；一次性 SSS
+        # 引导若存在会立即出现。没有引导关闭按钮说明本账号早已关过，
+        # 直接返回，不再按固定 8 帧空等（实测每局浪费约 8 秒）。
         for attempt in range(8):
             image = self.capture()
             if self.visible(image, "sss_guide_close"):
                 self.click((980, 648))
                 time.sleep(0.7)
                 return
-            # Once the carousel itself is readable for several settled frames,
-            # this account has already dismissed the one-time guide.
-            if attempt >= 5 and classify_room_tier(image) == "legend":
+            if classify_room_tier(image) == "legend":
                 return
             time.sleep(0.2)
 
