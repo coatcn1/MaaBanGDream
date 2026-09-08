@@ -304,7 +304,9 @@ $zipHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash
 )
 
 # 更新包：不含 Python 运行时归档。首次启动后该归档会被解压并删除，
-# 更新时无需再下载约 350MB 运行库；只有本机运行库缺失时才回退下载完整包。
+# 更新时无需再下载约 350MB 运行库；本地谱面库（resource/charts）也有自己
+# 的同步通道（演出设置 → 谱面辅助 → 同步），不进更新包。只有本机运行库
+# 缺失时才回退下载完整包。
 $updateZipPath = Join-Path $outputFull "$packageName-update.zip"
 $updateShaPath = "$updateZipPath.sha256"
 foreach ($oldArtifact in @($updateZipPath, $updateShaPath)) {
@@ -313,8 +315,10 @@ foreach ($oldArtifact in @($updateZipPath, $updateShaPath)) {
     }
 }
 $runtimeArchiveRelative = "$packageName/runtime/maabangdream-python.zip"
+$chartsRelative = "$packageName/resource/charts"
 tar.exe -a -c -f $updateZipPath `
     --exclude "$runtimeArchiveRelative" `
+    --exclude "$chartsRelative" `
     -C $outputFull $packageName
 if ($LASTEXITCODE -ne 0) {
     throw 'Unable to create Windows update ZIP.'
