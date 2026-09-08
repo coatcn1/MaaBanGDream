@@ -41,7 +41,7 @@ MaaFramework 运行库、Python Agent、本地谱面和资源文件。
 
 - MaaBanGDream：<https://github.com/coatcn1/MaaBanGDream>
 - 定制 MFAAvalonia：
-  <https://github.com/coatcn1/MFAAvalonia/tree/feature/performance-visual-settings>
+  <https://github.com/coatcn1/MFAAvalonia/tree/fix/native-realtime-ui-toggle>
 
 两个项目均按随包许可证文件所述以 GPL-3.0 发布。精确源码提交记录在
 `BUILD-INFO.json`。
