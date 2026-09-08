@@ -87,6 +87,46 @@ if (-not $currentVersion) {
 }
 Write-Host "本地版本：$currentVersion"
 
+# 版本升级后安装目录名也跟着变（例如 MaaBanGDream-v1.3.3-win-x64 →
+# MaaBanGDream-v1.3.4-win-x64）。目录名带版本号且与清单版本不一致时，
+# 在启动 MFA 之前用独立辅助进程改名并重启。改名要求没有进程把该目录
+# 当工作目录，所以辅助进程先等启动器退出，再离开目录执行改名。
+$folderName = Split-Path -Leaf $packageRoot
+$expectedFolder = "MaaBanGDream-v$currentVersion-win-x64"
+if ($folderName -match '^MaaBanGDream-v.*-win-x64$' -and $folderName -ne $expectedFolder) {
+    $parent = Split-Path -Parent $packageRoot
+    $newRoot = Join-Path $parent $expectedFolder
+    $helperPath = Join-Path $env:TEMP "maabangdream-rename-$currentVersion.ps1"
+    $rootLiteral = $packageRoot.Replace("'", "''")
+    $newRootLiteral = $newRoot.Replace("'", "''")
+    $parentLiteral = $parent.Replace("'", "''")
+    $helper = @"
+param()
+Set-Location -LiteralPath '$parentLiteral'
+foreach (`$attempt in 1..30) {
+    if (-not (Test-Path -LiteralPath '$rootLiteral')) { break }
+    try {
+        Rename-Item -LiteralPath '$rootLiteral' -NewName '$expectedFolder' -ErrorAction Stop
+        break
+    } catch {
+        `"`$(`$_.Exception.GetType().Name): `$(`$_.Exception.Message)`" | Out-File -Append `"`$env:TEMP\maabangdream-rename-trace.txt`" -Encoding utf8
+        Start-Sleep -Milliseconds 1000
+    }
+}
+`$launchRoot = if (Test-Path -LiteralPath '$newRootLiteral') { '$newRootLiteral' } else { '$rootLiteral' }
+Start-Process -FilePath 'cmd.exe' -WorkingDirectory '$parentLiteral' -ArgumentList '/c','"`$launchRoot\启动 MaaBanGDream.cmd"'
+"@
+    Set-Content -LiteralPath $helperPath -Value $helper -Encoding utf8
+    Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden `
+        -WorkingDirectory $parent `
+        -ArgumentList @(
+            '-NoProfile', '-ExecutionPolicy', 'Bypass',
+            '-File', $helperPath
+        )
+    # 退出码 2 通知启动器：目录正在改名并由辅助进程重启，不要从旧路径启动。
+    exit 2
+}
+
 $latestTag = Get-LatestRelease
 if (-not $latestTag) {
     Write-Host '无法连接 GitHub（离线或网络受限），跳过更新检查。'
