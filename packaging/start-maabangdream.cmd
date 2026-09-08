@@ -6,6 +6,9 @@ chcp 65001 >nul
 cd /d "%~dp0"
 rem Silently check for GitHub updates before launch; continue when offline.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\update.ps1" -Auto
+rem Exit code 2 means the installer folder is being renamed and relaunched;
+rem do not start MFA from the old path in that case.
+if errorlevel 2 exit /b 2
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start-release.ps1"
 if errorlevel 1 (
   echo.
