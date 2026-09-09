@@ -962,6 +962,135 @@ def test_engine_requests_disconnect_jump_once_on_zero_life():
     assert touch.closed == 1
 
 
+def test_engine_records_bounded_life_monitor_evidence_without_changing_outcome():
+    class SequenceLife:
+        def __init__(self, readings):
+            self.readings = iter(readings)
+            self.calls = 0
+
+        def detect(self, image):
+            self.calls += 1
+            return next(self.readings)
+
+    class Recorder:
+        def __init__(self):
+            self.records = []
+
+        def record(self, *args):
+            self.records.append(args)
+
+        def close(self):
+            pass
+
+    readings = [
+        LifeReading(True, 800),
+        LifeReading(True, 800),
+        LifeReading(True, 800),
+        LifeReading(True, 15),
+        LifeReading(True, 15),
+    ]
+    baseline, _, baseline_planner, _, baseline_capture = build()
+    baseline.life_detector = SequenceLife(list(readings))
+    baseline.life_guard = LifeGuard(confirm_frames=3)
+    baseline_stats = baseline.run(
+        baseline_capture,
+        lambda: baseline.life_detector.calls >= 5,
+        duration_seconds=10,
+        target_fps=60,
+    )
+
+    engine, _, planner, _, capture = build()
+    recorder = Recorder()
+    engine.life_detector = SequenceLife(list(readings))
+    engine.life_guard = LifeGuard(confirm_frames=3)
+    engine.debug_recorder = recorder
+    stats = engine.run(
+        capture,
+        lambda: engine.life_detector.calls >= 5,
+        duration_seconds=10,
+        target_fps=60,
+    )
+
+    assert (stats.processed_frames, stats.dispatched_actions, stats.life_depleted) == (
+        baseline_stats.processed_frames,
+        baseline_stats.dispatched_actions,
+        baseline_stats.life_depleted,
+    )
+    assert stats.life_monitor_diagnostics == {
+        "enabled": True,
+        "visible_samples": 5,
+        "invisible_samples": 0,
+        "minimum_value": 15,
+        "low_life_candidate_samples": 2,
+        "max_low_life_streak": 2,
+        "final_zero_streak": 2,
+        "alive_confirmed": True,
+        "dead_confirmed": False,
+        "first_low_life_timestamp": pytest.approx(0.08),
+        "first_low_life_value": 15,
+        "first_low_life_evidence_requested": True,
+        "life_depleted_reason": "zero-streak-not-confirmed",
+    }
+    assert any(
+        diagnostic.get("event") == "life_low_candidate"
+        and diagnostic.get("evidence_screenshot") is True
+        for record in recorder.records
+        for diagnostic in record[5]
+    )
+
+
+@pytest.mark.parametrize(
+    ("readings", "expected_reason", "expected_dead"),
+    [
+        ([LifeReading(False), LifeReading(False)], "no-visible-life-samples", False),
+        (
+            [
+                LifeReading(True, 800),
+                LifeReading(True, 800),
+                LifeReading(True, 800),
+                LifeReading(True, 0),
+                LifeReading(True, 0),
+                LifeReading(True, 0),
+            ],
+            "life-depleted-confirmed",
+            True,
+        ),
+    ],
+)
+def test_engine_life_monitor_evidence_explains_invisible_and_confirmed_dead(
+    readings, expected_reason, expected_dead,
+):
+    class SequenceLife:
+        def __init__(self, values):
+            self.values = iter(values)
+            self.calls = 0
+
+        def detect(self, image):
+            self.calls += 1
+            return next(self.values)
+
+    class Recorder:
+        def record(self, *args):
+            pass
+
+        def close(self):
+            pass
+
+    engine, _, planner, _, capture = build()
+    engine.life_detector = SequenceLife(readings)
+    engine.life_guard = LifeGuard(confirm_frames=3)
+    engine.debug_recorder = Recorder()
+    stats = engine.run(
+        capture,
+        lambda: engine.life_detector.calls >= len(readings),
+        duration_seconds=10,
+        target_fps=60,
+    )
+
+    assert stats.life_monitor_diagnostics["life_depleted_reason"] == expected_reason
+    assert stats.life_monitor_diagnostics["dead_confirmed"] is expected_dead
+
+
 def test_engine_invokes_life_safety_after_three_frames_below_threshold():
     engine, _, _, touch, capture = build()
     triggered = []
@@ -1301,3 +1430,59 @@ def test_engine_accepts_feedback_while_a_hold_is_active():
     assert stats.timing_feedback_ignored_reasons == {}
     # 每 3 个同向样本 +1ms，25 个样本共 8 次调整。
     assert planner.offset_changes == [1, 2, 3, 4, 5, 6, 7, 8]
+
+
+def test_accepted_feedback_records_only_observed_input_attribution():
+    engine, _, _, _, capture = build()
+
+    class FeedbackDetector:
+        def __init__(self):
+            self.calls = 0
+
+        def detect(self, image):
+            self.calls += 1
+            return "fast" if self.calls in {1, 3} else None
+
+    class FeedbackController:
+        current_offset_ms = 0
+        fast_samples = slow_samples = valid_samples = ignored_samples = 0
+        ignored_reasons = {}
+
+        def update(self, feedback, now, *, eligible, ignored_reason):
+            if feedback is not None and eligible:
+                self.valid_samples += 1
+                self.fast_samples += 1
+            return None
+
+    class Recorder:
+        def __init__(self):
+            self.diagnostics = []
+
+        def record(self, image, timestamp, notes, actions, life_status,
+                   diagnostics, timing_state, life_value=None, touch_state=None):
+            self.diagnostics.extend(diagnostics)
+
+        def close(self):
+            pass
+
+    recorder = Recorder()
+    detector = FeedbackDetector()
+    engine.debug_recorder = recorder
+    engine.timing_feedback_detector = detector
+    engine.timing_controller = FeedbackController()
+    engine.run(
+        capture, lambda: detector.calls >= 3, duration_seconds=1, target_fps=60,
+    )
+
+    accepted = [
+        item for item in recorder.diagnostics
+        if item["event"] == "timing_feedback_accepted"
+    ]
+    assert accepted[0]["input_origin"] is None
+    assert accepted[0]["input_kind"] is None
+    assert accepted[0]["dispatcher_started_at"] is None
+    assert accepted[1]["input_origin"] == "visual"
+    assert accepted[1]["input_kind"] == "tap"
+    assert accepted[1]["input_reason"] == ""
+    assert accepted[1]["dispatcher_started_at"] is not None
+    assert accepted[1]["dispatcher_finished_at"] is not None

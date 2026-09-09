@@ -86,6 +86,17 @@ class NativeMinitouchDevice:
         self._last_release_error: str | None = None
         self._reset_lock = threading.Lock()
         self._reset_thread: threading.Thread | None = None
+        self._reset_generation = 0
+        self._reset_requested = False
+        self._reset_request_cursor: int | None = None
+        self._reset_requested_at_s: float | None = None
+        self._reset_sent = False
+        self._reset_executed = False
+        self._reset_execution_latency_ms: float | None = None
+        self._reset_executed_event = threading.Event()
+        self._release_proof = "no-touch-possible"
+        self._forced_kill_used = False
+        self._touch_possible = False
         self._local_stop_lock = threading.Lock()
         self._full_stop_lock = threading.Lock()
 
@@ -107,6 +118,25 @@ class NativeMinitouchDevice:
     def last_release_error(self) -> str | None:
         """最近一次有界释放无法确认时的原因。"""
         return self._last_release_error
+
+    @property
+    def reset_executed(self) -> bool:
+        """本轮 reset 是否已由设备 jlog 明确回执。"""
+        with self._reset_lock:
+            return self._reset_executed
+
+    @property
+    def release_diagnostics(self) -> dict[str, object]:
+        """返回本轮释放证据；旧日志不能跨 generation 复用。"""
+        with self._reset_lock:
+            return {
+                "reset_requested": self._reset_requested,
+                "reset_sent": self._reset_sent,
+                "reset_executed": self._reset_executed,
+                "reset_execution_latency_ms": self._reset_execution_latency_ms,
+                "release_proof": self._release_proof,
+                "forced_kill_used": self._forced_kill_used,
+            }
 
     @property
     def max_x(self) -> int:
@@ -132,6 +162,20 @@ class NativeMinitouchDevice:
     def recent_logs(self) -> list[str]:
         with self._log_lock:
             return list(self._log_lines)
+
+    @property
+    def last_publish_diagnostics(self) -> dict[str, object] | None:
+        """透传最近一次 C++ socket publish 的只读计数。"""
+        client = self._client
+        if client is None:
+            return None
+        diagnostics = getattr(client, "last_publish_diagnostics", None)
+        if diagnostics is None:
+            return None
+        try:
+            return dict(diagnostics)
+        except (TypeError, ValueError):
+            return None
 
     def logs_since(self, after_sequence: int) -> tuple[int, list[str]]:
         """按单调序号取出新日志，不用文本去重丢掉重复命令。"""
@@ -279,13 +323,57 @@ class NativeMinitouchDevice:
             received_s = time.perf_counter()
         with self._log_lock:
             self._log_sequence += 1
+            sequence = self._log_sequence
             self._log_lines.append(line)
             self._log_records.append(
-                (self._log_sequence, line, float(received_s))
+                (sequence, line, float(received_s))
             )
             if self._jlog_file is not None:
                 self._jlog_file.write(line + "\n")
                 self._jlog_file.flush()
+        self._observe_reset_execution(sequence, line, float(received_s))
+
+    def _observe_reset_execution(
+        self,
+        sequence: int,
+        line: str,
+        received_s: float,
+    ) -> None:
+        """只接受本轮请求游标之后、精确 command=r 的设备执行证据。"""
+        with self._reset_lock:
+            request_cursor = self._reset_request_cursor
+            requested_at_s = self._reset_requested_at_s
+            if (
+                not self._reset_requested
+                or self._reset_executed
+                or request_cursor is None
+                or sequence <= request_cursor
+            ):
+                return
+        if not line.startswith("jlog "):
+            return
+        try:
+            event = native_engine.parse_minitouch_log(line)
+        except Exception:  # noqa: BLE001 - 普通 jlog 解析错误由 owner 路径报告
+            return
+        if event is None or str(event.get("command") or "").strip() != "r":
+            return
+        with self._reset_lock:
+            if (
+                self._reset_executed
+                or self._reset_request_cursor != request_cursor
+                or sequence <= int(request_cursor)
+            ):
+                return
+            self._reset_executed = True
+            self._touch_possible = False
+            self._reset_execution_latency_ms = max(
+                0.0,
+                (float(received_s) - float(requested_at_s or received_s))
+                * 1000.0,
+            )
+            self._release_proof = "current-reset-jlog"
+            self._reset_executed_event.set()
 
     def start(
         self,
@@ -295,7 +383,19 @@ class NativeMinitouchDevice:
         """push 二进制、启动 minitouch、forward 并完成握手。"""
         self._raise_if_cancelled(cancel_event)
         self._closed = False
-        self._last_reset_sent = False
+        with self._reset_lock:
+            self._reset_generation += 1
+            self._last_reset_sent = False
+            self._reset_requested = False
+            self._reset_request_cursor = None
+            self._reset_requested_at_s = None
+            self._reset_sent = False
+            self._reset_executed = False
+            self._reset_execution_latency_ms = None
+            self._reset_executed_event.clear()
+            self._release_proof = "no-touch-possible"
+            self._forced_kill_used = False
+            self._touch_possible = False
         if self._jlog_path is not None:
             self._jlog_path.parent.mkdir(parents=True, exist_ok=True)
             self._jlog_file = self._jlog_path.open(
@@ -448,30 +548,56 @@ class NativeMinitouchDevice:
         """追加一段已定时脚本；时序由设备端 w 保证。"""
         if self._closed or not self._client or not self._client.connected:
             raise MinitouchStartError("minitouch 未连接")
+        may_establish_touch = any(
+            line.strip().split(" ", 1)[0] == "d"
+            for line in str(text).splitlines()
+            if line.strip()
+        )
+        if may_establish_touch:
+            # socket 写入失败也可能已发送前缀；在 publish 前先封闭 no-touch
+            # 快捷路径，避免部分 d 已到设备却被当作无需 reset。
+            with self._reset_lock:
+                self._touch_possible = True
         if not self._client.publish(text):
             raise MinitouchStartError("publish 失败")
 
-    def _send_reset(self, client: Any) -> None:
+    def _send_reset(self, client: Any, generation: int) -> None:
         sent = False
         try:
             if client.connected:
                 sent = bool(client.publish("r\n"))
         except Exception:  # noqa: BLE001 - 设备端 kill 是独立释放证据
             sent = False
-        self._last_reset_sent = sent
+        with self._reset_lock:
+            if generation != self._reset_generation:
+                return
+            self._last_reset_sent = sent
+            self._reset_sent = sent
 
     def request_reset(self) -> bool:
-        """异步尝试 panic reset；协议无 ACK，调用本身绝不等待 send。"""
-        self._last_reset_sent = False
+        """异步请求 reset；仅当前 generation 的 jlog r 才返回已确认。"""
         with self._reset_lock:
+            if self._reset_requested:
+                return self._reset_executed
+            if not self._touch_possible:
+                self._release_proof = "no-touch-possible"
+                return True
             if self._reset_thread is not None and self._reset_thread.is_alive():
                 return False
             client = self._client
             if self._closed or client is None or not client.connected:
                 return False
+            with self._log_lock:
+                self._reset_request_cursor = self._log_sequence
+            self._reset_requested = True
+            self._reset_requested_at_s = time.perf_counter()
+            self._last_reset_sent = False
+            self._reset_sent = False
+            self._release_proof = "reset-execution-pending"
+            generation = self._reset_generation
             self._reset_thread = threading.Thread(
                 target=self._send_reset,
-                args=(client,),
+                args=(client, generation),
                 name="native-minitouch-reset",
                 daemon=True,
             )
@@ -563,10 +689,40 @@ class NativeMinitouchDevice:
         def remaining() -> float:
             return max(0.0, deadline - time.monotonic())
 
-        self.request_reset()
-        reset_thread = self._reset_thread
-        if reset_thread is not None and reset_thread.is_alive():
-            reset_thread.join(timeout=min(0.02, remaining()))
+        with self._reset_lock:
+            reset_required = self._touch_possible or self._reset_requested
+        reset_confirmed = not reset_required
+        if reset_required:
+            self.request_reset()
+            # 750ms 覆盖已发布的最大设备队列，至少保留 250ms 做本地与远端清理。
+            cleanup_reserve_s = (
+                0.250
+                if timeout_s >= 0.250
+                else max(0.0, timeout_s) * 0.25
+            )
+            with self._reset_lock:
+                requested_at_s = self._reset_requested_at_s
+            queue_wait_remaining_s = max(
+                0.0,
+                0.750
+                - max(
+                    0.0,
+                    time.perf_counter() - float(requested_at_s or 0.0),
+                ),
+            )
+            reset_wait_s = min(
+                queue_wait_remaining_s,
+                max(0.0, remaining() - cleanup_reserve_s),
+            )
+            if reset_wait_s > 0:
+                self._reset_executed_event.wait(timeout=reset_wait_s)
+            with self._reset_lock:
+                reset_confirmed = self._reset_executed
+                if not reset_confirmed:
+                    self._forced_kill_used = True
+                    self._release_proof = "reset-execution-unconfirmed"
+            if not reset_confirmed:
+                errors.append("本轮 reset 未取得设备 jlog 执行回执")
         remote_ok = True
         pid = self._pid
         if pid is not None:
@@ -622,9 +778,17 @@ class NativeMinitouchDevice:
                 self._port = 0
             else:
                 errors.append("ADB forward 未在释放预算内移除")
+        release_ok = bool(local_ok and remote_ok and reset_confirmed)
+        with self._reset_lock:
+            if release_ok:
+                self._release_proof = (
+                    "current-reset-jlog-and-cleanup"
+                    if reset_required
+                    else "no-touch-possible-and-cleanup"
+                )
         self._last_release_error = "; ".join(errors) or None
         # forward 清理失败会留下资源，但不会推翻设备端进程已退出这一触点证据。
-        return bool(local_ok and remote_ok)
+        return release_ok
 
     def stop_with_deadline(self, timeout_s: float) -> bool:
         """串行化完整清理；并发调用也只能共享同一个硬截止预算。"""
@@ -642,4 +806,4 @@ class NativeMinitouchDevice:
 
     def stop(self) -> bool:
         """幂等清理；普通调用也不得无限等待 ADB。"""
-        return self.stop_with_deadline(0.5)
+        return self.stop_with_deadline(1.0)

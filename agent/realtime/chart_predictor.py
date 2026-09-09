@@ -77,6 +77,7 @@ HOLD_ALIGNMENT_OFFSET_CLUSTER_S = 0.080
 HOLD_ALIGNMENT_MIN_MATCHED_NODES = 4
 HOLD_ALIGNMENT_MIN_EVENT_GROUPS = 2
 HOLD_ALIGNMENT_MAX_RESIDUAL_MAD_S = 0.025
+HOLD_ALIGNMENT_MAX_ABS_RESIDUAL_S = 0.025
 HOLD_ALIGNMENT_MIN_CONFIDENCE = 0.85
 HOLD_ALIGNMENT_HEAD_REASONS = frozenset({
     "crossing",
@@ -90,6 +91,7 @@ class _HoldHeadEvent:
     event_id: int
     time_s: float
     contacts: tuple[tuple[int, int], ...]
+    actions: tuple[TouchAction, ...]
 
     @property
     def lanes(self) -> tuple[int, ...]:
@@ -104,12 +106,14 @@ class _HoldTransitionEvent:
     contact: int
     from_lane: int
     to_lane: int
+    reason: str
 
 
 @dataclass(frozen=True, slots=True)
 class _HoldAlignmentSolution:
     offset_s: float
     residual_mad_s: float
+    max_abs_residual_s: float
     confidence: float
     matched_nodes: int
     matched_event_ids: frozenset[int]
@@ -120,6 +124,7 @@ class _HoldAlignmentSolution:
     head_matches: tuple[
         tuple[_HoldHeadEvent, tuple[ChartHoldPath, ...]], ...
     ]
+    matched_nodes_detail: tuple[dict[str, object], ...]
 
 
 def _adjacent_zigzag_anchor(
@@ -216,6 +221,8 @@ class ChartPredictor:
         self._track_phase_candidates: dict[
             int, list[tuple[float, int, int, float, float]]
         ] = {}
+        self._track_phase_candidate_context: dict[int, dict[str, object]] = {}
+        self._track_crossing_diagnostic: dict[str, object] | None = None
         self._sampled_track_ids: set[int] = set()
         self._consumed_judgements: set[tuple[int, str]] = set()
         self._phase_validation_track_ids: set[int] = set()
@@ -275,6 +282,8 @@ class ChartPredictor:
         self._disabled_diagnosed = False
         self._claimed_hold_note_indices = set()
         self._track_phase_candidates = {}
+        self._track_phase_candidate_context = {}
+        self._track_crossing_diagnostic = None
         self._sampled_track_ids = set()
         self._consumed_judgements = set()
         self._phase_validation_track_ids = set()
@@ -403,6 +412,7 @@ class ChartPredictor:
                 action.timestamp for action in actions
             ))) - self.press_bias_s,
             tuple(sorted(contacts.items())),
+            tuple(actions),
         )
         self._next_hold_alignment_event_id += 1
         self._hold_head_events.append(event)
@@ -461,6 +471,33 @@ class ChartPredictor:
         center = float(statistics.median(offsets))
         transition_contacts: set[int] = set()
         transition_nodes = 0
+        matched_nodes_detail: list[dict[str, object]] = []
+        for head_event, group in head_matches:
+            paths_by_lane = {round(path.head.lane): path for path in group}
+            actions_by_contact = {
+                int(action.lane if action.contact is None else action.contact): action
+                for action in head_event.actions
+            }
+            for contact, lane in head_event.contacts:
+                path = paths_by_lane.get(lane)
+                action = actions_by_contact.get(contact)
+                if path is None or action is None:
+                    continue
+                raw_relative_s = self._relative(action.timestamp)
+                normalized_time_s = raw_relative_s - self.press_bias_s
+                matched_nodes_detail.append({
+                    "node_type": "head",
+                    "event_id": head_event.event_id,
+                    "contact": contact,
+                    "action_reason": action.reason,
+                    "raw_relative_time_s": round(raw_relative_s, 6),
+                    "applied_press_bias_ms": round(self.press_bias_s * 1000, 3),
+                    "normalized_time_s": round(normalized_time_s, 6),
+                    "chart_note_index": path.note_index,
+                    "chart_time_s": round(path.head.time_s, 6),
+                    "chart_lane": lane,
+                    "path_kind": path.note_type,
+                })
         for head_event, group in head_matches:
             paths_by_lane: dict[int, list[ChartHoldPath]] = {}
             for path in group:
@@ -509,10 +546,33 @@ class ChartPredictor:
                     matched_event_ids.add(event.event_id)
                     transition_contacts.add(contact)
                     transition_nodes += 1
+                    raw_relative_s = event.time_s + self.press_bias_s
+                    matched_nodes_detail.append({
+                        "node_type": "transition",
+                        "event_id": event.event_id,
+                        "head_event_id": head_event.event_id,
+                        "contact": contact,
+                        "action_reason": event.reason,
+                        "raw_relative_time_s": round(raw_relative_s, 6),
+                        "applied_press_bias_ms": round(self.press_bias_s * 1000, 3),
+                        "normalized_time_s": round(event.time_s, 6),
+                        "chart_note_index": path.note_index,
+                        "chart_time_s": round(point.time_s, 6),
+                        "chart_lane": round(point.lane),
+                        "path_kind": path.note_type,
+                        "path_point_index": point_index,
+                    })
 
         offset_s = float(statistics.median(offsets))
         residuals = [abs(value - offset_s) for value in offsets]
         residual_mad_s = float(statistics.median(residuals))
+        max_abs_residual_s = float(max(residuals, default=0.0))
+        for detail in matched_nodes_detail:
+            normalized_time_s = float(detail["normalized_time_s"])
+            chart_time_s = float(detail["chart_time_s"])
+            detail["signed_residual_ms"] = round(
+                (chart_time_s - (normalized_time_s + offset_s)) * 1000, 3,
+            )
         matched_nodes = sum(len(group) for _event, group in head_matches)
         matched_nodes += transition_nodes
         evidence_score = min(1.0, matched_nodes / HOLD_ALIGNMENT_MIN_MATCHED_NODES)
@@ -534,6 +594,7 @@ class ChartPredictor:
         return _HoldAlignmentSolution(
             offset_s=offset_s,
             residual_mad_s=residual_mad_s,
+            max_abs_residual_s=max_abs_residual_s,
             confidence=confidence,
             matched_nodes=matched_nodes,
             matched_event_ids=frozenset(matched_event_ids),
@@ -545,6 +606,7 @@ class ChartPredictor:
                 if transition_nodes else "hold-head-combination"
             ),
             head_matches=tuple(head_matches),
+            matched_nodes_detail=tuple(matched_nodes_detail),
         )
 
     def _rank_hold_alignment_solutions(
@@ -593,13 +655,41 @@ class ChartPredictor:
             and runner_up.matched_nodes >= best.matched_nodes - 1
             and len(runner_up.matched_event_ids) >= len(best.matched_event_ids)
         )
+        max_abs_residual_rejected = (
+            best.max_abs_residual_s
+            > HOLD_ALIGNMENT_MAX_ABS_RESIDUAL_S + 1e-9
+        )
+        rejection_gates = {
+            "ambiguous": ambiguous,
+            "matched_nodes": best.matched_nodes < HOLD_ALIGNMENT_MIN_MATCHED_NODES,
+            "event_groups": (
+                len(best.matched_event_ids) < HOLD_ALIGNMENT_MIN_EVENT_GROUPS
+            ),
+            "paths": len(best.matched_note_indices) < 2,
+            "head_or_topology": (
+                best.matched_head_events < 2 and not (
+                    best.matched_transition_contacts >= 2
+                    and best.matched_head_events >= 1
+                )
+            ),
+            "residual_mad": (
+                best.residual_mad_s > HOLD_ALIGNMENT_MAX_RESIDUAL_MAD_S
+            ),
+            "max_abs_residual": max_abs_residual_rejected,
+            "confidence": best.confidence < HOLD_ALIGNMENT_MIN_CONFIDENCE,
+        }
         candidate_signature = (
             best.source,
             round(best.offset_s * 1000, 1),
             round(best.confidence, 3),
             best.matched_nodes,
             round(best.residual_mad_s * 1000, 1),
+            round(best.max_abs_residual_s * 1000, 3),
             ambiguous,
+            tuple(
+                (detail["node_type"], detail["event_id"], detail["chart_note_index"])
+                for detail in best.matched_nodes_detail
+            ),
         )
         if candidate_signature != self._last_alignment_candidate_signature:
             self._pending_alignment_diagnostics.append({
@@ -610,7 +700,39 @@ class ChartPredictor:
                 "alignment_candidate_confidence": candidate_signature[2],
                 "alignment_candidate_matched_nodes": best.matched_nodes,
                 "alignment_candidate_residual_ms": candidate_signature[4],
+                "alignment_candidate_max_abs_residual_ms": candidate_signature[5],
                 "alignment_candidate_ambiguous": ambiguous,
+                "alignment_candidate_runner_up": (
+                    None if runner_up is None else {
+                        "source": runner_up.source,
+                        "offset_ms": round(runner_up.offset_s * 1000, 1),
+                        "matched_nodes": runner_up.matched_nodes,
+                        "event_groups": len(runner_up.matched_event_ids),
+                        "confidence": round(runner_up.confidence, 3),
+                        "offset_gap_ms": round(
+                            (runner_up.offset_s - best.offset_s) * 1000, 1,
+                        ),
+                    }
+                ),
+                "alignment_candidate_ambiguous_reason": (
+                    "runner_up_has_comparable_topology" if ambiguous else None
+                ),
+                "alignment_candidate_rejection_gates": rejection_gates,
+                "alignment_candidate_thresholds": {
+                    "minimum_matched_nodes": HOLD_ALIGNMENT_MIN_MATCHED_NODES,
+                    "minimum_event_groups": HOLD_ALIGNMENT_MIN_EVENT_GROUPS,
+                    "minimum_paths": 2,
+                    "maximum_residual_mad_ms": (
+                        HOLD_ALIGNMENT_MAX_RESIDUAL_MAD_S * 1000
+                    ),
+                    "maximum_absolute_residual_ms": (
+                        HOLD_ALIGNMENT_MAX_ABS_RESIDUAL_S * 1000
+                    ),
+                    "minimum_confidence": HOLD_ALIGNMENT_MIN_CONFIDENCE,
+                },
+                "alignment_candidate_matched_nodes_detail": (
+                    list(best.matched_nodes_detail)
+                ),
             })
             self._last_alignment_candidate_signature = candidate_signature
         topology_confirmed = (
@@ -627,6 +749,7 @@ class ChartPredictor:
                 and not topology_confirmed
             )
             or best.residual_mad_s > HOLD_ALIGNMENT_MAX_RESIDUAL_MAD_S
+            or max_abs_residual_rejected
             or best.confidence < HOLD_ALIGNMENT_MIN_CONFIDENCE
         ):
             return
@@ -722,8 +845,9 @@ class ChartPredictor:
                         self._relative(action.timestamp) - self.press_bias_s,
                         contact,
                         previous_lane,
-                        action.lane,
-                    ))
+                    action.lane,
+                    action.reason,
+                ))
                     self._next_hold_alignment_event_id += 1
                     self._hold_transition_events = (
                         self._hold_transition_events[-64:]
@@ -1018,6 +1142,11 @@ class ChartPredictor:
             if candidates:
                 self._sampled_track_ids.add(tracked.track_id)
                 self._track_phase_candidates[tracked.track_id] = candidates
+                self._track_phase_candidate_context[tracked.track_id] = {
+                    "lane": tracked.note.lane,
+                    "velocity_y": round(tracked.velocity_y, 3),
+                    "predicted_crossing_s": round(crossing_relative, 6),
+                }
         if len(self._track_phase_candidates) < self.min_calibration_samples:
             return
 
@@ -1093,6 +1222,40 @@ class ChartPredictor:
             (crossing, lane, "track-crossing", offset)
             for offset, lane, _note_index, _chart_time, crossing in best
         ]
+        selected_details: list[dict[str, object]] = []
+        for offset, lane, note_index, chart_time, crossing in best:
+            track_id = next(
+                (
+                    key for key, candidates in self._track_phase_candidates.items()
+                    if (offset, lane, note_index, chart_time, crossing) in candidates
+                ),
+                None,
+            )
+            context = (
+                self._track_phase_candidate_context.get(track_id, {})
+                if track_id is not None else {}
+            )
+            selected_details.append({
+                "track_id": track_id,
+                "lane": lane,
+                "velocity_y": context.get("velocity_y"),
+                "predicted_crossing_s": context.get(
+                    "predicted_crossing_s", round(crossing, 6),
+                ),
+                "candidate_chart_time_s": round(chart_time, 6),
+                "signed_residual_ms": round((offset - median) * 1000, 3),
+            })
+        runner_up_gap_ms = (
+            round((ranked[1][2] - median) * 1000, 3)
+            if len(ranked) > 1 else None
+        )
+        self._track_crossing_diagnostic = {
+            "track_crossing_samples": selected_details,
+            "track_crossing_median_ms": round(median * 1000, 3),
+            "track_crossing_mad_ms": round(mad * 1000, 3),
+            "track_crossing_runner_up_gap_ms": runner_up_gap_ms,
+            "track_crossing_source": "track-crossing",
+        }
 
     def provisional_residue_judgement(
         self,
@@ -2639,6 +2802,7 @@ class ChartPredictor:
                 offset_ms=round(self.song_offset_s * 1000, 1),
                 samples=len(self.calibration_samples),
                 source=self._alignment_lock_source or "track-crossing",
+                **(self._track_crossing_diagnostic or {}),
             )
             self._calibration_diagnosed = True
         if self._pending_bootstrap_hold_actions:

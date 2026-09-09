@@ -16,7 +16,15 @@ using namespace mbdr;
 void test_publish_unconnected_fails() {
     MinitouchClient client;
     CHECK(!client.connected());
-    CHECK(!client.publish("d 0 1 2 3\n"));
+    const std::string payload = "d 0 1 2 3\n";
+    CHECK(!client.publish(payload));
+    const MinitouchPublishDiagnostics diagnostics =
+        client.last_publish_diagnostics();
+    CHECK_EQ(diagnostics.payload_bytes,
+             static_cast<uint64_t>(payload.size()));
+    CHECK_EQ(diagnostics.send_calls, static_cast<uint64_t>(0));
+    CHECK_EQ(diagnostics.sent_bytes, static_cast<uint64_t>(0));
+    CHECK(!diagnostics.success);
 }
 
 void test_loopback_publish_delivers_exact_bytes() {
@@ -55,6 +63,14 @@ void test_loopback_publish_delivers_exact_bytes() {
 
     const std::string payload = "d 0 10 20 50\nc\nw 12\nu 0\nc\n";
     CHECK(client.publish(payload));
+    const MinitouchPublishDiagnostics diagnostics =
+        client.last_publish_diagnostics();
+    CHECK_EQ(diagnostics.payload_bytes,
+             static_cast<uint64_t>(payload.size()));
+    CHECK(diagnostics.send_calls >= static_cast<uint64_t>(1));
+    CHECK_EQ(diagnostics.sent_bytes,
+             static_cast<uint64_t>(payload.size()));
+    CHECK(diagnostics.success);
 
     std::string received(payload.size(), '\0');
     int total = 0;

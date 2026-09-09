@@ -23,7 +23,18 @@ bool ensure_wsa() {
 
 MinitouchClient::MinitouchClient(MinitouchClient&& other) noexcept
     : socket_(other.socket_.exchange(
-          kInvalidSocket, std::memory_order_acq_rel)) {}
+          kInvalidSocket, std::memory_order_acq_rel)) {
+    const MinitouchPublishDiagnostics diagnostics =
+        other.last_publish_diagnostics();
+    last_payload_bytes_.store(
+        diagnostics.payload_bytes, std::memory_order_relaxed);
+    last_send_calls_.store(
+        diagnostics.send_calls, std::memory_order_relaxed);
+    last_sent_bytes_.store(
+        diagnostics.sent_bytes, std::memory_order_relaxed);
+    last_publish_success_.store(
+        diagnostics.success, std::memory_order_relaxed);
+}
 
 MinitouchClient& MinitouchClient::operator=(MinitouchClient&& other) noexcept {
     if (this != &other) {
@@ -32,6 +43,16 @@ MinitouchClient& MinitouchClient::operator=(MinitouchClient&& other) noexcept {
             other.socket_.exchange(
                 kInvalidSocket, std::memory_order_acq_rel),
             std::memory_order_release);
+        const MinitouchPublishDiagnostics diagnostics =
+            other.last_publish_diagnostics();
+        last_payload_bytes_.store(
+            diagnostics.payload_bytes, std::memory_order_relaxed);
+        last_send_calls_.store(
+            diagnostics.send_calls, std::memory_order_relaxed);
+        last_sent_bytes_.store(
+            diagnostics.sent_bytes, std::memory_order_relaxed);
+        last_publish_success_.store(
+            diagnostics.success, std::memory_order_relaxed);
     }
     return *this;
 }
@@ -84,22 +105,47 @@ bool MinitouchClient::connect(const std::string& host, int port) {
 }
 
 bool MinitouchClient::publish(std::string_view bytes) {
+    uint64_t send_calls = 0;
+    uint64_t sent_bytes = 0;
+    const auto record = [&](bool success) {
+        last_payload_bytes_.store(
+            static_cast<uint64_t>(bytes.size()), std::memory_order_relaxed);
+        last_send_calls_.store(send_calls, std::memory_order_relaxed);
+        last_sent_bytes_.store(sent_bytes, std::memory_order_relaxed);
+        last_publish_success_.store(success, std::memory_order_release);
+    };
     if (!connected()) {
+        record(false);
         return false;
     }
     const auto handle = reinterpret_cast<SOCKET>(
         socket_.load(std::memory_order_acquire));
     std::size_t sent = 0;
     while (sent < bytes.size()) {
+        ++send_calls;
         const int chunk = send(handle, bytes.data() + sent,
                                static_cast<int>(bytes.size() - sent), 0);
         if (chunk <= 0) {
+            record(false);
             close();
             return false;
         }
         sent += static_cast<std::size_t>(chunk);
+        sent_bytes += static_cast<uint64_t>(chunk);
     }
+    record(true);
     return true;
+}
+
+MinitouchPublishDiagnostics
+MinitouchClient::last_publish_diagnostics() const noexcept {
+    MinitouchPublishDiagnostics result;
+    result.payload_bytes =
+        last_payload_bytes_.load(std::memory_order_relaxed);
+    result.send_calls = last_send_calls_.load(std::memory_order_relaxed);
+    result.sent_bytes = last_sent_bytes_.load(std::memory_order_relaxed);
+    result.success = last_publish_success_.load(std::memory_order_acquire);
+    return result;
 }
 
 std::string MinitouchClient::receive(std::size_t max_bytes, int timeout_ms) {

@@ -599,14 +599,16 @@ class NativeMinitouchBackend:
         self._session = self._session_factory(
             publish=self._publish_chunk,
             request_reset=self._device.request_reset,
-            fallback_stop=lambda: self._emergency_stop_device_with_budget(0.08),
+            # reset 执行证据由 Python owner 从设备 jlog 回传；C++ 超时不能先行
+            # close/kill，否则会在排队的 r 真正执行前截断唯一释放命令。
+            fallback_stop=lambda: False,
             clock=self._clock,
             config={
                 "lookahead_s": 0.500,
                 "low_water_s": 0.200,
                 "max_queue_s": 0.750,
-                "reset_timeout_s": 0.100,
-                "cancel_deadline_s": 0.500,
+                "reset_timeout_s": 1.000,
+                "cancel_deadline_s": 1.000,
             },
         )
         self._state = "idle"
@@ -633,6 +635,8 @@ class NativeMinitouchBackend:
         self._calibration_chunks = 0
         self._calibration_correction_ms = 0.0
         self._execution_timing = _ExecutionTimingTrace()
+        self._first_chunk_pipeline_lock = threading.Lock()
+        self._first_chunk_pipeline = self._new_first_chunk_pipeline()
         self._drift_rate_estimator = (
             _DriftRateEstimator() if drift_rate_correction_enabled else None
         )
@@ -645,6 +649,14 @@ class NativeMinitouchBackend:
         self._release_latency_ms: float | None = None
         self._release_confirmed: bool | None = None
         self._release_error: str | None = None
+        self._release_diagnostics: dict[str, object] = {
+            "reset_requested": False,
+            "reset_sent": False,
+            "reset_executed": False,
+            "reset_execution_latency_ms": None,
+            "release_proof": None,
+            "forced_kill_used": False,
+        }
         self._cleanup_warning: str | None = None
         self._publish_error: str | None = None
         self._device_thread: threading.Thread | None = None
@@ -705,6 +717,158 @@ class NativeMinitouchBackend:
             else self._receipt_reader
         )
         return [dict(item) for item in list(value)]
+
+    @staticmethod
+    def _new_first_chunk_pipeline() -> dict[str, object]:
+        """创建固定字段的首切片诊断；未观测边界必须保留为 null。"""
+        return {
+            "schema_version": 1,
+            "scope": "first-playback-chunk-only",
+            "host_clock_domain": "backend-monotonic-seconds",
+            "device_clock_domain": "minitouch-monotonic-milliseconds",
+            "duration_sign_convention": (
+                "positive=later-boundary-minus-earlier-boundary"
+            ),
+            "sequence": None,
+            "session_current_s": None,
+            "window_start_s": None,
+            "callback_entry_s": None,
+            "compile_start_s": None,
+            "compile_end_s": None,
+            "mapping_end_s": None,
+            "receipt_end_s": None,
+            "records_end_s": None,
+            "payload_end_s": None,
+            "socket_send_begin_s": None,
+            "socket_send_end_s": None,
+            "payload_bytes": None,
+            "send_calls": None,
+            "sent_bytes": None,
+            "send_success": None,
+            "first_jlog_command": None,
+            "first_jlog_start_device_ms": None,
+            "first_jlog_end_device_ms": None,
+            "first_jlog_received_s": None,
+            "first_jlog_start_engine_s": None,
+            "first_jlog_end_engine_s": None,
+            "first_wait_jlog_command": None,
+            "first_wait_requested_ms": None,
+            "first_wait_start_device_ms": None,
+            "first_wait_end_device_ms": None,
+            "first_wait_received_s": None,
+            "clock_mapping_basis": None,
+        }
+
+    @staticmethod
+    def _finite_or_none(value: object) -> float | None:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if math.isfinite(number) else None
+
+    @staticmethod
+    def _int_or_none(value: object) -> int | None:
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    def _diagnostic_clock_s(self) -> float | None:
+        """诊断读时钟失败不能改变发布、取消或释放结果。"""
+        try:
+            value = float(self._clock())
+        except Exception:  # noqa: BLE001 - 诊断必须旁路失败
+            return None
+        return value if math.isfinite(value) else None
+
+    def _begin_first_chunk_pipeline(
+        self, chunk: dict[str, object], callback_entry_s: float | None
+    ) -> bool:
+        sequence = int(chunk["sequence"])
+        with self._first_chunk_pipeline_lock:
+            if self._first_chunk_pipeline["sequence"] is not None:
+                return False
+            self._first_chunk_pipeline.update({
+                "sequence": sequence,
+                "session_current_s": self._finite_or_none(
+                    chunk.get("session_current_s")
+                ),
+                "window_start_s": self._finite_or_none(
+                    chunk.get("window_start_s")
+                ),
+                "callback_entry_s": callback_entry_s,
+            })
+        return True
+
+    def _update_first_chunk_pipeline(
+        self, sequence: int, **fields: object
+    ) -> None:
+        with self._first_chunk_pipeline_lock:
+            if self._first_chunk_pipeline["sequence"] != int(sequence):
+                return
+            self._first_chunk_pipeline.update(fields)
+
+    def _first_chunk_pipeline_report(self) -> dict[str, object]:
+        lock = getattr(self, "_first_chunk_pipeline_lock", None)
+        pipeline = getattr(self, "_first_chunk_pipeline", None)
+        if lock is None or pipeline is None:
+            result = self._new_first_chunk_pipeline()
+        else:
+            with lock:
+                result = dict(pipeline)
+
+        def elapsed_ms(later: str, earlier: str) -> float | None:
+            later_value = self._finite_or_none(result.get(later))
+            earlier_value = self._finite_or_none(result.get(earlier))
+            if later_value is None or earlier_value is None:
+                return None
+            return (later_value - earlier_value) * 1000.0
+
+        raw_start = self._finite_or_none(
+            result.get("first_jlog_start_device_ms")
+        )
+        raw_end = self._finite_or_none(
+            result.get("first_jlog_end_device_ms")
+        )
+        wait_start = self._finite_or_none(
+            result.get("first_wait_start_device_ms")
+        )
+        wait_end = self._finite_or_none(
+            result.get("first_wait_end_device_ms")
+        )
+        wait_requested = self._finite_or_none(
+            result.get("first_wait_requested_ms")
+        )
+        wait_actual = (
+            wait_end - wait_start
+            if wait_start is not None and wait_end is not None
+            else None
+        )
+        result["durations_ms"] = {
+            "session_current_to_callback_entry": elapsed_ms(
+                "callback_entry_s", "session_current_s"
+            ),
+            "host_build": elapsed_ms("payload_end_s", "callback_entry_s"),
+            "socket_send": elapsed_ms(
+                "socket_send_end_s", "socket_send_begin_s"
+            ),
+            "socket_send_end_to_first_jlog_start": elapsed_ms(
+                "first_jlog_start_engine_s", "socket_send_end_s"
+            ),
+            "first_jlog_start_to_end": (
+                raw_end - raw_start
+                if raw_start is not None and raw_end is not None
+                else None
+            ),
+            "first_wait_actual": wait_actual,
+            "first_wait_error": (
+                wait_actual - wait_requested
+                if wait_actual is not None and wait_requested is not None
+                else None
+            ),
+        }
+        return result
 
     def _fail_observation(self, reason: str) -> None:
         self._observation_error = reason
@@ -868,6 +1032,62 @@ class NativeMinitouchBackend:
                     f"收到未发布的设备命令 actual={command!r}"
                 )
             expected = self._expected_commands[0]
+            pipeline_lock = getattr(self, "_first_chunk_pipeline_lock", None)
+            pipeline = getattr(self, "_first_chunk_pipeline", None)
+            if pipeline_lock is None or pipeline is None:
+                first_sequence = None
+                first_jlog_missing = False
+            else:
+                with pipeline_lock:
+                    first_sequence = pipeline["sequence"]
+                    first_jlog_missing = (
+                        pipeline["first_jlog_start_device_ms"] is None
+                    )
+            if first_jlog_missing and first_sequence == expected.chunk_sequence:
+                mapped_start_s = None
+                mapped_end_s = None
+                mapping_basis = None
+                if (
+                    self._device_clock_offset_s is not None
+                    and self._clock_basis == "probe-midpoint"
+                ):
+                    mapped_start_s = (
+                        start_ms / 1000.0 + self._device_clock_offset_s
+                    )
+                    mapped_end_s = (
+                        end_ms / 1000.0 + self._device_clock_offset_s
+                    )
+                    mapping_basis = self._clock_basis
+                self._update_first_chunk_pipeline(
+                    expected.chunk_sequence,
+                    first_jlog_command=command,
+                    first_jlog_start_device_ms=start_ms,
+                    first_jlog_end_device_ms=end_ms,
+                    first_jlog_received_s=float(received_s),
+                    first_jlog_start_engine_s=mapped_start_s,
+                    first_jlog_end_engine_s=mapped_end_s,
+                    clock_mapping_basis=mapping_basis,
+                )
+            if first_sequence == expected.chunk_sequence and command.startswith("w "):
+                with pipeline_lock:
+                    first_wait_missing = (
+                        pipeline["first_wait_start_device_ms"] is None
+                    )
+                if first_wait_missing:
+                    try:
+                        requested_ms = float(command.split()[1])
+                    except (IndexError, ValueError, OverflowError):
+                        requested_ms = None
+                    if requested_ms is not None and not math.isfinite(requested_ms):
+                        requested_ms = None
+                    self._update_first_chunk_pipeline(
+                        expected.chunk_sequence,
+                        first_wait_jlog_command=command,
+                        first_wait_requested_ms=requested_ms,
+                        first_wait_start_device_ms=start_ms,
+                        first_wait_end_device_ms=end_ms,
+                        first_wait_received_s=float(received_s),
+                    )
             if command != expected.command:
                 self._fail_observation(
                     f"chunk={expected.chunk_sequence} 命令失配："
@@ -1120,7 +1340,14 @@ class NativeMinitouchBackend:
 
     def _publish_chunk(self, chunk: dict[str, object]) -> bool:
         """把 C++ 会话给出的绝对时刻切片编译后原样追加到设备队列。"""
+        callback_entry_s = self._diagnostic_clock_s()
+        sequence = -1
+        record_first = False
         try:
+            sequence = int(chunk["sequence"])
+            record_first = self._begin_first_chunk_pipeline(
+                chunk, callback_entry_s
+            )
             actions: list[dict[str, object]] = []
             for item in list(chunk.get("actions", [])):
                 entry = dict(item)
@@ -1134,6 +1361,10 @@ class NativeMinitouchBackend:
                 action["due_s"] = float(entry["engine_due_s"])
                 future_down_reservations.append(action)
             used_offsets = self._compiler.offsets
+            if record_first:
+                self._update_first_chunk_pipeline(
+                    sequence, compile_start_s=self._diagnostic_clock_s()
+                )
             script = list(self._compiler.compile(
                 actions,
                 dict(self._config, song_offset_s=0.0, press_bias_ms=0),
@@ -1142,10 +1373,18 @@ class NativeMinitouchBackend:
                 float(chunk["window_end_s"]),
                 future_down_reservations,
             ))
+            if record_first:
+                self._update_first_chunk_pipeline(
+                    sequence, compile_end_s=self._diagnostic_clock_s()
+                )
             commands = [str(line).strip() for line in script]
             if not commands or any(not command for command in commands):
                 raise RuntimeError("TouchScriptCompiler 生成了空命令行")
             commands = self._apply_touch_surface_mapping(commands)
+            if record_first:
+                self._update_first_chunk_pipeline(
+                    sequence, mapping_end_s=self._diagnostic_clock_s()
+                )
             receipt_by_commit: dict[int, list[dict[str, object]]] = {}
             receipt_source_lines: set[int] = set()
             new_tokens: set[int] = set()
@@ -1183,7 +1422,10 @@ class NativeMinitouchBackend:
                 receipt_source_lines.add(line_index)
                 receipt_by_commit.setdefault(commit_index, []).append(receipt)
                 new_tokens.add(token)
-            sequence = int(chunk["sequence"])
+            if record_first:
+                self._update_first_chunk_pipeline(
+                    sequence, receipt_end_s=self._diagnostic_clock_s()
+                )
             records = [
                 _ExpectedCommand(
                     command=command,
@@ -1196,6 +1438,10 @@ class NativeMinitouchBackend:
                 )
                 for index, command in enumerate(commands)
             ]
+            if record_first:
+                self._update_first_chunk_pipeline(
+                    sequence, records_end_s=self._diagnostic_clock_s()
+                )
             final_chunk = bool(chunk.get("final_chunk", False))
             if (
                 final_chunk
@@ -1208,9 +1454,48 @@ class NativeMinitouchBackend:
                     f"{len(self._published_action_tokens) + len(new_tokens)} "
                     f"planned={len(self._actions)}"
                 )
-            self._device.publish(
-                "".join(command + "\n" for command in commands)
-            )
+            payload = "".join(command + "\n" for command in commands)
+            payload_bytes = len(payload.encode("utf-8"))
+            if record_first:
+                self._update_first_chunk_pipeline(
+                    sequence,
+                    payload_end_s=self._diagnostic_clock_s(),
+                    payload_bytes=payload_bytes,
+                )
+            if record_first:
+                self._update_first_chunk_pipeline(
+                    sequence, socket_send_begin_s=self._diagnostic_clock_s()
+                )
+            try:
+                self._device.publish(payload)
+            finally:
+                if record_first:
+                    diagnostics = getattr(
+                        self._device, "last_publish_diagnostics", None
+                    )
+                    if callable(diagnostics):
+                        try:
+                            diagnostics = diagnostics()
+                        except Exception:  # noqa: BLE001 - 诊断不能覆盖发布错误
+                            diagnostics = None
+                    try:
+                        values = (
+                            dict(diagnostics)
+                            if diagnostics is not None
+                            else {}
+                        )
+                    except (TypeError, ValueError):
+                        values = {}
+                    self._update_first_chunk_pipeline(
+                        sequence,
+                        socket_send_end_s=self._diagnostic_clock_s(),
+                        send_calls=self._int_or_none(values.get("send_calls")),
+                        sent_bytes=self._int_or_none(values.get("sent_bytes")),
+                        send_success=(
+                            bool(values["success"])
+                            if "success" in values else None
+                        ),
+                    )
             self._expected_commands.extend(records)
             self._published_commands += len(records)
             self._published_action_tokens.update(new_tokens)
@@ -1366,6 +1651,20 @@ class NativeMinitouchBackend:
             result = bool(self._session.cancel(*arguments))
             self._refresh_session_snapshot()
             return result
+        if operation == "acknowledge_reset":
+            # 只有 owner 能接触 PlaybackSession；主线程在设备端 r 回执后
+            # 通过本命令同步确认 C++ 状态，再允许关闭 owner。
+            self._observe_new_logs()
+            if (
+                self._session_state == "cancelling"
+                and bool(getattr(self._device, "reset_executed", False))
+            ):
+                acknowledge = getattr(
+                    self._session, "acknowledge_reset", None
+                )
+                if callable(acknowledge) and bool(acknowledge()):
+                    return self._refresh_session_snapshot("cancelled")
+            return self._refresh_session_snapshot()
         raise RuntimeError(f"未知 PlaybackSession 操作：{operation}")
 
     def _submit_session(
@@ -1393,6 +1692,14 @@ class NativeMinitouchBackend:
     def _drive_session(self) -> None:
         """由 owner 线程高频补充切片并推进取消超时。"""
         self._observe_new_logs()
+        if (
+            self._session_state == "cancelling"
+            and bool(getattr(self._device, "reset_executed", False))
+        ):
+            acknowledge = getattr(self._session, "acknowledge_reset", None)
+            if callable(acknowledge) and bool(acknowledge()):
+                self._refresh_session_snapshot("cancelled")
+                return
         if (
             self._final_chunk_published
             and self._expected_commands
@@ -1473,7 +1780,7 @@ class NativeMinitouchBackend:
             try:
                 self._device.request_reset()
             finally:
-                self._emergency_stop_device_with_budget(0.08)
+                self._stop_device_with_budget(1.0)
 
     def poll(self, now: float) -> None:
         """5Hz 主循环只读取状态；滚动发布由独立 worker 驱动。"""
@@ -1497,9 +1804,9 @@ class NativeMinitouchBackend:
         self._game_terminal_reason = str(reason) if reason else None
 
     def stop(self) -> None:
-        """在 500ms 硬预算内取消生产并取得设备端释放证据。"""
+        """在 1s 硬预算内取消生产并取得设备端 reset 执行证据。"""
         stop_started = time.monotonic()
-        release_deadline = stop_started + 0.500
+        release_deadline = stop_started + 1.000
         release_errors: list[str] = []
 
         def remaining() -> float:
@@ -1518,15 +1825,15 @@ class NativeMinitouchBackend:
             and owner.is_alive()
             and self._final_chunk_published
             and self._expected_commands
+            and self._game_terminal_reason == "已识别演奏结束并进入结算"
         ):
             # 正常结算时给异步日志线程一个很短的排空窗口；超过窗口仍按
-            # 取消路径释放，整条 stop 路径继续受 500ms 门槛约束。
+            # 取消路径释放，整条 stop 路径继续受 1s 门槛约束。
             self._observation_complete.wait(timeout=min(0.10, remaining()))
-        if (
-            owner is not None
-            and owner.is_alive()
-            and self._session_state not in {"finished", "cancelled", "failed"}
-        ):
+        session_cancel_required = self._session_state not in {
+            "finished", "cancelled", "failed"
+        }
+        if owner is not None and owner.is_alive() and session_cancel_required:
             try:
                 timeout_s = min(0.08, remaining())
                 if timeout_s <= 0:
@@ -1536,11 +1843,42 @@ class NativeMinitouchBackend:
                 )
             except Exception as exc:  # noqa: BLE001 - 仍需继续释放设备
                 self._publish_error = f"cancel {type(exc).__name__}: {exc}"
-            # minitouch 没有 reset ACK；只给 C++ 状态机约 100ms 走到
-            # fallback，之后立即转入设备端 PID kill 证据路径。
-            self._session_terminal.wait(timeout=min(0.12, remaining()))
 
-        # 先请求 owner 停产，不在这里长等；设备断开后任何迟到 publish 都会失败。
+        device_thread = self._device_thread
+        # r 可能排在最长 750ms 的设备队列后。在本轮 jlog 确认 r 之前
+        # 保留 owner、socket 与日志线程；否则 C++ 会话无法从 cancelling
+        # 转到 cancelled，也无法证明设备真正执行了 reset。
+        device_release_ok = self._stop_device_with_budget(remaining())
+
+        # 不用一次 poll 周期猜测 owner 是否已经推进；必须把确认命令交给
+        # 唯一 owner，并等它返回 C++ 的终态后才能提交 shutdown。
+        session_cancel_confirmed = not session_cancel_required
+        if session_cancel_required:
+            if owner is None or not owner.is_alive():
+                release_errors.append(
+                    "PlaybackSession owner 已退出，无法确认 cancelled"
+                )
+            else:
+                try:
+                    timeout_s = remaining()
+                    if timeout_s <= 0:
+                        raise RuntimeError("reset ACK 后已无会话确认预算")
+                    confirmed_state = self._state_name(
+                        self._submit_session(
+                            "acknowledge_reset", timeout_s=timeout_s
+                        )
+                    )
+                    session_cancel_confirmed = confirmed_state == "cancelled"
+                    if not session_cancel_confirmed:
+                        release_errors.append(
+                            "PlaybackSession reset ACK 后未进入 cancelled："
+                            f"state={confirmed_state}"
+                        )
+                except Exception as exc:  # noqa: BLE001 - 仍需关闭 owner
+                    release_errors.append(
+                        "PlaybackSession cancelled 确认失败："
+                        f"{type(exc).__name__}: {exc}"
+                    )
         if owner is not None and owner.is_alive():
             response: queue.Queue[object] = queue.Queue(maxsize=1)
             self._owner_commands.put(("shutdown", (), response))
@@ -1550,15 +1888,28 @@ class NativeMinitouchBackend:
                     response.get(timeout=timeout_s)
             except queue.Empty:
                 pass
+            owner.join(timeout=remaining())
+        owner_stopped = owner is None or not owner.is_alive()
+        if not owner_stopped:
+            release_errors.append("publisher owner 未在 1000ms 停止预算内退出")
 
-        device_thread = self._device_thread
-        if device_thread is not None and device_thread.is_alive():
-            # close/kill 本地句柄可打断握手读取；线程退出后仍由下方设备
-            # stop 对设备端 PID 做独立确认。
-            self._emergency_stop_device_with_budget(min(0.08, remaining()))
-            device_thread.join(timeout=min(0.08, remaining()))
-
-        device_release_ok = self._stop_device_with_budget(remaining())
+        device_diagnostics = getattr(self._device, "release_diagnostics", None)
+        if callable(device_diagnostics):
+            device_diagnostics = device_diagnostics()
+        try:
+            self._release_diagnostics = dict(device_diagnostics)
+        except (TypeError, ValueError):
+            # 注入的测试设备没有设备级诊断；真实 NativeMinitouchDevice 必须提供。
+            self._release_diagnostics = {
+                "reset_requested": None,
+                "reset_sent": None,
+                "reset_executed": bool(device_release_ok),
+                "reset_execution_latency_ms": None,
+                "release_proof": (
+                    "injected-device-release" if device_release_ok else None
+                ),
+                "forced_kill_used": False,
+            }
         device_cleanup_detail = str(
             getattr(self._device, "last_release_error", None) or ""
         ) or None
@@ -1575,25 +1926,19 @@ class NativeMinitouchBackend:
             release_errors.append("minitouch 准备线程未在释放预算内退出")
 
         self._release_latency_ms = (time.monotonic() - stop_started) * 1000.0
-        if self._release_latency_ms > 500.0:
+        if self._release_latency_ms > 1000.0:
             release_errors.append(
-                f"释放耗时 {self._release_latency_ms:.3f}ms 超过 500ms"
+                f"释放耗时 {self._release_latency_ms:.3f}ms 超过 1000ms"
             )
         self._release_confirmed = bool(
             device_release_ok
             and start_cancel_synchronized
+            and session_cancel_confirmed
+            and owner_stopped
             and not (device_thread is not None and device_thread.is_alive())
-            and self._release_latency_ms <= 500.0
+            and self._release_latency_ms <= 1000.0
         )
         self._release_error = "; ".join(release_errors) or None
-
-        if owner is not None and owner.is_alive():
-            owner.join(timeout=remaining())
-        if owner is not None and owner.is_alive():
-            self._publish_error = (
-                self._publish_error
-                or "publisher owner 未在 500ms 停止预算内退出"
-            )
 
         fatal_error = bool(
             self._publisher_error
@@ -1741,6 +2086,7 @@ class NativeMinitouchBackend:
             "session_state": self._session_state,
             "first_action_anchor_s": self._first_action_anchor_s,
             "execution_timing": self._execution_timing.report(),
+            "first_chunk_pipeline": self._first_chunk_pipeline_report(),
             "touch_y": float(
                 getattr(self, "_config", {}).get("judgement_y", TOUCH_Y)
             ),
@@ -1792,6 +2138,7 @@ class NativeMinitouchBackend:
             "cancelled_pending_actions": self._cancelled_pending_actions,
             "release_confirmed": self._release_confirmed is True,
             "release_error": self._release_error,
+            **getattr(self, "_release_diagnostics", {}),
             "cleanup_warning": getattr(self, "_cleanup_warning", None),
             "publish_error": self._publish_error,
             "publisher_error": self._publisher_error,

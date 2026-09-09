@@ -169,7 +169,7 @@ def test_native_execution_gate_requires_complete_lossless_evidence():
     assert any("stop_latency_ms=nan" in failure for failure in over_budget)
 
 
-def test_native_execution_gate_accepts_game_terminal_life_failure():
+def test_native_execution_gate_accepts_only_proven_jump_cancellation():
     cancelled = {
         "planned": 3739,
         "sent": 2636,
@@ -178,12 +178,16 @@ def test_native_execution_gate_accepts_game_terminal_life_failure():
         "executed_observation_complete": False,
         "executed_observation_reason": "会话在完整设备回读前取消",
         "state": "cancelled",
-        "session_state": "cancelling",
+        "session_state": "cancelled",
+        "reset_executed": True,
         "release_confirmed": True,
-        "stop_latency_ms": 202.0,
+        "stop_latency_ms": 902.0,
         "game_terminal_reason": "演出失败：生命值归零",
     }
-    assert profile_play_action._native_execution_gate_failures(cancelled) == []
+    assert profile_play_action._native_execution_gate_failures(
+        cancelled,
+        expected_jump_cancel=True,
+    ) == []
 
     # 同样的取消状态，但没有游戏终态理由时仍必须报技术失败。
     without_terminal = {
@@ -197,6 +201,23 @@ def test_native_execution_gate_accepts_game_terminal_life_failure():
     assert any("terminal_state=cancelled" in item for item in failures)
     assert any("3739/2636/2618" in item for item in failures)
     assert any("device evidence incomplete" in item for item in failures)
+
+    for field, value in (
+        ("state", "cancelling"),
+        ("session_state", "cancelling"),
+        ("reset_executed", False),
+        ("release_confirmed", False),
+        ("underflows", 1),
+        ("executed", 2640),
+        ("sent", 3800),
+        ("publish_error", "late publish"),
+        ("stop_latency_ms", 1000.001),
+    ):
+        broken = {**cancelled, field: value}
+        assert profile_play_action._native_execution_gate_failures(
+            broken,
+            expected_jump_cancel=True,
+        ), field
 
 
 def test_profile_play_reuses_one_agent_controller_proxy(monkeypatch):
@@ -484,6 +505,122 @@ def test_profile_native_consumes_and_configures_prearmed_backend(monkeypatch):
     assert backend.offsets == [17]
     assert engine_backends == [backend]
     assert backend.stop_calls == 1
+
+
+def test_profile_jump_cancellation_reaches_disconnect_branch(monkeypatch):
+    prepared_run = reset_live_run(
+        mode="cooperative",
+        difficulty="Expert",
+        prepared_for_play=True,
+    )
+    tasker = Tasker()
+    context = SimpleNamespace(tasker=tasker)
+    settings = SimpleNamespace(
+        target_fps=60,
+        timing_offset_ms=17,
+        note_speed=10.0,
+        profile_path=SimpleNamespace(name="expert.json"),
+    )
+    selection = SimpleNamespace(
+        path=Path("chart-48-expert.json"),
+        timeline=None,
+        bestdori_song_id=48,
+        difficulty="expert",
+    )
+    monkeypatch.setattr(
+        profile_play_action.RealtimeProfileStore,
+        "resolve_latest",
+        lambda *args, **kwargs: settings,
+    )
+    monkeypatch.setattr(
+        profile_play_action.RealtimeProfileStore,
+        "runtime_options",
+        lambda *args, **kwargs: {
+            "chart_prediction_enabled": False,
+            "chart_predict_presses": False,
+            "native_realtime_enabled": True,
+            "life_safety_enabled": False,
+            "life_exit_threshold": 100,
+        },
+    )
+    monkeypatch.setattr(
+        profile_play_action,
+        "resolve_local_chart_for_run",
+        lambda *args, **kwargs: SimpleNamespace(
+            selection=selection,
+            reason="matched",
+        ),
+    )
+    monkeypatch.setattr(
+        profile_play_action, "require_game_foreground", lambda _controller: None
+    )
+    monkeypatch.setattr(profile_play_action, "debug_enabled", lambda: False)
+    monkeypatch.setattr(
+        profile_play_action, "diagnostic_trace_enabled", lambda: False
+    )
+
+    class Dispatcher:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        profile_play_action, "ControllerTouchDispatcher", Dispatcher
+    )
+
+    class Backend:
+        def configure_timing_offset(self, value):
+            assert value == 17
+
+    monkeypatch.setattr(
+        profile_play_action,
+        "consume_prearmed_backend",
+        lambda run_id, chart_path: Backend(),
+    )
+
+    class Engine:
+        def __init__(self, *args, **kwargs):
+            assert kwargs["native_backend"] is not None
+
+        def run(self, _capture, _stopping, **kwargs):
+            kwargs["on_life_depleted"](SimpleNamespace(value=0))
+            return EngineStats(
+                72,
+                309,
+                False,
+                life_depleted=True,
+                jump_requested=True,
+                completed=False,
+                terminal_reason="生命归零请求断网跳车",
+                engine_mode="native",
+                native_report={
+                    "planned": 2764,
+                    "sent": 309,
+                    "executed": 282,
+                    "underflows": 0,
+                    "executed_observation_complete": False,
+                    "executed_observation_reason": "会话在完整设备回读前取消",
+                    "state": "cancelled",
+                    "session_state": "cancelled",
+                    "reset_executed": True,
+                    "release_confirmed": True,
+                    "stop_latency_ms": 902.0,
+                },
+            )
+
+    monkeypatch.setattr(profile_play_action, "RealtimeEngine", Engine)
+
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Expert",
+        "run_mode": "cooperative",
+        "life_depleted_jump_request": True,
+        "confirm_final_cover": False,
+    }))
+    assert RealtimeProfilePlay()._run(context, argv) is True
+    assert profile_play_action.current_live_run().disconnect_jump_requested is True
+    assert profile_play_action.current_live_run().run_id == prepared_run.run_id
 
 
 def test_profile_falls_back_to_legacy_without_reliable_native_chart(
@@ -809,6 +946,10 @@ def test_result_report_contains_runtime_acceptance_metrics():
         terminal_reason="completed",
         initial_timing_offset_ms=-11,
         final_timing_offset_ms=-13,
+        life_monitor_diagnostics={
+            "enabled": True,
+            "life_depleted_reason": "zero-streak-not-confirmed",
+        },
     )
 
     payload = _result_report_payload(
@@ -824,6 +965,10 @@ def test_result_report_contains_runtime_acceptance_metrics():
     assert payload["frame_interval_p95_ms"] == pytest.approx(18.2)
     assert payload["effective_fps"] == pytest.approx(59.1)
     assert payload["terminal_reason"] == "completed"
+    assert payload["life_monitor_diagnostics"] == {
+        "enabled": True,
+        "life_depleted_reason": "zero-streak-not-confirmed",
+    }
 
 
 @pytest.mark.parametrize(

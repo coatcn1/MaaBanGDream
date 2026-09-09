@@ -165,6 +165,8 @@ def _completion_missing_frames(
 
 def _native_execution_gate_failures(
     native_report: dict[str, object],
+    *,
+    expected_jump_cancel: bool = False,
 ) -> list[str]:
     """返回 Native 完整性门禁失败项；空列表才允许进入结算解析。"""
     planned = int(native_report.get("planned", 0))
@@ -176,29 +178,31 @@ def _native_execution_gate_failures(
     session_state = str(
         native_report.get("session_state") or "<missing>"
     ).lower()
-    game_terminal = str(
-        native_report.get("game_terminal_reason") or ""
-    )
-    # 生命归零是游戏自身的终态：弹窗出现后引擎主动取消会话，剩余谱面动作
-    # 不会、也不应继续派发。此时 cancelled 会话与不完整的设备回读是预期，
-    # 只要触点已确认释放且无传输/设备错误，就不算技术失败。
-    life_failed_stop = "演出失败" in game_terminal
-    if (
-        (state != "finished" or session_state != "finished")
-        and not life_failed_stop
-    ):
+    if expected_jump_cancel:
+        if state != "cancelled" or session_state != "cancelled":
+            failures.append(
+                f"terminal_state={state} session_state={session_state}"
+            )
+        if not (0 <= executed <= sent <= planned):
+            failures.append(
+                f"planned/sent/executed={planned}/{sent}/{executed}"
+            )
+        if native_report.get("reset_executed") is not True:
+            failures.append("reset_executed=false")
+    elif state != "finished" or session_state != "finished":
         failures.append(
             f"terminal_state={state} session_state={session_state}"
         )
     if (
-        planned <= 0 or sent != planned or executed != planned
-    ) and not life_failed_stop:
+        not expected_jump_cancel
+        and (planned <= 0 or sent != planned or executed != planned)
+    ):
         failures.append(
             f"planned/sent/executed={planned}/{sent}/{executed}"
         )
     if (
         not bool(native_report.get("executed_observation_complete", False))
-        and not life_failed_stop
+        and not expected_jump_cancel
     ):
         failures.append(
             "device evidence incomplete: "
@@ -223,7 +227,7 @@ def _native_execution_gate_failures(
     except (KeyError, TypeError, ValueError):
         failures.append("stop_latency_ms=invalid")
     else:
-        if not math.isfinite(stop_latency_ms) or stop_latency_ms > 500.0:
+        if not math.isfinite(stop_latency_ms) or stop_latency_ms > 1000.0:
             failures.append(f"stop_latency_ms={stop_latency_ms}")
     return failures
 
@@ -2469,7 +2473,10 @@ class RealtimeProfilePlay(CustomAction):
             if native_requested and not stats.stopped:
                 native_report = dict(stats.native_report)
                 native_failures = _native_execution_gate_failures(
-                    native_report
+                    native_report,
+                    expected_jump_cancel=(
+                        stats.jump_requested and stats.life_depleted
+                    ),
                 )
                 print(
                     "RealtimeProfilePlay native_timing "

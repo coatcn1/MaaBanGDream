@@ -98,6 +98,9 @@ def result_report_payload(
         "action_counts": stats.action_counts,
         "engine_mode": getattr(stats, "engine_mode", "legacy"),
         "native": dict(getattr(stats, "native_report", {})),
+        "life_monitor_diagnostics": dict(
+            getattr(stats, "life_monitor_diagnostics", {})
+        ),
         "frame_interval_p50_ms": stats.frame_interval_p50_ms,
         "frame_interval_p95_ms": stats.frame_interval_p95_ms,
         "frame_interval_max_ms": stats.frame_interval_max_ms,

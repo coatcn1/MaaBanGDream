@@ -17,6 +17,7 @@ from agent.realtime.cooperative_action import (
     CooperativeLiveFinalize,
     CooperativeLiveAction,
     CooperativeLiveFlow,
+    CooperativePlayfieldEntryEvidence,
     JumpOutUnavailable,
     MemberExited,
     classify_room_tier,
@@ -266,6 +267,7 @@ def _fake_member_exit_watch_flow(frame, timeout):
     flow.visible = (
         lambda image, name, threshold=0.9: name == "member_exit_title"
     )
+    flow.playfield_entry_evidence = SimpleNamespace(reset=lambda: None)
     flow.dismiss_member_exit = lambda: dismissed.append(True)
     flow.watch_member_exit_before_black(timeout=timeout)
     return dismissed
@@ -280,6 +282,7 @@ def test_member_exit_watch_dismisses_popup_before_black():
     flow.visible = (
         lambda image, name, threshold=0.9: name == "member_exit_title"
     )
+    flow.playfield_entry_evidence = SimpleNamespace(reset=lambda: None)
     flow.dismiss_member_exit = lambda: dismissed.append(True)
     with pytest.raises(MemberExited):
         flow.watch_member_exit_before_black(timeout=2.0)
@@ -292,13 +295,108 @@ def test_member_exit_watch_returns_immediately_on_black_transition():
     assert dismissed == []
 
 
-def test_member_exit_watch_times_out_without_popup_or_black():
+def test_member_exit_watch_fails_closed_when_playfield_motion_proves_missed_transition(
+    capsys,
+):
     frame = np.full((720, 1280, 3), 128, dtype=np.uint8)
     flow = object.__new__(CooperativeLiveFlow)
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
     flow.capture = lambda: frame.copy()
     flow.visible = lambda image, name, threshold=0.9: False
-    flow.watch_member_exit_before_black(timeout=0.25)
+    flow.playfield_detector = lambda image: True
+    flow.playfield_entry_evidence = SimpleNamespace(
+        reset=lambda: None,
+        observe=lambda image, *, playfield_visible: True,
+    )
+
+    with pytest.raises(RuntimeError, match="已错过开演转场"):
+        flow.watch_member_exit_before_black(timeout=2.0)
+    assert "outcome=playfield-motion-missed-transition" in capsys.readouterr().out
+
+
+def test_member_exit_watch_does_not_accept_static_prepare_page_as_playfield(
+    monkeypatch,
+):
+    frame = np.full((720, 1280, 3), 128, dtype=np.uint8)
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    flow.capture = lambda: frame.copy()
+    flow.visible = lambda image, name, threshold=0.9: False
+    flow.playfield_detector = lambda image: True
+    flow.playfield_entry_evidence = SimpleNamespace(
+        reset=lambda: None,
+        observe=lambda image, *, playfield_visible: False,
+    )
+    clock = [0.0]
+    monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        cooperative_action.time,
+        "sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+
+    with pytest.raises(RuntimeError, match="未观察到可靠开演转场"):
+        flow.watch_member_exit_before_black(timeout=0.1)
+
+
+def test_cooperative_playfield_entry_evidence_requires_narrow_motion():
+    evidence = CooperativePlayfieldEntryEvidence()
+    static = np.full((720, 1280, 3), 80, dtype=np.uint8)
+    narrow_motion = static.copy()
+    narrow_motion[500:540, 600:640] = 255
+    narrow_motion_followup = static.copy()
+    narrow_motion_followup[500:540, 640:680] = 255
+    broad_transition = static.copy()
+    broad_transition[430:570, :, :] = 180
+
+    assert evidence.observe(static, playfield_visible=True) is False
+    assert evidence.observe(static, playfield_visible=True) is False
+    assert evidence.observe(broad_transition, playfield_visible=True) is False
+    assert evidence.observe(static, playfield_visible=True) is False
+    assert evidence.observe(narrow_motion, playfield_visible=True) is False
+    assert evidence.observe(narrow_motion_followup, playfield_visible=True) is True
+
+
+def test_member_exit_watch_resets_motion_evidence_between_rounds(monkeypatch):
+    static = np.full((720, 1280, 3), 80, dtype=np.uint8)
+    narrow = static.copy()
+    narrow[500:540, 600:640] = 255
+    black = np.zeros((720, 1280, 3), dtype=np.uint8)
+    frames = iter([static, narrow, black, static, narrow])
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    flow.capture = lambda: next(frames).copy()
+    flow.visible = lambda image, name, threshold=0.9: False
+    flow.playfield_detector = lambda image: True
+    flow.playfield_entry_evidence = CooperativePlayfieldEntryEvidence()
+    clock = [0.0]
+    monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        cooperative_action.time,
+        "sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+
+    assert flow.watch_member_exit_before_black(timeout=1.0) == "black"
+    with pytest.raises(RuntimeError, match="未观察到可靠开演转场"):
+        flow.watch_member_exit_before_black(timeout=0.2)
+
+
+def test_ready_up_observes_black_during_post_click_delivery_window():
+    ready = np.full((720, 1280, 3), 128, dtype=np.uint8)
+    black = np.zeros((720, 1280, 3), dtype=np.uint8)
+    frames = iter([ready, black])
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    flow.capture = lambda: next(frames).copy()
+    flow.template_box = lambda image, name, threshold: (100, 200, 80, 40)
+    flow.visible = lambda image, name, threshold=0.9: False
+    clicks = []
+    flow.click = clicks.append
+
+    assert flow.ready_up_and_verify() == "black"
+    assert clicks == [(140, 220)]
+
 
 
 @pytest.mark.parametrize(

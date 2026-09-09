@@ -83,6 +83,93 @@ class EngineStats:
     startup_timed_out: bool = False
     engine_mode: str = "legacy"
     native_report: dict[str, object] = field(default_factory=dict)
+    # 仅调试记录开启时填充；用于说明数值生命监控为何没有确认归零。
+    life_monitor_diagnostics: dict[str, object] = field(default_factory=dict)
+
+
+class _LifeMonitorDiagnostics:
+    """有界汇总生命读数，不向实时循环引入同步磁盘写入。"""
+
+    def __init__(self) -> None:
+        self.visible_samples = 0
+        self.invisible_samples = 0
+        self.minimum_value: int | None = None
+        self.low_life_candidate_samples = 0
+        self.max_low_life_streak = 0
+        self.first_low_life_timestamp: float | None = None
+        self.first_low_life_value: int | None = None
+        self.first_low_life_evidence_requested = False
+
+    def observe(
+        self,
+        reading,
+        guard: LifeGuard,
+        timestamp: float,
+    ) -> dict[str, object] | None:
+        if not reading.visible:
+            self.invisible_samples += 1
+            return None
+        self.visible_samples += 1
+        self.minimum_value = (
+            int(reading.value)
+            if self.minimum_value is None
+            else min(self.minimum_value, int(reading.value))
+        )
+        if reading.value >= 20:
+            return None
+        self.low_life_candidate_samples += 1
+        self.max_low_life_streak = max(
+            self.max_low_life_streak,
+            int(guard.zero_streak),
+        )
+        if self.first_low_life_timestamp is not None:
+            return None
+        self.first_low_life_timestamp = float(timestamp)
+        self.first_low_life_value = int(reading.value)
+        self.first_low_life_evidence_requested = True
+        # record() 由 recorder 工作线程落盘；热路径只把当前帧加入既有队列。
+        return {
+            "event": "life_low_candidate",
+            "timestamp": float(timestamp),
+            "life_value": int(reading.value),
+            "zero_streak": int(guard.zero_streak),
+            "confirm_frames": int(guard.confirm_frames),
+            "evidence_screenshot": True,
+        }
+
+    def report(self, guard: LifeGuard, *, life_depleted: bool) -> dict[str, object]:
+        # dead_confirmed 只描述数值生命条经 LifeGuard 确认的归零；失败弹窗
+        # 也会把引擎标为 life_depleted，但不能伪装成数值读数已经确认。
+        dead_confirmed = guard.status is LifeStatus.DEAD
+        if dead_confirmed:
+            reason = "life-depleted-confirmed"
+        elif life_depleted:
+            reason = "life-depleted-without-numeric-confirmation"
+        elif self.visible_samples == 0:
+            reason = "no-visible-life-samples"
+        elif not guard.alive_confirmed:
+            reason = "alive-not-confirmed"
+        elif self.low_life_candidate_samples == 0:
+            reason = "no-low-life-candidate"
+        else:
+            reason = "zero-streak-not-confirmed"
+        return {
+            "enabled": True,
+            "visible_samples": self.visible_samples,
+            "invisible_samples": self.invisible_samples,
+            "minimum_value": self.minimum_value,
+            "low_life_candidate_samples": self.low_life_candidate_samples,
+            "max_low_life_streak": self.max_low_life_streak,
+            "final_zero_streak": int(guard.zero_streak),
+            "alive_confirmed": bool(guard.alive_confirmed),
+            "dead_confirmed": dead_confirmed,
+            "first_low_life_timestamp": self.first_low_life_timestamp,
+            "first_low_life_value": self.first_low_life_value,
+            "first_low_life_evidence_requested": (
+                self.first_low_life_evidence_requested
+            ),
+            "life_depleted_reason": reason,
+        }
 
 
 class RealtimeEngine:
@@ -215,11 +302,23 @@ class RealtimeEngine:
             getattr(self.planner, "timing_offset_ms", 0)
         )
         last_transient_action_at = float("-inf")
+        # 仅保存最近一次实际派发的瞬态输入。FAST/SLOW 是画面延迟出现的
+        # 反馈，不能把同帧尚未派发的动作冒充为它的归属。
+        recent_transient_input: dict[str, object] | None = None
         hold_feedback_block_until = float("-inf")
         scheduled_actions = self._scheduled_actions
         scheduled_actions.clear()
         native_exclusive = self.native_backend_takeover()
         native_started = False
+        life_monitor_diagnostics = (
+            _LifeMonitorDiagnostics()
+            if (
+                self.debug_recorder is not None
+                and self.life_detector is not None
+                and self.life_guard is not None
+            )
+            else None
+        )
         startup_marker = (
             "演奏场"
             if self.playfield_monitor is not None
@@ -426,6 +525,15 @@ class RealtimeEngine:
                 frame_interval_outliers=tuple(frame_interval_outliers),
                 startup_timed_out=startup_timed_out,
                 engine_mode="native" if native_exclusive else "legacy",
+                life_monitor_diagnostics=(
+                    life_monitor_diagnostics.report(
+                        self.life_guard,
+                        life_depleted=life_depleted,
+                    )
+                    if life_monitor_diagnostics is not None
+                    and self.life_guard is not None
+                    else {}
+                ),
             )
 
         synchronize_touch = getattr(self.touch, "synchronize", None)
@@ -593,12 +701,21 @@ class RealtimeEngine:
                     "touch_advance", (self.clock() - stage_started) * 1000
                 )
                 life_status = None
+                life_diagnostic_events: list[dict[str, object]] = []
                 stage_started = self.clock()
                 try:
                     if self.life_detector is not None and self.life_guard is not None:
                         reading = self.life_detector.detect(image)
                         status = self.life_guard.update(reading)
                         life_status = status.value
+                        if life_monitor_diagnostics is not None:
+                            candidate = life_monitor_diagnostics.observe(
+                                reading,
+                                self.life_guard,
+                                now,
+                            )
+                            if candidate is not None:
+                                life_diagnostic_events.append(candidate)
                         if (
                             self.completion_guard is not None
                             and self.completion_guard.update(
@@ -707,7 +824,7 @@ class RealtimeEngine:
                         (self.clock() - stage_started) * 1000,
                     )
 
-                diagnostics: list[dict[str, object]] = []
+                diagnostics: list[dict[str, object]] = life_diagnostic_events
                 reset_touch = getattr(
                     self.touch, "emergency_release_all", None
                 )
@@ -863,12 +980,53 @@ class RealtimeEngine:
                     else:
                         eligible = True
                         ignored_reason = ""
+                    valid_samples_before = getattr(
+                        self.timing_controller, "valid_samples", None,
+                    )
                     adjusted = self.timing_controller.update(
                         feedback,
                         now,
                         eligible=eligible,
                         ignored_reason=ignored_reason,
                     )
+                    if (
+                        feedback is not None
+                        and eligible
+                        and valid_samples_before is not None
+                        and getattr(
+                            self.timing_controller, "valid_samples", None,
+                        ) != valid_samples_before
+                    ):
+                        diagnostics.append({
+                            "event": "timing_feedback_accepted",
+                            "timestamp": now,
+                            "feedback": getattr(feedback, "value", str(feedback)),
+                            "input_origin": (
+                                recent_transient_input["origin"]
+                                if recent_transient_input is not None else None
+                            ),
+                            "input_kind": (
+                                recent_transient_input["kind"]
+                                if recent_transient_input is not None else None
+                            ),
+                            "input_reason": (
+                                recent_transient_input["reason"]
+                                if recent_transient_input is not None else None
+                            ),
+                            "input_planned_timestamp": (
+                                recent_transient_input["planned_timestamp"]
+                                if recent_transient_input is not None else None
+                            ),
+                            "dispatcher_started_at": (
+                                recent_transient_input["dispatch_started_at"]
+                                if recent_transient_input is not None else None
+                            ),
+                            "dispatcher_finished_at": (
+                                recent_transient_input["dispatch_finished_at"]
+                                if recent_transient_input is not None else None
+                            ),
+                            "timing_offset_adjusted_ms": adjusted,
+                        })
                     if adjusted is not None:
                         self.planner.set_timing_offset_ms(adjusted)
                 record_stage_sample(
@@ -876,7 +1034,26 @@ class RealtimeEngine:
                 )
                 stage_started = self.clock()
                 if actions and not native_exclusive:
+                    dispatch_started_at = self.clock()
                     self.touch.dispatch(actions)
+                    dispatch_finished_at = self.clock()
+                    transient_actions = [
+                        action for action in actions
+                        if action.kind in {ActionKind.TAP, ActionKind.FLICK}
+                    ]
+                    if transient_actions:
+                        action = transient_actions[-1]
+                        recent_transient_input = {
+                            "origin": (
+                                "chart" if action.reason.startswith("chart-")
+                                else "visual"
+                            ),
+                            "kind": action.kind.value,
+                            "reason": action.reason,
+                            "planned_timestamp": action.timestamp,
+                            "dispatch_started_at": dispatch_started_at,
+                            "dispatch_finished_at": dispatch_finished_at,
+                        }
                     actions_count += len(actions)
                     for action in actions:
                         kind = action.kind.value

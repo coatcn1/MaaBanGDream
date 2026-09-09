@@ -123,6 +123,7 @@ void test_absolute_windows_respect_watermarks_and_final_marker() {
 
     CHECK(session.publish());
     CHECK_EQ(fixture.chunks.size(), static_cast<std::size_t>(1));
+    CHECK(std::abs(fixture.chunks[0].session_current_s - 0.0) < 1e-9);
     CHECK(std::abs(fixture.chunks[0].window_start_s - 0.0) < 1e-9);
     // 中间块保持名义 500ms 边界，0.49s TAP 的 UP 由编译器留到下一块。
     CHECK(std::abs(fixture.chunks[0].window_end_s - 0.5) < 1e-9);
@@ -133,6 +134,7 @@ void test_absolute_windows_respect_watermarks_and_final_marker() {
     fixture.now_s = 0.31;
     CHECK(session.publish());
     CHECK_EQ(fixture.chunks.size(), static_cast<std::size_t>(2));
+    CHECK(std::abs(fixture.chunks[1].session_current_s - 0.31) < 1e-9);
     CHECK(std::abs(fixture.chunks[1].window_start_s - 0.5) < 1e-9);
     CHECK(std::abs(fixture.chunks[1].window_end_s - 0.81) < 1e-9);
     CHECK_EQ(fixture.chunks[1].actions.size(), static_cast<std::size_t>(1));

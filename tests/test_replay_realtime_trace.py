@@ -209,6 +209,41 @@ def test_replay_can_keep_timing_offset_fixed(tmp_path, monkeypatch):
     assert result["replay_timing"]["recorded_feedback_enabled"] is False
 
 
+def test_anchor_shift_keeps_action_sequence_invariant(tmp_path):
+    first_trace = tmp_path / "first.jsonl"
+    second_trace = tmp_path / "second.jsonl"
+    rows = [
+        {
+            "timestamp": timestamp,
+            "notes": [{
+                "kind": "tap", "lane": 3, "x": 640, "y": 568,
+                "width": 20, "height": 10, "timestamp": timestamp,
+            }],
+            "actions": [],
+        }
+        for timestamp in (1.0, 1.02, 1.04)
+    ]
+    first_trace.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8",
+    )
+    for row in rows:
+        row["timestamp"] += 100.0
+        row["notes"][0]["timestamp"] += 100.0
+    second_trace.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8",
+    )
+
+    first = replay(first_trace, collect=True)
+    second = replay(second_trace, collect=True)
+
+    assert first["anchor_invariants"]["action_sequence"] == (
+        second["anchor_invariants"]["action_sequence"]
+    )
+    assert first["anchor_invariants"][
+        "bare_song_offset_cross_anchor_comparable"
+    ] is False
+
+
 def test_replay_metadata_uses_adjacent_modern_summary(tmp_path):
     trace = tmp_path / "trace.jsonl"
     _write_trace(trace, [1.0, 1.1])

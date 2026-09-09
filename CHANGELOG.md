@@ -8,6 +8,39 @@
 - Native Realtime Engine V2 仍是未发布、默认关闭的实验路径；离线实现不代表真机成绩，验收前不会替代 Python Legacy。
 - 当前待验收项：Native V2 连续 10 局 Expert 真机门槛、共享封面歌曲的 Normal 真机复验，以及完整校准断点续跑；v1.2.0 的协力弹窗门控、末尾漏键、结算恢复与单人跳过设置页预武装仍需真机复验。
 
+## 2026-09-10（v1.3.5）
+
+- 协力准备完毕后高频确认按钮送达、成员退出与真实黑场；漏掉转场时拒绝从歌曲中段启动演奏，并补全低血与生命归零证据。
+- Native 取消会话必须等到本轮设备端实际执行 `r` 才确认触点释放，避免空血停止后遗留触点；生命归零的预期取消通过严格完整性门禁后交给外层手动跳车流程，Maa 不自动修改模拟器网络。
+- Native 首切片新增 host 准备、socket publish、设备接收/首执行及切片内部 wait 的分段诊断，不改变调度、锚点、Profile offset 或 timing correction。
+- Legacy HOLD/Slide 开局锁相只消费离散拓扑事件，并新增单节点最大绝对残差 25ms 门禁，拒绝含 98.46ms 离群节点的假相位候选。
+- 真机验收：雷电协力空血局确认 `reset_executed=true`、`release_confirmed=true`、无强制 kill 或传输错误，并正常进入手动跳车提示；Legacy 锁相修复仍只有离线 replay 与自动化验证。
+
+## 2026-09-09（开发流程：精简专用 Agent）
+
+- 删除职责重叠且会强制重复消耗额度的 Sol `mbd_timing_reviewer` 与 `mbd_core_implementer`。保留 Luna 的日志/trace 扫描和 Terra 的 replay/实现角色；复杂 timing 的根因审查、反例检查和修改后复核改由主 Agent 负责，核心代码统一交给 `mbd_implementer` 单写入，验证与真机门禁不变。
+
+## 2026-09-09（Native 触点释放与空血跳车门禁）
+
+- Native 清理不再把 reset 写入 socket 或设备进程退出当作触点已释放：本轮请求前固定 jlog 游标，只接受游标后的精确 `command == "r"` 作为设备执行证据；旧回执不可复用。已可能发布 DOWN 的会话最长等待 750ms 队列和 250ms 清理，超时仍强制关闭但 `release_confirmed=false`。结果新增 `reset_requested`、`reset_sent`、`reset_executed`、`reset_execution_latency_ms`、`release_proof`、`forced_kill_used`。
+- 协力生命归零引发的 Native 取消只有在 backend/session 均为 cancelled、reset 与释放均确认、无队列下溢及传输/设备/观察错误、动作计数有序且 1 秒内停止时，才作为预期跳车终态交给外层手动跳车提示；其他取消继续 fail-closed。
+- Legacy HOLD/Slide bootstrap 候选增加独立的单节点最大绝对残差 25ms 硬门禁。真实 `Light a fire` 失败 trace 中 MAD 仅 2.6ms、但含 98.46ms 离群节点的假锁相现在会被拒绝；候选排名、anchor、scheduler、Profile offset 和 FAST/SLOW feedback 未改变。
+
+## 2026-09-09（协力准备后漏黑场与生命归零证据）
+
+- 协力点击“准备完毕”后不再固定等待 2 秒：高频观察按钮送达、成员退出和黑场，并把已观察到的黑场交给后续流程。漏黑场时，完整演奏场加连续局部音符运动只作为“歌曲已开始”的 fail-closed 证据，拒绝大面积转场，绝不在中段启动 Native/Legacy；超时同样 fail-closed。日志记录 `outcome`、耗时和 timeout，成员退出原有处理不变。
+- 调试录像/trace 开启数值生命监控时，结果 JSON 增加 `life_monitor_diagnostics`：可见/不可见样本、最低生命、`<20` 候选及最大连续帧、最终 zero streak、alive/dead 确认状态和未触发归零原因。首个 `<20` 候选由 recorder 工作线程保存一张事件截图，不在实时热路径同步写盘；生命阈值、归零回调和断网跳车行为不变。
+
+## 2026-09-09（Native 首切片提交链诊断）
+
+- Native 结果新增每局首切片一次性的结构化时间线，记录 PlaybackSession 取窗、Python 编译/映射/回执/载荷构造、socket publish、首条设备 jlog 及首个 `w N` 的请求/实耗/误差边界；缺失证据保持 `null`，宿主与设备单调时钟域及正负语义显式标注。
+- Minitouch 传输只读统计最近一次 publish 的 payload 字节、`send()` 调用次数、实际发送字节与成功状态，用于区分宿主构造、socket 背压和设备 reader 唤醒延迟；未修改 anchor、窗口、等待、队列、Profile offset 或 timing correction。
+
+## 2026-09-09（开发流程：常规与核心实现 Agent 分级）
+
+- 用户级 `mbd_implementer` 改由 Terra High 承担根因明确的常规代码、测试、诊断、Legacy、replay、导航和普通 realtime 修改；新增 Sol High 的 `mbd_core_implementer`，仅在 `mbd_timing_reviewer` 完成独立根因审查并放行后修改核心时间域、Native scheduler/minitouch、ChartPredictor 核心锁相、Profile timing 语义或 Native/Legacy 共用链路。
+- 同一批文件只允许主 Agent、常规实现 Agent 或核心实现 Agent 中的一方修改；核心修改保持“审查 → 实现 → 测试/replay → 修改后复核 → 用户真机验收”的门禁。
+
 ## 2026-09-09（Legacy HOLD/Slide 开局谱面对齐候选，待真机验收）
 
 - Legacy 谱面辅助的 bootstrap alignment 新增离散 HOLD/Slide 证据：按 50ms 聚合同一组视觉 DOWN 轨道，并匹配已确认本地谱面的 Slide 头；同一触点的离散换轨可继续匹配连接点拓扑。连续绿色像素和逐帧 HOLD 不计入锁相样本。

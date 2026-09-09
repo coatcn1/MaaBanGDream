@@ -295,6 +295,41 @@ def test_debug_recorder_saves_screenshot_for_post_release_rescue(tmp_path):
     assert (recorder.output_dir / events[0]["screenshot"]).stat().st_size > 0
 
 
+def test_debug_recorder_saves_requested_life_candidate_evidence_async(tmp_path):
+    recorder = RealtimeDebugRecorder(tmp_path, video_enabled=False)
+    frame = np.full((72, 128, 3), 127, dtype=np.uint8)
+    recorder.record(
+        frame,
+        1.0,
+        [],
+        [],
+        "critical",
+        [{
+            "event": "life_low_candidate",
+            "life_value": 15,
+            "zero_streak": 1,
+            "evidence_screenshot": True,
+        }],
+    )
+    recorder.close()
+
+    events = [
+        json.loads(line)
+        for line in (recorder.output_dir / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert len(events) == 1
+    event = events[0]
+    assert event["frame"] == 0
+    assert event["timestamp"] == 1.0
+    assert event["kind"] == "life_low_candidate"
+    assert event["lane"] == -1
+    assert event["reason"] == "life_low_candidate"
+    assert event["delay_seconds"] == 0.0
+    assert (recorder.output_dir / event["screenshot"]).is_file()
+
+
 def test_debug_video_is_sampled_at_thirty_fps_without_losing_trace(tmp_path):
     recorder = RealtimeDebugRecorder(tmp_path, video_fps=30)
     frame = np.zeros((72, 128, 3), dtype=np.uint8)
