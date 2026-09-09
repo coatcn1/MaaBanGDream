@@ -308,6 +308,7 @@ bool PlaybackSession::publish() {
 
     PlaybackChunk chunk;
     chunk.sequence = next_sequence_;
+    chunk.session_current_s = current_s;
     chunk.window_start_s = window_start_s;
     chunk.window_end_s = window_end_s;
     chunk.touch_config = engine_config_;

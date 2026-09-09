@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.3.4-ff6f9f" alt="Version"></a>
+  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.3.5-ff6f9f" alt="Version"></a>
   <img src="https://img.shields.io/badge/MaaFramework-5.10.2-4c8bf5" alt="MaaFramework">
   <img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?logo=windows11&logoColor=white" alt="Windows">
@@ -73,14 +73,14 @@ MaaBanGDream 的实时演奏并不是简单的固定坐标点击，而是由视�
 | --- | --- |
 | 实时视觉识别 | 检测 TAP / FLICK / HOLD 等音符及演奏状态 |
 | Bestdori 本地谱面 | 提供歌曲结构、时间轴和长条 / 滑条信息 |
-| 谱面辅助 | 由谱面提供时序先验，并通过视觉持续校准 |
+| 谱面辅助 | 由谱面提供时序先验；Legacy 可用 TAP / FLICK / SKILL 投影及多节点 HOLD / Slide 头与换轨拓扑完成锁相 |
 | Profile 校准 | 针对当前模拟器与游戏设置生成匹配参数 |
 | FAST / SLOW 反馈 | 用于实时 Timing 调整与结果分析 |
-| 调试 Trace / 录像 | 同一 run ID 关联准备证据、最终封面、演奏场门控、触控引擎、结算、清理、降级与重试决定 |
+| 调试 Trace / 录像 | 同一 run ID 关联准备证据、最终封面、演奏场门控、触控引擎、结算、清理、降级与重试决定；数值生命监控提供有界汇总和首个低血候选截图，协力准备后记录黑场或“已错过转场”的动态演奏场证据 |
 | 最终封面门控 | 单人、校准、挑战和协力均观察最终歌曲信息页；未识别但准备页谱面可信时继续原谱面，无可信谱面时在触控前整局回退 Legacy |
 | 有界失败重试 | “演出设置 → 任务安全”可设置 0–3 次；普通单人、校准与协力每次重试前都会释放会话并恢复到已识别页面；挑战演出不自动重试 |
 | 可选生命保护 | 关闭时不再逐帧读取数值生命值，改用演奏场存在性完成启动门控，并在开演后约 5 Hz 监控结算转场 |
-| 协力断网跳车 | 协力生命归零时可选择断网跳车：按游戏 UID 屏蔽网络 → 两段确认弹窗点“中断” → 恢复网络后重试回主页；支持按 UID 屏蔽的模拟器（如雷电）可用，MuMu 因内核缺 owner 模块暂回退 |
+| 协力跳车 | 协力生命归零时停止演奏、确认 Native 触点已释放并切回游戏，随后结束任务并提示用户手动断网跳车；Maa 不自动修改模拟器网络 |
 | Native V2（实验） | 默认关闭；先同时确认生命条与七轨判定标记，再使用时间制首音门控，禁止加载/歌曲信息/演奏场淡入冒充首音；速度 5.0 的首音检测带补偿采用真机录像基线，设备触控固定落在 `y=590` 判定线 |
 
 > [!TIP]
@@ -108,7 +108,7 @@ MaaBanGDream 的实时演奏并不是简单的固定坐标点击，而是由视�
 & '..\.tools\Miniconda3\envs\maabangdream\python.exe' `
   -m pip install -r .\requirements-release.txt
 
-.\scripts\build-windows-release.ps1 -Version 1.3.4
+.\scripts\build-windows-release.ps1 -Version 1.3.5
 ```
 
 发布包必须保持：

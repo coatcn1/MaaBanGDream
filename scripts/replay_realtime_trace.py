@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import statistics
 import time
@@ -72,6 +73,34 @@ def post_release_rescues(actions: list[TouchAction], window: float = .65) -> int
             ):
                 total += 1
     return total
+
+
+def anchor_invariant_action_summary(
+    actions: list[TouchAction],
+) -> dict[str, object]:
+    """返回不含绝对时间的动作摘要，供跨引擎锚点对照。"""
+    sequence = [
+        {
+            "kind": action.kind.value,
+            "lane": action.lane,
+            "contact": action.contact,
+            "reason": action.reason,
+            "target_x": action.target_x,
+            "flick_direction": action.flick_direction,
+        }
+        for action in actions
+    ]
+    canonical = json.dumps(
+        sequence, ensure_ascii=False, separators=(",", ":"), sort_keys=True,
+    ).encode("utf-8")
+    return {
+        "count": len(sequence),
+        "sha256": hashlib.sha256(canonical).hexdigest(),
+        "by_kind": {
+            kind.value: sum(action.kind is kind for action in actions)
+            for kind in ActionKind
+        },
+    }
 
 
 def transformed_trace_frames(
@@ -159,12 +188,18 @@ def replay(
     last_now = 0.0
     applied_timing_offset_ms = timing_offset_ms
     recorded_timing_adjustments = 0
+    chart_lock_song_time_s: float | None = None
     for frame in transformed_trace_frames(
         path,
         inject_gap_ms=inject_gap_ms,
         drop_frames=drop_frames,
         fault_after_frame=fault_after_frame,
     ):
+            phase = frame.get("phase")
+            if isinstance(phase, str) and phase != "engine":
+                # 录制包还含最终封面等引擎外阶段；线上 Planner 此时尚未创建，
+                # 回放若把它喂进去会把谱面锚点人为提前数秒。
+                continue
             now = float(frame["timestamp"])
             last_now = now
             timing_feedback = frame.get("timing_feedback")
@@ -200,7 +235,13 @@ def replay(
                 action.get("flick_direction"),
             ) for action in frame.get("actions", []))
             replayed.extend(planner.update(notes, now))
-            diagnostics.extend(planner.drain_diagnostics())
+            frame_diagnostics = planner.drain_diagnostics()
+            diagnostics.extend(frame_diagnostics)
+            if chart_lock_song_time_s is None and any(
+                item.get("event") == "chart_calibrated"
+                for item in frame_diagnostics
+            ):
+                chart_lock_song_time_s = planner.song_time_s(now)
     chart_stats = (
         {
             "enabled": chart_prediction,
@@ -311,6 +352,18 @@ def replay(
             "recorded_adjustments": recorded_timing_adjustments,
         },
         "chart_prediction": chart_stats,
+        "anchor_invariants": {
+            "chart_lock_song_time_s": (
+                round(chart_lock_song_time_s, 6)
+                if chart_lock_song_time_s is not None else None
+            ),
+            "action_sequence": anchor_invariant_action_summary(replayed),
+            "bare_song_offset_cross_anchor_comparable": False,
+            "explanation": (
+                "裸 song_offset 依赖引擎锚点；跨锚点对照应使用锁定时的 "
+                "chart song time 与不含绝对时间的动作序列摘要。"
+            ),
+        },
     }
     if collect:
         result["actions_sequence"] = [

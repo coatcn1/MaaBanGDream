@@ -107,6 +107,38 @@ def test_replay_reports_residual_hold_cleanup_state(tmp_path):
     assert result["cleanup_up_actions"] == 0
 
 
+def test_replay_ignores_recording_phases_before_legacy_engine(tmp_path):
+    trace = tmp_path / "trace.jsonl"
+    rows = [
+        {
+            "timestamp": 1.0,
+            "phase": "final-cover",
+            "notes": [],
+            "actions": [{
+                "kind": "tap",
+                "lane": 0,
+                "timestamp": 1.0,
+                "reason": "not-engine-input",
+            }],
+        },
+        {
+            "timestamp": 5.0,
+            "phase": "engine",
+            "notes": [],
+            "actions": [],
+        },
+    ]
+    trace.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+    result = replay(trace)
+
+    assert result["recorded_actions"] == 0
+    assert result["replayed_actions"] == 0
+
+
 def test_replay_applies_recorded_timing_feedback_per_frame(tmp_path, monkeypatch):
     trace = tmp_path / "trace.jsonl"
     rows = []
@@ -175,6 +207,41 @@ def test_replay_can_keep_timing_offset_fixed(tmp_path, monkeypatch):
     assert applied == []
     assert result["replay_timing"]["final_offset_ms"] == -12
     assert result["replay_timing"]["recorded_feedback_enabled"] is False
+
+
+def test_anchor_shift_keeps_action_sequence_invariant(tmp_path):
+    first_trace = tmp_path / "first.jsonl"
+    second_trace = tmp_path / "second.jsonl"
+    rows = [
+        {
+            "timestamp": timestamp,
+            "notes": [{
+                "kind": "tap", "lane": 3, "x": 640, "y": 568,
+                "width": 20, "height": 10, "timestamp": timestamp,
+            }],
+            "actions": [],
+        }
+        for timestamp in (1.0, 1.02, 1.04)
+    ]
+    first_trace.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8",
+    )
+    for row in rows:
+        row["timestamp"] += 100.0
+        row["notes"][0]["timestamp"] += 100.0
+    second_trace.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8",
+    )
+
+    first = replay(first_trace, collect=True)
+    second = replay(second_trace, collect=True)
+
+    assert first["anchor_invariants"]["action_sequence"] == (
+        second["anchor_invariants"]["action_sequence"]
+    )
+    assert first["anchor_invariants"][
+        "bare_song_offset_cross_anchor_comparable"
+    ] is False
 
 
 def test_replay_metadata_uses_adjacent_modern_summary(tmp_path):

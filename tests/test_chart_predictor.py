@@ -11,6 +11,7 @@ from agent.realtime.note_detector import NoteKind, ObservedNote
 from agent.realtime.note_tracker import TrackedNote
 from agent.realtime.touch_planner import ActionKind, RealtimePlanner, TouchAction
 from agent.realtime.touch_planner.geometry import lane_center_x
+from agent.realtime.touch_planner.state import PlannerState
 
 
 def _synthetic_chart() -> ChartTimeline:
@@ -28,6 +29,338 @@ def _synthetic_chart() -> ChartTimeline:
         ChartJudgement(4.375, 5, "hold-tail", 8),
     ]
     return ChartTimeline(judgements, bpm=192.0)
+
+
+def _hold_bootstrap_chart(*, repeated: bool = False) -> ChartTimeline:
+    starts = [(2.0, (2, 5)), (4.0, (0, 3))]
+    if repeated:
+        starts += [(10.0, (2, 5)), (12.0, (0, 3))]
+    paths = []
+    judgements = []
+    for group_index, (time_s, lanes) in enumerate(starts):
+        for lane_index, lane in enumerate(lanes):
+            note_index = group_index * 2 + lane_index
+            target_lane = lane + 1 if lane < 6 else lane - 1
+            path = ChartHoldPath(
+                note_index,
+                "Slide",
+                (
+                    ChartPathPoint(time_s, time_s, float(lane)),
+                    ChartPathPoint(
+                        time_s + 0.2,
+                        time_s + 0.2,
+                        float(target_lane),
+                    ),
+                    ChartPathPoint(
+                        time_s + 0.8,
+                        time_s + 0.8,
+                        float(target_lane),
+                    ),
+                ),
+            )
+            paths.append(path)
+            judgements.extend([
+                ChartJudgement(time_s, lane, "hold-head", note_index),
+                ChartJudgement(
+                    time_s + 0.8,
+                    target_lane,
+                    "hold-tail",
+                    note_index,
+                ),
+            ])
+    return ChartTimeline(judgements, bpm=120.0, hold_paths=paths)
+
+
+def _observe_hold_chord(
+    predictor: ChartPredictor,
+    timestamp: float,
+    lanes: tuple[int, ...],
+) -> None:
+    predictor.observe_visual_actions([
+        TouchAction(
+            ActionKind.DOWN,
+            lane,
+            timestamp + index * 0.010,
+            lane,
+            "crossing",
+        )
+        for index, lane in enumerate(lanes)
+    ], timestamp + 0.020)
+    predictor.observe_visual_actions([], timestamp + 0.070)
+
+
+def test_hold_bootstrap_locks_after_two_matching_slide_head_chords():
+    predictor = ChartPredictor(_hold_bootstrap_chart())
+    predictor._anchor_time = 100.0
+
+    _observe_hold_chord(predictor, 103.0, (2, 5))
+    assert not predictor.calibrated
+    predictor.observe_visual_actions([
+        TouchAction(ActionKind.DOWN, 0, 105.0, 0, "crossing"),
+    ], 105.0)
+    predictor.observe_visual_actions([
+        TouchAction(ActionKind.DOWN, 3, 105.016, 3, "crossing"),
+    ], 105.016)
+    predictor.observe_visual_actions([], 105.070)
+
+    assert predictor.calibrated
+    assert abs(predictor.song_offset_s + 1.005) <= 0.010
+    assert predictor._alignment_lock_source == "hold-head-combination"
+
+
+def test_hold_bootstrap_can_use_two_slide_lane_transitions():
+    predictor = ChartPredictor(_hold_bootstrap_chart())
+    predictor._anchor_time = 100.0
+    _observe_hold_chord(predictor, 103.0, (2, 5))
+
+    predictor.observe_visual_actions([
+        TouchAction(ActionKind.MOVE, 3, 103.2, 2, "hold-follow"),
+        TouchAction(ActionKind.MOVE, 6, 103.2, 5, "hold-follow"),
+    ], 103.2)
+
+    assert predictor.calibrated
+    assert abs(predictor.song_offset_s + 1.005) <= 0.010
+    assert predictor._alignment_lock_source == "hold-slide-topology"
+
+
+def test_hold_bootstrap_rejects_single_large_node_residual():
+    predictor = ChartPredictor(_hold_bootstrap_chart())
+    predictor._anchor_time = 100.0
+    _observe_hold_chord(predictor, 103.0, (2, 5))
+    predictor.observe_visual_actions([
+        TouchAction(ActionKind.MOVE, 3, 103.10154, 2, "hold-follow"),
+        TouchAction(ActionKind.MOVE, 6, 103.2, 5, "hold-follow"),
+    ], 103.2)
+
+    assert not predictor.calibrated
+    candidate = predictor._pending_alignment_diagnostics[-1]
+    assert candidate["alignment_candidate_max_abs_residual_ms"] == 98.46
+    assert candidate["alignment_candidate_rejection_gates"][
+        "max_abs_residual"
+    ] is True
+    assert candidate["alignment_candidate_thresholds"][
+        "maximum_absolute_residual_ms"
+    ] == 25.0
+
+
+def test_hold_bootstrap_absolute_residual_boundary_is_inclusive():
+    accepted = ChartPredictor(_hold_bootstrap_chart())
+    accepted._anchor_time = 100.0
+    _observe_hold_chord(accepted, 103.0, (2, 5))
+    accepted.observe_visual_actions([
+        TouchAction(ActionKind.MOVE, 3, 103.175, 2, "hold-follow"),
+        TouchAction(ActionKind.MOVE, 6, 103.2, 5, "hold-follow"),
+    ], 103.2)
+    assert accepted.calibrated
+    accepted_candidate = [
+        item for item in accepted._pending_alignment_diagnostics
+        if item["event"] == "alignment_candidate"
+    ][-1]
+    assert accepted_candidate[
+        "alignment_candidate_max_abs_residual_ms"
+    ] == 25.0
+
+    rejected = ChartPredictor(_hold_bootstrap_chart())
+    rejected._anchor_time = 100.0
+    _observe_hold_chord(rejected, 103.0, (2, 5))
+    rejected.observe_visual_actions([
+        TouchAction(ActionKind.MOVE, 3, 103.1749, 2, "hold-follow"),
+        TouchAction(ActionKind.MOVE, 6, 103.2, 5, "hold-follow"),
+    ], 103.2)
+    assert not rejected.calibrated
+    rejected_candidate = rejected._pending_alignment_diagnostics[-1]
+    assert rejected_candidate[
+        "alignment_candidate_max_abs_residual_ms"
+    ] > 25.0
+
+
+def test_hold_bootstrap_keeps_similar_lane_patterns_ambiguous():
+    predictor = ChartPredictor(_hold_bootstrap_chart(repeated=True))
+    predictor._anchor_time = 100.0
+
+    _observe_hold_chord(predictor, 113.0, (2, 5))
+    _observe_hold_chord(predictor, 115.0, (0, 3))
+
+    assert not predictor.calibrated
+    assert predictor._pending_alignment_diagnostics[-1][
+        "alignment_candidate_ambiguous"
+    ] is True
+
+
+def test_single_green_effect_hold_chord_cannot_lock_chart():
+    predictor = ChartPredictor(_hold_bootstrap_chart())
+    predictor._anchor_time = 100.0
+
+    _observe_hold_chord(predictor, 103.0, (2, 5))
+    for timestamp in (103.1, 103.2, 103.3, 103.4):
+        predictor.observe_visual_actions([
+            TouchAction(ActionKind.MOVE, 2, timestamp, 2, "hold-follow"),
+            TouchAction(ActionKind.MOVE, 5, timestamp, 5, "hold-follow"),
+        ], timestamp)
+
+    assert not predictor.calibrated
+    assert predictor._pending_alignment_diagnostics[-1][
+        "alignment_candidate_matched_nodes"
+    ] == 2
+
+
+def test_wrong_hold_bootstrap_candidate_never_locks():
+    predictor = ChartPredictor(_hold_bootstrap_chart())
+    predictor._anchor_time = 100.0
+
+    _observe_hold_chord(predictor, 103.0, (2, 5))
+    _observe_hold_chord(predictor, 105.0, (1, 4))
+    predictor.observe_visual_actions([
+        TouchAction(ActionKind.MOVE, 6, 105.2, 1, "hold-follow"),
+        TouchAction(ActionKind.MOVE, 2, 105.2, 4, "hold-follow"),
+    ], 105.2)
+
+    assert not predictor.calibrated
+
+
+def test_hold_bootstrap_diagnostics_include_candidate_and_lock_fields():
+    predictor = ChartPredictor(_hold_bootstrap_chart())
+    predictor._anchor_time = 100.0
+    _observe_hold_chord(predictor, 103.0, (2, 5))
+    _observe_hold_chord(predictor, 105.0, (0, 3))
+    state = PlannerState()
+
+    predictor.update([], [], 105.1, [], state, None, visual_observed=True)
+    diagnostics = state.drain_diagnostics()
+    candidate = [
+        item for item in diagnostics if item["event"] == "alignment_candidate"
+    ][-1]
+    lock = next(item for item in diagnostics if item["event"] == "alignment_lock")
+
+    assert {
+        "alignment_candidate_source",
+        "alignment_candidate_offset_ms",
+        "alignment_candidate_confidence",
+        "alignment_candidate_matched_nodes",
+        "alignment_candidate_residual_ms",
+    }.issubset(candidate)
+    assert {
+        "alignment_lock_source",
+        "alignment_lock_latency_ms",
+        "alignment_lock_offset_ms",
+    }.issubset(lock)
+    assert candidate["alignment_candidate_rejection_gates"] == {
+        "ambiguous": False,
+        "matched_nodes": False,
+        "event_groups": False,
+        "paths": False,
+        "head_or_topology": False,
+        "residual_mad": False,
+        "max_abs_residual": False,
+        "confidence": False,
+    }
+    nodes = candidate["alignment_candidate_matched_nodes_detail"]
+    assert len(nodes) == 4
+    assert {"action_reason", "raw_relative_time_s", "applied_press_bias_ms",
+            "normalized_time_s", "chart_note_index", "chart_time_s",
+            "signed_residual_ms", "path_kind"}.issubset(nodes[0])
+
+
+def test_chart_without_holds_still_uses_track_crossing_calibration():
+    chart = ChartTimeline([
+        ChartJudgement(2.0 + index * 0.4, index % 3, "tap", index)
+        for index in range(6)
+    ], bpm=120.0)
+    predictor = ChartPredictor(chart, min_calibration_samples=6)
+    predictor._anchor_time = 100.0
+
+    for index, judgement in enumerate(chart.judgements, 1):
+        now = 100.0 + judgement.time_s + 1.0 - 0.5
+        predictor.observe_tracks([
+            _phase_track(index, judgement.lane, now),
+        ], now)
+
+    assert predictor.calibrated
+    assert abs(predictor.song_offset_s + 1.0) <= 0.020
+    assert predictor._alignment_lock_source is None
+
+
+def test_track_crossing_calibration_diagnostics_keep_projection_evidence():
+    chart = ChartTimeline([
+        ChartJudgement(2.0 + index * 0.4, index % 3, "tap", index)
+        for index in range(6)
+    ], bpm=120.0)
+    predictor = ChartPredictor(chart, min_calibration_samples=6)
+    predictor._anchor_time = 100.0
+    for index, judgement in enumerate(chart.judgements, 1):
+        now = 100.0 + judgement.time_s + .5
+        predictor.observe_tracks([_phase_track(index, judgement.lane, now)], now)
+
+    state = PlannerState()
+    predictor.update([], [], 106.0, [], state, None, visual_observed=True)
+    diagnostic = next(
+        item for item in state.drain_diagnostics()
+        if item["event"] == "chart_calibrated"
+    )
+    assert diagnostic["source"] == "track-crossing"
+    assert diagnostic["track_crossing_source"] == "track-crossing"
+    assert len(diagnostic["track_crossing_samples"]) == 6
+    assert {"lane", "velocity_y", "predicted_crossing_s",
+            "candidate_chart_time_s", "signed_residual_ms"}.issubset(
+                diagnostic["track_crossing_samples"][0]
+            )
+
+
+def test_press_bias_keeps_chart_tail_move_and_release_semantics():
+    chart = ChartTimeline([
+        ChartJudgement(2.0, 1, "hold-head", 0),
+        ChartJudgement(2.4, 3, "hold-tail", 0),
+    ], bpm=192.0, hold_paths=(ChartHoldPath(
+        0,
+        "Slide",
+        (
+            ChartPathPoint(2.0, 2.0, 1.0),
+            ChartPathPoint(2.4, 2.4, 3.0),
+        ),
+    ),))
+    planner, predictor = _planner_with_press_rescue(chart)
+    predictor._anchor_time = 100.0
+    planner.set_timing_offset_ms(31)
+    state = planner._state
+    state._active_hold_tail[1] = 500.0
+    state._active_hold_lane[1] = 1
+    state._hold_started[1] = 104.9
+    state._hold_confirmed.add(1)
+    predictor.expected_hold_tail[1] = (2.4, 3)
+    state._chart_tail_lane[1] = 3
+
+    actions = planner.update([], 105.42)
+
+    assert [(action.kind, action.lane, action.reason) for action in actions] == [
+        (ActionKind.MOVE, 3, "chart-tail-move"),
+        (ActionKind.UP, 3, "chart-tail"),
+    ]
+
+
+def test_press_bias_preserves_crossing_rescue_and_paired_rescue_evidence():
+    predictor = ChartPredictor(_hold_bootstrap_chart(), press_bias_ms=31)
+    predictor._anchor_time = 100.0
+    predictor.observe_visual_actions([
+        TouchAction(ActionKind.DOWN, 2, 103.0, 2, "crossing"),
+        TouchAction(ActionKind.DOWN, 5, 103.01, 5, "paired-rescue"),
+    ], 103.02)
+    predictor.observe_visual_actions([], 103.07)
+    predictor.observe_visual_actions([
+        TouchAction(ActionKind.MOVE, 3, 103.2, 2, "hold-follow"),
+        TouchAction(ActionKind.MOVE, 6, 103.2, 5, "hold-follow"),
+    ], 103.2)
+
+    candidate = [
+        item for item in predictor._pending_alignment_diagnostics
+        if item["event"] == "alignment_candidate"
+    ][-1]
+    nodes = candidate["alignment_candidate_matched_nodes_detail"]
+
+    assert predictor.calibrated
+    assert {node["action_reason"] for node in nodes} == {
+        "crossing", "paired-rescue", "hold-follow",
+    }
+    assert {node["applied_press_bias_ms"] for node in nodes} == {-31.0}
 
 
 def test_calibration_succeeds_when_chart_matches():

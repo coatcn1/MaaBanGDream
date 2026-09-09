@@ -41,6 +41,9 @@ struct TimedPlaybackAction {
 
 struct PlaybackChunk {
     uint64_t sequence = 0;
+    // publish() 本轮取窗时读取的绝对引擎单调时刻；只供上层诊断
+    // current→callback 边界，不参与窗口或动作计算。
+    double session_current_s = 0.0;
     // 绝对引擎单调时间窗口；允许 actions 为空，此时适配器仍应生成等待窗。
     double window_start_s = 0.0;
     double window_end_s = 0.0;

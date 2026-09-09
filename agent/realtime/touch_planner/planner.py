@@ -157,7 +157,7 @@ class RealtimePlanner:
         self._ordinary.finish_frame(notes, now, actions)
         if self._chart_predictor is not None:
             self._chart_predictor.observe_tracks(tracked_notes, now)
-            self._chart_predictor.observe_visual_actions(actions)
+            self._chart_predictor.observe_visual_actions(actions, now)
             if (
                 self._chart_predictor.predict_presses
                 and not self._chart_predictor.disabled_for_run

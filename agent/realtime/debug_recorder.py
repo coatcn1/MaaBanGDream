@@ -472,6 +472,17 @@ class RealtimeDebugRecorder:
         for diagnostic in diagnostics:
             event = str(diagnostic.get("event", "unknown"))
             self._diagnostic_counts[event] = self._diagnostic_counts.get(event, 0) + 1
+            if diagnostic.get("evidence_screenshot") is True:
+                # 生命监控等热路径只把截图请求排入现有 recorder 队列；由此工作
+                # 线程写入关键帧，不把磁盘 I/O 反压到触控与截图循环。
+                self._write_event(
+                    image,
+                    timestamp,
+                    -1,
+                    event,
+                    str(diagnostic.get("reason", event)),
+                    0.0,
+                )
         self._phase_counts[phase] = self._phase_counts.get(phase, 0) + 1
         if timing_state:
             self._last_timing_state = dict(timing_state)

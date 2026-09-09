@@ -38,6 +38,7 @@ from .live_session import append_current_run_event, current_live_run
 from .life_monitor import LifeDetector
 from .live_visual_gate import MODE_TOGGLE_POINT, live_performance_mode_is_off
 from .performance_settings_action import RealtimePerformanceSettingsGate
+from .playfield_monitor import PlayfieldDetector
 from .profile_play_action import RealtimeProfilePlay
 from .profile_store import (
     EnvironmentSignature,
@@ -112,6 +113,74 @@ HOME_LIVE_POINT = (1175, 645)
 # 弹窗2“确认中断当前演出返回主页吗？”点右侧粉色“中断”。
 DISCONNECT_CONTINUE_INTERRUPT_POINT = (508, 447)
 DISCONNECT_CONFIRM_INTERRUPT_POINT = (754, 439)
+READY_DELIVERY_OBSERVE_SECONDS = 2.0
+
+
+def _frame_is_black_transition(image: np.ndarray) -> bool:
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    return float(gray.mean()) < 6.0 and float(gray.std()) < 6.0
+
+
+class CooperativePlayfieldEntryEvidence:
+    """为准备后漏黑场保留的有界演奏场动态证据。
+
+    PlayfieldDetector 的生命条和白色判定线在准备页也可能同时出现，不能单独
+    放行。这里仅观察判定线上方的音符区域：要求连续两帧出现局部列变化，并
+    拒绝覆盖大面积列的转场/变暗。它只决定成员退出监听何时结束，不参与
+    Native 首音锚点、scheduler 或任何歌曲时间计算。
+    """
+
+    _REFERENCE_HEIGHT = 720
+    _TOP = 430
+    _BOTTOM = 570
+    _COLUMN_CHANGE_THRESHOLD = 18.0
+    _MIN_CHANGED_COLUMNS = 12
+    _BROAD_FRACTION = 0.30
+    _REQUIRED_NARROW_EVENTS = 2
+
+    def __init__(self) -> None:
+        self._previous_columns: np.ndarray | None = None
+        self._narrow_motion_streak = 0
+
+    def reset(self) -> None:
+        self._previous_columns = None
+        self._narrow_motion_streak = 0
+
+    def observe(self, image: np.ndarray, *, playfield_visible: bool) -> bool:
+        if not playfield_visible:
+            self.reset()
+            return False
+        if (
+            not isinstance(image, np.ndarray)
+            or image.ndim != 3
+            or image.shape[2] < 3
+            or image.shape[0] < 2
+            or image.shape[1] < 2
+        ):
+            self.reset()
+            return False
+        height = image.shape[0]
+        scale = height / self._REFERENCE_HEIGHT
+        top = max(0, min(height - 1, round(self._TOP * scale)))
+        bottom = max(top + 1, min(height, round(self._BOTTOM * scale)))
+        columns = image[top:bottom, :, :3].astype("float32").mean(axis=(0, 2))
+        if self._previous_columns is None:
+            self._previous_columns = columns
+            return False
+        changed_columns = int(np.count_nonzero(
+            np.abs(columns - self._previous_columns)
+            >= self._COLUMN_CHANGE_THRESHOLD
+        ))
+        self._previous_columns = columns
+        if changed_columns >= image.shape[1] * self._BROAD_FRACTION:
+            # 整屏淡入、成员等待弹窗及其遮罩都会造成大面积同向变化，不是音符。
+            self._narrow_motion_streak = 0
+            return False
+        if changed_columns < self._MIN_CHANGED_COLUMNS:
+            self._narrow_motion_streak = 0
+            return False
+        self._narrow_motion_streak += 1
+        return self._narrow_motion_streak >= self._REQUIRED_NARROW_EVENTS
 
 
 def cooperative_play_params(settings: dict[str, object]) -> dict[str, object]:
@@ -270,6 +339,10 @@ class CooperativeLiveFlow:
         self.settings = settings
         self.progress_callback = progress_callback
         self.detector = LifeDetector()
+        # 准备完毕后的短黑场可能只持续一帧；若轮询错过黑场，仍必须以完整
+        # 演奏场后的局部音符运动结束成员退出窗口，不能靠静态准备页元素放行。
+        self.playfield_detector = PlayfieldDetector()
+        self.playfield_entry_evidence = CooperativePlayfieldEntryEvidence()
         self.templates = {
             path.stem: imread_unicode(path, cv2.IMREAD_COLOR)
             for path in TEMPLATE_DIR.glob("*.png")
@@ -723,8 +796,9 @@ class CooperativeLiveFlow:
         ):
             raise RuntimeError("协力准备页流速复核失败")
         self.ensure_performance_mode_off()
-        self.ready_up_and_verify()
-        self.watch_member_exit_before_black()
+        ready_transition = self.ready_up_and_verify()
+        if ready_transition != "black":
+            self.watch_member_exit_before_black()
         print(
             f"CooperativeLive ready=true difficulty={difficulty} speed_gate=verified",
             flush=True,
@@ -777,7 +851,7 @@ class CooperativeLiveFlow:
                 flush=True,
             )
 
-    def ready_up_and_verify(self) -> None:
+    def ready_up_and_verify(self) -> str:
         """点击“准备完毕”并确认按钮消失，防止触控未送达造成空演奏。"""
         for attempt in range(3):
             if self.stopped():
@@ -790,34 +864,107 @@ class CooperativeLiveFlow:
                     f"CooperativeLive ready=confirmed attempt={attempt + 1}",
                     flush=True,
                 )
-                return
+                return "already-confirmed"
             left, top, width, height = box
             self.click((left + width // 2, top + height // 2))
-            time.sleep(2.0)
+            delivery = self.watch_ready_delivery_after_click()
+            if delivery != "still-visible":
+                print(
+                    "CooperativeLive ready=confirmed "
+                    f"attempt={attempt + 1} delivery={delivery}",
+                    flush=True,
+                )
+                return delivery
         raise RuntimeError("点击准备完毕后按钮仍在，触控可能未送达")
 
-    def watch_member_exit_before_black(self, timeout: float = 12.0) -> None:
+    def watch_ready_delivery_after_click(
+        self,
+        timeout: float = READY_DELIVERY_OBSERVE_SECONDS,
+    ) -> str:
+        """点击后高频观察送达，避免固定睡眠吞掉短黑场转场。"""
+        started_at = time.monotonic()
+        deadline = started_at + float(timeout)
+        while time.monotonic() < deadline:
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
+            image = self.capture()
+            if self.visible(image, "member_exit_title", 0.93):
+                self.dismiss_member_exit()
+                raise MemberExited("协力成员退出房间")
+            if _frame_is_black_transition(image):
+                outcome = "black"
+            elif self.template_box(image, "ready_button", 0.90) is None:
+                outcome = "button-gone"
+            else:
+                time.sleep(0.05)
+                continue
+            elapsed_ms = (time.monotonic() - started_at) * 1000.0
+            print(
+                "CooperativeLive ready_delivery "
+                f"outcome={outcome} elapsed_ms={elapsed_ms:.1f} "
+                f"timeout_s={float(timeout):.3f}",
+                flush=True,
+            )
+            return outcome
+        print(
+            "CooperativeLive ready_delivery outcome=still-visible "
+            f"elapsed_ms={(time.monotonic() - started_at) * 1000.0:.1f} "
+            f"timeout_s={float(timeout):.3f}",
+            flush=True,
+        )
+        return "still-visible"
+
+    def watch_member_exit_before_black(self, timeout: float = 12.0) -> str:
         """准备完毕到黑场转场之间的成员退出弹窗窗口。
 
         点击“准备完毕”后、进入演奏的整屏黑场之前，其他成员退出时仍会弹出
         “错误/由于XX退出房间。”；此时已离开房间等待页，常规 wait_for 的
         成员退出检测不再覆盖，弹窗会挡住转场导致整局卡死。这里高频轮询到
         黑场出现为止：看到弹窗就点“确定”并按成员退出策略处理；看到黑场
-        说明转场已开始，弹窗不再可能，立即退出本窗口。
+        说明转场已开始，弹窗不再可能，立即退出本窗口。若短黑场刚好被轮询
+        漏掉，完整演奏场和连续局部音符运动只能证明歌曲已经开始，必须立即
+        fail-closed，绝不能把谱面开头锚到中段；静态准备页可能误中生命条与
+        判定线，超时同样 fail-closed。
         """
-        deadline = time.monotonic() + float(timeout)
+        # 每局准备后窗口都从空白动态基线开始，绝不能让上一局未完成的局部
+        # 变化跨局累积成“已错过转场”的第二次证据。
+        self.playfield_entry_evidence.reset()
+        started_at = time.monotonic()
+        deadline = started_at + float(timeout)
+
+        def finish(outcome: str) -> str:
+            elapsed_ms = (time.monotonic() - started_at) * 1000.0
+            print(
+                "CooperativeLive ready_transition "
+                f"outcome={outcome} elapsed_ms={elapsed_ms:.1f} "
+                f"timeout_s={float(timeout):.3f}",
+                flush=True,
+            )
+            return outcome
+
         while time.monotonic() < deadline:
             if self.stopped():
                 raise InterruptedError("用户已停止任务")
             image = self.capture()
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            if float(gray.mean()) < 6.0 and float(gray.std()) < 6.0:
+            if _frame_is_black_transition(image):
                 # 整屏黑场转场已经开始，成员退出弹窗窗口已过。
-                return
+                return finish("black")
             if self.visible(image, "member_exit_title", 0.93):
+                finish("member-exit")
                 self.dismiss_member_exit()
                 raise MemberExited("协力成员退出房间")
+            playfield_visible = self.playfield_detector(image)
+            if self.playfield_entry_evidence.observe(
+                image,
+                playfield_visible=playfield_visible,
+            ):
+                finish("playfield-motion-missed-transition")
+                raise RuntimeError(
+                    "准备完毕后已错过开演转场，拒绝在歌曲中段启动演奏"
+                )
             time.sleep(0.1)
+        finish("timeout")
+        raise RuntimeError("准备完毕后未观察到可靠开演转场，拒绝继续演奏")
 
     def jump_after_download_timeout(self) -> None:
         require_game_foreground(self.controller)

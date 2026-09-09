@@ -253,6 +253,7 @@ PlaybackSessionConfig playback_config_from_dict(const py::dict& source) {
 py::dict playback_chunk_to_dict(const PlaybackChunk& chunk) {
     py::dict result;
     result["sequence"] = chunk.sequence;
+    result["session_current_s"] = chunk.session_current_s;
     result["window_start_s"] = chunk.window_start_s;
     result["window_end_s"] = chunk.window_end_s;
     result["final_chunk"] = chunk.final_chunk;
@@ -698,6 +699,17 @@ PYBIND11_MODULE(maabangdream_realtime, module) {
             },
             py::arg("max_bytes"), py::arg("timeout_ms") = 500)
         .def("close", &MinitouchClient::close)
+        .def_property_readonly("last_publish_diagnostics",
+            [](const MinitouchClient& self) {
+                const MinitouchPublishDiagnostics diagnostics =
+                    self.last_publish_diagnostics();
+                py::dict result;
+                result["payload_bytes"] = diagnostics.payload_bytes;
+                result["send_calls"] = diagnostics.send_calls;
+                result["sent_bytes"] = diagnostics.sent_bytes;
+                result["success"] = diagnostics.success;
+                return result;
+            })
         .def_property_readonly("connected",
             [](const MinitouchClient& self) { return self.connected(); });
 

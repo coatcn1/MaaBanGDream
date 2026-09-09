@@ -89,6 +89,19 @@ docs/                   # 额外文档
 - **歌曲模式**：仅支持当前曲目和随机选曲，不支持按名称指定
 - **不在迁移范围**：旧 BDAS 的 Electron、PyWebIO、自建调度器
 
+## MaaBanGDream Subagent 路由
+
+用户级自定义 Agent 只用于边界清晰的委派，主 Agent 始终负责需求、证据链、作用域和最终结论。
+
+- `mbd_log_scanner`：扫描 MFA 日志、`summary.json` 和 `realtime-result-*.json`，只提取事实，不修改源码，不单独定根因。
+- `mbd_trace_scanner`：扫描 `checkpoints.jsonl`、`lifecycle.jsonl`、`events.jsonl` 和 `trace.jsonl` 的有限窗口，只提取事件链，不修改源码。
+- `mbd_replay_runner`：运行离线 replay、对照基线和候选行为；允许生成 `.local/` 下的临时产物，但不修改正式源码。
+- `mbd_implementer`（Terra High）：在主 Agent 已给出有界证据、最小假设和验收标准后，承担 Python/C++、测试、诊断、Legacy、replay、导航及 realtime 修改；核心 timing 任务也统一由该角色实现，不再额外转交第二个写入 Agent。
+
+日志与 trace 扫描可在输入互不依赖时并行；replay 与实现按证据依赖顺序串行。主 Agent 负责 timing、phase、drift、scheduler、minitouch、ChartPredictor 锁相、Profile timing 及 Native/Legacy 共用链路的根因审查、反例检查和修改后复核；存在两个及以上竞争根因时，必须先补足证据或最小可证伪实验，再交给 `mbd_implementer`。同一批文件只能由主 Agent 或 `mbd_implementer` 中的一方修改。
+
+Realtime 修改的闭环固定为：证据提取 → 必要的独立审查 → 最小实现 → 定向测试 → 离线 replay → 必要的修改后复核 → 用户真机验收。离线结果不得替代真机验收，也不得据此宣称“已修复”。
+
 ## 测试与验证
 
 ```powershell
@@ -313,6 +326,9 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
 23. **MFA 双进程/配置切换闪退是上游 Avalonia 崩溃**：2026-09-07 用户实测同时开两个 MFA（本机+便携）或快速来回切换配置时，`MFAAvalonia.exe` 以 `0xc0000005` 崩溃在已卸载的 `external_renderer_ipc.dll`（Windows Application 事件日志 11:00:30、11:03:20）。这不是 Agent 代码问题，修复需要改定制 MFAAvalonia 源码/上游；暂按“单实例 + 少切换配置”规避。“配置2连雷电但输入派发到 MuMu”是既有 `emulator-7554` 端口影子问题（MuMu 运行时占用 127.0.0.1:7555），关 MuMu 后恢复正常，与本条目无关。
 24. **协力最终封面能读到却不认识＝歌曲不在本地曲库**：trace 里若出现大量“final cover jacket does not match selected chart / song fingerprint is not confirmed”而 playfield 已可见，通常是游戏新增歌曲未同步进 `resource/charts` 目录（选曲页同样 song=unknown）。此时协力没有可信准备页谱面可回退，只能整局视觉演出；修复是重跑 `scripts/sync_bestdori_catalog.py` 同步曲库。注意区分第二种情形：日志先出现 `gate_mismatch ... selected_bestdori_id=<N>` 再出现 `resolve_failed` 的指纹变化，说明封面已按“14 bit + 等级”被仓库解析、却被 `FinalCoverGate` 的 8 bit 复核拒绝（实测 `Little Busters!` 稳定 10 bit）——封面门控必须与 `LocalChartRepository.resolve` 使用同一套“等级匹配才放宽到 14 bit”的阈值，不要改回 8 bit，否则 Native 拿不到谱面、整局降级视觉 Legacy。`CooperativePreparePopupDetector` 是像素启发式（白色圆角条+左侧粉色图标），不依赖模板，`live_prepare.png` 只用于单人/自动/挑战的演出准备节点，与协力等待弹窗无关。
 25. **协力谱面校准窗必须容纳“其他成员准备中”的等待时长**：协力演奏场出现后歌曲可能再等十几秒才开始（实测 2026-09-08 `FIRE BIRD` 等待约 16.4 秒），引擎锚点与歌曲开始的真实相位可超过单人局默认的 12 秒候选窗；窗口过窄会排除真实相位，让周期性段落里的假相位接管谱面时钟（实测锁到 -4522ms、比真实 -13530ms 早约 8.9 秒，开局几个视觉按键后整段盲压到生命归零）。`ChartPredictor` 的 `calibration_early_window_s` 在协力模式放宽到 60 秒，其余模式保持 12 秒；不要再缩回固定小窗口。此外锁定后相位校验窗口只有 ±350ms，整段相位锁错时既匹配不到同 lane 判定也不会产生可计入残差，旧逻辑完全看不见——现在按“滑动窗口 24 个可信投影中 ≥65% 在同 lane ±350ms 内找不到任何谱面判定”fail-closed，放弃 chart 输入回退纯视觉。改动谱面校准时先用 `scripts/replay_realtime_trace.py --chart-prelude-window` 对真实 trace 离线重放对比锁定相位。
+26. **Legacy 的 HOLD/Slide 开局锁相只能消费离散拓扑事件**：连续绿色像素和逐帧 HOLD 是同一条绿条的重复观测，绝不能当多个校准样本。只使用视觉管线已经确认并派发的 HOLD/Slide 头 DOWN（50ms 内聚合同一和弦）与同一 contact 的离散 lane transition；匹配已确认本地谱面的 hold path 后，至少 4 个节点、2 组事件、2 条路径共同确认，残差 MAD 与 confidence 达标且不存在等强相位候选才允许 `chart_calibrated`。单个绿条、技能绿色特效、重复 lane pattern 或错误候选必须继续纯视觉，既有 TAP/FLICK/SKILL 投影校准与 fail-closed 回退不得删除。HOLD 事件时间要先去掉 Profile press bias，避免锁相后谱面调度再次应用 timing offset；不得借此修改 Profile 或扩大 FAST/SLOW ±35ms feedback correction。
+27. **协力准备后短黑场不能作为唯一退出证据**：2026-09-09 `coop-20260909-114620-401553` 中，准备完毕后先固定睡眠 2 秒、黑场又被后续 100ms 轮询漏掉，旧 `watch_member_exit_before_black()` 只认黑场/成员退出而静默等满 12 秒；随后 preflight 已是中段演奏，Native 约 18 秒晚入场。点击准备完毕后必须高频观察按钮送达、成员退出和黑场，不能有固定盲等；正常开演只能消费本轮实际观察到的黑场。漏黑场 fallback 的完整演奏场 + 连续局部音符运动只可证明“歌曲已开始”，必须记录后 fail-closed，绝不能在中段启动 Native/Legacy；大面积转场也不得作为证据。准备页可能同时误中生命条和六轨白色标记，静态元素绝不放行；证据超时同样 fail-closed。数值生命监控未触发断网跳车时，不得直接改阈值，应在调试证据中先检查可见/不可见样本、最低值、`<20` 连续帧、alive/dead 确认和首个候选截图。
+28. **Native 触点释放必须由本轮设备 `r` 回执证明**：EvATive7 minitouch 的 `w` 会在设备 reader 内阻塞，reset 写入 socket、关闭连接或 kill 进程都不能单独证明排队的 `r` 已执行。只在本轮 reset 请求前记录的 jlog 游标之后，精确解析到 `command == "r"`，再完成本地句柄、设备进程和启动提交清理，才允许 `release_confirmed=true`；旧 `r` 不得复用。最大队列 750ms 时统一使用 1 秒停止预算（750ms 等执行 + 250ms 清理），超时仍强制关闭但必须 fail-closed。协力空血取消只有同时满足 jump_requested、life_depleted、双 cancelled、reset 执行确认及其余传输门禁时，才能进入断网跳车流程。
 
 ## 后续开发方向（已记录，暂缓或未开始）
 
