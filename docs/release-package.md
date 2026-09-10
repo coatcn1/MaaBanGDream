@@ -29,7 +29,7 @@ MaaFramework 运行库、Python Agent、本地谱面和资源文件。
 - `runtime`：包内 Miniconda 环境。
 
 客户端使用 MFA 原生 GitHub 更新入口检查和下载正式 Release。已存在便携 Python
-运行库时优先下载约 143 MiB 的 runtime-free 更新包；运行库缺失时回退完整包。
+运行库时优先下载约 148 MiB 的 runtime-free 更新包；运行库缺失时回退完整包。
 下载支持断点续传和 SHA-256 校验，MFA 退出后由独立更新器覆盖程序文件，并保留
 上述用户目录。谱面库继续通过“演出设置 → 谱面辅助 → 同步”独立更新。
 
