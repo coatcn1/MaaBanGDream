@@ -14,6 +14,7 @@
 - GitHub Release 资产按系统、架构和本机运行库状态确定性选择：现有 Python runtime 优先约 143 MiB 的 `-update.zip`，运行库缺失时回退完整包，`.sha256` 不再可能被误选为更新归档；GitHub asset digest 缺失时读取同名校验文件。
 - 原生下载器增加 `.part` 与 HTTP Range 断点续传，兼容 206、忽略 Range 的 200 和已完成分片的 416；SHA-256 通过后才形成正式下载文件。
 - 含 MFA 核心文件的便携包完成验证后，由 self-contained `MFAUpdater.exe` 等待主进程正常退出再覆盖；保留 config/profiles/debug/logs/screencap/runtime，最后写 `update-manifest.json`，任一复制失败均不启动或宣称新版本。
+- 发行用 `MFAUpdater.exe` 启用安全裁剪并保持单文件自包含，避免为了退出后覆盖逻辑额外携带整套未裁剪 .NET 运行时。
 - 同时发布协力慢准备恢复：入房等待 180 秒与点击“不指定歌曲”后的 60 秒拆分计时，漏检短黑场时只接受连续稳定且身份完整确认的最终封面；已经进入歌曲中段时保持 fail-closed，不启动演奏引擎。
 - 自动化和本地升级演练完成后发布正式版本；v1.3.5 → v1.3.6 的公开 GitHub 更新链路由用户发布后亲自验收。
 
