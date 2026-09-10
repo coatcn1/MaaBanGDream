@@ -314,6 +314,7 @@ def wait_for_final_cover(
     fallback_selection_available: bool | None = None,
     require_black_transition: bool = False,
     initial_image=None,
+    initial_resolution: FinalCoverResolution | None = None,
 ) -> FinalCoverWaitOutcome:
     """确认最终封面；识别缺失时保留准备页谱面或降级到视觉演奏。"""
     if not 1 <= float(timeout_seconds) <= 180:
@@ -336,6 +337,39 @@ def wait_for_final_cover(
     evidence_reason = resolver.evidence_reason()
     if evidence_reason is not None:
         raise RuntimeError(f"最终封面确认缺少准备页证据：{evidence_reason}")
+    if initial_resolution is not None:
+        if initial_image is None:
+            raise ValueError("预确认封面结果缺少对应画面")
+        if stopping():
+            raise InterruptedError("用户已停止任务")
+        if observer is not None:
+            observer(
+                initial_image,
+                time.monotonic(),
+                {
+                    "event": "final_cover_observation",
+                    "status": "confirmed",
+                    "source": "preconfirmed-transition",
+                    "frames": 2,
+                    "playfield_streak": 0,
+                    "reason": "confirmed before black transition was observed",
+                },
+            )
+        print(
+            "RealtimeFinalCover confirmed=true "
+            "source=preconfirmed-transition "
+            "bestdori_song_id="
+            f"{initial_resolution.confirmation.bestdori_song_id} frames=2",
+            flush=True,
+        )
+        return FinalCoverWaitOutcome(
+            status="confirmed",
+            resolution=initial_resolution,
+            reason="confirmed",
+            frames=2,
+            playfield_seen=False,
+            image=initial_image,
+        )
     playfield_detector = PlayfieldDetector()
     playfield_streak = 0
     black_burst_until = float("-inf")
@@ -1928,6 +1962,19 @@ class RealtimeProfilePlay(CustomAction):
             if final_cover_required:
                 # 协力准备页的歌曲身份可能受随机选曲和网络阶段影响，最终封面
                 # 必须独立解析谱面，不能被早先的候选结果锁死。
+                startup_cover_resolution = (
+                    live_run.startup_final_cover_resolution
+                    if isinstance(
+                        live_run.startup_final_cover_resolution,
+                        FinalCoverResolution,
+                    )
+                    else None
+                )
+                startup_cover_image = (
+                    live_run.startup_final_cover_image
+                    if startup_cover_resolution is not None
+                    else None
+                )
                 cover_selection = (
                     None if live_run.mode == "cooperative" else selected_chart
                 )
@@ -1974,7 +2021,12 @@ class RealtimeProfilePlay(CustomAction):
                     ),
                     fallback_selection_available=selected_chart is not None,
                     require_black_transition=ordered_startup,
-                    initial_image=preflight_image if ordered_startup else None,
+                    initial_image=(
+                        startup_cover_image
+                        if startup_cover_image is not None
+                        else (preflight_image if ordered_startup else None)
+                    ),
+                    initial_resolution=startup_cover_resolution,
                 )
                 if recorder is not None and cover_outcome.image is not None:
                     _recorder_checkpoint(
@@ -2000,6 +2052,8 @@ class RealtimeProfilePlay(CustomAction):
                         final_cover_status="confirmed",
                         final_cover_reason=None,
                         prepared_for_play=True,
+                        startup_final_cover_image=None,
+                        startup_final_cover_resolution=None,
                     )
                 else:
                     live_run = update_live_run(
@@ -2008,6 +2062,8 @@ class RealtimeProfilePlay(CustomAction):
                         final_cover_status=cover_outcome.status,
                         final_cover_reason=cover_outcome.reason,
                         prepared_for_play=selected_chart is not None,
+                        startup_final_cover_image=None,
+                        startup_final_cover_resolution=None,
                     )
                     if selected_chart is None:
                         chart_timeline = None

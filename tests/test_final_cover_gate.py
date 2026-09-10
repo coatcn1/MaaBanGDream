@@ -10,7 +10,12 @@ import pytest
 
 from agent.realtime import profile_play_action
 from agent.realtime.chart_repository import ChartResolution, LocalChartRepository
-from agent.realtime.final_cover import FinalCoverGate, FinalCoverResolver
+from agent.realtime.final_cover import (
+    FinalCoverConfirmation,
+    FinalCoverGate,
+    FinalCoverResolution,
+    FinalCoverResolver,
+)
 from agent.realtime.profile_play_action import wait_for_final_cover
 from agent.realtime.song_identity import (
     FINAL_SONG_JACKET_ROI,
@@ -78,6 +83,40 @@ def test_ordered_startup_stop_does_not_capture_or_fallback():
             selection(final_cover_frame()[1]), "Expert", lambda: True,
             require_black_transition=True,
         )
+
+
+def test_final_cover_consumes_preconfirmed_cooperative_evidence_without_capture():
+    cover, song_id = final_cover_frame()
+    selected = selection(song_id)
+    resolution = FinalCoverResolution(
+        confirmation=FinalCoverConfirmation(
+            song_id=song_id,
+            song_id_method="song-jacket-phash-v2",
+            bestdori_song_id=selected.bestdori_song_id,
+        ),
+        selection=selected,
+    )
+    observed = []
+
+    class Controller:
+        def post_screencap(self):
+            raise AssertionError("已确认的封面证据不应再次截图等待")
+
+    outcome = wait_for_final_cover(
+        Controller(),
+        SimpleNamespace(song_level=28, song_title="SAVIOR OF SONG"),
+        selected,
+        "Expert",
+        lambda: False,
+        initial_image=cover,
+        initial_resolution=resolution,
+        observer=lambda image, now, detail: observed.append(detail),
+    )
+
+    assert outcome.status == "confirmed"
+    assert outcome.resolution is resolution
+    assert observed[0]["status"] == "confirmed"
+    assert observed[0]["source"] == "preconfirmed-transition"
 
 
 def test_opening_black_after_false_ready_playfield_is_not_completion(monkeypatch):

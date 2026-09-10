@@ -32,13 +32,19 @@ from .game_effect_settings_action import (
     verified_game_visual_settings,
 )
 from .game_effect_settings_action import _click as _maa_click
-from .vision_io import imread_unicode
+from .vision_io import imread_unicode, imwrite_unicode
 from .game_effect_settings_action import _swipe as _maa_swipe
-from .live_session import append_current_run_event, current_live_run
-from .life_monitor import LifeDetector
+from .live_session import (
+    append_current_run_event,
+    current_live_run,
+    update_live_run,
+)
+from .life_monitor import LifeDetector, LifeGuard, LifeStatus
 from .live_visual_gate import MODE_TOGGLE_POINT, live_performance_mode_is_off
 from .performance_settings_action import RealtimePerformanceSettingsGate
 from .playfield_monitor import PlayfieldDetector
+from .chart_repository import LocalChartRepository
+from .final_cover import FinalCoverResolver
 from .profile_play_action import RealtimeProfilePlay
 from .profile_store import (
     EnvironmentSignature,
@@ -107,6 +113,8 @@ COOPERATIVE_DIFFICULTY_TARGETS = {
     "Special": (942, 575),
 }
 MEMBER_DOWNLOAD_TIMEOUT_SECONDS = 60.0
+ROOM_SONG_CHOICE_TIMEOUT_SECONDS = 180.0
+SONG_CHOICE_TO_READY_TIMEOUT_SECONDS = 60.0
 POST_SCORE_NAVIGATION_TIMEOUT_SECONDS = 60.0
 HOME_LIVE_POINT = (1175, 645)
 # 断网跳车按钮点击点：弹窗1“通信已中断。是否继续演出？”点左侧“中断”；
@@ -218,7 +226,7 @@ class MemberExited(RuntimeError):
 
 
 class JumpOutUnavailable(RuntimeError):
-    """生命归零后无法自动断网跳车，应结束任务让用户手动处理。"""
+    """协力局已安全跳车或无法继续自动恢复，应立即结束任务。"""
 
 
 def configure_cooperative_settings(params: dict[str, object]) -> dict[str, object]:
@@ -339,8 +347,8 @@ class CooperativeLiveFlow:
         self.settings = settings
         self.progress_callback = progress_callback
         self.detector = LifeDetector()
-        # 准备完毕后的短黑场可能只持续一帧；若轮询错过黑场，仍必须以完整
-        # 演奏场后的局部音符运动结束成员退出窗口，不能靠静态准备页元素放行。
+        # 准备完毕后的短黑场可能只持续一帧；漏检时先用与本局身份一致的
+        # 稳定最终封面放行，只有已经进入动态演奏场才走生命监控兜底。
         self.playfield_detector = PlayfieldDetector()
         self.playfield_entry_evidence = CooperativePlayfieldEntryEvidence()
         self.templates = {
@@ -729,24 +737,46 @@ class CooperativeLiveFlow:
             raise ValueError(f"不支持的协力入房方式：{method}")
 
     def wait_for_preparation(self) -> None:
-        song_confirmed = False
-        deadline = time.monotonic() + 180.0
-        while time.monotonic() < deadline:
+        choice_deadline = (
+            time.monotonic() + ROOM_SONG_CHOICE_TIMEOUT_SECONDS
+        )
+        while time.monotonic() < choice_deadline:
             state, _ = self.wait_for(
                 ("song_unspecified", "ready_button"),
-                timeout=min(3.0, max(0.1, deadline - time.monotonic())),
+                timeout=min(
+                    3.0,
+                    max(0.1, choice_deadline - time.monotonic()),
+                ),
             )
             if state == "ready_button":
                 return
             if state == "song_unspecified":
-                if not song_confirmed:
-                    self.click((780, 647))
-                    time.sleep(0.35)
-                    self.click((1068, 647))
-                    song_confirmed = True
-                    print("CooperativeLive song_choice=unspecified", flush=True)
+                ready_deadline = (
+                    time.monotonic()
+                    + SONG_CHOICE_TO_READY_TIMEOUT_SECONDS
+                )
+                self.click((780, 647))
+                time.sleep(0.35)
+                self.click((1068, 647))
+                print("CooperativeLive song_choice=unspecified", flush=True)
                 time.sleep(0.5)
-        raise RuntimeError("180秒内未进入协力演出准备页")
+                while time.monotonic() < ready_deadline:
+                    ready_state, _ = self.wait_for(
+                        ("ready_button",),
+                        timeout=min(
+                            3.0,
+                            max(0.1, ready_deadline - time.monotonic()),
+                        ),
+                    )
+                    if ready_state == "ready_button":
+                        return
+                raise RuntimeError(
+                    "点击不指定歌曲后60秒内未进入协力演出准备页"
+                )
+        self.jump_after_startup_failure(
+            "进入协力房间后180秒内未出现不指定歌曲或准备页，"
+            "已退后台返回游戏"
+        )
 
     @staticmethod
     def action_argv(params: dict[str, object]):
@@ -914,21 +944,41 @@ class CooperativeLiveFlow:
         )
         return "still-visible"
 
-    def watch_member_exit_before_black(self, timeout: float = 12.0) -> str:
+    def make_final_cover_entry_resolver(self) -> FinalCoverResolver | None:
+        """构造准备后封面转场识别器，只接受与本局身份一致的稳定封面。"""
+        run = current_live_run()
+        if run is None:
+            return None
+        return FinalCoverResolver(
+            difficulty=run.difficulty,
+            observed_level=run.song_level,
+            observed_title=run.song_title,
+            observed_title_confidence=float(run.song_title_confidence or 0.0),
+            repository=LocalChartRepository(
+                PROJECT_ROOT / "resource" / "charts"
+            ),
+        )
+
+    def watch_member_exit_before_black(
+        self,
+        timeout: float = MEMBER_DOWNLOAD_TIMEOUT_SECONDS,
+    ) -> str:
         """准备完毕到黑场转场之间的成员退出弹窗窗口。
 
         点击“准备完毕”后、进入演奏的整屏黑场之前，其他成员退出时仍会弹出
         “错误/由于XX退出房间。”；此时已离开房间等待页，常规 wait_for 的
         成员退出检测不再覆盖，弹窗会挡住转场导致整局卡死。这里高频轮询到
         黑场出现为止：看到弹窗就点“确定”并按成员退出策略处理；看到黑场
-        说明转场已开始，弹窗不再可能，立即退出本窗口。若短黑场刚好被轮询
-        漏掉，完整演奏场和连续局部音符运动只能证明歌曲已经开始，必须立即
-        fail-closed，绝不能把谱面开头锚到中段；静态准备页可能误中生命条与
-        判定线，超时同样 fail-closed。
+        说明转场已开始，弹窗不再可能，立即退出本窗口。若短黑场漏检，连续
+        两帧稳定且能由本局难度、等级、标题共同确认的最终封面也可证明正常
+        转场，并把该证据直接交给演奏入口；只有已经进入动态演奏场时才进入
+        只监控生命的 fail-closed 路径，绝不能把谱面开头锚到中段。静态准备页
+        可能误中生命条与判定线，60 秒超时同样安全跳车并停止任务。
         """
         # 每局准备后窗口都从空白动态基线开始，绝不能让上一局未完成的局部
         # 变化跨局累积成“已错过转场”的第二次证据。
         self.playfield_entry_evidence.reset()
+        final_cover_resolver = self.make_final_cover_entry_resolver()
         started_at = time.monotonic()
         deadline = started_at + float(timeout)
 
@@ -953,32 +1003,105 @@ class CooperativeLiveFlow:
                 finish("member-exit")
                 self.dismiss_member_exit()
                 raise MemberExited("协力成员退出房间")
+            if final_cover_resolver is not None:
+                cover_resolution = final_cover_resolver.observe(image)
+                if cover_resolution is not None:
+                    update_live_run(
+                        startup_final_cover_image=image.copy(),
+                        startup_final_cover_resolution=cover_resolution,
+                    )
+                    return finish("final-cover")
             playfield_visible = self.playfield_detector(image)
             if self.playfield_entry_evidence.observe(
                 image,
                 playfield_visible=playfield_visible,
             ):
                 finish("playfield-motion-missed-transition")
-                raise RuntimeError(
-                    "准备完毕后已错过开演转场，拒绝在歌曲中段启动演奏"
-                )
+                self.wait_for_life_depleted_after_missed_transition(image)
             time.sleep(0.1)
         finish("timeout")
-        raise RuntimeError("准备完毕后未观察到可靠开演转场，拒绝继续演奏")
+        self.jump_after_download_timeout()
 
-    def jump_after_download_timeout(self) -> None:
+    def wait_for_life_depleted_after_missed_transition(
+        self,
+        initial_image: np.ndarray,
+        *,
+        timeout: float = MEMBER_DOWNLOAD_TIMEOUT_SECONDS,
+    ) -> None:
+        """错过黑场后只监控生命归零，绝不在歌曲中段启动演奏引擎。"""
+        guard = LifeGuard(confirm_frames=3)
+        started_at = time.monotonic()
+        deadline = started_at + float(timeout)
+        image = initial_image
+        visible_samples = 0
+        invisible_samples = 0
+
+        while time.monotonic() < deadline:
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
+            reading = self.detector.detect(image)
+            if reading.visible:
+                visible_samples += 1
+            else:
+                invisible_samples += 1
+            status = guard.update(reading)
+            if status is LifeStatus.DEAD:
+                print(
+                    "CooperativeLive missed_transition_life_monitor "
+                    "outcome=life-depleted "
+                    f"elapsed_ms={(time.monotonic() - started_at) * 1000.0:.1f} "
+                    f"minimum_value={guard.minimum} "
+                    f"visible_samples={visible_samples} "
+                    f"invisible_samples={invisible_samples}",
+                    flush=True,
+                )
+                self.jump_after_startup_failure(
+                    "准备完毕后错过开演转场，已确认生命归零并退后台返回游戏"
+                )
+            time.sleep(0.2)
+            image = self.capture()
+
+        print(
+            "CooperativeLive missed_transition_life_monitor "
+            "outcome=timeout "
+            f"elapsed_ms={(time.monotonic() - started_at) * 1000.0:.1f} "
+            f"minimum_value={guard.minimum} "
+            f"alive_confirmed={guard.alive_confirmed} "
+            f"visible_samples={visible_samples} "
+            f"invisible_samples={invisible_samples}",
+            flush=True,
+        )
+        self.jump_after_startup_failure(
+            "准备完毕后错过开演转场，生命监控超时，已退后台返回游戏"
+        )
+
+    def jump_after_startup_failure(self, reason: str) -> None:
+        """从无法安全启动演奏的协力局退后台并返回游戏，然后停止任务。"""
         require_game_foreground(self.controller)
         self.controller.post_click_key(3).wait()
-        time.sleep(1.5)
+        time.sleep(0.6)
         self.controller.post_start_app(GAME_PACKAGE).wait()
         deadline = time.monotonic() + 12.0
+        foreground_confirmed = False
         while time.monotonic() < deadline:
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
             if foreground_package(self.controller) == GAME_PACKAGE:
+                foreground_confirmed = True
                 break
             time.sleep(0.5)
-        reason = "成员下载超过60秒仍未进入演出，已主动跳车并返回游戏"
         record_failure_reason(reason)
-        raise RuntimeError(reason)
+        print(
+            "CooperativeLive startup_jump "
+            f"foreground_confirmed={str(foreground_confirmed).lower()} "
+            f"reason={reason}",
+            flush=True,
+        )
+        raise JumpOutUnavailable(reason)
+
+    def jump_after_download_timeout(self) -> None:
+        reason = "成员下载超过60秒仍未进入演出，已主动跳车并返回游戏"
+        self.jump_after_startup_failure(reason)
 
     def wait_for_playfield(self) -> None:
         state, _ = self.wait_for(
@@ -1260,7 +1383,7 @@ class CooperativeLiveFlow:
             self.wait_for_preparation()
             self.prepare()
             return self.play()
-        except (InterruptedError, MemberExited):
+        except (InterruptedError, MemberExited, JumpOutUnavailable):
             raise
         except Exception as exc:
             if isinstance(exc, OSError) and "access violation" in str(exc).lower():
@@ -1386,7 +1509,7 @@ class CooperativeLiveFlow:
                 reuse_room = False
                 continue
             except JumpOutUnavailable as exc:
-                # 无法自动断网跳车或连续两局跳车：结束任务，交用户手动处理。
+                # 已执行安全跳车，或现有自动化无法继续处理时直接结束任务。
                 record_failure_reason(str(exc))
                 print(
                     f"[任务][协力演出][流程][ERROR] {exc}",
