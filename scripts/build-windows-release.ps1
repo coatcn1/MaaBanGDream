@@ -131,6 +131,8 @@ dotnet publish $mfaUpdaterProject `
     -r win-x64 `
     --self-contained true `
     -p:PublishSingleFile=true `
+    -p:PublishTrimmed=true `
+    -p:TrimMode=link `
     -o $updaterPublishDirectory
 if ($LASTEXITCODE -ne 0) {
     throw 'MFAUpdater self-contained publish failed.'

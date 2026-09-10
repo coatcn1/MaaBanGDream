@@ -73,6 +73,7 @@ def test_release_builder_uses_clean_sources_and_excludes_private_state():
     assert "--self-contained true" in builder
     assert "MFAUpdater\\MFAUpdater.csproj" in builder
     assert "-p:PublishSingleFile=true" in builder
+    assert "-p:PublishTrimmed=true" in builder
     assert "MFAUpdater.exe" in validator
     assert "conda-pack.exe" in builder
     assert "status --porcelain" in builder
