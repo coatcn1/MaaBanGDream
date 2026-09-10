@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.3.5-ff6f9f" alt="Version"></a>
+  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.3.6-ff6f9f" alt="Version"></a>
   <img src="https://img.shields.io/badge/MaaFramework-5.10.2-4c8bf5" alt="MaaFramework">
   <img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?logo=windows11&logoColor=white" alt="Windows">
@@ -49,6 +49,10 @@
 
 > [!NOTE]
 > 首次启动会在解压目录内展开固定版本的便携 Python 环境，因此第一次启动可能比之后稍慢。
+
+从 v1.3.6 起，版本检查和下载统一使用 MFA 设置页的原生 GitHub 更新功能。
+已安装运行库时下载约 143 MiB 的 runtime-free 更新包；配置、Profile、日志、调试记录
+与谱面库不会被常规更新覆盖，谱面仍由“演出设置 → 谱面辅助 → 同步”单独维护。
 
 ## 🖥️ 环境要求
 
@@ -109,7 +113,7 @@ MaaBanGDream 的实时演奏并不是简单的固定坐标点击，而是由视�
 & '..\.tools\Miniconda3\envs\maabangdream\python.exe' `
   -m pip install -r .\requirements-release.txt
 
-.\scripts\build-windows-release.ps1 -Version 1.3.5
+.\scripts\build-windows-release.ps1 -Version 1.3.6
 ```
 
 发布包必须保持：
@@ -126,12 +130,12 @@ MaaBanGDream 的实时演奏并不是简单的固定坐标点击，而是由视�
 ```text
 workplace/
 ├─ MaaBanGDream/
-└─ MFAAvalonia/  # feature/performance-visual-settings
+└─ MFAAvalonia/  # fix/native-realtime-ui-toggle
 ```
 
 定制 MFA 源码：
 
-[coatcn1/MFAAvalonia · feature/performance-visual-settings](https://github.com/coatcn1/MFAAvalonia/tree/feature/performance-visual-settings)
+[coatcn1/MFAAvalonia · fix/native-realtime-ui-toggle](https://github.com/coatcn1/MFAAvalonia/tree/fix/native-realtime-ui-toggle)
 
 > [!WARNING]
 > 不要用同版本官方 Core DLL 覆盖定制版本，否则会丢失“演出设置”和启动保护。

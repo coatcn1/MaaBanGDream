@@ -42,6 +42,9 @@ if ($Version -notmatch '^\d+\.\d+\.\d+([.-][0-9A-Za-z.-]+)?$') {
 $mfaProject = Join-Path `
     $MfaSourceRoot `
     'MFAAvalonia.Desktop\MFAAvalonia.Desktop.csproj'
+$mfaUpdaterProject = Join-Path `
+    $MfaSourceRoot `
+    'MFAUpdater\MFAUpdater.csproj'
 $mfaLicense = Join-Path $MfaSourceRoot 'LICENSE'
 $performanceSettings = Join-Path `
     $MfaSourceRoot `
@@ -51,12 +54,14 @@ $versionChecker = Join-Path `
     'MFAAvalonia\Helper\VersionChecker.cs'
 foreach ($required in @(
     $mfaProject,
+    $mfaUpdaterProject,
     $mfaLicense,
     $performanceSettings,
     $versionChecker,
     (Join-Path $projectRoot 'packaging\start-maabangdream.cmd'),
     (Join-Path $projectRoot 'docs\release-package.md'),
-    (Join-Path $projectRoot 'scripts\start-release.ps1')
+    (Join-Path $projectRoot 'scripts\start-release.ps1'),
+    (Join-Path $projectRoot 'scripts\normalize-release-directory.ps1')
 )) {
     if (-not (Test-Path -LiteralPath $required)) {
         throw "Release build input is missing: $required"
@@ -115,6 +120,31 @@ if ($LASTEXITCODE -ne 0) {
 Get-ChildItem -LiteralPath $packageRoot -Recurse -File -Filter '*.pdb' |
     Remove-Item -Force
 
+# 核心程序文件必须在 MFA 退出后覆盖。更新器独立发布为 self-contained 单文件，
+# 避免目标电脑缺少对应 .NET 大版本时无法启动更新。
+$updaterPublishDirectory = Join-Path $outputFull '.mfa-updater-publish'
+if (Test-Path -LiteralPath $updaterPublishDirectory) {
+    Remove-Item -LiteralPath $updaterPublishDirectory -Recurse -Force
+}
+dotnet publish $mfaUpdaterProject `
+    -c Release `
+    -r win-x64 `
+    --self-contained true `
+    -p:PublishSingleFile=true `
+    -o $updaterPublishDirectory
+if ($LASTEXITCODE -ne 0) {
+    throw 'MFAUpdater self-contained publish failed.'
+}
+$updaterExecutable = Join-Path $updaterPublishDirectory 'MFAUpdater.exe'
+if (-not (Test-Path -LiteralPath $updaterExecutable -PathType Leaf)) {
+    throw 'MFAUpdater publish did not produce MFAUpdater.exe.'
+}
+Copy-Item `
+    -LiteralPath $updaterExecutable `
+    -Destination (Join-Path $packageRoot 'MFAUpdater.exe') `
+    -Force
+Remove-Item -LiteralPath $updaterPublishDirectory -Recurse -Force
+
 # Native 实时扩展被 .gitignore 忽略、不会进入 Git，但便携包必须内置；
 # 否则打开 Native 的便携环境会报 “No module named 'maabangdream_realtime'”。
 & (Join-Path $projectRoot 'scripts\build_native_realtime.ps1')
@@ -151,7 +181,7 @@ foreach ($relativePath in @(
     'requirements.txt',
     'runtime-compatibility.json',
     'scripts\start-release.ps1',
-    'scripts\update.ps1',
+    'scripts\normalize-release-directory.ps1',
     'scripts\check_runtime.py',
     'scripts\sync_bestdori_catalog.py',
     'scripts\sync_bestdori_charts.py'

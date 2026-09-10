@@ -7,7 +7,7 @@
 基于 MaaFramework 的 BanG Dream! 自动化项目。通过 MFAAvalonia GUI 加载 Python Agent，控制 Android 模拟器完成自动演出、实时触控演奏、校准和挑战演出。
 
 - 仓库：`https://github.com/coatcn1/MaaBanGDream`
-- 当前版本：`v1.3.1`
+- 当前版本：`v1.3.6`
 - 许可证：GPL-3.0-only
 
 ## MaaBanGDream 运行布局
@@ -51,7 +51,7 @@ main                                      ← 发布主线
 
 功能与修复一律从 `main` 最新提交拉取 `feature/*` / `fix/*` 分支，验收后合并回 `main` 并删除分支；不再维护跨版本累积的“统一开发分支”。
 
-定制 MFAAvalonia 独立开发分支为 `feature/performance-visual-settings`；两个仓库必须分别提交和推送。
+定制 MFAAvalonia 独立开发分支为 `fix/native-realtime-ui-toggle`；两个仓库必须分别提交和推送。
 
 ## 仓库结构
 
@@ -229,7 +229,7 @@ pytest 临时目录固定在 `.local/pytest-<进程号>`（Git 忽略），不�
 | --- | --- |
 | `D:\Documents\workplace\MFAAvalonia` | 定制 MFAAvalonia 源码，包含“演出设置”、Profile 管理和 Mirror 启动检查保护 |
 
-- 定制分支：`feature/performance-visual-settings`
+- 定制分支：`fix/native-realtime-ui-toggle`
 - 定制基线提交：`d7b381b2fa6a09e140d925fb1504bac19ca1f921`
 - `MFAAvalonia.Core.dll` 即使显示相同的 `2.12.0` 版本，也不能视为内容相同。
 
@@ -346,17 +346,18 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
   143MB；本机 `runtime/python/python.exe` 缺失才回退完整包。首启解压后删除
   `runtime/maabangdream-python.zip`。升级后安装目录名自动跟随版本（
   `MaaBanGDream-v1.3.3-win-x64` → `MaaBanGDream-v1.3.4-win-x64`），由
-  update.ps1 的脱离启动器辅助进程改名（启动器退出码 2 协议），自定义目录名
+  `normalize-release-directory.ps1` 的脱离启动器辅助进程改名（启动器退出码 2 协议），自定义目录名
   不改。关键坑：中文路径别经 `cmd /c` 转 ANSI 代码页（用 ShellExecute 直启
   `.cmd`）；生成的 `.ps1` 必须写 UTF-8 BOM；`SHA256.HashData(Stream)` 不关闭
   流，必须 `using`。
-- **复用 MFA 原生 GitHub 更新界面（计划，暂缓）**：现自绘“MaaBanGDream 版本
-  更新”卡片与状态文本较简陋。MFA 上游自带 GitHub 下载源
-  （`VersionChecker.GetLatestVersionAndDownloadUrlFromGithubAsync` + 下载源
-  下拉框 + 任务队列下载进度条 + Toast，不依赖 Mirror酱）。计划：`interface.json`
-  补 `controller.github` 指向本仓库 → 复用上游“检查/下载/进度/Toast”整套 UI，
-  只把“解压进 resource/”替换成“整包覆盖 + 重启脚本”；保留现有断点续传、sha256
-  校验与目录改名逻辑。动定制 MFAAvalonia 的更新设置页，需要单独验收。
+- **复用 MFA 原生 GitHub 更新界面（v1.3.6 起）**：`interface.json` 顶层 `github`
+  指向本仓库，检查、下载进度、Toast、标题栏提示与自动更新统一由原生
+  `VersionChecker` 管理；未声明 Mirror RID 时更新源固定为 GitHub。归档筛选排除
+  `.sha256`，已有 runtime 时优先 `-update.zip`，缺失时选择完整包；下载使用
+  `.part` + HTTP Range，并在 SHA-256 通过后才完成。含核心文件的包由 self-contained
+  `MFAUpdater.exe` 等主进程正常退出后覆盖，保留用户目录、最后写版本清单。旧
+  `scripts/update.ps1` 仅保留在 v1.3.5 已发布客户端中用于桥接到 v1.3.6；新包不再
+  携带自建网络更新器。
 - **Special 谱面支持**、**更多演出类型**：未开始。
 
 ## 修改后的最低验收
