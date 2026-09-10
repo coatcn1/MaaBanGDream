@@ -28,6 +28,7 @@ from agent.realtime.cooperative_action import (
     DEFAULT_SETTINGS,
     should_stay_in_room,
 )
+from agent.realtime.life_monitor import LifeReading
 
 
 ROOT = Path(__file__).parents[1]
@@ -238,7 +239,7 @@ def _make_play_flow(monkeypatch, *, jump_requested):
             return _FakeJob()
 
     flow.context = SimpleNamespace(
-        tasker=SimpleNamespace(controller=Controller())
+        tasker=SimpleNamespace(stopping=False, controller=Controller())
     )
     return flow, keys, started
 
@@ -257,6 +258,41 @@ def test_play_skips_jump_without_live_run_signal(monkeypatch):
     flow, _, _ = _make_play_flow(monkeypatch, jump_requested=False)
 
     assert flow.play() is False
+
+
+def test_startup_failure_jump_homes_reopens_and_records_reason(monkeypatch):
+    flow, keys, started = _make_play_flow(monkeypatch, jump_requested=False)
+    failures = []
+    monkeypatch.setattr(cooperative_action, "require_game_foreground", lambda _c: None)
+    monkeypatch.setattr(
+        cooperative_action,
+        "foreground_package",
+        lambda _c: cooperative_action.GAME_PACKAGE,
+    )
+    monkeypatch.setattr(cooperative_action, "record_failure_reason", failures.append)
+    monkeypatch.setattr(cooperative_action.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(JumpOutUnavailable, match="startup failed"):
+        flow.jump_after_startup_failure("startup failed")
+
+    assert keys == [3]
+    assert started == [cooperative_action.GAME_PACKAGE]
+    assert failures == ["startup failed"]
+
+
+def test_run_attempt_propagates_startup_jump_without_failure_capture():
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.enter_room = lambda: None
+    flow.wait_for_preparation = lambda: None
+    flow.prepare = lambda: (_ for _ in ()).throw(
+        JumpOutUnavailable("startup failed")
+    )
+    flow.capture = lambda: (_ for _ in ()).throw(
+        AssertionError("不应在跳车后再次截图")
+    )
+
+    with pytest.raises(JumpOutUnavailable, match="startup failed"):
+        flow.run_attempt()
 
 
 def _fake_member_exit_watch_flow(frame, timeout):
@@ -308,10 +344,115 @@ def test_member_exit_watch_fails_closed_when_playfield_motion_proves_missed_tran
         reset=lambda: None,
         observe=lambda image, *, playfield_visible: True,
     )
+    monitored = []
 
-    with pytest.raises(RuntimeError, match="已错过开演转场"):
+    def monitor(image):
+        monitored.append(image)
+        raise JumpOutUnavailable("missed transition")
+
+    flow.wait_for_life_depleted_after_missed_transition = monitor
+
+    with pytest.raises(JumpOutUnavailable, match="missed transition"):
         flow.watch_member_exit_before_black(timeout=2.0)
     assert "outcome=playfield-motion-missed-transition" in capsys.readouterr().out
+    assert len(monitored) == 1
+    assert np.array_equal(monitored[0], frame)
+
+
+def test_member_exit_watch_default_covers_slow_ready_countdown(monkeypatch):
+    waiting = np.full((720, 1280, 3), 128, dtype=np.uint8)
+    black = np.zeros((720, 1280, 3), dtype=np.uint8)
+    clock = [0.0]
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    flow.capture = lambda: (black if clock[0] >= 20.0 else waiting).copy()
+    flow.visible = lambda image, name, threshold=0.9: False
+    flow.playfield_detector = lambda image: False
+    flow.playfield_entry_evidence = SimpleNamespace(
+        reset=lambda: None,
+        observe=lambda image, *, playfield_visible: False,
+    )
+    monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        cooperative_action.time,
+        "sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+
+    assert flow.watch_member_exit_before_black() == "black"
+    assert 20.0 <= clock[0] < MEMBER_DOWNLOAD_TIMEOUT_SECONDS
+
+
+def test_member_exit_watch_accepts_matching_final_cover_without_black(monkeypatch):
+    cover = np.full((720, 1280, 3), 128, dtype=np.uint8)
+    resolution = SimpleNamespace(confirmation=SimpleNamespace(song_id="confirmed"))
+    observations = [None, resolution]
+    changes = []
+    clock = [0.0]
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    flow.capture = lambda: cover.copy()
+    flow.visible = lambda image, name, threshold=0.9: False
+    flow.playfield_detector = lambda image: False
+    flow.playfield_entry_evidence = SimpleNamespace(
+        reset=lambda: None,
+        observe=lambda image, *, playfield_visible: False,
+    )
+    flow.make_final_cover_entry_resolver = lambda: SimpleNamespace(
+        observe=lambda image: observations.pop(0),
+    )
+    monkeypatch.setattr(
+        cooperative_action,
+        "update_live_run",
+        lambda **kw: changes.append(kw),
+    )
+    monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        cooperative_action.time,
+        "sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+
+    assert flow.watch_member_exit_before_black(timeout=2.0) == "final-cover"
+    assert len(changes) == 1
+    assert changes[0]["startup_final_cover_resolution"] is resolution
+    assert np.array_equal(changes[0]["startup_final_cover_image"], cover)
+
+
+def test_missed_transition_monitor_jumps_after_confirmed_zero(monkeypatch):
+    frame = np.full((720, 1280, 3), 128, dtype=np.uint8)
+    readings = iter(
+        [
+            LifeReading(True, 1000),
+            LifeReading(True, 1000),
+            LifeReading(True, 1000),
+            LifeReading(True, 0),
+            LifeReading(True, 0),
+            LifeReading(True, 0),
+        ]
+    )
+    clock = [0.0]
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    flow.detector = SimpleNamespace(detect=lambda image: next(readings))
+    flow.capture = lambda: frame.copy()
+    reasons = []
+
+    def jump(reason):
+        reasons.append(reason)
+        raise JumpOutUnavailable(reason)
+
+    flow.jump_after_startup_failure = jump
+    monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        cooperative_action.time,
+        "sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+
+    with pytest.raises(JumpOutUnavailable, match="生命归零"):
+        flow.wait_for_life_depleted_after_missed_transition(frame, timeout=2.0)
+    assert len(reasons) == 1
 
 
 def test_member_exit_watch_does_not_accept_static_prepare_page_as_playfield(
@@ -327,6 +468,13 @@ def test_member_exit_watch_does_not_accept_static_prepare_page_as_playfield(
         reset=lambda: None,
         observe=lambda image, *, playfield_visible: False,
     )
+    jumped = []
+
+    def jump():
+        jumped.append(True)
+        raise JumpOutUnavailable("startup timeout")
+
+    flow.jump_after_download_timeout = jump
     clock = [0.0]
     monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(
@@ -335,8 +483,9 @@ def test_member_exit_watch_does_not_accept_static_prepare_page_as_playfield(
         lambda seconds: clock.__setitem__(0, clock[0] + seconds),
     )
 
-    with pytest.raises(RuntimeError, match="未观察到可靠开演转场"):
+    with pytest.raises(JumpOutUnavailable, match="startup timeout"):
         flow.watch_member_exit_before_black(timeout=0.1)
+    assert jumped == [True]
 
 
 def test_cooperative_playfield_entry_evidence_requires_narrow_motion():
@@ -369,6 +518,9 @@ def test_member_exit_watch_resets_motion_evidence_between_rounds(monkeypatch):
     flow.visible = lambda image, name, threshold=0.9: False
     flow.playfield_detector = lambda image: True
     flow.playfield_entry_evidence = CooperativePlayfieldEntryEvidence()
+    flow.jump_after_download_timeout = lambda: (_ for _ in ()).throw(
+        JumpOutUnavailable("startup timeout")
+    )
     clock = [0.0]
     monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(
@@ -378,7 +530,7 @@ def test_member_exit_watch_resets_motion_evidence_between_rounds(monkeypatch):
     )
 
     assert flow.watch_member_exit_before_black(timeout=1.0) == "black"
-    with pytest.raises(RuntimeError, match="未观察到可靠开演转场"):
+    with pytest.raises(JumpOutUnavailable, match="startup timeout"):
         flow.watch_member_exit_before_black(timeout=0.2)
 
 
@@ -472,6 +624,64 @@ def test_normal_entry_ignores_stale_room_code_and_stay_setting():
     assert should_stay_in_room(settings) is False
 
 
+def test_wait_for_preparation_jumps_after_song_choice_entry_timeout(monkeypatch):
+    clock = [0.0]
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    flow.wait_for = lambda names, timeout: (
+        clock.__setitem__(0, clock[0] + timeout) or (None, np.zeros((1, 1, 3)))
+    )
+    reasons = []
+
+    def jump(reason):
+        reasons.append(reason)
+        raise JumpOutUnavailable(reason)
+
+    flow.jump_after_startup_failure = jump
+    monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: clock[0])
+
+    with pytest.raises(JumpOutUnavailable, match="180秒"):
+        flow.wait_for_preparation()
+
+    assert reasons == [
+        "进入协力房间后180秒内未出现不指定歌曲或准备页，已退后台返回游戏"
+    ]
+
+
+def test_wait_for_preparation_gives_ready_page_independent_60_seconds(monkeypatch):
+    clock = [0.0]
+    song_selected = [False]
+    clicks = []
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    flow.click = clicks.append
+
+    def wait_for(names, timeout):
+        if not song_selected[0]:
+            clock[0] = 179.0
+            song_selected[0] = True
+            return "song_unspecified", np.zeros((1, 1, 3))
+        ready_at = 230.0
+        if clock[0] + timeout >= ready_at:
+            clock[0] = ready_at
+            return "ready_button", np.zeros((1, 1, 3))
+        clock[0] += timeout
+        return None, np.zeros((1, 1, 3))
+
+    flow.wait_for = wait_for
+    monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        cooperative_action.time,
+        "sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+
+    flow.wait_for_preparation()
+
+    assert clicks == [(780, 647), (1068, 647)]
+    assert clock[0] == 230.0
+
+
 def test_private_entry_requires_explicit_entry_selection():
     configure_cooperative_settings({"reset": True, "entry_method": "private"})
     configure_cooperative_settings({"room_code": "941093"})
@@ -497,6 +707,8 @@ def test_cooperative_play_disables_life_abort_but_keeps_start_gate():
         }
     )
     assert MEMBER_DOWNLOAD_TIMEOUT_SECONDS == 60.0
+    assert cooperative_action.ROOM_SONG_CHOICE_TIMEOUT_SECONDS == 180.0
+    assert cooperative_action.SONG_CHOICE_TO_READY_TIMEOUT_SECONDS == 60.0
     assert params["startup_timeout_seconds"] == 60
     assert params["completion_missing_frames"] == 30
     assert params["use_life_safety"] is False
@@ -1362,3 +1574,17 @@ def test_live_action_fails_immediately_on_preflight_error(monkeypatch):
         context, SimpleNamespace(custom_action_param="{}")
     ) is False
     assert failures == ["开局前 Profile 环境校验失败：TAP EFFECT 1 ≠ 4"]
+
+
+def test_performance_mode_evidence_uses_unicode_safe_writer(monkeypatch, tmp_path):
+    flow = object.__new__(CooperativeLiveFlow)
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+    monkeypatch.setattr(cooperative_action, "PROJECT_ROOT", tmp_path)
+
+    flow._save_performance_mode_evidence(frame, "before")
+
+    evidence = list(
+        (tmp_path / "debug").glob("cooperative-performance-mode-*-before.png")
+    )
+    assert len(evidence) == 1
+    assert cv2.imread(str(evidence[0])) is not None
