@@ -11,7 +11,7 @@
 ## 2026-09-10（v1.3.6）
 
 - 更新设置统一回到 MFA 原生 `VersionChecker`：删除 MaaBanGDream 自绘 GitHub 更新卡片和并行更新器，复用原生检查、进度、Toast、标题栏提示与自动更新入口；资源未配置 Mirror RID 时只显示并固定使用 GitHub。
-- GitHub Release 资产按系统、架构和本机运行库状态确定性选择：现有 Python runtime 优先约 143 MiB 的 `-update.zip`，运行库缺失时回退完整包，`.sha256` 不再可能被误选为更新归档；GitHub asset digest 缺失时读取同名校验文件。
+- GitHub Release 资产按系统、架构和本机运行库状态确定性选择：现有 Python runtime 优先约 148 MiB 的 `-update.zip`，运行库缺失时回退完整包，`.sha256` 不再可能被误选为更新归档；GitHub asset digest 缺失时读取同名校验文件。
 - 原生下载器增加 `.part` 与 HTTP Range 断点续传，兼容 206、忽略 Range 的 200 和已完成分片的 416；SHA-256 通过后才形成正式下载文件。
 - 含 MFA 核心文件的便携包完成验证后，由 self-contained `MFAUpdater.exe` 等待主进程正常退出再覆盖；保留 config/profiles/debug/logs/screencap/runtime，最后写 `update-manifest.json`，任一复制失败均不启动或宣称新版本。
 - 发行用 `MFAUpdater.exe` 启用安全裁剪并保持单文件自包含，避免为了退出后覆盖逻辑额外携带整套未裁剪 .NET 运行时。

@@ -3,7 +3,7 @@
 ## ✨ 更新架构
 
 - 🔄 更新设置改用 MFA 原生 GitHub 资源更新流程，统一使用原生检查、下载进度、Toast、标题栏提示和自动更新选项，不再保留重复的 MaaBanGDream 更新卡片。
-- 📦 已存在 Python runtime 时下载约 143 MiB 的 runtime-free 更新包；运行库缺失时自动回退完整包。下载支持断点续传与 SHA-256 校验。
+- 📦 已存在 Python runtime 时下载约 148 MiB 的 runtime-free 更新包；运行库缺失时自动回退完整包。下载支持断点续传与 SHA-256 校验。
 - 🛡️ 程序文件在 MFA 正常退出后由独立更新器覆盖；配置、Profile、日志、调试记录、截图与既有 runtime 均保留，版本清单最后写入。
 
 ## 🐛 协力修复
@@ -27,5 +27,5 @@
 
 ## 🔒 已知限制
 
-- ⚠️ GitHub 暂不提供逐文件小更新，本次 runtime-free 更新包仍约 143 MiB；Mirror酱暂未接入。
+- ⚠️ GitHub 暂不提供逐文件小更新，本次 runtime-free 更新包约 148 MiB；Mirror酱暂未接入。
 - ⚠️ Legacy 开局漏键和偶发整体 LATE 本次不修改。
