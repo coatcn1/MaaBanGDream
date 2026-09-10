@@ -71,6 +71,9 @@ def test_release_builder_uses_clean_sources_and_excludes_private_state():
 
     assert "ls-files -- agent resource" in builder
     assert "--self-contained true" in builder
+    assert "MFAUpdater\\MFAUpdater.csproj" in builder
+    assert "-p:PublishSingleFile=true" in builder
+    assert "MFAUpdater.exe" in validator
     assert "conda-pack.exe" in builder
     assert "status --porcelain" in builder
     assert "[switch]$AllowDirty" in builder
@@ -117,4 +120,17 @@ def test_release_readme_documents_sources_and_first_run():
     assert "coatcn1/MFAAvalonia" in release_readme
     assert "BUILD-INFO.json" in release_readme
     assert "Releases" in project_readme
-    assert "feature/performance-visual-settings" in project_readme
+    assert "fix/native-realtime-ui-toggle" in project_readme
+
+
+def test_v136_launcher_uses_native_mfa_update_flow():
+    launcher = read("packaging/start-maabangdream.cmd")
+    normalizer = read("scripts/normalize-release-directory.ps1")
+    builder = read("scripts/build-windows-release.ps1")
+
+    assert "normalize-release-directory.ps1" in launcher
+    assert "update.ps1" not in launcher
+    assert "Invoke-WebRequest" not in normalizer
+    assert "MaaBanGDream-v$currentVersion-win-x64" in normalizer
+    assert "normalize-release-directory.ps1" in builder
+    assert "scripts\\update.ps1" not in builder

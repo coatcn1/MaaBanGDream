@@ -12,6 +12,7 @@ from pathlib import Path
 REQUIRED_PATHS = (
     "MFAAvalonia.exe",
     "MFAAvalonia.deps.json",
+    "MFAUpdater.exe",
     "libs/MFAAvalonia.Core.dll",
     "interface.json",
     "interface.template.json",

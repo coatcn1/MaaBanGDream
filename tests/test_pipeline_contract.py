@@ -23,7 +23,9 @@ def test_all_pipeline_clicks_use_the_foreground_guard():
 def test_interface_references_existing_entry_and_resource():
     interface = load(ROOT / "interface.json")
     assert interface["interface_version"] == 2
-    assert interface["version"] == "1.3.5"
+    assert interface["version"] == "1.3.6"
+    assert interface["github"] == "https://github.com/coatcn1/MaaBanGDream"
+    assert "mirrorchyan_rid" not in interface
     assert [task["name"] for task in interface["task"]] == [
         "AutoLive", "RealtimeLive", "CooperativeLive", "ContinuousRealtimeLive",
         "RealtimeCalibration", "DailyFreeGacha", "ChallengeLive",

@@ -4,8 +4,9 @@ rem keep this launcher ASCII-only.  Any UTF-8 Chinese here gets mis-decoded
 rem and executed as a command on first launch.
 chcp 65001 >nul
 cd /d "%~dp0"
-rem Silently check for GitHub updates before launch; continue when offline.
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\update.ps1" -Auto
+rem Normalize a versioned install folder after an update. Network update checks
+rem are owned by MFA's native VersionChecker after v1.3.6.
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\normalize-release-directory.ps1"
 rem Exit code 2 means the installer folder is being renamed and relaunched;
 rem do not start MFA from the old path in that case.
 if errorlevel 2 exit /b 2
