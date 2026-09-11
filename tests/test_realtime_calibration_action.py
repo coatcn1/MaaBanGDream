@@ -9,6 +9,7 @@ import agent.realtime.calibration_action as calibration_action_module
 from agent.realtime.calibration_action import (
     CalibrationRunner,
     RealtimeCalibration,
+    _activate_accepted_profile,
     _warm_start_offset,
     calibration_round_plan,
     latest_result_report_since,
@@ -51,6 +52,46 @@ def test_warm_start_prefers_pinned_accepted_profile(tmp_path):
 def test_warm_start_falls_back_when_no_accepted_profile(tmp_path):
     store = RealtimeProfileStore(tmp_path / "profiles")
     assert _warm_start_offset(store, "Expert", 3) == 3
+
+
+def test_accepted_calibration_profile_replaces_the_old_pin(tmp_path):
+    store = RealtimeProfileStore(tmp_path / "profiles")
+    base = {
+        "created_at": "2026-09-11T14:00:00",
+        "difficulty": "Expert",
+        "accepted": True,
+        "accepted_at": "2026-09-11T14:05:00",
+        "environment": {
+            "resolution": [1280, 720],
+            "dpi": 240,
+            "game_fps": 60,
+            "render_quality": "standard",
+            "note_speed": 5.0,
+            "note_skin_type": 1,
+            "tap_effect": 4,
+            "judgement_assist_effect": False,
+            "engine": "native",
+        },
+        "settings": {"timing_offset_ms": 48},
+        "rehearsals": [],
+        "formal_attempts": [],
+    }
+    old = store.write(base)
+    current = store.write({
+        **base,
+        "created_at": "2026-09-11T14:10:00",
+        "settings": {"timing_offset_ms": 60},
+    })
+    store.pin("Expert", old.name)
+
+    activated = _activate_accepted_profile(
+        store,
+        {"status": "accepted", "candidate_profile": current.name},
+        "Expert",
+    )
+
+    assert activated == current.name
+    assert store.pinned_profile("Expert") == current.name
 
 
 def test_calibration_round_plan_never_falls_back_to_prepare():

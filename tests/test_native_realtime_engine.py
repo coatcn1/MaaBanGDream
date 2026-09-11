@@ -2012,6 +2012,83 @@ def test_native_first_chunk_pipeline_distinguishes_host_send_and_device_gaps(
     })
 
 
+def test_native_timing_trial_applies_first_start_delay_once():
+    class Compiler:
+        def __init__(self):
+            self.residuals = []
+
+        def add_residual_ms(self, value):
+            self.residuals.append(value)
+
+    backend = object.__new__(NativeMinitouchBackend)
+    backend._compiler = Compiler()
+    backend._timing_trial_enabled = True
+    backend._clock_basis = "probe-midpoint"
+    backend._clock_uncertainty_ms = 0.5
+    backend._startup_timing_trial_lock = threading.Lock()
+    backend._startup_timing_trial = {
+        "enabled": True,
+        "observed_delay_ms": None,
+        "correction_ms": 0.0,
+        "reason": "pending",
+    }
+    backend._startup_timing_trial_attempted = False
+
+    backend._maybe_apply_startup_timing_trial(10.050, 10.000)
+    backend._maybe_apply_startup_timing_trial(10.050, 10.000)
+
+    assert backend._compiler.residuals == [pytest.approx(50.0)]
+    assert backend._startup_timing_trial_report() == {
+        "enabled": True,
+        "observed_delay_ms": pytest.approx(50.0),
+        "correction_ms": pytest.approx(50.0),
+        "reason": "applied",
+    }
+
+
+@pytest.mark.parametrize(
+    "mapped_start_s, uncertainty_ms, expected_reason",
+    [
+        (10.007, 0.5, "delay-below-8ms"),
+        (10.061, 0.5, "delay-over-60ms"),
+        (float("nan"), 0.5, "missing-first-window-mapping"),
+        (10.050, float("nan"), "clock-uncertainty-over-1ms"),
+        (10.050, -0.001, "clock-uncertainty-over-1ms"),
+        (10.050, 1.001, "clock-uncertainty-over-1ms"),
+    ],
+)
+def test_native_timing_trial_rejects_invalid_startup_evidence(
+    mapped_start_s,
+    uncertainty_ms,
+    expected_reason,
+):
+    class Compiler:
+        def __init__(self):
+            self.residuals = []
+
+        def add_residual_ms(self, value):
+            self.residuals.append(value)
+
+    backend = object.__new__(NativeMinitouchBackend)
+    backend._compiler = Compiler()
+    backend._timing_trial_enabled = True
+    backend._clock_basis = "probe-midpoint"
+    backend._clock_uncertainty_ms = uncertainty_ms
+    backend._startup_timing_trial_lock = threading.Lock()
+    backend._startup_timing_trial = {
+        "enabled": True,
+        "observed_delay_ms": None,
+        "correction_ms": 0.0,
+        "reason": "pending",
+    }
+    backend._startup_timing_trial_attempted = False
+
+    backend._maybe_apply_startup_timing_trial(mapped_start_s, 10.000)
+
+    assert backend._compiler.residuals == []
+    assert backend._startup_timing_trial_report()["reason"] == expected_reason
+
+
 def test_native_backend_fails_closed_on_jlog_command_mismatch(monkeypatch):
     class Device:
         def logs_since(self, cursor):

@@ -18,6 +18,7 @@
 | --- | --- |
 | `D:\Documents\workplace\MaaBanGDream` | Git 仓库，唯一源码目录 |
 | `D:\Documents\workplace\.tools\MFAAvalonia-profile-v3` | MFA 运行目录（Git 忽略），含 `interface.json` 和 `resource/` 部署副本 |
+| 用户正式安装目录（发布包） | 排查仅可读取证据，禁止部署候选、覆盖源码或修改 Profile/配置 |
 
 MFA 不会直接读仓库资源。修改代码后必须通过 `scripts/launch-mfa.ps1` 同步部署并重启 MFA。
 
@@ -329,6 +330,9 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
 26. **Legacy 的 HOLD/Slide 开局锁相只能消费离散拓扑事件**：连续绿色像素和逐帧 HOLD 是同一条绿条的重复观测，绝不能当多个校准样本。只使用视觉管线已经确认并派发的 HOLD/Slide 头 DOWN（50ms 内聚合同一和弦）与同一 contact 的离散 lane transition；匹配已确认本地谱面的 hold path 后，至少 4 个节点、2 组事件、2 条路径共同确认，残差 MAD 与 confidence 达标且不存在等强相位候选才允许 `chart_calibrated`。单个绿条、技能绿色特效、重复 lane pattern 或错误候选必须继续纯视觉，既有 TAP/FLICK/SKILL 投影校准与 fail-closed 回退不得删除。HOLD 事件时间要先去掉 Profile press bias，避免锁相后谱面调度再次应用 timing offset；不得借此修改 Profile 或扩大 FAST/SLOW ±35ms feedback correction。
 27. **协力准备后短黑场不能作为唯一退出证据**：2026-09-09 `coop-20260909-114620-401553` 中，准备完毕后先固定睡眠 2 秒、黑场又被后续 100ms 轮询漏掉，旧 `watch_member_exit_before_black()` 只认黑场/成员退出而静默等满 12 秒；随后 preflight 已是中段演奏，Native 约 18 秒晚入场。入房后先独立等待“不指定歌曲”或准备页 180 秒，超时必须退到桌面再切回游戏并结束任务；点击“不指定歌曲”后重新开始独立 60 秒准备页窗口，不能继续共用前一阶段剩余时间。点击准备完毕后必须高频观察按钮送达、成员退出和黑场，不能有固定盲等。普通协力开演可消费本轮真实黑场，或连续两帧稳定且由本局难度、等级、标题共同确认的最终封面；后者必须把封面帧与解析结果一次性交给 `RealtimeProfilePlay`，不得重新等待黑场。任意高纹理加载画面不能作为封面放行。开演观察窗统一使用 `MEMBER_DOWNLOAD_TIMEOUT_SECONDS=60`，覆盖烧条倒计时和成员准备较慢的场景。漏黑场 fallback 的完整演奏场 + 连续局部音符运动只可证明“歌曲已开始”，必须记录后 fail-closed，绝不能在中段启动 Native/Legacy；此后仅运行独立数值生命监控，确认 alive 后连续 3 帧 `<20` 或监控超时时退到桌面再切回游戏并停止任务。大面积转场不得作为证据；准备页可能同时误中生命条和六轨白色标记，静态元素绝不放行。60 秒内仍无黑场、匹配封面或可靠动态证据时同样安全跳车并停止。数值生命监控未触发跳车时，不得直接改阈值，应在调试证据中先检查可见/不可见样本、最低值、`<20` 连续帧、alive/dead 确认和首个候选截图。
 28. **Native 触点释放必须由本轮设备 `r` 回执证明**：EvATive7 minitouch 的 `w` 会在设备 reader 内阻塞，reset 写入 socket、关闭连接或 kill 进程都不能单独证明排队的 `r` 已执行。只在本轮 reset 请求前记录的 jlog 游标之后，精确解析到 `command == "r"`，再完成本地句柄、设备进程和启动提交清理，才允许 `release_confirmed=true`；旧 `r` 不得复用。最大队列 750ms 时统一使用 1 秒停止预算（750ms 等执行 + 250ms 清理），超时仍强制关闭但必须 fail-closed。协力空血取消只有同时满足 jump_requested、life_depleted、双 cancelled、reset 执行确认及其余传输门禁时，才能进入断网跳车流程。
+
+29. **跨进程重试预算不能使用 RemoteTasker 指针**：MaaFramework 每次 Agent Action 回调都会创建临时 `RemoteContext`/`RemoteTasker`，Python `_handle` 是代理指针，不是稳定的远端任务身份。预算使用回调携带的 `argv.task_detail.task_id`，由下一局入口显式 reset；缺少有效任务 ID 时拒绝重试。回归必须覆盖真实 AgentClient/AgentServer 连续回调，不能只用固定 `_handle` 的 mock。
+30. **Native 等待补偿必须覆盖已知命令成本**：每条 `w` 的总补偿固定限于 1ms 时，已知等待额外成本大于 1ms 也无法被持续抵消。离线恒定 1.5/2ms 成本可复现 10 秒累计晚 100/200ms。2026-09-11 雷电真机验收后成本回收与一次性启动延迟补偿默认启用；开发回归可用 `launch-mfa.ps1 -DisableNativeTimingCompensation` 临时关闭。仍须验证跨切片残差和触点生命周期，设备相对计划漂移不等于游戏判定相位，不得据此直接改 Profile。
 
 ## 后续开发方向（已记录，暂缓或未开始）
 

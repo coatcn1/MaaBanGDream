@@ -238,6 +238,25 @@ void test_per_type_offset_shortens_waits_with_clamp() {
     CHECK(sum_waits(script) == 1498);
 }
 
+double max_virtual_wait_cost_phase_error(
+    const std::vector<std::string>& lines,
+    double wait_cost_ms,
+    double first_due_ms,
+    double interval_ms) {
+    double elapsed_ms = 0.0;
+    double expected_ms = first_due_ms;
+    double maximum = 0.0;
+    for (const std::string& item : lines) {
+        if (item.rfind("w ", 0) == 0) {
+            elapsed_ms += std::stod(item.substr(2)) + wait_cost_ms;
+        } else if (item.rfind("d ", 0) == 0) {
+            maximum = std::max(maximum, std::abs(elapsed_ms - expected_ms));
+            expected_ms += interval_ms;
+        }
+    }
+    return maximum;
+}
+
 void test_rate_correction_scales_waits_without_touching_residual() {
     EngineConfig config;
     const std::vector<ScheduledAction> actions = {
@@ -853,8 +872,106 @@ void test_commit_intervals_do_not_accumulate_phase() {
     CHECK_EQ(downs, 100);
 }
 
+void test_wait_cost_recovery_trial_repays_known_positive_wait_cost() {
+    EngineConfig config;
+    std::vector<ScheduledAction> actions;
+    for (int index = 0; index < 101; ++index) {
+        actions.push_back(action(
+            ActionKind::Tap, static_cast<uint8_t>(index % kLaneCount),
+            static_cast<double>(index + 1) * 0.1));
+    }
+
+    for (const double wait_cost_ms : {0.7, 1.5, 2.0}) {
+        TouchLatencyOffsets offsets;
+        offsets.wait_ms = wait_cost_ms;
+
+        TouchScriptCompiler baseline(offsets);
+        const auto baseline_lines = baseline.compile(actions, config, 0.0);
+        const double baseline_error = max_virtual_wait_cost_phase_error(
+            baseline_lines, wait_cost_ms, 100.0, 100.0);
+
+        TouchScriptCompiler trial(offsets);
+        trial.set_wait_cost_recovery_enabled(true);
+        const auto trial_lines = trial.compile(actions, config, 0.0);
+        const double trial_error = max_virtual_wait_cost_phase_error(
+            trial_lines, wait_cost_ms, 100.0, 100.0);
+        const TouchTimingTrialReport report = trial.timing_trial_report();
+
+        CHECK(trial_error <= 2.0);
+        if (wait_cost_ms <= 1.0) {
+            CHECK(baseline_error <= 2.0);
+        } else {
+            CHECK(baseline_error >= 50.0);
+        }
+        CHECK(report.wait_cost_recovery_enabled);
+        CHECK(report.positive_recovered_ms > 0.0);
+        CHECK(report.positive_recovery_waits > 0);
+    }
+}
+
+void test_wait_cost_recovery_trial_preserves_negative_limit_and_zero_wait() {
+    TouchScriptCompiler compiler;
+    compiler.set_wait_cost_recovery_enabled(true);
+    compiler.add_residual_ms(-5.0);
+    const auto negative = compiler.compile({
+        action(ActionKind::Down, 0, 0.1, 1),
+    }, EngineConfig{}, 0.0, false);
+    // 负向残差仍只能把首段 100ms 延长 1ms。
+    CHECK_EQ(sum_waits(negative), 101);
+
+    TouchScriptCompiler no_wait;
+    no_wait.set_wait_cost_recovery_enabled(true);
+    no_wait.add_residual_ms(20.0);
+    const auto immediate = no_wait.compile({
+        action(ActionKind::Down, 0, 0.0, 1),
+    }, EngineConfig{}, 0.0, false);
+    CHECK_EQ(sum_waits(immediate), 0);
+    CHECK(no_wait.timing_trial_report().residual_ms >= 20.0);
+}
+
+void test_wait_cost_recovery_trial_keeps_double_slide_across_chunks() {
+    TouchLatencyOffsets first_offsets;
+    first_offsets.wait_ms = 1.5;
+    TouchScriptCompiler compiler(first_offsets);
+    compiler.set_wait_cost_recovery_enabled(true);
+    EngineConfig config;
+
+    const auto first = compiler.compile({
+        action(ActionKind::Down, 1, 0.10, 0),
+        action(ActionKind::Down, 4, 0.10, 1),
+        action(ActionKind::Move, 2, 0.18, 0),
+        action(ActionKind::Move, 3, 0.18, 1),
+    }, config, 0.0, false, 0.20);
+
+    TouchLatencyOffsets second_offsets;
+    second_offsets.wait_ms = 2.0;
+    compiler.set_offsets(second_offsets);
+    const auto second = compiler.compile({
+        action(ActionKind::Move, 3, 0.25, 0),
+        action(ActionKind::Move, 2, 0.25, 1),
+        action(ActionKind::Up, 3, 0.30, 0),
+        action(ActionKind::Up, 2, 0.30, 1),
+    }, config, 0.20, true, 0.35);
+
+    std::vector<std::string> joined = first;
+    joined.insert(joined.end(), second.begin(), second.end());
+    CHECK(script_has_valid_contact_lifecycle(joined));
+    int downs = 0;
+    int ups = 0;
+    for (const std::string& line : joined) {
+        downs += line.rfind("d ", 0) == 0 ? 1 : 0;
+        ups += line.rfind("u ", 0) == 0 ? 1 : 0;
+    }
+    CHECK_EQ(downs, 2);
+    CHECK_EQ(ups, 2);
+    CHECK(compiler.timing_trial_report().positive_recovered_ms > 0.0);
+}
+
 int run_touch_script_tests() {
     test_commit_intervals_do_not_accumulate_phase();
+    test_wait_cost_recovery_trial_repays_known_positive_wait_cost();
+    test_wait_cost_recovery_trial_preserves_negative_limit_and_zero_wait();
+    test_wait_cost_recovery_trial_keeps_double_slide_across_chunks();
     test_basic_hold_lifecycle_ordering();
     test_commit_precedes_every_wait();
     test_per_type_offset_shortens_waits_with_clamp();

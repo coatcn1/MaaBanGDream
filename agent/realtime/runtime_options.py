@@ -99,26 +99,41 @@ def retryable_play_failure(reason: str) -> bool:
     return not any(marker in normalized for marker in _NON_RETRYABLE_MARKERS)
 
 
+def _retry_task_id(argv: CustomAction.RunArg) -> int | None:
+    """返回 Maa 为本次外层任务分配的稳定 ID，缺失时拒绝重试。"""
+    detail = getattr(argv, "task_detail", None)
+    value = getattr(detail, "task_id", None)
+    try:
+        task_id = int(value)
+    except (TypeError, ValueError):
+        return None
+    return task_id if task_id > 0 else None
+
+
 @AgentServer.custom_action("RealtimePlayRetryControl")
 class RealtimePlayRetryControl(CustomAction):
     """管理普通单人单局的有界重试；校准由其外层状态机负责。"""
 
     def run(self, context: Context, argv: CustomAction.RunArg) -> bool:
-        # 每次 Custom Action 回调会重新包装 Tasker；Python 对象地址不是任务身份。
-        tasker = context.tasker
-        handle = getattr(tasker, "_handle", None)
-        handle = getattr(handle, "value", handle)
-        key = int(handle) if handle else id(tasker)
         try:
+            if context.tasker.stopping:
+                return True
+
             params = json.loads(argv.custom_action_param or "{}")
             operation = str(params.get("operation", "check"))
+            task_id = _retry_task_id(argv)
+            if task_id is None:
+                self._record_decision("rejected-no-task-id")
+                print(
+                    "RealtimePlayRetry retry=false class=missing-task-id",
+                    flush=True,
+                )
+                return operation == "reset"
             if operation == "reset":
-                _PLAY_RETRY_COUNTS.pop(key, None)
+                _PLAY_RETRY_COUNTS.pop(task_id, None)
                 return True
             if operation != "check":
                 raise ValueError(f"invalid retry operation: {operation}")
-            if context.tasker.stopping:
-                return False
 
             run = current_live_run()
             run_mode = "unknown" if run is None else str(run.mode)
@@ -144,7 +159,7 @@ class RealtimePlayRetryControl(CustomAction):
                 .runtime_options()
                 .get("play_failure_retry_count", 1)
             )
-            used = _PLAY_RETRY_COUNTS.get(key, 0)
+            used = _PLAY_RETRY_COUNTS.get(task_id, 0)
             if used >= retry_limit:
                 self._record_decision(
                     "exhausted",
@@ -161,7 +176,7 @@ class RealtimePlayRetryControl(CustomAction):
                 return False
 
             used += 1
-            _PLAY_RETRY_COUNTS[key] = used
+            _PLAY_RETRY_COUNTS[task_id] = used
             discard_prearmed_backend("single-play-retry")
             self._record_decision(
                 "scheduled",

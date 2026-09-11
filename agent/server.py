@@ -5,6 +5,8 @@ import sys
 from maa.agent.agent_server import AgentServer
 from maa.tasker import Tasker
 
+from realtime.runtime_flags import configure_agent_runtime_flags
+
 import common_recover  # noqa: F401 - registration happens at import time
 import live_select  # noqa: F401 - registration happens at import time
 import task_reporting  # noqa: F401 - registration happens at import time
@@ -31,6 +33,13 @@ import realtime.daily_free_gacha  # noqa: F401 - registration happens at import 
 def main() -> None:
     if len(sys.argv) < 2:
         raise SystemExit("Maa Agent socket id is required")
+    runtime_flags = configure_agent_runtime_flags(sys.argv[1:-1])
+    print(
+        "Agent runtime flags: "
+        "native_timing_compensation="
+        f"{runtime_flags['native_timing_compensation']}",
+        flush=True,
+    )
     Tasker.set_log_dir("./debug")
     AgentServer.start_up(sys.argv[-1])
     AgentServer.join()

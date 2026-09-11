@@ -55,6 +55,33 @@ def test_launchers_write_json_without_bom_and_check_tolerates_bom():
     assert "Unblock-File -LiteralPath $mfa" in launcher
 
 
+def test_developer_launcher_enables_native_timing_compensation_by_default():
+    launcher = read("scripts/launch-mfa.ps1")
+
+    assert "[switch]$NativeTimingTrial" in launcher
+    assert "[switch]$DisableNativeTimingCompensation" in launcher
+    assert "$agentArgs += '--native-timing-trial'" in launcher
+    assert "$agentArgs += '--disable-native-timing-compensation'" in launcher
+    assert "$interface.agent.child_args = $agentArgs" in launcher
+    assert "Wait-Process -Id $_.ProcessId" in launcher
+    assert "Native timing compensation flag was not written" in launcher
+
+
+def test_developer_launcher_separates_utf8_comments_from_commands_for_windows_powershell():
+    lines = (ROOT / "scripts/launch-mfa.ps1").read_bytes().splitlines(keepends=True)
+
+    for index, line in enumerate(lines[:-1]):
+        if (
+            line.endswith(b"\n")
+            and not line.endswith(b"\r\n")
+            and any(value >= 0x80 for value in line)
+        ):
+            assert (
+                lines[index + 1] in {b"\n", b"\r\n"}
+                or lines[index + 1].lstrip().startswith(b"#")
+            )
+
+
 def test_runtime_check_loads_bom_prefixed_interface(tmp_path):
     path = tmp_path / "interface.json"
     path.write_bytes(

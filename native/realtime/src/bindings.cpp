@@ -350,6 +350,18 @@ py::list execution_receipts_to_list(const TouchScriptCompiler& compiler) {
     return result;
 }
 
+py::dict timing_trial_report_to_dict(const TouchScriptCompiler& compiler) {
+    const TouchTimingTrialReport report = compiler.timing_trial_report();
+    py::dict result;
+    result["wait_cost_recovery_enabled"] = report.wait_cost_recovery_enabled;
+    result["residual_ms"] = report.residual_ms;
+    result["positive_recovered_ms"] = report.positive_recovered_ms;
+    result["positive_recovery_waits"] = report.positive_recovery_waits;
+    result["positive_budget_exhausted"] = report.positive_budget_exhausted;
+    result["positive_no_wait_available"] = report.positive_no_wait_available;
+    return result;
+}
+
 MinitouchLogEvent log_event_from_dict(const py::dict& event_dict) {
     MinitouchLogEvent event;
     event.start_ms = event_dict["start_ms"].cast<double>();
@@ -530,6 +542,12 @@ PYBIND11_MODULE(maabangdream_realtime, module) {
         .def("set_rate_correction",
             &TouchScriptCompiler::set_rate_correction,
             py::arg("rate"))
+        .def("set_wait_cost_recovery_enabled",
+            &TouchScriptCompiler::set_wait_cost_recovery_enabled,
+            py::arg("enabled"))
+        // 当前 compile()/报告绑定保留 Python GIL，保证试验统计不会与同一实例的
+        // 编译提交并发交错；若将来释放 GIL，必须先为该状态补充同步。
+        .def("timing_trial_report", &timing_trial_report_to_dict)
         .def_property_readonly(
             "rate_correction", &TouchScriptCompiler::rate_correction)
         .def("add_residual_ms", &TouchScriptCompiler::add_residual_ms,
