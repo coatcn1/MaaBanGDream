@@ -73,7 +73,7 @@ def test_failure_visibility_is_single_source_and_framework_failure_is_preserved(
         "challenge_live.json": (
             "ChallengeNoEvent",
             "ChallengePointStillOpen",
-            "ChallengeLifeSafetyStop",
+            "ChallengeFailure",
         ),
         "realtime_calibration.json": ("RealtimeCalibrationFailure",),
         "realtime_multi_live.json": ("RealtimeLiveFailure",),

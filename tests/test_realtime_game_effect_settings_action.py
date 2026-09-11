@@ -167,7 +167,7 @@ def test_new_stopped_gate_clears_previous_visual_readback():
     assert verified_game_visual_settings() is None
 
 
-def test_disabled_gate_skips_page_and_publishes_declared_settings(monkeypatch):
+def test_disabled_gate_skips_page_even_when_legacy_force_param_is_present(monkeypatch):
     clicks = []
     options = {
         "game_effect_settings_enabled": False,
@@ -195,7 +195,7 @@ def test_disabled_gate_skips_page_and_publishes_declared_settings(monkeypatch):
     )
     clear_verified_game_visual_settings()
 
-    assert RealtimeGameEffectSettingsGate()._run(context, {}) is True
+    assert RealtimeGameEffectSettingsGate()._run(context, {"force": True}) is True
 
     verified = verified_game_visual_settings()
     assert verified is not None

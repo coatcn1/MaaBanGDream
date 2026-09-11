@@ -142,9 +142,6 @@ REWARD_POPUP_BUTTON_REGION = (0.40, 0.68, 0.60, 0.90)
 ACHIEVEMENT_LIST_CLOSE_REGION = (0.40, 0.80, 0.60, 0.94)
 
 
-_LAST_LIFE_SAFETY_ABORT = False
-
-
 def _native_adb_endpoint(controller) -> tuple[str, str]:
     """从当前 Maa controller 取 Native 设备端点，缺失时禁止猜测本机路径。"""
     return controller_adb_endpoint(controller)
@@ -637,51 +634,22 @@ def _recorder_update_metadata(recorder, live_run: LiveRunContext) -> None:
 
 def resolve_life_policy(
     params: dict,
-    runtime_options: dict,
-) -> tuple[bool, bool, int | None]:
-    """Return rehearsal mode, continue-after-depletion and safety threshold."""
+) -> tuple[bool, bool]:
+    """返回排练模式及生命归零后是否继续等待结算。"""
     require_profile = bool(params.get("require_profile", True))
     is_rehearsal = bool(params.get("rehearsal_mode", not require_profile))
-    ignore_rehearsal_life = bool(
-        runtime_options.get("rehearsal_ignore_life_safety", True)
-    )
     continue_after_depleted = bool(params.get(
         "continue_after_life_depleted",
-        is_rehearsal and ignore_rehearsal_life,
+        is_rehearsal,
     ))
-    default_use_safety = not (is_rehearsal and ignore_rehearsal_life)
-    use_life_safety = bool(params.get("use_life_safety", default_use_safety))
-    life_threshold = (
-        int(runtime_options["life_exit_threshold"])
-        if use_life_safety and runtime_options["life_safety_enabled"] else None
-    )
-    return is_rehearsal, continue_after_depleted, life_threshold
+    return is_rehearsal, continue_after_depleted
 
 
 def resolve_life_monitor_enabled(
     params: dict,
-    runtime_options: dict,
 ) -> bool:
-    """只有用户启用生命保护且本次流程允许时才读取数值生命值。"""
-    require_profile = bool(params.get("require_profile", True))
-    is_rehearsal = bool(params.get("rehearsal_mode", not require_profile))
-    ignore_rehearsal_life = bool(
-        runtime_options.get("rehearsal_ignore_life_safety", True)
-    )
-    default_use_safety = not (is_rehearsal and ignore_rehearsal_life)
-    return bool(
-        params.get("use_life_safety", default_use_safety)
-        and runtime_options.get("life_safety_enabled", True)
-    )
-
-
-def pause_overlay_changed(before, after) -> bool:
-    if before.shape != after.shape or before.size == 0:
-        return False
-    height, width = before.shape[:2]
-    roi = (slice(height // 8, height * 7 // 8), slice(width // 8, width * 7 // 8))
-    difference = cv2.absdiff(before[roi], after[roi])
-    return float(difference.mean()) >= 8.0
+    """数值生命只负责开演确认、归零终态和协力跳车。"""
+    return bool(params.get("monitor_life", True))
 
 
 def _write_calibration_report(
@@ -1666,8 +1634,6 @@ class RealtimeProfilePlay(CustomAction):
             return False
 
     def _run(self, context: Context, argv: CustomAction.RunArg) -> bool:
-        global _LAST_LIFE_SAFETY_ABORT
-        _LAST_LIFE_SAFETY_ABORT = False
         params = json.loads(argv.custom_action_param or "{}")
         if context.tasker.stopping:
             return True
@@ -1821,18 +1787,10 @@ class RealtimeProfilePlay(CustomAction):
                             f"reason={chart_reason}",
                             flush=True,
                         )
-            (
-                is_rehearsal,
-                continue_after_depleted,
-                life_threshold,
-            ) = resolve_life_policy(params, runtime_options)
-            numeric_life_monitor_enabled = resolve_life_monitor_enabled(
-                params,
-                runtime_options,
-            )
-            # 协力“断网跳车”：即使关闭生命保护，也要打开数值生命监视，
-            # 让引擎在生命归零帧发出一次性跳车信号。安全暂停阈值保持关闭，
-            # 避免阈值中止路径抢在跳车信号之前触发。
+            is_rehearsal, continue_after_depleted = resolve_life_policy(params)
+            numeric_life_monitor_enabled = resolve_life_monitor_enabled(params)
+            # 协力“断网跳车”必须保留数值生命监视，让引擎在生命归零帧
+            # 发出一次性跳车信号。
             disconnect_jump_request = bool(
                 params.get("life_depleted_jump_request", False)
             )
@@ -2431,40 +2389,10 @@ class RealtimeProfilePlay(CustomAction):
             "RealtimeProfilePlay life_policy "
             f"rehearsal={is_rehearsal} "
             f"continue_after_depleted={continue_after_depleted} "
-            f"threshold={life_threshold} "
             f"numeric_monitor={numeric_life_monitor_enabled} "
             f"playfield_monitor={playfield_monitor is not None}",
             flush=True,
         )
-
-        def pause_for_life(reading) -> None:
-            global _LAST_LIFE_SAFETY_ABORT
-            _LAST_LIFE_SAFETY_ABORT = True
-            confirmed = False
-            for attempt in range(2):
-                try:
-                    require_game_foreground(controller)
-                    before = controller.post_screencap().wait().get()
-                    controller.post_click(1237, 58).wait()
-                    time.sleep(.4)
-                    after = controller.post_screencap().wait().get()
-                    confirmed = pause_overlay_changed(before, after)
-                except Exception:
-                    confirmed = False
-                if confirmed:
-                    break
-            print(
-                f"RealtimeProfilePlay life_safety value={reading.value} "
-                f"threshold={life_threshold} pause_confirmed={confirmed}",
-                flush=True,
-            )
-            if not confirmed:
-                print(
-                    "RealtimeProfilePlay life_safety warning: "
-                    "pause overlay was not confirmed; touches are already "
-                    "released, continuing as a life-safety abort",
-                    flush=True,
-                )
 
         duration_value = params.get("duration_seconds", 30)
         duration_seconds = (
@@ -2485,10 +2413,6 @@ class RealtimeProfilePlay(CustomAction):
                 duration_seconds=duration_seconds,
                 target_fps=target_fps,
                 continue_after_life_depleted=continue_after_depleted,
-                life_exit_threshold=life_threshold,
-                on_life_safety=(
-                    pause_for_life if life_threshold is not None else None
-                ),
                 on_life_depleted=(
                     request_disconnect_jump
                     if disconnect_jump_request else None
@@ -2775,7 +2699,7 @@ class RealtimeProfilePlay(CustomAction):
             result_output.mkdir(parents=True, exist_ok=True)
             status = (
                 "playfield_start_timeout" if stats.startup_timed_out
-                else "life_safety_abort" if stats.aborted_for_life
+                else "life_depleted" if stats.aborted_for_life
                 else "cleanup_failed" if stats.cleanup_failed
                 else "engine_incomplete"
             )
@@ -3081,11 +3005,3 @@ class RealtimeProfilePlay(CustomAction):
             record_failure_reason(reason)
             print(f"[任务][实时演奏][演奏][ERROR] {reason}", flush=True)
         return success
-
-
-@AgentServer.custom_action("RealtimeLifeSafetyAbortCheck")
-class RealtimeLifeSafetyAbortCheck(CustomAction):
-    """Route a protected abort to StopTask while ordinary failures may recover."""
-
-    def run(self, context: Context, argv: CustomAction.RunArg) -> bool:
-        return _LAST_LIFE_SAFETY_ABORT

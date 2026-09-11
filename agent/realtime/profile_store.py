@@ -109,12 +109,10 @@ class RealtimeProfileStore:
 
     SCHEMA_VERSION = 1
     DIFFICULTIES = frozenset({"Easy", "Normal", "Hard", "Expert", "Special"})
-    MAIN_DIFFICULTIES = ("Easy", "Normal", "Hard", "Expert")
+    MAIN_DIFFICULTIES = ("Easy", "Normal", "Hard")
+    HIGH_DIFFICULTIES = ("Expert", "Special")
     SELECTION_FILE = "selection.json"
     DEFAULT_RUNTIME_OPTIONS = {
-        "life_safety_enabled": True,
-        "life_exit_threshold": 200,
-        "rehearsal_ignore_life_safety": True,
         "skip_process_conflict_cleanup": False,
         "game_effect_settings_enabled": True,
         "note_skin_type": 1,
@@ -152,9 +150,11 @@ class RealtimeProfileStore:
     def compatible_difficulties(cls, difficulty: str) -> tuple[str, ...]:
         if difficulty not in cls.DIFFICULTIES:
             raise ValueError(f"不支持的难度: {difficulty}")
-        if difficulty == "Special":
-            return ("Special",)
-        return cls.MAIN_DIFFICULTIES[cls.MAIN_DIFFICULTIES.index(difficulty):]
+        if difficulty in cls.HIGH_DIFFICULTIES:
+            other = next(item for item in cls.HIGH_DIFFICULTIES if item != difficulty)
+            return difficulty, other
+        start = cls.MAIN_DIFFICULTIES.index(difficulty)
+        return cls.MAIN_DIFFICULTIES[start:] + cls.HIGH_DIFFICULTIES
 
     def load(self, value: str | Path) -> dict[str, Any]:
         path = self._path(value)
@@ -221,12 +221,6 @@ class RealtimeProfileStore:
     def _validated_runtime_options(cls, options: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(options, dict):
             raise ValueError("runtime_options 必须是 JSON 对象")
-        enabled = options.get("life_safety_enabled", True)
-        if not isinstance(enabled, bool):
-            raise ValueError("life_safety_enabled 必须是布尔值")
-        rehearsal_ignore = options.get("rehearsal_ignore_life_safety", True)
-        if not isinstance(rehearsal_ignore, bool):
-            raise ValueError("rehearsal_ignore_life_safety 必须是布尔值")
         skip_conflict_cleanup = options.get("skip_process_conflict_cleanup", False)
         if not isinstance(skip_conflict_cleanup, bool):
             raise ValueError("skip_process_conflict_cleanup must be boolean")
@@ -284,12 +278,6 @@ class RealtimeProfileStore:
             or not 0 <= play_failure_retry_count <= 3
         ):
             raise ValueError("play_failure_retry_count 必须是 0..3 的整数")
-        try:
-            threshold = int(options.get("life_exit_threshold", 200))
-        except (TypeError, ValueError) as exc:
-            raise ValueError("life_exit_threshold 必须是整数") from exc
-        if not 10 <= threshold <= 990:
-            raise ValueError("life_exit_threshold 必须在 10..990 之间")
         configured_speeds = options.get(
             "calibration_note_speeds",
             cls.DEFAULT_RUNTIME_OPTIONS["calibration_note_speeds"],
@@ -310,9 +298,6 @@ class RealtimeProfileStore:
                 )
             speeds[difficulty] = speed
         return {
-            "life_safety_enabled": enabled,
-            "life_exit_threshold": threshold,
-            "rehearsal_ignore_life_safety": rehearsal_ignore,
             "skip_process_conflict_cleanup": skip_conflict_cleanup,
             "game_effect_settings_enabled": effect_settings_enabled,
             "note_skin_type": note_skin_type,

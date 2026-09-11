@@ -130,12 +130,10 @@ def test_listener_diagnostic_saves_last_waiting_frame_on_stop(tmp_path):
     assert metadata == {"reason": "stopped"}
 
 
-def test_one_key_playback_never_enables_life_safety_pause():
+def test_one_key_playback_continues_after_life_depletion():
     params = continuous_song_params({
         "difficulty": "Expert",
-        "use_life_safety": True,
         "continue_after_life_depleted": False,
     })
 
-    assert params["use_life_safety"] is False
     assert params["continue_after_life_depleted"] is True

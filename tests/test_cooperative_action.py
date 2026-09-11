@@ -698,7 +698,7 @@ def test_invalid_cooperative_count_is_rejected_without_corrupting_settings():
     assert current_cooperative_settings()["count"] == 3
 
 
-def test_cooperative_play_disables_life_abort_but_keeps_start_gate():
+def test_cooperative_play_continues_to_the_jump_out_gate_after_depletion():
     params = cooperative_play_params(
         {
             "difficulty": "Hard",
@@ -711,7 +711,6 @@ def test_cooperative_play_disables_life_abort_but_keeps_start_gate():
     assert cooperative_action.SONG_CHOICE_TO_READY_TIMEOUT_SECONDS == 60.0
     assert params["startup_timeout_seconds"] == 60
     assert params["completion_missing_frames"] == 30
-    assert params["use_life_safety"] is False
     assert params["continue_after_life_depleted"] is True
     assert params["require_completion"] is True
     assert params["run_mode"] == "cooperative"

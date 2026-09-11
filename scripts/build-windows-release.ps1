@@ -180,6 +180,9 @@ foreach ($relativePath in $trackedRuntimeFiles) {
 Copy-ProjectFile -RelativePath 'agent\realtime\native\maabangdream_realtime.pyd'
 
 foreach ($relativePath in @(
+    'docs\about.md',
+    'docs\contact.md',
+    'docs\assets\maabangdream-logo-v1.png',
     'requirements.txt',
     'runtime-compatibility.json',
     'scripts\start-release.ps1',

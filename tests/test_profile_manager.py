@@ -132,9 +132,6 @@ def test_selection_state_is_written_atomically(tmp_path):
         "version": 1,
         "pinned": {"Easy": path.name},
         "runtime_options": {
-            "life_safety_enabled": True,
-            "life_exit_threshold": 200,
-            "rehearsal_ignore_life_safety": True,
             "skip_process_conflict_cleanup": False,
             "game_effect_settings_enabled": True,
             "note_skin_type": 1,
@@ -166,9 +163,6 @@ def test_runtime_options_default_and_atomic_update_do_not_invalidate_profile(tmp
         root=tmp_path,
     )
     assert listed["runtime_options"] == {
-        "life_safety_enabled": True,
-        "life_exit_threshold": 200,
-        "rehearsal_ignore_life_safety": True,
         "skip_process_conflict_cleanup": False,
         "game_effect_settings_enabled": True,
         "note_skin_type": 1,
@@ -192,9 +186,6 @@ def test_runtime_options_default_and_atomic_update_do_not_invalidate_profile(tmp
         {
             "operation": "update-runtime-options",
             "runtime_options": {
-                "life_safety_enabled": False,
-                "life_exit_threshold": 350,
-                "rehearsal_ignore_life_safety": False,
                 "calibration_note_speeds": {
                     "Easy": 1.5,
                     "Normal": 2.5,
@@ -206,8 +197,6 @@ def test_runtime_options_default_and_atomic_update_do_not_invalidate_profile(tmp
         },
         root=tmp_path,
     )
-    assert result["runtime_options"]["life_exit_threshold"] == 350
-    assert result["runtime_options"]["rehearsal_ignore_life_safety"] is False
     assert result["runtime_options"]["calibration_note_speeds"]["Hard"] == 3.5
     assert store.load(path.name)["accepted"] is True
     assert not list(tmp_path.glob("*.tmp"))
@@ -246,16 +235,69 @@ def test_list_uses_configured_visual_settings_when_environment_omits_them(tmp_pa
     assert result["selection"]["profile"] == result["profiles"][0]["filename"]
 
 
-@pytest.mark.parametrize("threshold", [9, 991])
-def test_runtime_options_reject_invalid_life_threshold(tmp_path, threshold):
-    with pytest.raises(ValueError, match="life_exit_threshold"):
-        handle_request(
-            {
-                "operation": "update-runtime-options",
-                "runtime_options": {"life_safety_enabled": True, "life_exit_threshold": threshold},
+def test_legacy_life_protection_options_are_dropped_on_write(tmp_path):
+    result = handle_request(
+        {
+            "operation": "update-runtime-options",
+            "runtime_options": {
+                "life_safety_enabled": True,
+                "life_exit_threshold": 200,
+                "rehearsal_ignore_life_safety": False,
             },
-            root=tmp_path,
-        )
+        },
+        root=tmp_path,
+    )
+
+    assert "life_safety_enabled" not in result["runtime_options"]
+    assert "life_exit_threshold" not in result["runtime_options"]
+    assert "rehearsal_ignore_life_safety" not in result["runtime_options"]
+
+
+@pytest.mark.parametrize(
+    ("difficulty", "expected"),
+    [
+        ("Easy", ("Easy", "Normal", "Hard", "Expert", "Special")),
+        ("Normal", ("Normal", "Hard", "Expert", "Special")),
+        ("Hard", ("Hard", "Expert", "Special")),
+        ("Expert", ("Expert", "Special")),
+        ("Special", ("Special", "Expert")),
+    ],
+)
+def test_expert_and_special_share_the_high_difficulty_compatibility_tier(
+    difficulty,
+    expected,
+):
+    assert RealtimeProfileStore.compatible_difficulties(difficulty) == expected
+
+
+def test_special_task_can_pin_expert_profile(tmp_path):
+    store = RealtimeProfileStore(tmp_path)
+    path = store.write(payload(difficulty="Expert", accepted=True))
+
+    result = handle_request(
+        {"operation": "pin", "difficulty": "Special", "profile": path.name},
+        root=tmp_path,
+    )
+
+    assert result["pinned"]["Special"] == path.name
+
+
+def test_special_auto_selection_prefers_exact_difficulty_before_expert(tmp_path):
+    store = RealtimeProfileStore(tmp_path)
+    expert = store.write(payload(difficulty="Expert", accepted=True))
+    special = store.write(payload(difficulty="Special", accepted=True))
+
+    result = handle_request(
+        {
+            "operation": "list",
+            "difficulty": "Special",
+            "environment": SIGNATURE.to_mapping(),
+        },
+        root=tmp_path,
+    )
+
+    assert result["selection"]["profile"] == special.name
+    assert result["selection"]["profile"] != expert.name
 
 
 @pytest.mark.parametrize("retry_count", [-1, 4, True, 1.5, "two"])

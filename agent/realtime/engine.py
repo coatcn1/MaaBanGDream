@@ -232,8 +232,6 @@ class RealtimeEngine:
         duration_seconds: float | None,
         target_fps: int,
         continue_after_life_depleted: bool = False,
-        life_exit_threshold: int | None = None,
-        on_life_safety: Callable[[object], None] | None = None,
         on_life_depleted: Callable[[object], None] | None = None,
         touch_reset_life_threshold: int = 300,
         touch_reset_cooldown_seconds: float = 5.0,
@@ -270,12 +268,10 @@ class RealtimeEngine:
         life_failed = False
         jump_requested = False
         startup_timed_out = False
-        below_threshold_streak = 0
         touch_resets = 0
         last_touch_reset_at = float("-inf")
         touch_reset_life_samples: deque[tuple[float, int]] = deque()
         reading = None
-        safety_reading = None
         base_stats: EngineStats | None = None
         run_error: Exception | None = None
         cleanup_errors: list[str] = []
@@ -724,33 +720,6 @@ class RealtimeEngine:
                         ):
                             completed = True
                             break
-                        if (
-                            life_exit_threshold is not None
-                            and self.life_guard.alive_confirmed
-                            and reading.visible
-                        ):
-                            below_threshold_streak = (
-                                below_threshold_streak + 1
-                                if reading.value < life_exit_threshold else 0
-                            )
-                            if below_threshold_streak >= 3:
-                                life_depleted = (
-                                    life_depleted or status is LifeStatus.DEAD
-                                )
-                                aborted_for_life = True
-                                safety_reading = reading
-                                record_terminal_life_frame(
-                                    image,
-                                    now,
-                                    life_status=status.value,
-                                    life_value=reading.value,
-                                    reason="life-exit-threshold",
-                                )
-                                break
-                        elif not reading.visible:
-                            # Invisible readings default to zero. Song-end fades
-                            # must contribute to completion, not low-life debounce.
-                            below_threshold_streak = 0
                         if status is LifeStatus.DEAD:
                             life_depleted = True
                             if on_life_depleted is not None:
@@ -1152,7 +1121,7 @@ class RealtimeEngine:
             elif jump_requested:
                 terminal_reason = "生命归零请求断网跳车"
             elif aborted_for_life:
-                terminal_reason = "生命值触发安全停止"
+                terminal_reason = "演出失败：生命值归零"
             elif life_failed:
                 terminal_reason = "演出失败：生命值归零"
             elif completed:
@@ -1211,13 +1180,6 @@ class RealtimeEngine:
                 cleanup_errors.append(
                     f"touch_close={type(exc).__name__}: {exc}"
                 )
-            if on_life_safety is not None and safety_reading is not None:
-                try:
-                    on_life_safety(safety_reading)
-                except Exception as exc:
-                    cleanup_errors.append(
-                        f"life_safety={type(exc).__name__}: {exc}"
-                    )
             if self.debug_recorder is not None:
                 try:
                     self.debug_recorder.close()

@@ -335,12 +335,16 @@ def test_higher_main_difficulty_profile_is_compatible_and_nearest_wins(tmp_path)
     assert settings.profile_path != expert
 
 
-def test_special_profile_is_isolated_from_main_difficulties(tmp_path):
+def test_special_profile_is_compatible_with_lower_difficulties(tmp_path):
     store = RealtimeProfileStore(tmp_path)
-    store.write(payload(difficulty="Special", accepted=True))
+    special = store.write(payload(difficulty="Special", accepted=True))
 
-    with pytest.raises(ValueError, match="Normal Profile"):
-        store.resolve_latest(difficulty="Normal", current_signature=SIGNATURE)
+    settings = store.resolve_latest(
+        difficulty="Normal",
+        current_signature=SIGNATURE,
+    )
+
+    assert settings.profile_path == special
 
 
 def test_pinned_invalid_profile_blocks_without_automatic_fallback(tmp_path):

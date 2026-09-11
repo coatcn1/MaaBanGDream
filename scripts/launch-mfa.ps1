@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$MfaRoot,
     [string]$CondaRoot,
     [string]$EnvironmentName = 'maabangdream',
@@ -88,10 +88,24 @@ if ($otherMfaProcesses.Count -gt 0) {
     )
 }
 $targetMfaProcesses | ForEach-Object {
-    Stop-Process -Id $_.ProcessId -ErrorAction Stop
+    $targetProcessId = $_.ProcessId
+    try {
+        Stop-Process -Id $targetProcessId -ErrorAction Stop
+    }
+    catch {
+        if (Get-Process -Id $targetProcessId -ErrorAction SilentlyContinue) {
+            throw $_
+        }
+    }
     # 等旧进程完全退出后再覆盖 interface，避免其退出保存把新参数写回旧值。
-
-    Wait-Process -Id $_.ProcessId -Timeout 10 -ErrorAction Stop
+    try {
+        Wait-Process -Id $targetProcessId -Timeout 10 -ErrorAction Stop
+    }
+    catch {
+        if (Get-Process -Id $targetProcessId -ErrorAction SilentlyContinue) {
+            throw $_
+        }
+    }
 }
 
 $dotnetRuntimes = & dotnet --list-runtimes 2>$null
@@ -106,6 +120,12 @@ foreach ($runtimeDirectory in ($profileDirectory, $recordingDirectory, $captureD
     New-Item -ItemType Directory -Force -Path $runtimeDirectory | Out-Null
 }
 Copy-Item -Path (Join-Path $sourceResource '*') -Destination $deployedResource -Recurse -Force
+
+foreach ($aboutAsset in @('docs/about.md', 'docs/contact.md', 'docs/assets/maabangdream-logo-v1.png')) {
+    $aboutDestination = Join-Path $MfaRoot $aboutAsset
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $aboutDestination) | Out-Null
+    Copy-Item -LiteralPath (Join-Path $projectRoot $aboutAsset) -Destination $aboutDestination -Force
+}
 
 # The local chart catalog intentionally stores only Hard/Expert/Special.  A
 # normal Copy-Item deployment does not remove Easy/Normal files left by older

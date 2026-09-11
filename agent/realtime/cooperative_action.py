@@ -209,7 +209,6 @@ def cooperative_play_params(settings: dict[str, object]) -> dict[str, object]:
         "save_result_frame": True,
         "result_back_attempts": 30,
         "result_back_interval_seconds": 1.5,
-        "use_life_safety": False,
         "continue_after_life_depleted": True,
         "run_mode": "cooperative",
         "confirm_final_cover": True,

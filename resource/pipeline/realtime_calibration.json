@@ -79,9 +79,6 @@
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "RealtimeGameEffectSettingsGate",
-    "custom_action_param": {
-      "force": true
-    },
     "next": [
       "CalibrationDifficultySetting"
     ],

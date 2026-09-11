@@ -7,7 +7,7 @@
 基于 MaaFramework 的 BanG Dream! 自动化项目。通过 MFAAvalonia GUI 加载 Python Agent，控制 Android 模拟器完成自动演出、实时触控演奏、校准和挑战演出。
 
 - 仓库：`https://github.com/coatcn1/MaaBanGDream`
-- 当前版本：`v1.3.6`
+- 当前版本：`v1.3.7`
 - 许可证：GPL-3.0-only
 
 ## MaaBanGDream 运行布局
@@ -137,7 +137,7 @@ pytest 临时目录固定在 `.local/pytest-<进程号>`（Git 忽略），不�
    宽限、协力“其他成员正在准备中”弹窗拦截）→ `NativeMinitouchBackend` 启动 →
    C++ PlaybackSession 滚动发布 → 约 5Hz 生命/终态监控。
    Legacy 路径：`NoteDetector` + `RealtimePlanner` + `ControllerTouchDispatcher` 60FPS
-   视觉演奏，可选数值生命保护。
+   视觉演奏，并保留生命归零与结算终态监控。
 6. 终态判定（结算/生命失败/用户停止/超时）→ 释放全部触点 → Native 完整性门禁 →
    写 `screencap/realtime-result-*.json`。
 7. 结果处理：单人/挑战解析判定并回写 FAST/SLOW timing offset，协力只推进结算；失败按
@@ -178,13 +178,13 @@ pytest 临时目录固定在 `.local/pytest-<进程号>`（Git 忽略），不�
 
 1. 进程互斥；要求最近 15 分钟内有演出视觉设置读回复核（`require_recent_visual_settings`）。
 2. 被动监听：每 0.1s 截图检测生命条（数值 ≥20 连续 3 帧）；检测到歌曲开始就调用一次
-   `RealtimeProfilePlay`（`ignore_note_speed`、无生命保护、`require_completion=false`），
+   `RealtimeProfilePlay`（`ignore_note_speed`、`require_completion=false`），
    打完继续监听下一首，直到用户停止。
 3. 停止/失败保存最后一帧诊断截图到 `debug/recordings/listener-*`。
 
 ### 4. 实时校准（RealtimeCalibration）
 
-1. 进程互斥 → 主页 → 演出特效门禁 → 读难度/歌曲模式/续跑模式/调试选项。
+1. 进程互斥 → 主页 → 演出特效门禁（服从 `game_effect_settings_enabled`）→ 读难度/歌曲模式/续跑模式/调试选项。
 2. `CalibrationSessionStore` 新建或续跑会话（`auto`/`restart`）；环境签名一致才复用；
    生成 `accepted=false` 的候选 Profile。
 3. 阶段固定为 `rehearsal-1`（一首排练）→ `formal-validation`（一首正式验证）。
@@ -239,7 +239,7 @@ pytest 临时目录固定在 `.local/pytest-<进程号>`（Git 忽略），不�
 绝对不要从官方 `v2.12.0` tag、临时 clone 或 NuGet 发布物重新编译 `MFAAvalonia.Core.dll` 后直接覆盖运行目录。这样会同时删除：
 
 - 设置页中的“演出设置”入口；
-- Profile 表格、生命保护和调试目录等本地功能；
+- Profile 表格、谱面辅助和调试目录等本地功能；
 - 启动时跳过“不支持 Mirror 更新源”检查的保护。
 
 如果启动后“演出设置”消失，或右下角出现“该资源操作暂不支持 Mirror酱”，优先检查是否部署了错误的官方 Core DLL，不要先清空用户配置。
@@ -306,7 +306,7 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
    `0.36`。所有 `home_marker` 节点当前统一为 `0.75`，调整时必须同时更新所有
    Pipeline 和契约测试。
 4. **停止不是业务失败**：Custom Action 观察到 `context.tasker.stopping` 时应立即停止输入并返回中性成功；不要继续截图、点击、嵌套任务或记录业务失败原因。
-5. **正式演奏时限**：旧的 300 秒上限会在长曲仍演奏时强制失败。正式演奏节点当前为 600 秒，并应在超时、生命保护、用户停止、结算识别等终态记录具体原因。
+5. **正式演奏时限**：旧的 300 秒上限会在长曲仍演奏时强制失败。正式演奏节点当前为 600 秒，并应在超时、生命归零、用户停止、结算识别等终态记录具体原因。
 6. **禁止含糊日志**：不要写“详情见上一条日志”。终态日志必须包含当前阶段和可执行的具体原因；运行时原因通过 `TaskOutcome` 的 latest failure reason 传递。
 7. **启动恢复必须有界**：未知界面最多按 ESC 恢复 60 秒；仍无法识别主页才重启游戏。登录画面应先识别“点击任意处/开始”，登录阶段不得过早发送 ESC。
 8. **部署必须从包含所有已合并功能的分支进行**：`launch-mfa.ps1` 用当前工作树的 `interface.json` 和 Agent 覆盖运行目录。功能合并回 `main` 后一律从 `main` 部署；多个未合并 feature 分支并存时，从缺少某功能的旧分支部署，会把该功能从 MFA 里“部署丢”。合并并部署完成后删除 feature/fix 分支，避免残留分支误导后续工作。
@@ -334,7 +334,11 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
 29. **跨进程重试预算不能使用 RemoteTasker 指针**：MaaFramework 每次 Agent Action 回调都会创建临时 `RemoteContext`/`RemoteTasker`，Python `_handle` 是代理指针，不是稳定的远端任务身份。预算使用回调携带的 `argv.task_detail.task_id`，由下一局入口显式 reset；缺少有效任务 ID 时拒绝重试。回归必须覆盖真实 AgentClient/AgentServer 连续回调，不能只用固定 `_handle` 的 mock。
 30. **Native 等待补偿必须覆盖已知命令成本**：每条 `w` 的总补偿固定限于 1ms 时，已知等待额外成本大于 1ms 也无法被持续抵消。离线恒定 1.5/2ms 成本可复现 10 秒累计晚 100/200ms。2026-09-11 雷电真机验收后成本回收与一次性启动延迟补偿默认启用；开发回归可用 `launch-mfa.ps1 -DisableNativeTimingCompensation` 临时关闭。仍须验证跨切片残差和触点生命周期，设备相对计划漂移不等于游戏判定相位，不得据此直接改 Profile。
 
+31. **Profile 当前选择属于任务难度槽位**：表格单击只查看/编辑，双击才把文件设为当前。写入 `selection.json` 时使用界面正在配置的任务难度，不使用 Profile 自身难度；否则给 Easy/Hard 选择兼容的 Expert/Special Profile 会误写进高难度槽。Expert 与 Special 是同一兼容等级，二者互相兼容并都可供较低难度任务使用；当前项用主题 `SukiPrimaryColor` 标记，不能与 DataGrid 的普通选中状态混为一体。
+
 ## 后续开发方向（已记录，暂缓或未开始）
+
+- **关于页素材与 GitHub 限流**：关于页专用字段 `about_icon` 使用 `docs/assets/maabangdream-logo-v1.png`，`description` 使用 `docs/about.md`，`contact` 使用 `docs/contact.md`；部署与打包须同时携带三者。不要把 v1 填入通用 `icon`：该字段也会替换窗口/软件标志。软件继续使用默认内嵌 Logo，关于页通过渲染层居中缩放裁剪放大人物，不覆盖原图。Logo、联系方式、许可证等分区框须使用 MFA/Suki 原生 `GlassCard` 及其 `ControlGlassOpacity`，不能用普通 `Border + SukiCardBackground` 绕开框架玻璃透明度。`MaaInterface.Merge` 必须保留 `Icon/AboutIcon`，设置页延迟创建时须补载说明文件；Avalonia 缩放中心用 `50%,50%`，不是像素坐标 `0.5,0.5`。“显示公告”读取最新稳定 Release，不能继续调用缺少本地 announcement 目录时静默返回的旧入口；复用 `ChangelogView` 与原生下载提示，更新后公告不得仅凭预下载写入的 `Changelog.md` 触发；核心整包须核对最后写入的 `update-manifest.json`。GitHub 标签带 `v`、安装版本不带 `v` 时须按语义比较版本，网络请求仍保留原始发布标签。GitHub REST 明确限流时，稳定版查询可回退 `releases/latest` 与 `releases/expanded_assets/<tag>`；继续执行同一套选包和 SHA-256 校验，不得将普通权限错误或预发布通道静默改成稳定版。
 
 - **MuMu Native 漂移**：定性为客户机时钟速率偏斜且逐局可变，速率校正实验闭环发散；暂不解决，MuMu 用 Legacy、雷电用 Native。见“最近交互”的 MuMu 时钟偏斜条目。
 - **调试文件定时清理**：暂不做应用内自动清理；已有 `.local/clean-recordings.ps1`（保留最新 5 个）。若做，建议按保留天数在任务启动时修剪 `debug/recordings/*`，并留足证据窗口。
@@ -394,5 +398,5 @@ MaaBanGDream 和定制 MFAAvalonia 是两个独立 Git 仓库。若一次修复�
 13. **临轨绿条只在严格证据下取中点**：只有至少三次相邻轨来回切换、轨道跨度恰为 1 的锯齿 Slide，才把触点锚在两轨中点；普通滑条仍跟随谱面连接点，不能泛化成宽判定。
 14. **谱面同步是显式维护操作**：MFA 的手动同步入口复用 `scripts/sync_bestdori_catalog.py`，只保存 Hard/Expert/Special，封面按 CN→JP→EN 回退。演奏热路径禁止联网；同步前应停止 Maa 任务，生成清单必须原子替换。
 15. **首音门控必须先证明演奏场成立**：Native 的 60 FPS 截图循环不得使用固定 200 帧冻结期，也不得用加载页、歌曲信息页、全黑转场或演奏场淡入建立颜色基线。单人、校准、挑战和协力都必须先同时确认生命条与至少六轨白色判定标记；随后才按各自进入阶段使用连续稳定窗口和 500 ms 前奏残留宽限。两类模式不得引入不同的歌曲时间偏移，演奏场证据丢失必须重置基线。检测带到判定时刻的补偿必须由当前流速的真机录像对齐，不能直接照搬上游 30 ms；当前 Expert 速度 5.0 基线为 190 ms。结果报告必须保存演奏场等待、补偿、稳定、忽略和触发证据。
-16. **最终封面复核谱面，首音只负责定时**：单人、校准、挑战和协力在完整演奏场前都必须观察最终歌曲信息页，使用居中封面复核本轮已解析的本地谱面；封面不得作为歌曲时钟起点。准备页难度、等级或共享封面标题发生真实冲突时仍硬拒绝；仅最终封面未识别时不得直接结束：已有可信准备页谱面则记录降级并继续原谱面，没有可信谱面则必须在发送任何触控前整局回退 Legacy 视觉演奏，禁止 Native/Legacy 中途混合。生命保护关闭时禁止继续构造数值 `LifeDetector`，但必须保留演奏场启动门控和约 5 Hz 的终态监控；协力不得先等到演奏场出现再启动会话。
+16. **最终封面复核谱面，首音只负责定时**：单人、校准、挑战和协力在完整演奏场前都必须观察最终歌曲信息页，使用居中封面复核本轮已解析的本地谱面；封面不得作为歌曲时钟起点。准备页难度、等级或共享封面标题发生真实冲突时仍硬拒绝；仅最终封面未识别时不得直接结束：已有可信准备页谱面则记录降级并继续原谱面，没有可信谱面则必须在发送任何触控前整局回退 Legacy 视觉演奏，禁止 Native/Legacy 中途混合。数值 `LifeDetector` 只负责演奏场确认、生命归零和结算终态，不得重新引入低血量提前暂停；协力不得先等到演奏场出现再启动会话。
 17. **调试证据必须覆盖完整演奏生命周期**：实时调试记录不能只从音符热路径开始；同一 run ID 的证据包至少要关联准备页身份、开演前检查、最终封面、演奏场门控、输入引擎、结算、清理，以及所有降级和重试决定。高频阶段继续使用非阻塞 Trace/录像，低频阶段保存有界关键截图和结构化原因；任何门控失败、超时、异常、用户停止和重试前都必须留下终态现场。技术失败重试必须有可配置上限，每次重试先释放全部触点和 Native 会话并恢复到已识别页面；用户停止、配置冲突和身份硬冲突不得盲目重试。
