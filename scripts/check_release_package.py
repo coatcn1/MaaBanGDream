@@ -23,6 +23,7 @@ REQUIRED_PATHS = (
     "agent/profile_manager.py",
     "agent/realtime/native/maabangdream_realtime.pyd",
     "resource/pipeline/auto_live.json",
+    "resource/Release.md",
     "resource/charts/manifest.json",
     "scripts/start-release.ps1",
     "scripts/sync_bestdori_catalog.py",
@@ -84,6 +85,11 @@ def validate_release_archives(package_root: Path) -> list[str]:
                         errors.append("update archive contains the Python runtime")
                     if any(name.startswith(charts) for name in names):
                         errors.append("update archive contains the chart catalog")
+                release_note = f"{archive_root}resource/Release.md"
+                if release_note not in names:
+                    errors.append(
+                        f"release archive has no packaged release notes: {archive_path.name}"
+                    )
         except zipfile.BadZipFile as exc:
             errors.append(f"invalid release archive {archive_path.name}: {exc}")
     return errors
@@ -105,6 +111,12 @@ def validate(package_root: Path) -> list[str]:
             errors.append("unconfigured interface must use portable child_exec=python")
         if interface["resource"][0]["path"] != ["./resource"]:
             errors.append("unconfigured interface must use ./resource")
+
+    release_note_path = package_root / "resource/Release.md"
+    if release_note_path.is_file():
+        release_note = release_note_path.read_text(encoding="utf-8-sig")
+        if not release_note.strip() or release_note.strip().casefold() == "placeholder":
+            errors.append("packaged release notes are empty or placeholder")
 
     runtime_archive = package_root / "runtime/maabangdream-python.zip"
     if runtime_archive.is_file():
