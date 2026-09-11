@@ -12,7 +12,7 @@
 - 🌐 GitHub REST API 明确限流时，稳定版检查会回退 GitHub 发布网页，继续匹配完整包或 runtime-free 更新包并校验 SHA-256。
 - 📢 完整包与更新包都会携带当前版本的 `resource/Release.md`；“显示公告”和更新完成弹窗读取本地说明，不再为了正文访问 GitHub。Release tag 带 `v`、安装版本不带 `v` 时也能正确比较。
 - ⏱️ Native 等待命令成本和一次性启动延迟补偿默认启用，减少整局逐渐偏慢；实时校准通过后会立即切换到新 Profile，跨回调重试预算也不再被临时代理重置。
-- 🖥️ 开发启动器兼容 Windows PowerShell 5.1 的中文脚本解析，并在目标 MFA 已自行退出时正常继续部署。
+- 🖥️ 开发启动器和发布构建脚本兼容 Windows PowerShell 5.1 的中文脚本解析，避免部署命令或包内中文启动器名称损坏；目标 MFA 已自行退出时也能正常继续部署。
 - 📦 发布 ZIP 使用 UTF-8 文件名并校验中央目录，修复中文启动器在部分解压工具中变成乱码、导致无法双击启动的问题。
 - 📦 runtime-free 更新 ZIP 把 `interface.json` 直接放在归档根目录，修复下载和校验成功后仍提示资源包缺少接口文件的问题；MFA 启动后也会自动执行一次资源版本检查。
 
@@ -24,7 +24,7 @@
 
 ## ✅ 验证
 
-- 🧪 自动化：MaaBanGDream `1023 passed / 7 skipped`；定制 MFA 自动保存、About、本地发布说明、GitHub 更新器和 Profile 设置回归、Release x64 构建及发布包结构校验通过。
+- 🧪 自动化：MaaBanGDream `1024 passed / 7 skipped`；定制 MFA 自动保存、About、本地发布说明、GitHub 更新器和 Profile 设置回归、Release x64 构建及发布包结构校验通过。
 - 🌐 更新器：覆盖 REST 限流网页回退、稳定版 tag 保留、公告正文、资产选择、断点续传和 SHA-256 校验；用户已确认资源检查与资源更新可用。
 - 🎨 界面：用户已确认最终 About 页面；Profile 和任务安全设置通过自动化与开发部署验证。
 - 🎮 真机：雷电上的东京校准取得 852P/7G 与 851P/8G，Talk to My Tone 正式演奏取得 458P/0G，三局均零 MISS。演出设置简化后的完整任务流程仍待发布包继续验收。
