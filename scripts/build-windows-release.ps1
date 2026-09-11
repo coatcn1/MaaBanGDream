@@ -45,6 +45,7 @@ $mfaProject = Join-Path `
 $mfaUpdaterProject = Join-Path `
     $MfaSourceRoot `
     'MFAUpdater\MFAUpdater.csproj'
+$zipBuilder = Join-Path $projectRoot 'scripts\create_release_zip.py'
 $mfaLicense = Join-Path $MfaSourceRoot 'LICENSE'
 $performanceSettings = Join-Path `
     $MfaSourceRoot `
@@ -61,7 +62,8 @@ foreach ($required in @(
     (Join-Path $projectRoot 'packaging\start-maabangdream.cmd'),
     (Join-Path $projectRoot 'docs\release-package.md'),
     (Join-Path $projectRoot 'scripts\start-release.ps1'),
-    (Join-Path $projectRoot 'scripts\normalize-release-directory.ps1')
+    (Join-Path $projectRoot 'scripts\normalize-release-directory.ps1'),
+    $zipBuilder
 )) {
     if (-not (Test-Path -LiteralPath $required)) {
         throw "Release build input is missing: $required"
@@ -327,7 +329,9 @@ foreach ($oldArtifact in @($zipPath, $shaPath)) {
         Remove-Item -LiteralPath $oldArtifact -Force
     }
 }
-tar.exe -a -c -f $zipPath -C $outputFull $packageName
+& $BuildPython $zipBuilder `
+    --source $packageRoot `
+    --output $zipPath
 if ($LASTEXITCODE -ne 0) {
     throw 'Unable to create Windows release ZIP.'
 }
@@ -349,12 +353,13 @@ foreach ($oldArtifact in @($updateZipPath, $updateShaPath)) {
         Remove-Item -LiteralPath $oldArtifact -Force
     }
 }
-$runtimeArchiveRelative = "$packageName/runtime/maabangdream-python.zip"
-$chartsRelative = "$packageName/resource/charts"
-tar.exe -a -c -f $updateZipPath `
-    --exclude "$runtimeArchiveRelative" `
-    --exclude "$chartsRelative" `
-    -C $outputFull $packageName
+$runtimeArchiveRelative = 'runtime/maabangdream-python.zip'
+$chartsRelative = 'resource/charts'
+& $BuildPython $zipBuilder `
+    --source $packageRoot `
+    --output $updateZipPath `
+    --exclude $runtimeArchiveRelative `
+    --exclude $chartsRelative
 if ($LASTEXITCODE -ne 0) {
     throw 'Unable to create Windows update ZIP.'
 }
