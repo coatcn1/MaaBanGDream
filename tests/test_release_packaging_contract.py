@@ -73,6 +73,12 @@ def test_developer_launcher_uses_utf8_bom_for_windows_powershell():
     assert launcher.startswith(b"\xef\xbb\xbf")
 
 
+def test_release_builder_uses_utf8_bom_for_windows_powershell():
+    builder = (ROOT / "scripts/build-windows-release.ps1").read_bytes()
+
+    assert builder.startswith(b"\xef\xbb\xbf")
+
+
 def test_runtime_check_loads_bom_prefixed_interface(tmp_path):
     path = tmp_path / "interface.json"
     path.write_bytes(
