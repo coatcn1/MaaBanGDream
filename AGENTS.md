@@ -352,7 +352,9 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
   `MaaBanGDream-vX-win-x64-update.zip` 不含 Python 运行库归档与
   `resource/charts`（谱面走“演出设置 → 谱面辅助 → 同步”独立通道），约
   148MB；本机 `runtime/python/python.exe` 缺失才回退完整包。首启解压后删除
-  `runtime/maabangdream-python.zip`。升级后安装目录名自动跟随版本（
+  `runtime/maabangdream-python.zip`。更新 ZIP 必须把 `interface.json` 直接放在归档根目录；
+  完整安装 ZIP 才保留版本目录外壳。发布校验必须分别检查这两种结构，不能只验证文件存在。
+  升级后安装目录名自动跟随版本（
   `MaaBanGDream-v1.3.3-win-x64` → `MaaBanGDream-v1.3.4-win-x64`），由
   `normalize-release-directory.ps1` 的脱离启动器辅助进程改名（启动器退出码 2 协议），自定义目录名
   不改。关键坑：中文路径别经 `cmd /c` 转 ANSI 代码页（用 ShellExecute 直启

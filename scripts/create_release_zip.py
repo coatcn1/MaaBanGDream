@@ -29,6 +29,7 @@ def create_release_zip(
     output_path: Path,
     *,
     excludes: Iterable[str] = (),
+    include_root: bool = True,
 ) -> None:
     source_root = source_root.resolve(strict=True)
     if not source_root.is_dir():
@@ -65,7 +66,10 @@ def create_release_zip(
                 relative = path.relative_to(source_root).as_posix()
                 if _is_excluded(relative, normalized_excludes):
                     continue
-                archive.write(path, f"{source_root.name}/{relative}")
+                archive_name = (
+                    f"{source_root.name}/{relative}" if include_root else relative
+                )
+                archive.write(path, archive_name)
         os.replace(temporary_path, output_path)
     finally:
         temporary_path.unlink(missing_ok=True)
@@ -76,8 +80,14 @@ def main() -> int:
     parser.add_argument("--source", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--exclude", action="append", default=[])
+    parser.add_argument("--flat-root", action="store_true")
     args = parser.parse_args()
-    create_release_zip(args.source, args.output, excludes=args.exclude)
+    create_release_zip(
+        args.source,
+        args.output,
+        excludes=args.exclude,
+        include_root=not args.flat_root,
+    )
     return 0
 
 

@@ -358,6 +358,7 @@ $chartsRelative = 'resource/charts'
 & $BuildPython $zipBuilder `
     --source $packageRoot `
     --output $updateZipPath `
+    --flat-root `
     --exclude $runtimeArchiveRelative `
     --exclude $chartsRelative
 if ($LASTEXITCODE -ne 0) {
