@@ -258,6 +258,7 @@ def test_calibration_is_single_task_with_three_rehearsal_contract():
     assert nodes["RealtimeCalibrationVisualSettingsGate"]["custom_action"] == (
         "RealtimeGameEffectSettingsGate"
     )
+    assert "custom_action_param" not in nodes["RealtimeCalibrationVisualSettingsGate"]
     assert nodes["RealtimeCalibrationVisualSettingsGate"]["next"] == [
         "CalibrationDifficultySetting"
     ]
@@ -320,7 +321,7 @@ def test_challenge_points_and_profile_contract():
         assert params["note_speed"] == (
             5.0 if name.endswith(("Expert", "Special")) else 2.0
         )
-        assert nodes[name]["on_error"] == ["ChallengeLifeSafetyGate"]
+        assert nodes[name]["on_error"] == ["ChallengeFailure"]
     assert nodes["ChallengeDifficulty"]["custom_action"] == "RealtimeDifficultySelect"
     assert nodes["ChallengeDifficulty"]["custom_action_param"]["mode"] == "challenge"
     for case in interface["option"]["ChallengeDifficulty"]["cases"]:
@@ -334,7 +335,5 @@ def test_challenge_points_and_profile_contract():
         assert override["ChallengeSettingsGate"]["custom_action_param"][
             "run_mode"
         ] == "challenge"
-    assert nodes["ChallengeLifeSafetyGate"]["custom_action"] == "RealtimeLifeSafetyAbortCheck"
-    life_failure = nodes["ChallengeLifeSafetyStop"]
-    assert life_failure["custom_action"] == "TaskOutcome"
-    assert life_failure["custom_action_param"]["status"] == "failure"
+    assert "ChallengeLifeSafetyGate" not in nodes
+    assert "ChallengeLifeSafetyStop" not in nodes

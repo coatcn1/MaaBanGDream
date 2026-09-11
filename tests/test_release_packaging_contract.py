@@ -10,7 +10,7 @@ ROOT = Path(__file__).parents[1]
 
 
 def read(relative: str) -> str:
-    return (ROOT / relative).read_text(encoding="utf-8")
+    return (ROOT / relative).read_text(encoding="utf-8-sig")
 
 
 def test_release_launcher_extracts_only_package_local_runtime():
@@ -53,6 +53,24 @@ def test_launchers_write_json_without_bom_and_check_tolerates_bom():
     assert "Set-Content -LiteralPath $deployedInterface -Encoding utf8" not in developer_launcher
     assert "utf-8-sig" in checker
     assert "Unblock-File -LiteralPath $mfa" in launcher
+
+
+def test_developer_launcher_enables_native_timing_compensation_by_default():
+    launcher = read("scripts/launch-mfa.ps1")
+
+    assert "[switch]$NativeTimingTrial" in launcher
+    assert "[switch]$DisableNativeTimingCompensation" in launcher
+    assert "$agentArgs += '--native-timing-trial'" in launcher
+    assert "$agentArgs += '--disable-native-timing-compensation'" in launcher
+    assert "$interface.agent.child_args = $agentArgs" in launcher
+    assert "Wait-Process -Id $targetProcessId" in launcher
+    assert "Native timing compensation flag was not written" in launcher
+
+
+def test_developer_launcher_uses_utf8_bom_for_windows_powershell():
+    launcher = (ROOT / "scripts/launch-mfa.ps1").read_bytes()
+
+    assert launcher.startswith(b"\xef\xbb\xbf")
 
 
 def test_runtime_check_loads_bom_prefixed_interface(tmp_path):

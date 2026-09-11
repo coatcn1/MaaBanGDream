@@ -1091,91 +1091,6 @@ def test_engine_life_monitor_evidence_explains_invisible_and_confirmed_dead(
     assert stats.life_monitor_diagnostics["dead_confirmed"] is expected_dead
 
 
-def test_engine_invokes_life_safety_after_three_frames_below_threshold():
-    engine, _, _, touch, capture = build()
-    triggered = []
-
-    class FallingLife:
-        def __init__(self): self.frames = 0
-        def detect(self, image):
-            self.frames += 1
-            return LifeReading(True, 800 if self.frames <= 3 else 190)
-
-    engine.life_detector = FallingLife()
-    engine.life_guard = LifeGuard(confirm_frames=3)
-
-    stats = engine.run(
-        capture, lambda: False, duration_seconds=10, target_fps=60,
-        life_exit_threshold=200,
-        on_life_safety=lambda reading: triggered.append(reading.value),
-    )
-
-    assert stats.aborted_for_life
-    assert not stats.life_depleted
-    assert triggered == [190]
-    assert touch.closed == 1
-
-
-def test_life_safety_callback_failure_becomes_structured_cleanup_failure():
-    engine, _, _, touch, capture = build()
-
-    class FallingLife:
-        def __init__(self):
-            self.frames = 0
-
-        def detect(self, image):
-            self.frames += 1
-            return LifeReading(True, 800 if self.frames <= 3 else 190)
-
-    engine.life_detector = FallingLife()
-    engine.life_guard = LifeGuard(confirm_frames=3)
-
-    def fail_pause(_reading):
-        raise RuntimeError("pause overlay did not appear")
-
-    stats = engine.run(
-        capture,
-        lambda: False,
-        duration_seconds=10,
-        target_fps=60,
-        life_exit_threshold=200,
-        on_life_safety=fail_pause,
-    )
-
-    assert stats.aborted_for_life
-    assert stats.cleanup_failed
-    assert stats.cleanup_errors == (
-        "life_safety=RuntimeError: pause overlay did not appear",
-    )
-    assert "实时触控收尾失败" in stats.terminal_reason
-    assert touch.closed == 1
-
-
-def test_zero_life_uses_safety_pause_callback_before_plain_abort():
-    engine, _, _, touch, capture = build()
-    triggered = []
-
-    class ZeroLife:
-        def __init__(self): self.frames = 0
-        def detect(self, image):
-            self.frames += 1
-            return LifeReading(True, 800 if self.frames <= 3 else 0)
-
-    engine.life_detector = ZeroLife()
-    engine.life_guard = LifeGuard(confirm_frames=3)
-
-    stats = engine.run(
-        capture, lambda: False, duration_seconds=10, target_fps=60,
-        life_exit_threshold=200,
-        on_life_safety=lambda reading: triggered.append(reading.value),
-    )
-
-    assert stats.aborted_for_life
-    assert stats.life_depleted
-    assert triggered == [0]
-    assert touch.closed == 1
-
-
 def test_engine_never_dispatches_before_alive_life_is_confirmed():
     engine, clock, planner, touch, _ = build()
 
@@ -1323,9 +1238,8 @@ def test_engine_does_not_play_or_finish_before_first_note():
     assert touch.closed == 1
 
 
-def test_invisible_transition_frames_do_not_trigger_life_safety():
+def test_invisible_transition_frames_complete_without_false_life_depletion():
     engine, _, planner, touch, capture = build()
-    triggered = []
 
     class EndsWithDefaultInvisibleReading:
         def __init__(self):
@@ -1346,13 +1260,11 @@ def test_invisible_transition_frames_do_not_trigger_life_safety():
         lambda: False,
         duration_seconds=10,
         target_fps=60,
-        life_exit_threshold=200,
-        on_life_safety=lambda reading: triggered.append(reading.value),
     )
 
     assert stats.completed
     assert not stats.aborted_for_life
-    assert triggered == []
+    assert not stats.life_depleted
     assert planner.resets == 1
     assert touch.closed == 1
 

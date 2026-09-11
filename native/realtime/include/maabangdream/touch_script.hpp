@@ -63,6 +63,16 @@ struct TouchLatencyOffsets {
     double interval_ms = 0.0;
 };
 
+// 仅用于默认关闭的等待成本试验诊断；不参与触点拓扑、谱面锚点或 Profile。
+struct TouchTimingTrialReport {
+    bool wait_cost_recovery_enabled = false;
+    double residual_ms = 0.0;
+    double positive_recovered_ms = 0.0;
+    std::size_t positive_recovery_waits = 0;
+    std::size_t positive_budget_exhausted = 0;
+    std::size_t positive_no_wait_available = 0;
+};
+
 // 定时 minitouch 脚本编译器。
 //
 // 把已分配触点的调度动作编译成带相对 w(ait) 的 minitouch v1 脚本；
@@ -70,8 +80,9 @@ struct TouchLatencyOffsets {
 //
 // 补偿模型与 autodori 的 actions_to_MNTcmd 一致：
 // - 每条命令先累加 interval_ms + 该类型 offset 到未清偿残差；
-// - 每个 w 前先发 c(ommit) 冲刷触点状态，再按残差缩短该 w（每次限 ±1ms），
-//   未清偿部分留给后续 w，避免整数毫秒丢精度；
+// - 每个 w 前先发 c(ommit) 冲刷触点状态，再按残差缩短该 w（默认每次限 ±1ms）；
+//   默认关闭的试验仅把正向额度扩至已知 wait/interval 成本再加 1ms，负向仍限
+//   1ms，未清偿部分留给后续 w，避免整数毫秒丢精度；
 // - 每次 w 四舍五入的损失累计进下一个 w（绝对值限 ±2ms），保证长时间线不漂移；
 // - 残差与取整损失跨 compile() 调用保留，供分切片流式发布时逐片校准。
 class TouchScriptCompiler {
@@ -91,6 +102,15 @@ public:
         rate_correction_ = std::max(-0.02, std::min(0.02, rate));
     }
     double rate_correction() const noexcept { return rate_correction_; }
+
+    // 试验开关只放宽正向已知 w 成本的偿还容量；负向仍保持每段最多 1ms。
+    void set_wait_cost_recovery_enabled(bool enabled) noexcept {
+        wait_cost_recovery_enabled_ = enabled;
+    }
+    bool wait_cost_recovery_enabled() const noexcept {
+        return wait_cost_recovery_enabled_;
+    }
+    TouchTimingTrialReport timing_trial_report() const noexcept;
 
     // 切片边界追加补偿（例如 LatencyCalibrator 统计出的上一切片欠账）。
     void add_residual_ms(double ms) noexcept {
@@ -132,6 +152,11 @@ private:
     double residual_offset_ms_ = 0.0;
     // 上次 w 取整后的欠账，跨 compile() 调用保留。
     double rounding_loss_ms_ = 0.0;
+    bool wait_cost_recovery_enabled_ = false;
+    double positive_recovered_ms_ = 0.0;
+    std::size_t positive_recovery_waits_ = 0;
+    std::size_t positive_budget_exhausted_ = 0;
+    std::size_t positive_no_wait_available_ = 0;
     // 触点状态跨滚动切片保留；available_after 防止下一片把仍在设备队列中
     // 的瞬态手势触点提前复用。
     std::array<bool, kMaxContacts> active_contacts_{};

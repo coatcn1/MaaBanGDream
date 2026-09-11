@@ -1,13 +1,19 @@
-param(
+﻿param(
     [string]$MfaRoot,
     [string]$CondaRoot,
     [string]$EnvironmentName = 'maabangdream',
-    [switch]$OrderedStartupTrial
+    [switch]$OrderedStartupTrial,
+    [switch]$NativeTimingTrial,
+    [switch]$DisableNativeTimingCompensation
 )
 
 $ErrorActionPreference = 'Stop'
 # 候选行为仅由本次启动显式启用；普通启动保留已发布行为，便于真机对照。
+
 $env:MAABANGDREAM_ORDERED_STARTUP = if ($OrderedStartupTrial) { '1' } else { '0' }
+# 已验收的等待成本与首命令启动补偿默认启用，仅保留显式关闭入口用于回归排查。
+
+$env:MAABANGDREAM_NATIVE_TIMING_TRIAL = if ($DisableNativeTimingCompensation) { '0' } else { '1' }
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $workspaceRoot = Split-Path -Parent $projectRoot
 if (-not $MfaRoot) {
@@ -43,7 +49,64 @@ foreach ($required in ($mfaExe, $sourceInterface, $sourceResource, $python, $age
     }
 }
 
-Get-Process MFAAvalonia -ErrorAction SilentlyContinue | Stop-Process
+# 运行目录外的 MFA 可能是用户的正式版。先完整枚举，再只停止本次部署目标，
+# 发现其它路径的实例时在写入前失败，避免按进程名误伤正式安装目录。
+
+$resolvedTargetMfaPath = (Resolve-Path -LiteralPath $mfaExe).ProviderPath
+$targetMfaProcesses = @()
+$otherMfaProcesses = @()
+Get-CimInstance Win32_Process -Filter "Name = 'MFAAvalonia.exe'" | ForEach-Object {
+    $runningPath = $_.ExecutablePath
+    if ([string]::IsNullOrWhiteSpace($runningPath)) {
+        $otherMfaProcesses += [PSCustomObject]@{
+            ProcessId = $_.ProcessId
+            Path = '<unavailable>'
+        }
+    }
+    else {
+        $fullRunningPath = (Resolve-Path -LiteralPath $runningPath).ProviderPath
+        if ($fullRunningPath -ieq $resolvedTargetMfaPath) {
+            $targetMfaProcesses += $_
+        }
+        else {
+            $otherMfaProcesses += [PSCustomObject]@{
+                ProcessId = $_.ProcessId
+                Path = $fullRunningPath
+            }
+        }
+    }
+}
+if ($otherMfaProcesses.Count -gt 0) {
+    $otherDetails = $otherMfaProcesses | ForEach-Object {
+        "PID $($_.ProcessId): $($_.Path)"
+    }
+    throw (
+        "Another MFAAvalonia instance is running outside this deployment root. " +
+        "Refusing to stop it or deploy. Target: $($resolvedTargetMfaPath). " +
+        "Close it manually first: " +
+        ($otherDetails -join '; ')
+    )
+}
+$targetMfaProcesses | ForEach-Object {
+    $targetProcessId = $_.ProcessId
+    try {
+        Stop-Process -Id $targetProcessId -ErrorAction Stop
+    }
+    catch {
+        if (Get-Process -Id $targetProcessId -ErrorAction SilentlyContinue) {
+            throw $_
+        }
+    }
+    # 等旧进程完全退出后再覆盖 interface，避免其退出保存把新参数写回旧值。
+    try {
+        Wait-Process -Id $targetProcessId -Timeout 10 -ErrorAction Stop
+    }
+    catch {
+        if (Get-Process -Id $targetProcessId -ErrorAction SilentlyContinue) {
+            throw $_
+        }
+    }
+}
 
 $dotnetRuntimes = & dotnet --list-runtimes 2>$null
 if (-not ($dotnetRuntimes -match '^Microsoft\.NETCore\.App 10\.')) {
@@ -57,6 +120,12 @@ foreach ($runtimeDirectory in ($profileDirectory, $recordingDirectory, $captureD
     New-Item -ItemType Directory -Force -Path $runtimeDirectory | Out-Null
 }
 Copy-Item -Path (Join-Path $sourceResource '*') -Destination $deployedResource -Recurse -Force
+
+foreach ($aboutAsset in @('docs/about.md', 'docs/contact.md', 'docs/assets/maabangdream-logo-v1.png')) {
+    $aboutDestination = Join-Path $MfaRoot $aboutAsset
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $aboutDestination) | Out-Null
+    Copy-Item -LiteralPath (Join-Path $projectRoot $aboutAsset) -Destination $aboutDestination -Force
+}
 
 # The local chart catalog intentionally stores only Hard/Expert/Special.  A
 # normal Copy-Item deployment does not remove Easy/Normal files left by older
@@ -93,13 +162,38 @@ if (Test-Path -LiteralPath $deployedBestdoriRoot -PathType Container) {
 $interface = Get-Content -LiteralPath $sourceInterface -Raw -Encoding utf8 | ConvertFrom-Json
 $interface.resource[0].path = @('./resource/resource')
 $interface.agent.child_exec = $python.Replace('\', '/')
-$interface.agent.child_args = @($agent.Replace('\', '/'))
+$agentArgs = @($agent.Replace('\', '/'))
+if ($DisableNativeTimingCompensation) {
+    $agentArgs += '--disable-native-timing-compensation'
+}
+else {
+    # MFA 启动 Agent 时可能不保留父进程临时环境，命令行参数是可核验的传递通道。
+
+    $agentArgs += '--native-timing-trial'
+}
+$interface.agent.child_args = $agentArgs
 $interfaceJson = $interface | ConvertTo-Json -Depth 100
 [System.IO.File]::WriteAllText(
     $deployedInterface,
     $interfaceJson,
     [System.Text.UTF8Encoding]::new($false)
 )
+$deployedAgentArgs = @(
+    (Get-Content -LiteralPath $deployedInterface -Raw -Encoding utf8 |
+        ConvertFrom-Json).agent.child_args
+)
+if (
+    -not $DisableNativeTimingCompensation -and
+    '--native-timing-trial' -notin $deployedAgentArgs
+) {
+    throw 'Native timing compensation flag was not written to deployed interface.json'
+}
+if (
+    $DisableNativeTimingCompensation -and
+    '--disable-native-timing-compensation' -notin $deployedAgentArgs
+) {
+    throw 'Native timing compensation disable flag was not written to deployed interface.json'
+}
 
 # The custom MFA settings page reads this ignored, machine-local sidecar. It is
 # deliberately generated here so neither usernames nor repository paths enter Git.
@@ -180,6 +274,7 @@ try {
 }
 finally {
     Remove-Item Env:MAABANGDREAM_ORDERED_STARTUP -ErrorAction SilentlyContinue
+    Remove-Item Env:MAABANGDREAM_NATIVE_TIMING_TRIAL -ErrorAction SilentlyContinue
     Remove-Item Env:MAABANGDREAM_MFA_SESSION_ID -ErrorAction SilentlyContinue
     Remove-Item Env:MAABANGDREAM_MFA_ROOT -ErrorAction SilentlyContinue
 }
@@ -189,3 +284,4 @@ Write-Host "Project: $projectRoot"
 Write-Host "Deployment: $MfaRoot"
 Write-Host "Conda environment: $EnvironmentName ($python)"
 Write-Host "Ordered startup trial: $([bool]$OrderedStartupTrial)"
+Write-Host "Native timing compensation: $(-not [bool]$DisableNativeTimingCompensation)"

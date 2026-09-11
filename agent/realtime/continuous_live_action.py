@@ -82,11 +82,7 @@ class ListenerDiagnosticCapture:
 
 
 def continuous_song_params(params: dict) -> dict:
-    """Build the one-key playback policy without life-safety pausing.
-
-    Cooperative screens may expose a different or non-interactive pause
-    control.  This task must never invoke the life protection pause path.
-    """
+    """构造一键演奏策略；生命归零后继续等待可识别的演奏终态。"""
     return {
         **params,
         "require_profile": True,
@@ -98,7 +94,6 @@ def continuous_song_params(params: dict) -> dict:
         ),
         "require_completion": False,
         "save_result_frame": False,
-        "use_life_safety": False,
         "continue_after_life_depleted": True,
     }
 

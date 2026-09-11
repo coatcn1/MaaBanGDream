@@ -19,10 +19,13 @@ from . import native_engine
 from .native_minitouch import NativeMinitouchDevice
 from .playfield_monitor import LANE_CENTERS, PlayfieldDetector
 from .prepare_popup import CooperativePreparePopupDetector
+from .runtime_flags import native_timing_compensation_enabled
 
 
 TOUCH_Y = 590.0
 PHOTOGATE_LATENCY_MS = 190.0
+_STARTUP_TIMING_MIN_MS = 8.0
+_STARTUP_TIMING_MAX_MS = 60.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -537,6 +540,7 @@ class NativeMinitouchBackend:
         publisher_poll_ms: float = 20.0,
         require_probe: bool | None = None,
         drift_rate_correction_enabled: bool = False,
+        timing_trial_enabled: bool | None = None,
     ) -> None:
         if not native_engine.available():
             raise RuntimeError(
@@ -561,6 +565,18 @@ class NativeMinitouchBackend:
         self._compiler = native_engine.touch_script_compiler(
             offsets=self._frozen_offsets
         )
+        self._timing_trial_enabled = (
+            native_timing_compensation_enabled()
+            if timing_trial_enabled is None
+            else bool(timing_trial_enabled)
+        )
+        trial_setter = getattr(
+            self._compiler, "set_wait_cost_recovery_enabled", None
+        )
+        if self._timing_trial_enabled:
+            if not callable(trial_setter):
+                raise RuntimeError("Native 模块缺少等待成本补偿接口")
+            trial_setter(True)
         self._receipt_reader = getattr(
             self._compiler, "execution_receipts", None
         )
@@ -637,6 +653,14 @@ class NativeMinitouchBackend:
         self._execution_timing = _ExecutionTimingTrace()
         self._first_chunk_pipeline_lock = threading.Lock()
         self._first_chunk_pipeline = self._new_first_chunk_pipeline()
+        self._startup_timing_trial_lock = threading.Lock()
+        self._startup_timing_trial = {
+            "enabled": self._timing_trial_enabled,
+            "observed_delay_ms": None,
+            "correction_ms": 0.0,
+            "reason": "pending" if self._timing_trial_enabled else "disabled",
+        }
+        self._startup_timing_trial_attempted = False
         self._drift_rate_estimator = (
             _DriftRateEstimator() if drift_rate_correction_enabled else None
         )
@@ -870,6 +894,93 @@ class NativeMinitouchBackend:
         }
         return result
 
+    def _startup_timing_trial_report(self) -> dict[str, object]:
+        lock = getattr(self, "_startup_timing_trial_lock", None)
+        state = getattr(self, "_startup_timing_trial", None)
+        if lock is None or not isinstance(state, dict):
+            return {
+                "enabled": False,
+                "observed_delay_ms": None,
+                "correction_ms": 0.0,
+                "reason": "unavailable",
+            }
+        with lock:
+            return dict(state)
+
+    def _compiler_timing_trial_report(self) -> dict[str, object]:
+        result = {
+            "wait_cost_recovery_enabled": bool(
+                getattr(self, "_timing_trial_enabled", False)
+            ),
+            "residual_ms": None,
+            "positive_recovered_ms": 0.0,
+            "positive_recovery_waits": 0,
+            "positive_budget_exhausted": 0,
+            "positive_no_wait_available": 0,
+        }
+        compiler = getattr(self, "_compiler", None)
+        reader = getattr(compiler, "timing_trial_report", None)
+        if not callable(reader):
+            return result
+        try:
+            values = dict(reader())
+        except (TypeError, ValueError):
+            return result
+        result.update(values)
+        return result
+
+    def _maybe_apply_startup_timing_trial(
+        self,
+        mapped_start_s: float | None,
+        window_start_s: float | None,
+    ) -> None:
+        """只回收首条设备命令前的启动开销，后续漂移仍由既有门禁观察。"""
+        lock = getattr(self, "_startup_timing_trial_lock", None)
+        state = getattr(self, "_startup_timing_trial", None)
+        if lock is None or not isinstance(state, dict):
+            return
+        with lock:
+            if self._startup_timing_trial_attempted:
+                return
+            self._startup_timing_trial_attempted = True
+            if not self._timing_trial_enabled:
+                self._startup_timing_trial["reason"] = "disabled"
+                return
+            if self._clock_basis != "probe-midpoint":
+                self._startup_timing_trial["reason"] = "clock-basis-not-probe-midpoint"
+                return
+            try:
+                clock_uncertainty_ms = float(self._clock_uncertainty_ms)
+            except (TypeError, ValueError):
+                clock_uncertainty_ms = float("nan")
+            if (
+                not math.isfinite(clock_uncertainty_ms)
+                or clock_uncertainty_ms < 0.0
+                or clock_uncertainty_ms > 1.0
+            ):
+                self._startup_timing_trial["reason"] = "clock-uncertainty-over-1ms"
+                return
+            try:
+                mapped_start = float(mapped_start_s)
+                window_start = float(window_start_s)
+            except (TypeError, ValueError):
+                mapped_start = float("nan")
+                window_start = float("nan")
+            if not math.isfinite(mapped_start) or not math.isfinite(window_start):
+                self._startup_timing_trial["reason"] = "missing-first-window-mapping"
+                return
+            delay_ms = (mapped_start - window_start) * 1000.0
+            self._startup_timing_trial["observed_delay_ms"] = delay_ms
+            if delay_ms < _STARTUP_TIMING_MIN_MS:
+                self._startup_timing_trial["reason"] = "delay-below-8ms"
+                return
+            if delay_ms > _STARTUP_TIMING_MAX_MS:
+                self._startup_timing_trial["reason"] = "delay-over-60ms"
+                return
+            self._compiler.add_residual_ms(delay_ms)
+            self._startup_timing_trial["correction_ms"] = delay_ms
+            self._startup_timing_trial["reason"] = "applied"
+
     def _fail_observation(self, reason: str) -> None:
         self._observation_error = reason
         raise RuntimeError(f"Native jlog 执行证据无效：{reason}")
@@ -1037,14 +1148,18 @@ class NativeMinitouchBackend:
             if pipeline_lock is None or pipeline is None:
                 first_sequence = None
                 first_jlog_missing = False
+                first_window_start_s = None
             else:
                 with pipeline_lock:
                     first_sequence = pipeline["sequence"]
                     first_jlog_missing = (
                         pipeline["first_jlog_start_device_ms"] is None
                     )
+                    first_window_start_s = self._finite_or_none(
+                        pipeline.get("window_start_s")
+                    )
+            mapped_start_s = None
             if first_jlog_missing and first_sequence == expected.chunk_sequence:
-                mapped_start_s = None
                 mapped_end_s = None
                 mapping_basis = None
                 if (
@@ -1092,6 +1207,10 @@ class NativeMinitouchBackend:
                 self._fail_observation(
                     f"chunk={expected.chunk_sequence} 命令失配："
                     f"expected={expected.command!r} actual={command!r}"
+                )
+            if first_jlog_missing and first_sequence == expected.chunk_sequence:
+                self._maybe_apply_startup_timing_trial(
+                    mapped_start_s, first_window_start_s
                 )
             self._expected_commands.popleft()
             self._observed_commands += 1
@@ -2102,6 +2221,10 @@ class NativeMinitouchBackend:
             "calibration_chunks": self._calibration_chunks,
             "executed_chunks": self._calibration_chunks,
             "calibration_correction_ms": self._calibration_correction_ms,
+            "timing_trial": {
+                "startup": self._startup_timing_trial_report(),
+                "wait_cost_recovery": self._compiler_timing_trial_report(),
+            },
             "drift_rate_correction_enabled": (
                 getattr(self, "_drift_rate_estimator", None) is not None
             ),

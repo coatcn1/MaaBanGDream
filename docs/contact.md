@@ -1,0 +1,3 @@
+- 开源代码：[GitHub](https://github.com/coatcn1/MaaBanGDream)
+- 使用说明：[README](https://github.com/coatcn1/MaaBanGDream#readme)
+- 问题反馈：[GitHub Issues](https://github.com/coatcn1/MaaBanGDream/issues)

@@ -318,6 +318,21 @@ void TouchScriptCompiler::reset_contacts() noexcept {
     next_action_token_ = 1;
     last_execution_receipts_.clear();
     transient_cursor_ = 0;
+    positive_recovered_ms_ = 0.0;
+    positive_recovery_waits_ = 0;
+    positive_budget_exhausted_ = 0;
+    positive_no_wait_available_ = 0;
+}
+
+TouchTimingTrialReport TouchScriptCompiler::timing_trial_report() const noexcept {
+    TouchTimingTrialReport report;
+    report.wait_cost_recovery_enabled = wait_cost_recovery_enabled_;
+    report.residual_ms = residual_offset_ms_;
+    report.positive_recovered_ms = positive_recovered_ms_;
+    report.positive_recovery_waits = positive_recovery_waits_;
+    report.positive_budget_exhausted = positive_budget_exhausted_;
+    report.positive_no_wait_available = positive_no_wait_available_;
+    return report;
 }
 
 std::vector<std::string> TouchScriptCompiler::compile(
@@ -473,6 +488,10 @@ std::vector<std::string> TouchScriptCompiler::compile(
     double cursor = canonical_time(time_key(start_engine_time));
     double residual = residual_offset_ms_;
     double loss = rounding_loss_ms_;
+    double positive_recovered_ms = positive_recovered_ms_;
+    std::size_t positive_recovery_waits = positive_recovery_waits_;
+    std::size_t positive_budget_exhausted = positive_budget_exhausted_;
+    std::size_t positive_no_wait_available = positive_no_wait_available_;
 
     auto account = [&](double type_offset_ms) {
         residual += offsets_.interval_ms + type_offset_ms;
@@ -497,10 +516,33 @@ std::vector<std::string> TouchScriptCompiler::compile(
         double compensated_wait_ms = ideal_wait_ms;
         // 正补偿只能吃掉本段确实存在的等待；不足 1ms 的短段把剩余欠账
         // 留给后续窗口，不能凭空生成负等待。
-        const double max_offset_adjust = std::min(
+        const double standard_positive_budget = std::min(
             kMaxOffsetPerWaitMs, compensated_wait_ms);
-        const double offset_adjust = clamp(
-            residual, -kMaxOffsetPerWaitMs, max_offset_adjust);
+        const double known_wait_cost_budget = wait_cost_recovery_enabled_
+            ? std::max(0.0, offsets_.wait_ms + offsets_.interval_ms)
+            : 0.0;
+        const double positive_budget = std::min(
+            compensated_wait_ms,
+            standard_positive_budget + known_wait_cost_budget);
+        double offset_adjust = 0.0;
+        if (residual > 0.0) {
+            offset_adjust = std::min(residual, positive_budget);
+            if (wait_cost_recovery_enabled_) {
+                if (positive_budget <= kTimeEpsilon) {
+                    ++positive_no_wait_available;
+                } else {
+                    ++positive_recovery_waits;
+                    positive_recovered_ms += offset_adjust;
+                    if (residual - offset_adjust > kTimeEpsilon
+                        && offset_adjust >= positive_budget - kTimeEpsilon) {
+                        ++positive_budget_exhausted;
+                    }
+                }
+            }
+        } else {
+            // 负向残差沿用旧的 1ms 限幅，不能因试验开关延长等待。
+            offset_adjust = std::max(residual, -kMaxOffsetPerWaitMs);
+        }
         compensated_wait_ms -= offset_adjust;
         residual -= offset_adjust;
         const double previous_loss = loss;
@@ -624,6 +666,10 @@ std::vector<std::string> TouchScriptCompiler::compile(
     transient_cursor_ = transient_cursor;
     residual_offset_ms_ = residual;
     rounding_loss_ms_ = loss;
+    positive_recovered_ms_ = positive_recovered_ms;
+    positive_recovery_waits_ = positive_recovery_waits;
+    positive_budget_exhausted_ = positive_budget_exhausted;
+    positive_no_wait_available_ = positive_no_wait_available;
     return script;
 }
 

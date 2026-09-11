@@ -227,6 +227,22 @@ def formal_validation_passed(
     return bool(survived and completed and result.miss < 10)
 
 
+def _activate_accepted_profile(
+    store: RealtimeProfileStore,
+    session: dict,
+    difficulty: str,
+) -> str:
+    """把正式验证通过的候选设为当前难度实际使用的 Profile。"""
+
+    if session.get("status") != "accepted":
+        raise ValueError("只有已通过正式验证的候选 Profile 才能自动启用")
+    candidate = str(session.get("candidate_profile") or "").strip()
+    if not candidate:
+        raise ValueError("校准会话缺少候选 Profile")
+    store.pin(difficulty, candidate)
+    return candidate
+
+
 class CalibrationRunner:
     """Pure fixed 3+1 runner used by unit tests and non-persistent callers."""
 
@@ -592,12 +608,17 @@ class RealtimeCalibration(CustomAction):
                     "候选 Profile 已保留但未接受"
                 )
         else:
+            activated_profile = _activate_accepted_profile(
+                store,
+                session,
+                difficulty,
+            )
             log_task(
                 "实时演奏校准",
                 "结束",
                 "SUCCESS",
                 "✅ 实时演奏校准成功：正式验证通过，Profile 已接受"
-                f"（{session.get('candidate_profile')}，"
+                f"并启用（{activated_profile}，"
                 f"offset={session.get('current_offset_ms')}ms）",
             )
         return accepted

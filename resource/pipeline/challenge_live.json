@@ -591,7 +591,7 @@
       "ChallengeReturnHome"
     ],
     "on_error": [
-      "ChallengeLifeSafetyGate"
+      "ChallengeFailure"
     ]
   },
   "ChallengePlayNormal": {
@@ -620,7 +620,7 @@
       "ChallengeReturnHome"
     ],
     "on_error": [
-      "ChallengeLifeSafetyGate"
+      "ChallengeFailure"
     ]
   },
   "ChallengePlayHard": {
@@ -649,7 +649,7 @@
       "ChallengeReturnHome"
     ],
     "on_error": [
-      "ChallengeLifeSafetyGate"
+      "ChallengeFailure"
     ]
   },
   "ChallengePlayExpert": {
@@ -678,7 +678,7 @@
       "ChallengeReturnHome"
     ],
     "on_error": [
-      "ChallengeLifeSafetyGate"
+      "ChallengeFailure"
     ]
   },
   "ChallengePlaySpecial": {
@@ -707,30 +707,8 @@
       "ChallengeReturnHome"
     ],
     "on_error": [
-      "ChallengeLifeSafetyGate"
+      "ChallengeFailure"
     ]
-  },
-  "ChallengeLifeSafetyGate": {
-    "recognition": "DirectHit",
-    "action": "Custom",
-    "custom_action": "RealtimeLifeSafetyAbortCheck",
-    "next": [
-      "ChallengeLifeSafetyStop"
-    ],
-    "on_error": [
-      "ChallengeReturnHome"
-    ]
-  },
-  "ChallengeLifeSafetyStop": {
-    "recognition": "DirectHit",
-    "action": "Custom",
-    "custom_action": "TaskOutcome",
-    "custom_action_param": {
-      "task_name": "ChallengeLive",
-      "label": "挑战演出",
-      "status": "failure",
-      "reason": "检测到生命值安全中止，已停止本轮挑战"
-    }
   },
   "ChallengeReturnHome": {
     "recognition": "DirectHit",

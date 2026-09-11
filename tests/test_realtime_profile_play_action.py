@@ -11,7 +11,6 @@ import pytest
 from agent.realtime.engine import EngineStats
 from agent.realtime import profile_play_action
 from agent.realtime.profile_play_action import (
-    RealtimeLifeSafetyAbortCheck,
     RealtimeProfilePlay,
     ResultCollectionOutcome,
     ResultCollectionStatus,
@@ -21,7 +20,6 @@ from agent.realtime.profile_play_action import (
     _write_calibration_report,
     _recording_kind,
     collect_result,
-    pause_overlay_changed,
     resolve_life_monitor_enabled,
     resolve_life_policy,
 )
@@ -240,8 +238,6 @@ def test_profile_play_reuses_one_agent_controller_proxy(monkeypatch):
             "chart_prediction_enabled": False,
             "chart_predict_presses": False,
             "native_realtime_enabled": False,
-            "life_safety_enabled": False,
-            "life_exit_threshold": 100,
         },
     )
     foreground_checks = []
@@ -280,8 +276,8 @@ def test_profile_play_reuses_one_agent_controller_proxy(monkeypatch):
     assert foreground_checks == [tasker._controller]
     assert dispatcher_options == [{}]
     assert engine_options[0]["startup_timeout_seconds"] == 60.0
-    assert engine_construction_options[0]["life_detector"] is None
-    assert engine_construction_options[0]["life_guard"] is None
+    assert engine_construction_options[0]["life_detector"] is not None
+    assert engine_construction_options[0]["life_guard"] is not None
 
 
 def test_explicit_native_initialization_failure_never_falls_back(
@@ -322,8 +318,6 @@ def test_explicit_native_initialization_failure_never_falls_back(
             "chart_prediction_enabled": False,
             "chart_predict_presses": False,
             "native_realtime_enabled": True,
-            "life_safety_enabled": False,
-            "life_exit_threshold": 100,
         },
     )
     resolution_calls = []
@@ -423,8 +417,6 @@ def test_profile_native_consumes_and_configures_prearmed_backend(monkeypatch):
             "chart_prediction_enabled": False,
             "chart_predict_presses": False,
             "native_realtime_enabled": True,
-            "life_safety_enabled": False,
-            "life_exit_threshold": 100,
         },
     )
     monkeypatch.setattr(
@@ -539,8 +531,6 @@ def test_profile_jump_cancellation_reaches_disconnect_branch(monkeypatch):
             "chart_prediction_enabled": False,
             "chart_predict_presses": False,
             "native_realtime_enabled": True,
-            "life_safety_enabled": False,
-            "life_exit_threshold": 100,
         },
     )
     monkeypatch.setattr(
@@ -651,8 +641,6 @@ def test_profile_falls_back_to_legacy_without_reliable_native_chart(
             "chart_prediction_enabled": True,
             "chart_predict_presses": True,
             "native_realtime_enabled": True,
-            "life_safety_enabled": False,
-            "life_exit_threshold": 100,
         },
     )
     monkeypatch.setattr(
@@ -825,77 +813,37 @@ def test_profile_play_stop_during_preflight_is_neutral_and_writes_nothing(
     assert not list(tmp_path.rglob("realtime-result-*.json"))
 
 
-def test_pause_overlay_requires_a_material_screen_change():
-    before = np.zeros((720, 1280, 3), dtype=np.uint8)
-    unchanged = before.copy()
-    overlay = before.copy()
-    overlay[90:630, 160:1120] = 80
-
-    assert not pause_overlay_changed(before, unchanged)
-    assert pause_overlay_changed(before, overlay)
-
-
-def test_life_safety_abort_gate_only_matches_protected_abort(monkeypatch):
-    context = SimpleNamespace()
-    argv = SimpleNamespace(custom_action_param="{}")
-    monkeypatch.setattr(profile_play_action, "_LAST_LIFE_SAFETY_ABORT", False)
-    assert not RealtimeLifeSafetyAbortCheck().run(context, argv)
-    monkeypatch.setattr(profile_play_action, "_LAST_LIFE_SAFETY_ABORT", True)
-    assert RealtimeLifeSafetyAbortCheck().run(context, argv)
-
-
 def test_rehearsal_life_policy_can_ignore_depletion():
     policy = resolve_life_policy(
         {"require_profile": False, "rehearsal_mode": True},
-        {
-            "life_safety_enabled": True,
-            "life_exit_threshold": 200,
-            "rehearsal_ignore_life_safety": True,
-        },
     )
 
-    assert policy == (True, True, None)
+    assert policy == (True, True)
 
 
-def test_unchecked_life_safety_disables_numeric_life_monitor():
-    assert resolve_life_monitor_enabled(
-        {},
-        {"life_safety_enabled": False},
-    ) is False
-    assert resolve_life_monitor_enabled(
-        {"use_life_safety": False},
-        {"life_safety_enabled": True},
-    ) is False
-    assert resolve_life_monitor_enabled(
-        {},
-        {"life_safety_enabled": True},
-    ) is True
+def test_numeric_life_monitor_defaults_on_for_terminal_detection():
+    assert resolve_life_monitor_enabled({}) is True
+    assert resolve_life_monitor_enabled({"monitor_life": False}) is False
 
 
-def test_rehearsal_life_policy_can_enable_normal_protection():
+def test_rehearsal_life_policy_can_explicitly_stop_after_depletion():
     policy = resolve_life_policy(
-        {"require_profile": False, "rehearsal_mode": True},
         {
-            "life_safety_enabled": True,
-            "life_exit_threshold": 200,
-            "rehearsal_ignore_life_safety": False,
+            "require_profile": False,
+            "rehearsal_mode": True,
+            "continue_after_life_depleted": False,
         },
     )
 
-    assert policy == (True, False, 200)
+    assert policy == (True, False)
 
 
-def test_formal_calibration_round_uses_life_protection():
+def test_formal_calibration_round_stops_only_after_life_is_depleted():
     policy = resolve_life_policy(
         {"require_profile": False, "rehearsal_mode": False},
-        {
-            "life_safety_enabled": True,
-            "life_exit_threshold": 200,
-            "rehearsal_ignore_life_safety": True,
-        },
     )
 
-    assert policy == (False, False, 200)
+    assert policy == (False, False)
 
 
 def test_calibration_report_contains_replay_diagnostics(tmp_path):
