@@ -100,6 +100,7 @@ def test_release_builder_uses_clean_sources_and_excludes_private_state():
     assert "SupportsSelectedResourceUpdateSource" in builder
     assert "build_native_realtime.ps1" in builder
     assert "create_release_zip.py" in builder
+    assert "--flat-root" in builder
     assert "tar.exe -a -c" not in builder
     assert r"agent\realtime\native\maabangdream_realtime.pyd" in builder
     assert "maabangdream_realtime.pyd" in validator
