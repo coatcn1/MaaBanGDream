@@ -38,6 +38,7 @@ if (-not $Version) {
 if ($Version -notmatch '^\d+\.\d+\.\d+([.-][0-9A-Za-z.-]+)?$') {
     throw "Invalid release version: $Version"
 }
+$releaseNotesRelativePath = "docs\release-notes-v$Version.md"
 
 $mfaProject = Join-Path `
     $MfaSourceRoot `
@@ -61,6 +62,7 @@ foreach ($required in @(
     $versionChecker,
     (Join-Path $projectRoot 'packaging\start-maabangdream.cmd'),
     (Join-Path $projectRoot 'docs\release-package.md'),
+    (Join-Path $projectRoot $releaseNotesRelativePath),
     (Join-Path $projectRoot 'scripts\start-release.ps1'),
     (Join-Path $projectRoot 'scripts\normalize-release-directory.ps1'),
     $zipBuilder
@@ -205,6 +207,9 @@ Copy-ProjectFile `
 Copy-ProjectFile `
     -RelativePath 'docs\release-package.md' `
     -DestinationRelativePath 'README.md'
+Copy-ProjectFile `
+    -RelativePath $releaseNotesRelativePath `
+    -DestinationRelativePath 'resource\Release.md'
 Copy-ProjectFile `
     -RelativePath 'LICENSE' `
     -DestinationRelativePath 'LICENSE-MaaBanGDream.txt'

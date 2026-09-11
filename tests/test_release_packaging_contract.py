@@ -101,6 +101,9 @@ def test_release_builder_uses_clean_sources_and_excludes_private_state():
     assert "build_native_realtime.ps1" in builder
     assert "create_release_zip.py" in builder
     assert "--flat-root" in builder
+    assert '"docs\\release-notes-v$Version.md"' in builder
+    assert "resource\\Release.md" in builder
+    assert '"resource/Release.md"' in validator
     assert "tar.exe -a -c" not in builder
     assert r"agent\realtime\native\maabangdream_realtime.pyd" in builder
     assert "maabangdream_realtime.pyd" in validator
@@ -143,6 +146,7 @@ def test_release_readme_documents_sources_and_first_run():
     assert "BUILD-INFO.json" in release_readme
     assert "Releases" in project_readme
     assert "fix/native-realtime-ui-toggle" in project_readme
+    assert "resource/Release.md" in release_readme
 
 
 def test_v136_launcher_uses_native_mfa_update_flow():
