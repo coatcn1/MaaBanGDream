@@ -49,6 +49,44 @@ FORBIDDEN_TEXT = (
 )
 
 
+def validate_release_archives(package_root: Path) -> list[str]:
+    errors: list[str] = []
+    archive_paths = (
+        package_root.parent / f"{package_root.name}.zip",
+        package_root.parent / f"{package_root.name}-update.zip",
+    )
+    launcher = f"{package_root.name}/启动 MaaBanGDream.cmd"
+    for archive_path in archive_paths:
+        if not archive_path.is_file():
+            continue
+        try:
+            with zipfile.ZipFile(archive_path) as archive:
+                names = set(archive.namelist())
+                if launcher not in names:
+                    errors.append(
+                        f"release archive has a corrupted or missing launcher name: "
+                        f"{archive_path.name}"
+                    )
+                    continue
+                if not archive.getinfo(launcher).flag_bits & 0x800:
+                    errors.append(
+                        f"release archive launcher is not marked UTF-8: "
+                        f"{archive_path.name}"
+                    )
+                if archive_path.name.endswith("-update.zip"):
+                    runtime = (
+                        f"{package_root.name}/runtime/maabangdream-python.zip"
+                    )
+                    charts = f"{package_root.name}/resource/charts/"
+                    if runtime in names:
+                        errors.append("update archive contains the Python runtime")
+                    if any(name.startswith(charts) for name in names):
+                        errors.append("update archive contains the chart catalog")
+        except zipfile.BadZipFile as exc:
+            errors.append(f"invalid release archive {archive_path.name}: {exc}")
+    return errors
+
+
 def validate(package_root: Path) -> list[str]:
     errors: list[str] = []
     for relative in REQUIRED_PATHS:
@@ -103,6 +141,7 @@ def validate(package_root: Path) -> list[str]:
                     f"local path marker {forbidden!r} found in "
                     f"{path.relative_to(package_root)}"
                 )
+    errors.extend(validate_release_archives(package_root))
     return errors
 
 
