@@ -85,6 +85,8 @@ def test_stable_result_payload_links_run_settings_recording_and_stage_metrics():
     assert payload["run_id"] == "91cb1867-5e7f-435c-8ccd-cf1a1b378005"
     assert payload["song_id"] == "song-phash-v1-0123456789abcdef"
     assert payload["profile"] == "expert-20260809.json"
+    assert payload["requested_difficulty"] == "Expert"
+    assert payload["effective_difficulty"] == "Expert"
     assert payload["session"]["run_id"] == payload["run_id"]
     assert payload["session"]["song_id"] == payload["song_id"]
     assert payload["settings"] == {

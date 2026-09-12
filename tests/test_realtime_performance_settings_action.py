@@ -18,6 +18,7 @@ from agent.realtime.performance_settings_action import (
     _read_speed,
     _speed_click_plan,
     clear_verified_settings,
+    require_special_chart_for_settings_gate,
     verified_settings,
 )
 from agent.realtime.game_effect_settings_action import (
@@ -55,6 +56,66 @@ def _isolate_native_prearm(monkeypatch):
         "agent.realtime.performance_settings_action.RealtimeProfileStore.runtime_options",
         lambda _store: {"game_effect_settings_enabled": True},
     )
+
+
+def test_special_chart_gate_rejects_missing_reliable_local_chart(monkeypatch):
+    reset_live_run(
+        mode="challenge",
+        difficulty="Special",
+        requested_difficulty="Special",
+        prepared_for_play=True,
+    )
+    update_live_run(
+        song_id="unknown",
+        song_level=30,
+        song_title="Special Song",
+    )
+
+    class Repository:
+        def resolve(self, *_args, **_kwargs):
+            return SimpleNamespace(
+                selection=None,
+                reason="no local special chart for confirmed song",
+            )
+
+    monkeypatch.setattr(
+        performance_settings_action,
+        "LocalChartRepository",
+        lambda _root: Repository(),
+    )
+
+    with pytest.raises(RuntimeError, match="禁止按视觉回退开演"):
+        require_special_chart_for_settings_gate("Special")
+
+
+def test_special_chart_gate_accepts_exact_special_selection(monkeypatch):
+    reset_live_run(
+        mode="cooperative",
+        difficulty="Special",
+        requested_difficulty="Special",
+        prepared_for_play=True,
+    )
+    update_live_run(
+        song_id="unknown",
+        song_level=30,
+        song_title="Special Song",
+    )
+    selection = SimpleNamespace(
+        bestdori_song_id=30,
+        difficulty="special",
+    )
+
+    class Repository:
+        def resolve(self, *_args, **_kwargs):
+            return SimpleNamespace(selection=selection, reason="confirmed")
+
+    monkeypatch.setattr(
+        performance_settings_action,
+        "LocalChartRepository",
+        lambda _root: Repository(),
+    )
+
+    assert require_special_chart_for_settings_gate("Special") is selection
 
 
 def test_fixed_digit_template_reader_decodes_two_digit_upper_bound():

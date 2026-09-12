@@ -191,9 +191,13 @@ class CooperativePlayfieldEntryEvidence:
         return self._narrow_motion_streak >= self._REQUIRED_NARROW_EVENTS
 
 
-def cooperative_play_params(settings: dict[str, object]) -> dict[str, object]:
+def cooperative_play_params(
+    settings: dict[str, object],
+    *,
+    effective_difficulty: str | None = None,
+) -> dict[str, object]:
     return {
-        "difficulty": str(settings["difficulty"]),
+        "difficulty": str(effective_difficulty or settings["difficulty"]),
         "require_profile": True,
         "settings_gate_required": True,
         "debug_recording": bool(settings["debug_recording"]),
@@ -344,6 +348,7 @@ class CooperativeLiveFlow:
     ) -> None:
         self.context = context
         self.settings = settings
+        self.effective_difficulty = str(settings["difficulty"])
         self.progress_callback = progress_callback
         self.detector = LifeDetector()
         # 准备完毕后的短黑场可能只持续一帧；漏检时先用与本局身份一致的
@@ -796,10 +801,26 @@ class CooperativeLiveFlow:
             "mode": "cooperative",
             "debug_recording": bool(self.settings["debug_recording"]),
         }
+        if difficulty == "Special":
+            # 协力歌曲由房间决定；Special 不存在时显式回退 Expert，后续流程
+            # 必须只消费实际选中的难度，不能继续拿 Special 谱面演奏。
+            difficulty_params["fallback_difficulties"] = ["Expert"]
         if not RealtimeDifficultySelect().run(
             self.context, self.action_argv(difficulty_params)
         ):
             raise RuntimeError(f"协力准备页未能选择并复核 {difficulty} 难度")
+        run = current_live_run()
+        if run is None or not run.prepared_for_play:
+            raise RuntimeError("协力难度选择成功但缺少本局实际难度证据")
+        effective_difficulty = str(run.difficulty)
+        if effective_difficulty != difficulty and not (
+            difficulty == "Special" and effective_difficulty == "Expert"
+        ):
+            raise RuntimeError(
+                "协力实际难度不符合回退策略："
+                f"请求 {difficulty}，实际 {effective_difficulty}"
+            )
+        self.effective_difficulty = effective_difficulty
 
         visual_params = {
             "entry_mode": "preparation",
@@ -812,7 +833,7 @@ class CooperativeLiveFlow:
             raise RuntimeError("协力准备页演出视觉设置复核失败")
 
         performance_params = {
-            "difficulty": difficulty,
+            "difficulty": effective_difficulty,
             "require_profile": True,
             "dpi": COOPERATIVE_DPI,
             "game_fps": COOPERATIVE_GAME_FPS,
@@ -829,7 +850,10 @@ class CooperativeLiveFlow:
         if ready_transition != "black":
             self.watch_member_exit_before_black()
         print(
-            f"CooperativeLive ready=true difficulty={difficulty} speed_gate=verified",
+            "CooperativeLive ready=true "
+            f"requested_difficulty={difficulty} "
+            f"effective_difficulty={effective_difficulty} "
+            "speed_gate=verified",
             flush=True,
         )
 
@@ -1113,7 +1137,14 @@ class CooperativeLiveFlow:
         print("CooperativeLive member_download=complete playfield_visible=true", flush=True)
 
     def play(self) -> bool:
-        params = cooperative_play_params(self.settings)
+        params = cooperative_play_params(
+            self.settings,
+            effective_difficulty=getattr(
+                self,
+                "effective_difficulty",
+                str(self.settings.get("difficulty", "Expert")),
+            ),
+        )
         success = RealtimeProfilePlay().run(
             self.context, self.action_argv(params)
         )

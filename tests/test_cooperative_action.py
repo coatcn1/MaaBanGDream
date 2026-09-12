@@ -29,6 +29,7 @@ from agent.realtime.cooperative_action import (
     should_stay_in_room,
 )
 from agent.realtime.life_monitor import LifeReading
+from agent.realtime.live_session import reset_live_run
 
 
 ROOT = Path(__file__).parents[1]
@@ -717,6 +718,69 @@ def test_cooperative_play_continues_to_the_jump_out_gate_after_depletion():
     assert params["diagnostic_trace"] is False
     assert params["confirm_final_cover"] is True
     assert params["native_prearm_deferred"] is True
+
+
+def test_cooperative_play_uses_effective_fallback_difficulty():
+    params = cooperative_play_params(
+        {
+            "difficulty": "Special",
+            "debug_recording": False,
+            "diagnostic_trace": False,
+        },
+        effective_difficulty="Expert",
+    )
+
+    assert params["difficulty"] == "Expert"
+
+
+def test_cooperative_prepare_falls_back_special_to_effective_expert(monkeypatch):
+    difficulty_params = []
+    performance_params = []
+
+    class DifficultyAction:
+        def run(self, _context, argv):
+            params = json.loads(argv.custom_action_param)
+            difficulty_params.append(params)
+            reset_live_run(
+                mode="cooperative",
+                difficulty="Expert",
+                requested_difficulty="Special",
+                prepared_for_play=True,
+            )
+            return True
+
+    class VisualGate:
+        def run(self, _context, _argv):
+            return True
+
+    class PerformanceGate:
+        def run(self, _context, argv):
+            performance_params.append(json.loads(argv.custom_action_param))
+            return True
+
+    monkeypatch.setattr(
+        cooperative_action, "RealtimeDifficultySelect", DifficultyAction
+    )
+    monkeypatch.setattr(
+        cooperative_action, "RealtimeGameEffectSettingsGate", VisualGate
+    )
+    monkeypatch.setattr(
+        cooperative_action, "RealtimePerformanceSettingsGate", PerformanceGate
+    )
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    flow.settings = {
+        "difficulty": "Special",
+        "debug_recording": False,
+    }
+    flow.ensure_performance_mode_off = lambda: None
+    flow.ready_up_and_verify = lambda: "black"
+
+    flow.prepare()
+
+    assert difficulty_params[0]["fallback_difficulties"] == ["Expert"]
+    assert performance_params[0]["difficulty"] == "Expert"
+    assert flow.effective_difficulty == "Expert"
 
 
 def test_cooperative_interface_exposes_requested_modes_and_five_difficulties():

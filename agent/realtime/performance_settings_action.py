@@ -34,6 +34,7 @@ from .native_prearm import (
     discard_prearmed_backend,
     prepare_native_for_settings_gate,
 )
+from .chart_repository import LocalChartRepository
 from .run_reporting import (
     PreflightPerformanceSnapshot,
     write_preflight_terminal_result,
@@ -421,6 +422,39 @@ def _close_settings_dialog(
     )
 
 
+def require_special_chart_for_settings_gate(difficulty: str):
+    """Special 必须在点击开始前持有本局可信本地谱面。"""
+    if difficulty.casefold() != "special":
+        return None
+    run = current_live_run()
+    if (
+        run is None
+        or not run.prepared_for_play
+        or run.difficulty.casefold() != "special"
+    ):
+        raise RuntimeError("Special 开演前缺少本局实际难度证据")
+    resolution = LocalChartRepository(
+        PROJECT_ROOT / "resource" / "charts"
+    ).resolve(
+        run.song_id,
+        difficulty,
+        level=run.song_level,
+        title=run.song_title,
+    )
+    if resolution.selection is None:
+        raise RuntimeError(
+            "Special 必须先确认可信本地谱面，禁止按视觉回退开演："
+            f"{resolution.reason}"
+        )
+    print(
+        "RealtimePerformanceSettingsGate special_chart=confirmed "
+        f"bestdori_song_id={resolution.selection.bestdori_song_id} "
+        f"difficulty={resolution.selection.difficulty}",
+        flush=True,
+    )
+    return resolution.selection
+
+
 @AgentServer.custom_action("RealtimePerformanceSettingsGate")
 class RealtimePerformanceSettingsGate(CustomAction):
     """Read and adjust note speed on the explicitly selected first settings tab."""
@@ -516,6 +550,7 @@ class RealtimePerformanceSettingsGate(CustomAction):
             confirm_preparation_identity(before, difficulty)
             if context.tasker.stopping:
                 return True
+        require_special_chart_for_settings_gate(difficulty)
         expected, profile = _expected_speed(context, params, before)
         _speed_cents(expected)
         if on_expected is not None:

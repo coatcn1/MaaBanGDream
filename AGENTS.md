@@ -336,6 +336,8 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
 
 31. **Profile 当前选择属于任务难度槽位**：表格单击只查看/编辑，双击才把文件设为当前。写入 `selection.json` 时使用界面正在配置的任务难度，不使用 Profile 自身难度；否则给 Easy/Hard 选择兼容的 Expert/Special Profile 会误写进高难度槽。Expert 与 Special 是同一兼容等级，二者互相兼容并都可供较低难度任务使用；当前项用主题 `SukiPrimaryColor` 标记，不能与 DataGrid 的普通选中状态混为一体。
 
+32. **Special 的实际难度与方向语义必须 fail-closed**：单人实时、挑战和 AutoLive 请求 Special 时不得静默沿用旧难度；协力仅在 Special 按钮不可选时允许回退 Expert，并把 `requested_difficulty=Special`、`effective_difficulty=Expert` 贯穿 Profile、流速门禁、谱面、播放和结果证据。Special 在 Native 与 Legacy 下都必须先确认可信本地谱面；Legacy 强制启用 ChartPredictor 恢复 Directional Left/Right，缺谱、身份冲突或最终封面未确认时在触控前失败。Bestdori Directional `width=1..7` 表示横跨轨道数/判定尺寸并影响最低滑动阈值；当前固定水平滑动距离已覆盖七档。2026-09-12 雷电 Native 单人真机五局全部 MISS 0，其中两张谱面覆盖 Left/Right 与 `width=1..3`；据此保持既有手势距离与 190ms 首音补偿。协力仍无本轮真实房间证据，不得由单人结果推断 broad-change 门禁已经验收。
+
 ## 后续开发方向（已记录，暂缓或未开始）
 
 - **关于页素材与 GitHub 限流**：关于页专用字段 `about_icon` 使用 `docs/assets/maabangdream-logo-v1.png`，`description` 使用 `docs/about.md`，`contact` 使用 `docs/contact.md`；部署与打包须同时携带三者。不要把 v1 填入通用 `icon`：该字段也会替换窗口/软件标志。软件继续使用默认内嵌 Logo，关于页通过渲染层居中缩放裁剪放大人物，不覆盖原图。Logo、联系方式、许可证等分区框须使用 MFA/Suki 原生 `GlassCard` 及其 `ControlGlassOpacity`，不能用普通 `Border + SukiCardBackground` 绕开框架玻璃透明度。`MaaInterface.Merge` 必须保留 `Icon/AboutIcon`，设置页延迟创建时须补载说明文件；Avalonia 缩放中心用 `50%,50%`，不是像素坐标 `0.5,0.5`。发布构建必须把 `docs/release-notes-v<version>.md` 复制为包内 `resource/Release.md`；“显示公告”和更新完成弹窗只读取本地文件，不得在点击时请求 GitHub，也不得在发现新版本时用远端正文覆盖当前版本说明。复用 `ChangelogView` 与原生下载提示；更新完成公告只能在包校验通过且核心整包最后写入匹配的 `update-manifest.json` 后展示。GitHub 标签带 `v`、安装版本不带 `v` 时须按语义比较版本，网络请求仍保留原始发布标签。GitHub REST 明确限流时，稳定版查询可回退 `releases/latest` 与 `releases/expanded_assets/<tag>`；继续执行同一套选包和 SHA-256 校验，不得将普通权限错误或预发布通道静默改成稳定版。
@@ -368,7 +370,7 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
   `MFAUpdater.exe` 等主进程正常退出后覆盖，保留用户目录、最后写版本清单。旧
   `scripts/update.ps1` 仅保留在 v1.3.5 已发布客户端中用于桥接到 v1.3.6；新包不再
   携带自建网络更新器。
-- **Special 谱面支持**、**更多演出类型**：未开始。
+- **更多演出类型**：未开始。
 
 ## 修改后的最低验收
 

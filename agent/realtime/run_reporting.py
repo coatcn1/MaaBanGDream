@@ -73,6 +73,12 @@ def result_report_payload(
         "started_at": context.get("started_at"),
         "mode": context.get("mode"),
         "difficulty": context.get("difficulty"),
+        "requested_difficulty": context.get(
+            "requested_difficulty", context.get("difficulty")
+        ),
+        "effective_difficulty": context.get(
+            "effective_difficulty", context.get("difficulty")
+        ),
         "profile": context.get("profile_name"),
         "session": context,
         "settings": context.get("settings", {}),

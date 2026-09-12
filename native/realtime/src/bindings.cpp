@@ -50,6 +50,7 @@ py::dict judgement_to_dict(const ChartJudgement& judgement) {
         ? py::object(py::none())
         : py::object(py::str(judgement.direction < 0 ? "Left" : "Right"));
     result["direction"] = direction_value;
+    result["directional_width"] = judgement.directional_width;
     result["tail_flick"] = judgement.tail_flick;
     return result;
 }

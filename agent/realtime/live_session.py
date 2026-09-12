@@ -15,6 +15,7 @@ class LiveRunContext:
     started_at: datetime
     mode: str
     difficulty: str
+    requested_difficulty: str | None = None
     profile_name: str | None = None
     song_id: str = UNKNOWN_SONG_ID
     song_id_method: str = "unknown"
@@ -51,6 +52,10 @@ class LiveRunContext:
             "started_at": self.started_at.isoformat().replace("+00:00", "Z"),
             "mode": self.mode,
             "difficulty": self.difficulty,
+            "requested_difficulty": (
+                self.requested_difficulty or self.difficulty
+            ),
+            "effective_difficulty": self.difficulty,
             "profile_name": self.profile_name,
             "song_id": self.song_id,
             "song_id_method": self.song_id_method,
@@ -83,6 +88,7 @@ def reset_live_run(
     *,
     mode: str,
     difficulty: str,
+    requested_difficulty: str | None = None,
     profile_name: str | None = None,
     expected_note_speed: float | None = None,
     actual_note_speed: float | None = None,
@@ -99,6 +105,7 @@ def reset_live_run(
         started_at=datetime.now(timezone.utc),
         mode=str(mode),
         difficulty=str(difficulty),
+        requested_difficulty=str(requested_difficulty or difficulty),
         profile_name=profile_name,
         expected_note_speed=expected_note_speed,
         actual_note_speed=actual_note_speed,

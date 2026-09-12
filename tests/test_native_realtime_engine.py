@@ -80,6 +80,46 @@ def test_native_chart_timeline_matches_python_counts():
     assert native.level == 20
 
 
+@requires_native
+@pytest.mark.parametrize(
+    ("direction", "width"),
+    [
+        ("Left", 1),
+        ("Right", 2),
+        ("Left", 3),
+        ("Right", 4),
+        ("Left", 5),
+        ("Right", 6),
+        ("Left", 7),
+    ],
+)
+def test_native_special_directional_sizes_keep_direction_and_width(
+    tmp_path: Path,
+    direction: str,
+    width: int,
+):
+    path = tmp_path / f"directional-{direction}-{width}.json"
+    path.write_text(json.dumps([
+        {"type": "BPM", "beat": 0, "bpm": 120},
+        {
+            "type": "Directional",
+            "beat": 2,
+            "lane": 3,
+            "direction": direction,
+            "width": width,
+        },
+    ]), encoding="utf-8")
+
+    native = native_engine.compile_chart(path)
+    judgement = native.judgements()[0]
+    action = native.compile_actions({})[0]
+
+    assert judgement["direction"] == direction
+    assert judgement["directional_width"] == width
+    assert action["kind"] == "flick"
+    assert action["flick_direction"] == direction
+
+
 @pytest.mark.parametrize("chart_path", [CHART_306, CHART_64, CHART_165])
 def test_native_pure_chart_keeps_non_hold_judgements(chart_path: Path):
     if not native_engine.available():
@@ -812,6 +852,34 @@ def test_cooperative_photogate_blocks_broad_prepare_dim():
         event["event"] for event in report["photogate_events"]
     ]
     assert "broad-change-blocked" in event_names
+
+
+@pytest.mark.parametrize("changed_width", [80, 240, 400])
+def test_cooperative_photogate_accepts_localized_directional_like_changes(
+    changed_width: int,
+):
+    """合成样本只验证 35% 门禁边界，不替代 Special 真机几何验收。"""
+    gate = NativeStartPhotogate(
+        stable_duration_ms=100.0,
+        grace_ms=0.0,
+        latency_ms=30.0,
+        mode="cooperative-playfield-confirmed",
+    )
+    playfield = _synthetic_playfield()
+
+    assert gate.observe(playfield, 0.00) is None
+    assert gate.observe(playfield, 0.11) is None
+    assert gate.frozen is True
+
+    first_note = playfield.copy()
+    left = (first_note.shape[1] - changed_width) // 2
+    first_note[510:536, left:left + changed_width] = 200
+
+    assert gate.observe(first_note, 0.20) is not None
+    assert gate.triggered is True
+    assert "broad-change-blocked" not in {
+        event["event"] for event in gate.report()["photogate_events"]
+    }
 
 
 def test_legacy_lifecycle_waits_for_popup_and_first_note_before_completion():

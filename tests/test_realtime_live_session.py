@@ -69,3 +69,18 @@ def test_live_run_mapping_is_ready_for_json_artifacts():
     }
     assert payload["debug_recording"] is True
     assert payload["recording_path"] is None
+
+
+def test_live_run_mapping_distinguishes_requested_and_effective_difficulty():
+    current = reset_live_run(
+        mode="cooperative",
+        difficulty="Expert",
+        requested_difficulty="Special",
+        prepared_for_play=True,
+    )
+
+    payload = current.to_mapping()
+
+    assert payload["difficulty"] == "Expert"
+    assert payload["requested_difficulty"] == "Special"
+    assert payload["effective_difficulty"] == "Expert"

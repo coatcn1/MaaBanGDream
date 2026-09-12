@@ -282,3 +282,77 @@ def test_ambiguous_shared_jacket_retries_level_and_title_without_reclick(
         (None, None),
         (26, "ON YOUR MARK"),
     ]
+
+
+def test_special_can_fallback_to_expert_and_records_effective_difficulty(
+    monkeypatch,
+):
+    controller = DifficultyController(difficulty_frame("Expert"))
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=controller),
+    )
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Special",
+        "fallback_difficulties": ["Expert"],
+        "max_attempts": 1,
+        "identity_read_attempts": 1,
+        "verify_delay_seconds": 0,
+        "song_identity": False,
+        "mode": "cooperative",
+    }))
+    monkeypatch.setattr(difficulty_action, "require_game_foreground", lambda _: None)
+    monkeypatch.setattr(difficulty_action.time, "sleep", lambda _: None)
+    monkeypatch.setattr(difficulty_action, "recognize_song_title", lambda _, **kwargs: None)
+
+    assert RealtimeDifficultySelect().run(context, argv)
+
+    current = current_live_run()
+    assert current is not None
+    assert current.requested_difficulty == "Special"
+    assert current.difficulty == "Expert"
+    assert current.prepared_for_play is True
+    assert controller.clicks == [
+        DIFFICULTY_TARGETS["Special"],
+        DIFFICULTY_TARGETS["Expert"],
+    ]
+
+
+def test_special_without_fallback_fails_with_specific_reason(monkeypatch):
+    controller = DifficultyController(difficulty_frame("Expert"))
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=controller),
+    )
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Special",
+        "max_attempts": 1,
+        "verify_delay_seconds": 0,
+    }))
+    reasons = []
+    monkeypatch.setattr(difficulty_action, "require_game_foreground", lambda _: None)
+    monkeypatch.setattr(difficulty_action.time, "sleep", lambda _: None)
+    monkeypatch.setattr(difficulty_action, "record_failure_reason", reasons.append)
+
+    assert RealtimeDifficultySelect().run(context, argv) is False
+    assert reasons == ["当前歌曲没有 Special 难度或 Special 按钮不可选择"]
+    assert current_live_run().prepared_for_play is False
+
+
+def test_auto_live_verification_does_not_replace_realtime_round(monkeypatch):
+    stale = reset_live_run(mode="formal", difficulty="Expert")
+    controller = DifficultyController(difficulty_frame("Special"))
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=controller),
+    )
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Special",
+        "max_attempts": 1,
+        "verify_delay_seconds": 0,
+        "track_live_run": False,
+        "song_identity": False,
+    }))
+    monkeypatch.setattr(difficulty_action, "require_game_foreground", lambda _: None)
+    monkeypatch.setattr(difficulty_action.time, "sleep", lambda _: None)
+
+    assert RealtimeDifficultySelect().run(context, argv)
+    assert current_live_run() is stale
+    assert controller.screencaps == 1

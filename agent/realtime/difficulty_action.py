@@ -12,8 +12,10 @@ import numpy as np
 
 try:
     from ..foreground_guard import require_game_foreground
+    from ..task_reporting import record_failure_reason
 except ImportError:  # AgentServer imports realtime as a top-level package.
     from foreground_guard import require_game_foreground
+    from task_reporting import record_failure_reason
 
 from maa.agent.agent_server import AgentServer
 from maa.context import Context
@@ -232,22 +234,34 @@ class RealtimeDifficultySelect(CustomAction):
             attempts = int(params.get("max_attempts", 3))
             if context.tasker.stopping:
                 return True
-            reset_live_run(
-                mode=str(params.get("mode", "realtime")),
-                difficulty=requested,
-                profile_name=params.get("profile_name"),
-                expected_note_speed=params.get("note_speed"),
-                debug_recording=bool(params.get("debug_recording", False)),
-            )
+            track_live_run = bool(params.get("track_live_run", True))
+            if track_live_run:
+                reset_live_run(
+                    mode=str(params.get("mode", "realtime")),
+                    difficulty=requested,
+                    requested_difficulty=requested,
+                    profile_name=params.get("profile_name"),
+                    expected_note_speed=params.get("note_speed"),
+                    debug_recording=bool(params.get("debug_recording", False)),
+                )
             controller = context.tasker.controller
             configured_targets = params.get("difficulty_targets", DIFFICULTY_TARGETS)
             targets = {
                 str(name): tuple(int(value) for value in point)
                 for name, point in configured_targets.items()
             }
+            fallback_value = params.get("fallback_difficulties", [])
+            if not isinstance(fallback_value, list):
+                raise ValueError("fallback_difficulties must be a list")
+            candidates = [requested]
+            for value in fallback_value:
+                candidate = str(value)
+                if candidate not in targets:
+                    raise ValueError(f"missing difficulty target: {candidate}")
+                if candidate not in candidates:
+                    candidates.append(candidate)
             if requested not in targets:
                 raise ValueError(f"missing difficulty target: {requested}")
-            target = targets[requested]
             level_roi = tuple(
                 int(value)
                 for value in params.get("song_level_roi", SONG_LEVEL_ROI)
@@ -258,21 +272,34 @@ class RealtimeDifficultySelect(CustomAction):
                 if title_roi_value is not None else None
             )
             use_song_identity = bool(params.get("song_identity", True))
-            for attempt in range(1, attempts + 1):
-                if context.tasker.stopping:
-                    return True
-                require_game_foreground(controller)
-                controller.post_click(*target).wait()
-                time.sleep(float(params.get("verify_delay_seconds", 0.35)))
-                image = controller.post_screencap().wait().get()
-                recognized = selected_difficulty(image, targets)
-                print(
-                    f"RealtimeDifficultySelect requested={requested} "
-                    f"target={target} attempt={attempt}/{attempts} "
-                    f"recognized={recognized}",
-                    flush=True,
-                )
-                if recognized == requested:
+            last_recognized = None
+            for candidate_index, effective in enumerate(candidates):
+                target = targets[effective]
+                for attempt in range(1, attempts + 1):
+                    if context.tasker.stopping:
+                        return True
+                    require_game_foreground(controller)
+                    controller.post_click(*target).wait()
+                    time.sleep(float(params.get("verify_delay_seconds", 0.35)))
+                    image = controller.post_screencap().wait().get()
+                    recognized = selected_difficulty(image, targets)
+                    last_recognized = recognized
+                    print(
+                        f"RealtimeDifficultySelect requested={requested} "
+                        f"candidate={effective} target={target} "
+                        f"attempt={attempt}/{attempts} recognized={recognized}",
+                        flush=True,
+                    )
+                    if recognized != effective:
+                        continue
+                    if not track_live_run:
+                        print(
+                            "RealtimeDifficultySelect confirmed=true "
+                            f"requested={requested} effective={effective} "
+                            "track_live_run=false",
+                            flush=True,
+                        )
+                        return True
                     identity_attempts = max(
                         1,
                         int(params.get("identity_read_attempts", 4)),
@@ -316,7 +343,7 @@ class RealtimeDifficultySelect(CustomAction):
                         )
                         chart_resolution = resolve_chart_for_selected_song(
                             identity.song_id,
-                            requested,
+                            effective,
                             song_level,
                             song_title,
                         )
@@ -373,6 +400,7 @@ class RealtimeDifficultySelect(CustomAction):
                         if title_reading is not None else None
                     )
                     update_live_run(
+                        difficulty=effective,
                         song_id=identity.song_id,
                         song_id_method=identity.method,
                         song_level=song_level,
@@ -385,6 +413,7 @@ class RealtimeDifficultySelect(CustomAction):
                     )
                     print(
                         "RealtimeDifficultySelect "
+                        f"requested={requested} effective={effective} "
                         f"song={identity.song_id} method={identity.method} "
                         f"song_level={song_level} "
                         f"song_title={song_title!r} "
@@ -393,13 +422,33 @@ class RealtimeDifficultySelect(CustomAction):
                         flush=True,
                     )
                     return True
+                if candidate_index + 1 < len(candidates):
+                    print(
+                        "RealtimeDifficultySelect fallback=true "
+                        f"requested={requested} unavailable={effective} "
+                        f"next={candidates[candidate_index + 1]}",
+                        flush=True,
+                    )
+            reason = (
+                "当前歌曲没有 Special 难度或 Special 按钮不可选择"
+                if requested == "Special"
+                else f"未能识别或切换到请求的 {requested} 难度"
+            )
+            if len(candidates) > 1:
+                reason += "，允许的回退难度也不可选择"
+            record_failure_reason(reason)
             print(
                 f"RealtimeDifficultySelect failed requested={requested} "
-                f"target={target} attempts={attempts}",
+                f"candidates={candidates} attempts={attempts} "
+                f"last_recognized={last_recognized} reason={reason}",
                 flush=True,
             )
             return False
         except Exception as exc:
+            if not context.tasker.stopping:
+                record_failure_reason(
+                    f"难度选择异常：{type(exc).__name__}: {exc}"
+                )
             traceback.print_exc()
             print(f"RealtimeDifficultySelect failed={type(exc).__name__}: {exc}", flush=True)
             return False

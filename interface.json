@@ -554,10 +554,13 @@
           "label": "Easy",
           "pipeline_override": {
             "AutoLiveDifficulty": {
-              "target": [
-                715,
-                545
-              ]
+              "custom_action_param": {
+                "difficulty": "Easy",
+                "max_attempts": 3,
+                "verify_delay_seconds": 0.35,
+                "track_live_run": false,
+                "song_identity": false
+              }
             }
           }
         },
@@ -566,10 +569,13 @@
           "label": "Normal",
           "pipeline_override": {
             "AutoLiveDifficulty": {
-              "target": [
-                827,
-                545
-              ]
+              "custom_action_param": {
+                "difficulty": "Normal",
+                "max_attempts": 3,
+                "verify_delay_seconds": 0.35,
+                "track_live_run": false,
+                "song_identity": false
+              }
             }
           }
         },
@@ -578,10 +584,13 @@
           "label": "Hard",
           "pipeline_override": {
             "AutoLiveDifficulty": {
-              "target": [
-                940,
-                545
-              ]
+              "custom_action_param": {
+                "difficulty": "Hard",
+                "max_attempts": 3,
+                "verify_delay_seconds": 0.35,
+                "track_live_run": false,
+                "song_identity": false
+              }
             }
           }
         },
@@ -590,10 +599,13 @@
           "label": "Expert",
           "pipeline_override": {
             "AutoLiveDifficulty": {
-              "target": [
-                1051,
-                545
-              ]
+              "custom_action_param": {
+                "difficulty": "Expert",
+                "max_attempts": 3,
+                "verify_delay_seconds": 0.35,
+                "track_live_run": false,
+                "song_identity": false
+              }
             }
           }
         },
@@ -602,10 +614,13 @@
           "label": "Special",
           "pipeline_override": {
             "AutoLiveDifficulty": {
-              "target": [
-                1180,
-                545
-              ]
+              "custom_action_param": {
+                "difficulty": "Special",
+                "max_attempts": 3,
+                "verify_delay_seconds": 0.35,
+                "track_live_run": false,
+                "song_identity": false
+              }
             }
           }
         }

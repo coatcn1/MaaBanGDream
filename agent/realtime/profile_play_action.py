@@ -1645,6 +1645,7 @@ class RealtimeProfilePlay(CustomAction):
             controller = context.tasker.controller
             require_profile = bool(params.get("require_profile", True))
             difficulty = str(params.get("difficulty", "Easy"))
+            special_requires_chart = difficulty.casefold() == "special"
             ignore_note_speed = bool(params.get("ignore_note_speed", False))
             verified = (
                 None if ignore_note_speed else verified_settings(difficulty)
@@ -1711,6 +1712,7 @@ class RealtimeProfilePlay(CustomAction):
                 chart_prediction_enabled
                 or native_requested
                 or final_cover_required
+                or special_requires_chart
             ):
                 live_run = current_live_run()
                 try:
@@ -1744,6 +1746,10 @@ class RealtimeProfilePlay(CustomAction):
                     if resolution.selection is not None:
                         selected_chart = resolution.selection
                         chart_timeline = selected_chart.timeline
+                        if special_requires_chart:
+                            # 纯视觉检测无法可靠判断 Directional 的左右方向；
+                            # Special 即使走 Legacy，也必须启用可信谱面的语义恢复。
+                            chart_prediction_enabled = True
                         if chart_prediction_enabled:
                             print(
                                 "RealtimeProfilePlay chart_prediction=on "
@@ -1759,6 +1765,15 @@ class RealtimeProfilePlay(CustomAction):
                                 f"chart={selected_chart.path}",
                                 flush=True,
                             )
+                    elif special_requires_chart and not final_cover_required:
+                        if native_requested:
+                            discard_prearmed_backend(
+                                "special-chart-resolution-missing"
+                            )
+                        raise RuntimeError(
+                            "Special 必须使用可信本地谱面，禁止按视觉回退演奏："
+                            f"{chart_reason}"
+                        )
                     elif native_requested and not native_prearm_deferred:
                         discard_prearmed_backend(
                             "profile-chart-resolution-missing"
@@ -2002,6 +2017,10 @@ class RealtimeProfilePlay(CustomAction):
                     confirmation = cover_outcome.resolution.confirmation
                     selected_chart = cover_outcome.resolution.selection
                     chart_timeline = selected_chart.timeline
+                    if special_requires_chart:
+                        # 最终封面确认得到的 Special 谱面同样必须驱动 Legacy
+                        # 方向语义，不能退回无方向的通用视觉 FLICK。
+                        chart_prediction_enabled = True
                     live_run = update_live_run(
                         song_id=confirmation.song_id,
                         song_id_method=confirmation.song_id_method,
@@ -2014,6 +2033,15 @@ class RealtimeProfilePlay(CustomAction):
                         startup_final_cover_resolution=None,
                     )
                 else:
+                    if special_requires_chart:
+                        if native_requested:
+                            discard_prearmed_backend(
+                                "special-final-cover-unconfirmed"
+                            )
+                        raise RuntimeError(
+                            "Special 最终封面未确认，已在发送演奏触控前停止："
+                            f"{cover_outcome.reason}"
+                        )
                     live_run = update_live_run(
                         final_cover_confirmed=False,
                         final_cover_song_id=None,

@@ -436,18 +436,23 @@
   "AutoLiveDifficulty": {
     "recognition": "DirectHit",
     "action": "Custom",
-    "custom_action": "ForegroundClick",
-    "target": [
-      715,
-      545
-    ],
-    "post_delay": 500,
+    "custom_action": "RealtimeDifficultySelect",
+    "custom_action_param": {
+      "difficulty": "Easy",
+      "max_attempts": 3,
+      "verify_delay_seconds": 0.35,
+      "track_live_run": false,
+      "song_identity": false
+    },
     "next": [
       "AutoLivePrepare"
     ],
+    "on_error": [
+      "AutoLiveFailure"
+    ],
     "focus": {
       "Node.Action.Failed": {
-        "content": "❌ 点击失败：游戏不在前台、控制器拒绝输入或页面位置已变化",
+        "content": "❌ 难度选择失败：当前歌曲没有请求的难度或按钮不可选择",
         "display": [
           "log"
         ]

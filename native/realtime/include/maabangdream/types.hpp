@@ -58,6 +58,8 @@ struct ChartJudgement {
     bool flick = false;
     // -1=Left，+1=Right，0=无方向。
     int8_t direction = 0;
+    // Directional 横跨的轨道数；当前手势距离已覆盖 1..7，不据此缩短动作。
+    uint8_t directional_width = 1;
     bool tail_flick = false;
 };
 

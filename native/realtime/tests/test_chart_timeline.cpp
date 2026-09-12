@@ -93,7 +93,7 @@ void test_hidden_trim_and_single_point() {
   ]},
   {"type": "Single", "lane": 0, "beat": 23.5, "skill": true},
   {"type": "Single", "lane": 1, "beat": 24.0, "flick": true},
-  {"type": "Directional", "lane": 6, "beat": 25.0, "direction": "Right"}
+  {"type": "Directional", "lane": 6, "beat": 25.0, "direction": "Right", "width": 7}
 ]
 )json";
     ChartTimeline timeline = ChartTimeline::from_json_string(chart);
@@ -121,6 +121,7 @@ void test_hidden_trim_and_single_point() {
             has_plain_flick = true;
         }
         if (judgement.flick && judgement.direction == 1 &&
+            judgement.directional_width == 7 &&
             std::abs(judgement.time_s - 12.5) < 1e-9) {
             has_directional_flick = true;
         }
@@ -144,6 +145,17 @@ void test_invalid_inputs() {
         ChartTimeline::from_json_string(
             R"json([{"type":"BPM","bpm":120,"beat":0},
                     {"type":"Single","lane":9,"beat":1}])json");
+    } catch (const ChartParseError&) {
+        threw = true;
+    }
+    CHECK(threw);
+
+    threw = false;
+    try {
+        ChartTimeline::from_json_string(
+            R"json([{"type":"BPM","bpm":120,"beat":0},
+                     {"type":"Directional","lane":3,"beat":1,
+                      "direction":"Left","width":8}])json");
     } catch (const ChartParseError&) {
         threw = true;
     }

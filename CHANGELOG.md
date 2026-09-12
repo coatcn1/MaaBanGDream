@@ -1,5 +1,13 @@
 # 变更记录
 
+## 2026-09-12（Special 谱面支持）
+
+- 单人实时与挑战演出选择 Special 时保持严格语义：当前歌曲没有 Special 或按钮不可选择会明确失败，不再把其他难度当成 Special；自动演出改为点击后复核实际难度，复核失败时禁止继续开演。
+- 协力请求 Special 而当前歌曲不可选时允许显式回退 Expert；请求难度与实际难度分别写入本局状态和结果 JSON，实际 Expert 会贯穿 Profile、流速门禁、本地谱面解析与播放参数。
+- Special 实时演奏必须在发送触控前确认可信本地谱面；谱面缺失、身份冲突或最终封面无法确认时 fail-closed。Legacy 也会强制启用本地谱面的 Directional 左右语义，不再用无方向的通用视觉 FLICK 冒充完整 Special 支持。
+- Python 与 Native 谱面模型保留并校验 Directional `width=1..7`。完整曲库审计发现歌曲 786 含交接统计遗漏的 `width=4..7`；上游实现表明该字段描述横跨轨道数、判定尺寸及最低滑动阈值，现有水平滑动距离仍覆盖七档，因此候选未凭字段名改动手势距离，也未在没有 Special 真机帧/trace 的情况下修改 190ms 首音补偿或协力 broad-change 门禁。
+- 验证：Special 定向回归 249 passed；Native C++ 1827 checks passed；159 张 Special 经 Python/Native 全量解析为 119,774 个判定、8,271 个 Directional 和 655,815 个 Native 动作，失败 0；既有协力 trace 离线 replay 通过且无重复判定；真实 MaaFramework 覆盖验证确认 AutoLive 五档参数完整；主项目完整 `scripts/verify.ps1` 为 1051 passed、7 skipped，固定 MFA 运行时兼容检查通过。候选已由 `launch-mfa.ps1` 部署到开发目录并完成雷电 Native 单人真机验收：五局均为请求/实际 Special、本地谱面与最终封面一致、MISS 0、全动作执行且释放成功，GREAT 依次为 4/0/11/5/1；其中 `Realize` 与 `誓いのWingbeat` 的谱面合计覆盖 236 个 Left/Right Directional 及 `width=1..3`。同曲复测把 11 GREAT 降至 5/1，用户确认按运行波动接受；协力 Special→Expert 回退和 broad-change 门禁仍没有本轮真机房间证据。
+
 ## 2026-09-11（v1.3.7）
 
 - 修正 v1.3.7 runtime-free 更新 ZIP 的目录结构：更新包现在直接在归档根目录提供 `interface.json`，并增加结构回归检查，避免 MFA 下载和 SHA-256 校验通过后误报“资源包缺少 interface.json”；MFA 完成界面初始化后会主动执行一次资源版本检查，无需等待手动点击。

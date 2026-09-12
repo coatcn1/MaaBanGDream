@@ -323,6 +323,10 @@ def test_multi_live_options_and_loop_contract():
     assert nodes["AutoLiveRoundGate"]["max_hit"] == 1
     assert nodes["AutoLiveRandomSong"]["target"] == [687, 642]
     assert nodes["AutoLiveRandomSong"]["custom_action"] == "RandomSongSelect"
+    assert nodes["AutoLiveDifficulty"]["custom_action"] == (
+        "RealtimeDifficultySelect"
+    )
+    assert nodes["AutoLiveDifficulty"]["on_error"] == ["AutoLiveFailure"]
     assert nodes["AutoLiveResult"]["next"] == ["AutoLiveRoundCompleted"]
     assert nodes["AutoLiveRoundCompleted"]["next"] == [
         "AutoLiveRoundGate",
@@ -332,7 +336,7 @@ def test_multi_live_options_and_loop_contract():
     assert nodes["AutoLiveComplete"]["custom_action_param"]["status"] == "success"
 
 
-def test_difficulty_cases_override_only_the_difficulty_target():
+def test_auto_live_difficulty_cases_use_verified_selection():
     interface = load(ROOT / "interface.json")
     cases = interface["option"]["AutoLiveDifficulty"]["cases"]
     assert [case["name"] for case in cases] == [
@@ -342,11 +346,63 @@ def test_difficulty_cases_override_only_the_difficulty_target():
         "Expert",
         "Special",
     ]
-    assert all(
-        list(case["pipeline_override"]) == ["AutoLiveDifficulty"]
-        and list(case["pipeline_override"]["AutoLiveDifficulty"]) == ["target"]
-        for case in cases
+    for case in cases:
+        assert list(case["pipeline_override"]) == ["AutoLiveDifficulty"]
+        override = case["pipeline_override"]["AutoLiveDifficulty"]
+        assert list(override) == ["custom_action_param"]
+        assert override["custom_action_param"] == {
+            "difficulty": case["name"],
+            "max_attempts": 3,
+            "verify_delay_seconds": 0.35,
+            "track_live_run": False,
+            "song_identity": False,
+        }
+
+
+def test_auto_live_difficulty_overrides_resolve_in_real_maafw(tmp_path):
+    import subprocess
+    import sys
+
+    interface = load(ROOT / "interface.json")
+    pipeline = load(ROOT / "resource/pipeline/auto_live.json")
+    cases = interface["option"]["AutoLiveDifficulty"]["cases"]
+    code = """
+import json, sys
+from maa.resource import Resource
+from maa.toolkit import Toolkit
+data = json.load(sys.stdin)
+Toolkit.init_option(data['log_dir'])
+resource = Resource()
+assert resource.override_pipeline({'AutoLiveDifficulty': data['base']})
+effective = {}
+for name, override in data['overrides'].items():
+    assert resource.override_pipeline({'AutoLiveDifficulty': override})
+    effective[name] = resource.get_node_data('AutoLiveDifficulty')['action']['param']['custom_action_param']
+print(json.dumps(effective))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        input=json.dumps({
+            "log_dir": str(tmp_path),
+            "base": pipeline["AutoLiveDifficulty"],
+            "overrides": {
+                case["name"]: case["pipeline_override"]["AutoLiveDifficulty"]
+                for case in cases
+            },
+        }),
+        text=True,
+        capture_output=True,
+        check=True,
     )
+    effective = json.loads(result.stdout)
+    for difficulty, params in effective.items():
+        assert params == {
+            "difficulty": difficulty,
+            "max_attempts": 3,
+            "verify_delay_seconds": 0.35,
+            "track_live_run": False,
+            "song_identity": False,
+        }
 
 
 def test_realtime_observe_is_screenshot_only_and_bounded():
