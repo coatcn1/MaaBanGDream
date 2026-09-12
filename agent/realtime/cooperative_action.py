@@ -840,13 +840,18 @@ class CooperativeLiveFlow:
             "render_quality": COOPERATIVE_RENDER_QUALITY,
             "coordinates": {"gear": (946, 650)},
             "defer_native_prearm": True,
+            "cache_preparation_image": True,
         }
         if not RealtimePerformanceSettingsGate().run(
             self.context, self.action_argv(performance_params)
         ):
             raise RuntimeError("协力准备页流速复核失败")
-        self.ensure_performance_mode_off()
-        ready_transition = self.ready_up_and_verify()
+        run = current_live_run()
+        initial_image = None if run is None else run.cooperative_prestart_image
+        ready_image = self.ensure_performance_mode_off(
+            initial_image=initial_image,
+        )
+        ready_transition = self.ready_up_and_verify(initial_image=ready_image)
         if ready_transition != "black":
             self.watch_member_exit_before_black()
         print(
@@ -857,7 +862,11 @@ class CooperativeLiveFlow:
             flush=True,
         )
 
-    def ensure_performance_mode_off(self) -> None:
+    def ensure_performance_mode_off(
+        self,
+        *,
+        initial_image: np.ndarray | None = None,
+    ) -> np.ndarray | None:
         """协力房间页关闭 3D/MV 演出表现，防止演出场背景变化提前触发谱面。
 
         房间页左下角与单人准备页同布局：循环箭头切换按钮位于
@@ -865,18 +874,23 @@ class CooperativeLiveFlow:
         强饱和色即视为 OFF。点击后仍无法确认关闭（例如界面改版或坐标
         漂移）时不阻断本局：保留证据截图并继续，让既有门控推进演出。
         """
+        image = initial_image
         for attempt in range(4):
-            image = self.capture()
+            reused = image is not None
+            if image is None:
+                image = self.capture()
             if live_performance_mode_is_off(image):
                 print(
-                    "CooperativeLive performance_mode=off confirmed=true",
+                    "CooperativeLive performance_mode=off confirmed=true "
+                    f"reused_preparation_image={str(reused).lower()}",
                     flush=True,
                 )
-                return
+                return image
             if attempt == 0:
                 self._save_performance_mode_evidence(image, "before")
             self.click(MODE_TOGGLE_POINT)
             time.sleep(0.6)
+            image = None
         try:
             self._save_performance_mode_evidence(self.capture(), "after")
         except InterruptedError:
@@ -886,6 +900,7 @@ class CooperativeLiveFlow:
             "action=continue-with-warning attempts=4",
             flush=True,
         )
+        return None
 
     def _save_performance_mode_evidence(self, image: np.ndarray, stage: str) -> None:
         try:
@@ -904,13 +919,26 @@ class CooperativeLiveFlow:
                 flush=True,
             )
 
-    def ready_up_and_verify(self) -> str:
+    def ready_up_and_verify(
+        self,
+        *,
+        initial_image: np.ndarray | None = None,
+    ) -> str:
         """点击“准备完毕”并确认按钮消失，防止触控未送达造成空演奏。"""
+        image = initial_image
         for attempt in range(3):
             if self.stopped():
                 raise InterruptedError("用户已停止任务")
-            image = self.capture()
+            reused = image is not None
+            if image is None:
+                image = self.capture()
             box = self.template_box(image, "ready_button", 0.90)
+            if box is None and reused:
+                # 缓存帧只用于加速肯定匹配；若没看到按钮，必须再采一张新图，
+                # 避免拿过期画面把“按钮缺失”误判成已经准备完毕。
+                image = self.capture()
+                reused = False
+                box = self.template_box(image, "ready_button", 0.90)
             if box is None:
                 # 按钮已消失：已进入准备完毕/成员等待或加载流程。
                 print(
@@ -919,6 +947,12 @@ class CooperativeLiveFlow:
                 )
                 return "already-confirmed"
             left, top, width, height = box
+            print(
+                "CooperativeLive ready_click "
+                f"attempt={attempt + 1} "
+                f"reused_preparation_image={str(reused).lower()}",
+                flush=True,
+            )
             self.click((left + width // 2, top + height // 2))
             delivery = self.watch_ready_delivery_after_click()
             if delivery != "still-visible":
@@ -928,6 +962,7 @@ class CooperativeLiveFlow:
                     flush=True,
                 )
                 return delivery
+            image = None
         raise RuntimeError("点击准备完毕后按钮仍在，触控可能未送达")
 
     def watch_ready_delivery_after_click(

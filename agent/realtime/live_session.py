@@ -41,6 +41,9 @@ class LiveRunContext:
     prepared_for_play: bool = False
     # 保留本局准备页证据，待演奏记录器建立后归入同一个证据包，不序列化像素。
     preparation_identity_image: object | None = None
+    # 协力跳过设置页时保留最新准备页截图，供模式确认和准备按钮立即复用；
+    # 与身份取证截图分开，避免打开过设置页后误用旧画面。
+    cooperative_prestart_image: object | None = None
     # 漏掉短黑场但已确认最终封面时，把同一帧和解析结果交给演奏入口；
     # 这些对象只在本局内存中传递，不进入结果 JSON。
     startup_final_cover_image: object | None = None

@@ -29,7 +29,7 @@ from .profile_store import (
     engine_from_native_flag,
 )
 from .rehearsal_action import frame_resolution
-from .live_session import current_live_run
+from .live_session import current_live_run, update_live_run
 from .native_prearm import (
     discard_prearmed_backend,
     prepare_native_for_settings_gate,
@@ -578,6 +578,16 @@ class RealtimePerformanceSettingsGate(CustomAction):
                 f"source=configured-values profile={profile or 'calibration-setting'}",
                 flush=True,
             )
+            if bool(params.get("cache_preparation_image", False)):
+                # 协力后续还要在同一准备页确认演出模式并点击准备按钮；这里的
+                # 截图刚由控制器采集，且跳过设置页时界面没有被改动，可以安全
+                # 复用。保存副本，避免控制器复用底层缓冲区后内容发生变化。
+                update_live_run(cooperative_prestart_image=before.copy())
+                print(
+                    "RealtimePerformanceSettingsGate preparation_image=cached "
+                    "reason=skip-game-settings",
+                    flush=True,
+                )
             # 跳过“打开游戏设置页读/改流速”不等于跳过 Native 预武装。单人
             # 非 deferred 流程依赖这里生成预武装后端；漏掉会让开演前消费
             # 直接报“不存在或已被消费”，整局零输入。

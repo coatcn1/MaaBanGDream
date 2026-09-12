@@ -8,7 +8,11 @@ import numpy as np
 import pytest
 
 from agent.realtime import performance_settings_action
-from agent.realtime.live_session import reset_live_run, update_live_run
+from agent.realtime.live_session import (
+    current_live_run,
+    reset_live_run,
+    update_live_run,
+)
 from agent.realtime.performance_settings_action import (
     DEFAULT_COORDINATES,
     RealtimePerformanceSettingsGate,
@@ -341,6 +345,47 @@ def test_skipped_gate_still_defers_native_prearm_when_requested(monkeypatch):
         "defer_native_prearm": True,
     })
     assert discarded == ["deferred-until-final-cover"]
+
+
+def test_skipped_gate_caches_fresh_cooperative_preparation_image(monkeypatch):
+    clear_verified_settings()
+    frame = np.full((720, 1280, 3), 37, dtype=np.uint8)
+
+    class Controller:
+        def post_screencap(self):
+            return SimpleNamespace(
+                wait=lambda: SimpleNamespace(get=lambda: frame),
+            )
+
+    reset_live_run(
+        mode="cooperative",
+        difficulty="Expert",
+        prepared_for_play=True,
+    )
+    monkeypatch.setattr(
+        performance_settings_action,
+        "_expected_speed",
+        lambda context, params, image: (5.0, "expert.json"),
+    )
+    monkeypatch.setattr(
+        "agent.realtime.performance_settings_action.RealtimeProfileStore.runtime_options",
+        lambda _store: {"game_effect_settings_enabled": False},
+    )
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=Controller()),
+    )
+
+    assert RealtimePerformanceSettingsGate()._run(context, {
+        "difficulty": "Expert",
+        "require_profile": True,
+        "defer_native_prearm": True,
+        "cache_preparation_image": True,
+    })
+
+    run = current_live_run()
+    assert run is not None
+    assert run.cooperative_prestart_image is not frame
+    assert np.array_equal(run.cooperative_prestart_image, frame)
 
 
 def test_gate_fails_closed_when_native_prearm_fails_after_dialog_close(

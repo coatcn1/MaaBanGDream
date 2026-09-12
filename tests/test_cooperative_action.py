@@ -29,7 +29,7 @@ from agent.realtime.cooperative_action import (
     should_stay_in_room,
 )
 from agent.realtime.life_monitor import LifeReading
-from agent.realtime.live_session import reset_live_run
+from agent.realtime.live_session import reset_live_run, update_live_run
 
 
 ROOT = Path(__file__).parents[1]
@@ -551,6 +551,54 @@ def test_ready_up_observes_black_during_post_click_delivery_window():
     assert clicks == [(140, 220)]
 
 
+def test_ready_up_reuses_verified_preparation_image_without_refresh():
+    cached = np.full((720, 1280, 3), 128, dtype=np.uint8)
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    flow.capture = lambda: (_ for _ in ()).throw(
+        AssertionError("可信准备页帧包含按钮时不应重复刷新")
+    )
+    flow.template_box = lambda image, name, threshold: (
+        (100, 200, 80, 40) if image is cached else None
+    )
+    flow.watch_ready_delivery_after_click = lambda: "button-gone"
+    clicks = []
+    flow.click = clicks.append
+
+    assert flow.ready_up_and_verify(initial_image=cached) == "button-gone"
+    assert clicks == [(140, 220)]
+
+
+def test_ready_up_refreshes_when_cached_image_does_not_contain_button():
+    cached = np.zeros((720, 1280, 3), dtype=np.uint8)
+    fresh = np.full((720, 1280, 3), 128, dtype=np.uint8)
+    captures = []
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    flow.capture = lambda: (captures.append(True), fresh)[1]
+    flow.template_box = lambda image, name, threshold: (
+        (100, 200, 80, 40) if image is fresh else None
+    )
+    flow.watch_ready_delivery_after_click = lambda: "button-gone"
+    clicks = []
+    flow.click = clicks.append
+
+    assert flow.ready_up_and_verify(initial_image=cached) == "button-gone"
+    assert len(captures) == 1
+    assert clicks == [(140, 220)]
+
+
+def test_performance_mode_check_returns_reusable_confirmed_image():
+    cached = np.zeros((720, 1280, 3), dtype=np.uint8)
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    flow.capture = lambda: (_ for _ in ()).throw(
+        AssertionError("已有可信准备页帧时不应重复刷新")
+    )
+
+    assert flow.ensure_performance_mode_off(initial_image=cached) is cached
+
+
 
 @pytest.mark.parametrize(
     ("target", "initial_hue", "target_hue", "start", "end"),
@@ -736,6 +784,8 @@ def test_cooperative_play_uses_effective_fallback_difficulty():
 def test_cooperative_prepare_falls_back_special_to_effective_expert(monkeypatch):
     difficulty_params = []
     performance_params = []
+    cached = np.zeros((720, 1280, 3), dtype=np.uint8)
+    reused = []
 
     class DifficultyAction:
         def run(self, _context, argv):
@@ -756,6 +806,7 @@ def test_cooperative_prepare_falls_back_special_to_effective_expert(monkeypatch)
     class PerformanceGate:
         def run(self, _context, argv):
             performance_params.append(json.loads(argv.custom_action_param))
+            update_live_run(cooperative_prestart_image=cached)
             return True
 
     monkeypatch.setattr(
@@ -773,14 +824,22 @@ def test_cooperative_prepare_falls_back_special_to_effective_expert(monkeypatch)
         "difficulty": "Special",
         "debug_recording": False,
     }
-    flow.ensure_performance_mode_off = lambda: None
-    flow.ready_up_and_verify = lambda: "black"
+    flow.ensure_performance_mode_off = lambda initial_image=None: (
+        reused.append(("mode", initial_image)),
+        initial_image,
+    )[1]
+    flow.ready_up_and_verify = lambda initial_image=None: (
+        reused.append(("ready", initial_image)),
+        "black",
+    )[1]
 
     flow.prepare()
 
     assert difficulty_params[0]["fallback_difficulties"] == ["Expert"]
     assert performance_params[0]["difficulty"] == "Expert"
+    assert performance_params[0]["cache_preparation_image"] is True
     assert flow.effective_difficulty == "Expert"
+    assert reused == [("mode", cached), ("ready", cached)]
 
 
 def test_cooperative_interface_exposes_requested_modes_and_five_difficulties():
