@@ -36,6 +36,7 @@ from .live_failed_detector import (
 from .live_session import (
     LiveRunContext,
     current_live_run,
+    effective_difficulty_for_current_run,
     reset_live_run,
     update_live_run,
 )
@@ -1644,7 +1645,19 @@ class RealtimeProfilePlay(CustomAction):
         try:
             controller = context.tasker.controller
             require_profile = bool(params.get("require_profile", True))
-            difficulty = str(params.get("difficulty", "Easy"))
+            requested_difficulty = str(params.get("difficulty", "Easy"))
+            difficulty = effective_difficulty_for_current_run(
+                requested_difficulty
+            )
+            if difficulty != requested_difficulty:
+                params = dict(params)
+                params["difficulty"] = difficulty
+                print(
+                    "RealtimeProfilePlay difficulty_fallback=true "
+                    f"requested={requested_difficulty} "
+                    f"effective={difficulty}",
+                    flush=True,
+                )
             special_requires_chart = difficulty.casefold() == "special"
             ignore_note_speed = bool(params.get("ignore_note_speed", False))
             verified = (

@@ -350,13 +350,16 @@ def test_auto_live_difficulty_cases_use_verified_selection():
         assert list(case["pipeline_override"]) == ["AutoLiveDifficulty"]
         override = case["pipeline_override"]["AutoLiveDifficulty"]
         assert list(override) == ["custom_action_param"]
-        assert override["custom_action_param"] == {
+        expected_params = {
             "difficulty": case["name"],
             "max_attempts": 3,
             "verify_delay_seconds": 0.35,
             "track_live_run": False,
             "song_identity": False,
         }
+        if case["name"] == "Special":
+            expected_params["fallback_difficulties"] = ["Expert"]
+        assert override["custom_action_param"] == expected_params
 
 
 def test_auto_live_difficulty_overrides_resolve_in_real_maafw(tmp_path):
@@ -396,13 +399,16 @@ print(json.dumps(effective))
     )
     effective = json.loads(result.stdout)
     for difficulty, params in effective.items():
-        assert params == {
+        expected_params = {
             "difficulty": difficulty,
             "max_attempts": 3,
             "verify_delay_seconds": 0.35,
             "track_live_run": False,
             "song_identity": False,
         }
+        if difficulty == "Special":
+            expected_params["fallback_difficulties"] = ["Expert"]
+        assert params == expected_params
 
 
 def test_realtime_observe_is_screenshot_only_and_bounded():
@@ -575,10 +581,13 @@ def test_realtime_multi_live_contract_and_options():
         target, play_node = expected[case["name"]]
         override = case["pipeline_override"]
         selection = override["RealtimeLiveDifficulty"]["custom_action_param"]
-        assert selection == {
+        expected_selection = {
             "difficulty": case["name"], "max_attempts": 3,
             "defer_song_title_to_preparation": True,
         }
+        if case["name"] == "Special":
+            expected_selection["fallback_difficulties"] = ["Expert"]
+        assert selection == expected_selection
         assert target == tuple(DIFFICULTY_TARGETS[case["name"]])
         assert override["RealtimeLiveRehearsalStart"]["next"] == [
             "RealtimeLiveRehearsalPostStart"

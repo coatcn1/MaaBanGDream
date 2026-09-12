@@ -137,6 +137,24 @@ def test_calibration_round_plan_forces_formal_mode_gate():
     ]
 
 
+def test_special_calibration_does_not_fallback_to_expert():
+    _, override = calibration_round_plan(
+        difficulty="Special",
+        note_speed=5.0,
+        calibration_debug=False,
+        formal=False,
+        play_node="RealtimeLivePlaySpecial",
+        offset=0,
+        report_path=Path("screencap/calibration-round-test.json"),
+    )
+
+    difficulty_params = override["RealtimeLiveDifficulty"][
+        "custom_action_param"
+    ]
+    assert difficulty_params["difficulty"] == "Special"
+    assert "fallback_difficulties" not in difficulty_params
+
+
 def test_calibration_round_plan_random_preserves_filter_and_excludes_used_songs():
     _, override = calibration_round_plan(
         difficulty="Hard",

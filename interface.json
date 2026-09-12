@@ -619,7 +619,10 @@
                 "max_attempts": 3,
                 "verify_delay_seconds": 0.35,
                 "track_live_run": false,
-                "song_identity": false
+                "song_identity": false,
+                "fallback_difficulties": [
+                  "Expert"
+                ]
               }
             }
           }
@@ -1203,7 +1206,10 @@
               "custom_action_param": {
                 "defer_song_title_to_preparation": true,
                 "difficulty": "Special",
-                "max_attempts": 3
+                "max_attempts": 3,
+                "fallback_difficulties": [
+                  "Expert"
+                ]
               }
             },
             "RealtimeLiveRehearsalStart": {
@@ -1822,7 +1828,10 @@
               "custom_action_param": {
                 "difficulty": "Special",
                 "max_attempts": 3,
-                "mode": "challenge"
+                "mode": "challenge",
+                "fallback_difficulties": [
+                  "Expert"
+                ]
               }
             },
             "ChallengeProfileCheck": {

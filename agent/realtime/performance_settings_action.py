@@ -29,7 +29,11 @@ from .profile_store import (
     engine_from_native_flag,
 )
 from .rehearsal_action import frame_resolution
-from .live_session import current_live_run, update_live_run
+from .live_session import (
+    current_live_run,
+    effective_difficulty_for_current_run,
+    update_live_run,
+)
 from .native_prearm import (
     discard_prearmed_backend,
     prepare_native_for_settings_gate,
@@ -535,9 +539,20 @@ class RealtimePerformanceSettingsGate(CustomAction):
     ) -> bool:
         if context.tasker.stopping:
             return True
-        difficulty = str(params.get("difficulty", "Easy"))
+        requested_difficulty = str(params.get("difficulty", "Easy"))
+        difficulty = effective_difficulty_for_current_run(
+            requested_difficulty
+        )
         if difficulty not in RealtimeProfileStore.DIFFICULTIES:
             raise ValueError(f"不支持的难度：{difficulty}")
+        effective_params = dict(params)
+        effective_params["difficulty"] = difficulty
+        if difficulty != requested_difficulty:
+            print(
+                "RealtimePerformanceSettingsGate difficulty_fallback=true "
+                f"requested={requested_difficulty} effective={difficulty}",
+                flush=True,
+            )
         controller = context.tasker.controller
         before = controller.post_screencap().wait().get()
         if context.tasker.stopping:
@@ -551,7 +566,9 @@ class RealtimePerformanceSettingsGate(CustomAction):
             if context.tasker.stopping:
                 return True
         require_special_chart_for_settings_gate(difficulty)
-        expected, profile = _expected_speed(context, params, before)
+        expected, profile = _expected_speed(
+            context, effective_params, before
+        )
         _speed_cents(expected)
         if on_expected is not None:
             on_expected(PreflightPerformanceSnapshot(

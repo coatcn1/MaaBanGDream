@@ -25,7 +25,11 @@ from agent.realtime.profile_play_action import (
 )
 from agent.realtime.result_parser import LiveResult
 from agent.realtime.performance_settings_action import clear_verified_settings
-from agent.realtime.live_session import reset_live_run, update_live_run
+from agent.realtime.live_session import (
+    current_live_run,
+    reset_live_run,
+    update_live_run,
+)
 
 
 def test_recording_kind_distinguishes_play_types():
@@ -278,6 +282,57 @@ def test_profile_play_reuses_one_agent_controller_proxy(monkeypatch):
     assert engine_options[0]["startup_timeout_seconds"] == 60.0
     assert engine_construction_options[0]["life_detector"] is not None
     assert engine_construction_options[0]["life_guard"] is not None
+
+
+def test_profile_play_uses_confirmed_expert_for_special_fallback(monkeypatch):
+    reset_live_run(
+        mode="formal",
+        difficulty="Expert",
+        requested_difficulty="Special",
+        prepared_for_play=True,
+    )
+    verified_calls = []
+    resolved_params = []
+    monkeypatch.setattr(
+        profile_play_action,
+        "verified_settings",
+        lambda difficulty: verified_calls.append(difficulty),
+    )
+    monkeypatch.setattr(
+        profile_play_action,
+        "verified_game_visual_settings",
+        lambda: None,
+    )
+
+    def stop_after_resolution(context, params, *, controller=None):
+        resolved_params.append(dict(params))
+        raise RuntimeError("stop after effective difficulty resolution")
+
+    monkeypatch.setattr(
+        profile_play_action,
+        "resolve_profile",
+        stop_after_resolution,
+    )
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=object()),
+    )
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Special",
+        "require_profile": True,
+    }))
+
+    with pytest.raises(
+        RuntimeError,
+        match="stop after effective difficulty resolution",
+    ):
+        RealtimeProfilePlay()._run(context, argv)
+
+    assert verified_calls == ["Expert"]
+    assert resolved_params[0]["difficulty"] == "Expert"
+    run = current_live_run()
+    assert run is not None
+    assert run.requested_difficulty == "Special"
+    assert run.difficulty == "Expert"
 
 
 def test_explicit_native_initialization_failure_never_falls_back(

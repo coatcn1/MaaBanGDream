@@ -329,6 +329,10 @@ def test_challenge_points_and_profile_contract():
         assert override["ChallengeDifficulty"]["custom_action_param"]["mode"] == (
             "challenge"
         )
+        fallback = override["ChallengeDifficulty"]["custom_action_param"].get(
+            "fallback_difficulties"
+        )
+        assert fallback == (["Expert"] if case["name"] == "Special" else None)
         assert override["ChallengeProfileCheck"]["custom_action_param"][
             "run_mode"
         ] == "challenge"

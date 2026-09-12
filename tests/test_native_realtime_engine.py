@@ -745,9 +745,17 @@ def _synthetic_playfield() -> np.ndarray:
 def _synthetic_prepare_popup() -> np.ndarray:
     """构造带“其他成员正在准备中”弹窗的协力演奏场帧。"""
     frame = _synthetic_playfield()
-    cv2.rectangle(frame, (430, 400), (850, 545), (250, 250, 250), -1)
+    cv2.rectangle(frame, (375, 418), (904, 534), (250, 250, 250), -1)
     # 左侧粉红八分音符图标（H=165，保证落入检测器的粉色区间）。
-    cv2.circle(frame, (475, 472), 26, (144, 59, 230), -1)
+    cv2.circle(frame, (455, 476), 26, (144, 59, 230), -1)
+    return frame
+
+
+def _synthetic_popup_like_double_flick() -> np.ndarray:
+    """构造会被弹窗启发式误认、但只覆盖局部判定带的双 FLICK 首音。"""
+    frame = _synthetic_playfield()
+    cv2.rectangle(frame, (570, 505), (710, 535), (250, 250, 250), -1)
+    cv2.circle(frame, (590, 520), 6, (144, 59, 230), -1)
     return frame
 
 
@@ -763,10 +771,16 @@ def test_prepare_popup_detector_handles_scaled_popup():
 
     # 缩放动画中弹窗可能只有完整尺寸的几成，仍必须被识别。
     frame = _synthetic_playfield()
-    cv2.rectangle(frame, (570, 440), (710, 470), (250, 250, 250), -1)
-    cv2.circle(frame, (590, 455), 6, (144, 59, 230), -1)
+    cv2.rectangle(frame, (570, 460), (710, 491), (250, 250, 250), -1)
+    cv2.circle(frame, (590, 476), 6, (144, 59, 230), -1)
 
     assert detector(frame) is True
+
+
+def test_prepare_popup_detector_rejects_popup_like_double_flick():
+    detector = CooperativePreparePopupDetector()
+
+    assert detector(_synthetic_popup_like_double_flick()) is False
 
 
 def test_cooperative_photogate_ignores_prepare_popup_transitions():
@@ -815,6 +829,82 @@ def test_cooperative_photogate_ignores_prepare_popup_transitions():
     ]
     assert "prepare-popup-visible" in event_names
     assert "prepare-popup-gone" in event_names
+
+
+def test_popup_like_first_note_triggers_after_stable_baseline():
+    """真实弹窗结束后，首批双 FLICK 不得重置歌曲时钟。"""
+    gate = NativeStartPhotogate(
+        stable_duration_ms=100.0,
+        grace_ms=0.0,
+        latency_ms=30.0,
+        mode="cooperative-playfield-confirmed",
+    )
+    playfield = _synthetic_playfield()
+    popup = _synthetic_prepare_popup()
+
+    assert gate.observe(popup, 0.00) is None
+    assert gate.observe(popup, 0.10) is None
+    assert gate.observe(playfield, 0.20) is None
+    assert gate.observe(playfield, 0.30) is None
+    assert gate.observe(playfield, 0.41) is None
+    assert gate.frozen is True
+
+    first_note = _synthetic_popup_like_double_flick()
+    assert CooperativePreparePopupDetector()(first_note) is False
+    anchor = gate.observe(first_note, 0.50)
+
+    assert anchor is not None
+    report = gate.report()
+    assert report["photogate_prepare_popup_frames"] == 2
+
+
+def test_popup_like_first_note_triggers_when_popup_never_appears():
+    """准备弹窗根本不出现时，首批双 FLICK 仍必须触发歌曲时钟。"""
+    gate = NativeStartPhotogate(
+        stable_duration_ms=100.0,
+        grace_ms=0.0,
+        mode="cooperative-playfield-confirmed",
+    )
+    playfield = _synthetic_playfield()
+    first_note = _synthetic_popup_like_double_flick()
+
+    assert gate.observe(playfield, 0.00) is None
+    assert gate.observe(playfield, 0.11) is None
+    assert gate.frozen is True
+    anchor = gate.observe(first_note, 0.20)
+
+    assert anchor is not None
+    report = gate.report()
+    assert report["photogate_prepare_popup_frames"] == 0
+
+
+def test_one_frame_popup_flash_finishes_before_first_note():
+    """冻结后弹窗只闪一帧时，消失后仍应接受首批双 FLICK。"""
+    gate = NativeStartPhotogate(
+        stable_duration_ms=100.0,
+        grace_ms=0.0,
+        mode="cooperative-playfield-confirmed",
+    )
+    playfield = _synthetic_playfield()
+    popup = _synthetic_prepare_popup()
+    first_note = _synthetic_popup_like_double_flick()
+
+    assert gate.observe(playfield, 0.00) is None
+    assert gate.observe(playfield, 0.11) is None
+    assert gate.frozen is True
+
+    assert gate.observe(popup, 0.20) is None
+    assert gate.frozen is False
+    assert gate.observe(playfield, 0.30) is None
+    assert gate.observe(playfield, 0.41) is None
+    assert gate.observe(playfield, 0.52) is None
+    assert gate.frozen is True
+    anchor = gate.observe(first_note, 0.60)
+
+    assert anchor is not None
+    report = gate.report()
+    assert report["photogate_prepare_popup_frames"] == 1
+    assert report["photogate_prepare_popup_blocked_events"] == 2
 
 
 def test_cooperative_photogate_blocks_broad_prepare_dim():

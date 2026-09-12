@@ -128,6 +128,25 @@ def current_live_run() -> LiveRunContext | None:
         return _CURRENT_LIVE_RUN
 
 
+def effective_difficulty_for_current_run(requested_difficulty: str) -> str:
+    """仅把已确认的 Special→Expert 回退传给本局后续开演节点。"""
+    requested = str(requested_difficulty)
+    run = current_live_run()
+    if run is None or not run.prepared_for_play:
+        return requested
+    recorded_request = str(
+        run.requested_difficulty or run.difficulty
+    ).casefold()
+    if recorded_request != requested.casefold():
+        return requested
+    if (
+        requested.casefold() == "special"
+        and str(run.difficulty).casefold() == "expert"
+    ):
+        return str(run.difficulty)
+    return requested
+
+
 def update_live_run(**changes) -> LiveRunContext:
     """Atomically replace fields on the current immutable round context."""
     global _CURRENT_LIVE_RUN

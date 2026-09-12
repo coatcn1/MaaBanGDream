@@ -312,6 +312,60 @@ def test_gate_skips_speed_read_when_game_effect_settings_disabled(monkeypatch):
     assert verified.expected_note_speed == 5.0
 
 
+def test_gate_uses_confirmed_expert_when_special_button_was_unavailable(
+    monkeypatch,
+):
+    clear_verified_settings()
+    reset_live_run(
+        mode="formal",
+        difficulty="Expert",
+        requested_difficulty="Special",
+        prepared_for_play=True,
+    )
+    identity_difficulties = []
+    expected_params = []
+    prearm_calls = []
+    monkeypatch.setattr(
+        "agent.realtime.preparation_identity.confirm_preparation_identity",
+        lambda image, difficulty: identity_difficulties.append(difficulty),
+    )
+    monkeypatch.setattr(
+        performance_settings_action,
+        "_expected_speed",
+        lambda context, params, image: (
+            expected_params.append(dict(params)) or (5.0, "expert.json")
+        ),
+    )
+    monkeypatch.setattr(
+        "agent.realtime.performance_settings_action.RealtimeProfileStore.runtime_options",
+        lambda _store: {"game_effect_settings_enabled": False},
+    )
+    monkeypatch.setattr(
+        performance_settings_action,
+        "prepare_native_for_settings_gate",
+        lambda **kwargs: prearm_calls.append(kwargs),
+    )
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=_Controller()),
+    )
+
+    assert RealtimePerformanceSettingsGate()._run(context, {
+        "difficulty": "Special",
+        "require_profile": True,
+        "confirm_preparation_identity": True,
+    })
+
+    assert identity_difficulties == ["Expert"]
+    assert expected_params[0]["difficulty"] == "Expert"
+    assert prearm_calls[0]["difficulty"] == "Expert"
+    assert verified_settings("Special") is None
+    assert verified_settings("Expert") is not None
+    run = current_live_run()
+    assert run is not None
+    assert run.requested_difficulty == "Special"
+    assert run.difficulty == "Expert"
+
+
 def test_skipped_gate_still_defers_native_prearm_when_requested(monkeypatch):
     clear_verified_settings()
     discarded = []

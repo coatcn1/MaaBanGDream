@@ -336,9 +336,11 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
 
 31. **Profile 当前选择属于任务难度槽位**：表格单击只查看/编辑，双击才把文件设为当前。写入 `selection.json` 时使用界面正在配置的任务难度，不使用 Profile 自身难度；否则给 Easy/Hard 选择兼容的 Expert/Special Profile 会误写进高难度槽。Expert 与 Special 是同一兼容等级，二者互相兼容并都可供较低难度任务使用；当前项用主题 `SukiPrimaryColor` 标记，不能与 DataGrid 的普通选中状态混为一体。
 
-32. **Special 的实际难度与方向语义必须 fail-closed**：单人实时、挑战和 AutoLive 请求 Special 时不得静默沿用旧难度；协力仅在 Special 按钮不可选时允许回退 Expert，并把 `requested_difficulty=Special`、`effective_difficulty=Expert` 贯穿 Profile、流速门禁、谱面、播放和结果证据。Special 在 Native 与 Legacy 下都必须先确认可信本地谱面；Legacy 强制启用 ChartPredictor 恢复 Directional Left/Right，缺谱、身份冲突或最终封面未确认时在触控前失败。Bestdori Directional `width=1..7` 表示横跨轨道数/判定尺寸并影响最低滑动阈值；当前固定水平滑动距离已覆盖七档。2026-09-12 雷电 Native 单人真机五局全部 MISS 0，其中两张谱面覆盖 Left/Right 与 `width=1..3`；据此保持既有手势距离与 190ms 首音补偿。协力仍无本轮真实房间证据，不得由单人结果推断 broad-change 门禁已经验收。
+32. **Special 的实际难度与方向语义必须 fail-closed**：协力、单人实时、挑战和 AutoLive 请求 Special 时，只有在 Special 按钮不可选时才允许显式回退 Expert；实时校准仍要求精确选中 Special。单人实时、挑战和协力必须把 `requested_difficulty=Special`、`effective_difficulty=Expert` 贯穿准备页身份、Profile、流速门禁、谱面、Native 预武装、播放和结果证据，不能在已选 Expert 后又按 Special 查谱；AutoLive 至少必须在难度选择日志中记录请求与实际难度。实际选中 Special 时，Native 与 Legacy 都必须先确认可信本地谱面；Legacy 强制启用 ChartPredictor 恢复 Directional Left/Right，缺谱、身份冲突或最终封面未确认时在触控前失败。Bestdori Directional `width=1..7` 表示横跨轨道数/判定尺寸并影响最低滑动阈值；当前固定水平滑动距离已覆盖七档。2026-09-12 雷电 Native 单人真机五局全部 MISS 0，其中两张谱面覆盖 Left/Right 与 `width=1..3`；据此保持既有手势距离与 190ms 首音补偿。协力仍无本轮真实房间证据，不得由单人结果推断 broad-change 门禁已经验收。
 
 33. **协力开演前截图只能复用本轮未改动的准备页**：2026-09-12 的 28 次开发 MFA 协力记录中，从点击难度到点击“演出开始”平均约 3.57 秒，中位数 3.41 秒，主要成本是设置门禁关闭后仍串行执行两次完整刷新截图。只有流速门禁刚完成截图、且因 `game_effect_settings_enabled=false` 没有打开或改动游戏设置页时，才可把独立的 `cooperative_prestart_image` 交给演出模式确认和“准备完毕”按钮检测；不要复用较早的身份取证截图。缓存帧看不到按钮时必须再采一张新图后才能按“已准备”处理，切换演出模式后同样必须刷新。点击后的按钮消失、成员退出和黑场观察属于触控送达与开演安全门禁，不得为缩短耗时而删除。优化后雷电 Native 两局实测约 0.76 秒和 0.43 秒，平均约 0.59 秒；两局均第一次点击送达、完整演奏并正常结算。
+
+34. **协力准备弹窗按固定缩放中心区分首批音符**：2026-09-12 外部 v1.3.7 的歌曲 538 Hard 证据中，真实“其他成员正在准备中”弹窗先持续 60 帧并消失，beat 7.75 的白底粉色双 FLICK 又让像素启发式产生一次仅 16ms 的 `prepare-popup-visible`；门控重置后在 1.066 秒后的下一颗附近才触发，而谱面前两组间隔 0.985 秒，造成整局晚一颗并快速空血。真实弹窗从画面约 66% 高度的固定中心等比例放大、缩小，可能完全不出现，也可能未放大到完整尺寸便缩小消失；检测必须按该中心位置区分判定线附近更靠下的白底粉色双 FLICK，不能要求弹窗一定出现、达到完整尺寸或持续多帧。任意一帧真实弹窗仍须拦截，消失帧仍须重置判定带，演奏场、500ms 前奏宽限和 broad-change 门禁继续保留。外部 trace 从 Native 启动后才开始低频记录，无法替代首音 60FPS 帧；修改检测器必须同时回归弹窗不出现、冻结后只闪一帧、正常完整出现、缩放中间态和首批双 FLICK，再做真机协力验收。
 
 ## 后续开发方向（已记录，暂缓或未开始）
 

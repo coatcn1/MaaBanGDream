@@ -8,6 +8,7 @@ import pytest
 from agent.realtime.live_session import (
     current_live_run,
     current_song_id,
+    effective_difficulty_for_current_run,
     reset_live_run,
     update_live_run,
 )
@@ -84,3 +85,26 @@ def test_live_run_mapping_distinguishes_requested_and_effective_difficulty():
     assert payload["difficulty"] == "Expert"
     assert payload["requested_difficulty"] == "Special"
     assert payload["effective_difficulty"] == "Expert"
+
+
+def test_only_confirmed_special_to_expert_fallback_reaches_later_nodes():
+    reset_live_run(
+        mode="formal",
+        difficulty="Expert",
+        requested_difficulty="Special",
+        prepared_for_play=True,
+    )
+
+    assert effective_difficulty_for_current_run("Special") == "Expert"
+    assert effective_difficulty_for_current_run("Expert") == "Expert"
+
+    update_live_run(prepared_for_play=False)
+    assert effective_difficulty_for_current_run("Special") == "Special"
+
+    reset_live_run(
+        mode="formal",
+        difficulty="Hard",
+        requested_difficulty="Special",
+        prepared_for_play=True,
+    )
+    assert effective_difficulty_for_current_run("Special") == "Special"
