@@ -298,11 +298,6 @@ def test_profile_play_uses_confirmed_expert_for_special_fallback(monkeypatch):
         "verified_settings",
         lambda difficulty: verified_calls.append(difficulty),
     )
-    monkeypatch.setattr(
-        profile_play_action,
-        "verified_game_visual_settings",
-        lambda: None,
-    )
 
     def stop_after_resolution(context, params, *, controller=None):
         resolved_params.append(dict(params))
@@ -1296,18 +1291,9 @@ def test_profile_resolution_failure_writes_correlated_preflight_result(
         profile="normal.json",
         verified_at=1.0,
     )
-    visual = SimpleNamespace(
-        note_skin_type=7,
-        tap_effect=5,
-        judgement_assist_effect=False,
-    )
     monkeypatch.setattr(
         "agent.realtime.profile_play_action.verified_settings",
         lambda _difficulty: verified,
-    )
-    monkeypatch.setattr(
-        "agent.realtime.profile_play_action.verified_game_visual_settings",
-        lambda: visual,
     )
     monkeypatch.setattr(
         "agent.realtime.profile_play_action.resolve_profile",
@@ -1347,14 +1333,11 @@ def test_profile_resolution_failure_writes_correlated_preflight_result(
     assert payload["profile"] == "normal.json"
     assert payload["settings"]["expected_note_speed"] == pytest.approx(3.5)
     assert payload["settings"]["actual_note_speed"] == pytest.approx(3.5)
-    assert payload["settings"]["note_skin_type"] == 7
-    assert payload["settings"]["tap_effect"] == 5
-    assert payload["settings"]["judgement_assist"] is False
     assert payload["reason"] == "ValueError: profile mismatch"
     assert failure_reasons == ["ValueError: profile mismatch"]
 
 
-def test_late_preflight_failure_preserves_verified_visual_and_speed(
+def test_late_preflight_failure_preserves_verified_speed(
     monkeypatch, tmp_path,
 ):
     reset_live_run(
@@ -1374,18 +1357,9 @@ def test_late_preflight_failure_preserves_verified_visual_and_speed(
         profile="normal.json",
         verified_at=1.0,
     )
-    visual = SimpleNamespace(
-        note_skin_type=7,
-        tap_effect=5,
-        judgement_assist_effect=False,
-    )
     monkeypatch.setattr(
         "agent.realtime.profile_play_action.verified_settings",
         lambda _difficulty: verified,
-    )
-    monkeypatch.setattr(
-        "agent.realtime.profile_play_action.verified_game_visual_settings",
-        lambda: visual,
     )
     monkeypatch.setattr(
         "agent.realtime.profile_play_action.RealtimeProfileStore.runtime_options",
@@ -1420,9 +1394,6 @@ def test_late_preflight_failure_preserves_verified_visual_and_speed(
     assert payload["settings"] == {
         "expected_note_speed": 3.5,
         "actual_note_speed": 3.5,
-        "note_skin_type": 7,
-        "tap_effect": 5,
-        "judgement_assist": False,
     }
 
 

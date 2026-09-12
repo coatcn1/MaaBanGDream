@@ -67,16 +67,6 @@ def handle_request(request: dict[str, Any], *, root: str | Path = PROJECT_ROOT /
     if isinstance(environment, dict):
         effective_environment = dict(environment)
         runtime_options = store.runtime_options()
-        effective_environment.setdefault(
-            "note_skin_type", runtime_options["note_skin_type"]
-        )
-        effective_environment.setdefault(
-            "tap_effect", runtime_options["tap_effect"]
-        )
-        effective_environment.setdefault(
-            "judgement_assist_effect",
-            runtime_options["judgement_assist_effect"],
-        )
         # 引擎是运行时选项（native_realtime_enabled）派生值，MFA 的静态
         # 环境配置不含它；不补默认就会按 legacy 比较，导致 Native 校准
         # 出的 Profile 在演出设置里永远显示“不匹配”。

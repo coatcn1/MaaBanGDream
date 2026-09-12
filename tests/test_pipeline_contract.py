@@ -241,12 +241,6 @@ def test_realtime_start_handles_optional_pre_live_settings_confirmation():
             "RealtimeLiveFormalSettingsConfirm",
             "RealtimeLiveFormalPlay",
         ),
-        (
-            "RealtimeLiveVisualEvaluationStart",
-            "RealtimeLiveVisualEvaluationPostStart",
-            "RealtimeLiveVisualEvaluationSettingsConfirm",
-            "RealtimeLiveVisualEvaluationPlay",
-        ),
     )
     for start_name, post_start_name, confirm_name, play_name in cases:
         assert nodes[start_name]["next"] == [post_start_name]
@@ -496,12 +490,20 @@ def test_realtime_multi_live_contract_and_options():
         "RealtimeLiveProcessConflictGuard"
     ]
     assert nodes["RealtimeLiveRecover"]["next"] == [
-        "RealtimeLiveEffectSettingsGate"
+        "RealtimeLiveSpeedSettingsGate"
     ]
-    assert nodes["RealtimeLiveEffectSettingsGate"]["custom_action"] == (
-        "RealtimeGameEffectSettingsGate"
+    assert nodes["RealtimeLiveSpeedSettingsGate"]["custom_action"] == (
+        "RealtimeGameSpeedSettingsGate"
     )
-    assert nodes["RealtimeLiveEffectSettingsGate"]["next"] == [
+    assert nodes["RealtimeLiveSpeedSettingsGate"]["custom_action_param"] == {
+        "entry_mode": "home",
+        "difficulty": "Easy",
+        "require_profile": True,
+        "dpi": 240,
+        "game_fps": 60,
+        "render_quality": "standard",
+    }
+    assert nodes["RealtimeLiveSpeedSettingsGate"]["next"] == [
         "RealtimeLiveRoundGate"
     ]
     assert nodes["RealtimeLiveRoundGate"]["max_hit"] == 1
@@ -588,6 +590,16 @@ def test_realtime_multi_live_contract_and_options():
         if case["name"] == "Special":
             expected_selection["fallback_difficulties"] = ["Expert"]
         assert selection == expected_selection
+        assert override["RealtimeLiveSpeedSettingsGate"][
+            "custom_action_param"
+        ] == {
+            "entry_mode": "home",
+            "difficulty": case["name"],
+            "require_profile": True,
+            "dpi": 240,
+            "game_fps": 60,
+            "render_quality": "standard",
+        }
         assert target == tuple(DIFFICULTY_TARGETS[case["name"]])
         assert override["RealtimeLiveRehearsalStart"]["next"] == [
             "RealtimeLiveRehearsalPostStart"
@@ -780,7 +792,7 @@ def test_task_entries_bootstrap_before_round_execution():
             "RealtimeMultiLive",
             "RealtimeLiveProcessConflictGuard",
             "RealtimeLiveRecover",
-            "RealtimeLiveEffectSettingsGate",
+            "RealtimeLiveSpeedSettingsGate",
         ),
         (
             "cooperative_live.json",
@@ -794,14 +806,14 @@ def test_task_entries_bootstrap_before_round_execution():
             "RealtimeCalibration",
             "RealtimeCalibrationProcessConflictGuard",
             "RealtimeCalibrationRecover",
-            "RealtimeCalibrationVisualSettingsGate",
+            "RealtimeCalibrationSpeedSettingsGate",
         ),
         (
             "challenge_live.json",
             "ChallengeLive",
             "ChallengeProcessConflictGuard",
             "ChallengeRecover",
-            "ChallengeVisualSettingsGate",
+            "ChallengeSpeedSettingsGate",
         ),
     )
     for filename, entry_name, guard_name, recover_name, gate_name in entries:

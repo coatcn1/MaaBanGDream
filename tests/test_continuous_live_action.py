@@ -8,7 +8,7 @@ from agent.realtime import continuous_live_action
 from agent.realtime.continuous_live_action import (
     ListenerDiagnosticCapture,
     continuous_song_params,
-    require_recent_visual_settings,
+    require_recent_speed_settings,
     run_continuous_listener,
 )
 from agent.realtime.life_monitor import LifeReading
@@ -22,29 +22,41 @@ class Detector:
         return next(self.readings)
 
 
-def test_continuous_requires_recent_actual_visual_readback(monkeypatch):
+def test_continuous_requires_recent_actual_speed_readback(monkeypatch):
     calls = []
     monkeypatch.setattr(
         continuous_live_action,
-        "verified_game_visual_settings",
-        lambda **kwargs: calls.append(kwargs) or None,
+        "verified_settings",
+        lambda difficulty, **kwargs: calls.append((difficulty, kwargs)) or None,
     )
 
     with pytest.raises(RuntimeError, match="不能用 MFA 目标配置冒充"):
-        require_recent_visual_settings()
+        require_recent_speed_settings("Expert")
 
-    assert calls == [{"max_age_seconds": 900}]
+    assert calls == [("Expert", {"max_age_seconds": 900})]
 
 
-def test_continuous_accepts_recent_actual_visual_readback(monkeypatch):
+def test_continuous_accepts_recent_actual_speed_readback(monkeypatch):
     verified = object()
     monkeypatch.setattr(
         continuous_live_action,
-        "verified_game_visual_settings",
-        lambda **_kwargs: verified,
+        "verified_settings",
+        lambda _difficulty, **_kwargs: verified,
     )
 
-    assert require_recent_visual_settings() is verified
+    assert require_recent_speed_settings("Expert") is verified
+
+
+def test_continuous_never_checks_speed_readback_when_setting_is_disabled(monkeypatch):
+    monkeypatch.setattr(
+        continuous_live_action,
+        "verified_settings",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("关闭开关后不得检查流速读回")
+        ),
+    )
+
+    assert require_recent_speed_settings("Expert", enabled=False) is None
 
 
 def test_listener_has_no_input_on_non_playfield_pages():

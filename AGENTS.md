@@ -156,24 +156,24 @@ pytest 临时目录固定在 `.local/pytest-<进程号>`（Git 忽略），不�
 
 ### 1. 单人实时演奏（RealtimeLive，入口 RealtimeMultiLive）
 
-1. 进程互斥 → `CommonRecover` 主页 → `RealtimeGameEffectSettingsGate` 演出特效设置
-   （`game_effect_settings_enabled=false` 时跳过）。
+1. 进程互斥 → `CommonRecover` 主页 → `RealtimeGameSpeedSettingsGate` 在主页只检查流速
+   （`note_speed_settings_enabled=false` 时永不进入设置页；开启时每次任务都真实读取、按需修正并复核流速）。
 2. 局循环：主页 → 演出选择（`LiveSelectFind`）→ 自由演出 → 歌曲选择标记 →
    `RealtimeDifficultySelect`（点击目标难度并读等级/标题/封面身份，确认本地谱面）。
 3. 准备页按正式/排练分路：
    - 正式：切到正式标记，检查必须有可用 Profile，执行 `RealtimeFormalPreflight`
      （关闭自动演出、3D Cut-in、3D/MV 显示）和 `RealtimePerformanceSettingsGate`
-     （流速；跳过时仍执行 Native 预武装），开始后进入 `RealtimeProfilePlay`。
+     （只复用主页检查结果并处理 Native 预武装，禁止在准备页打开设置），开始后进入 `RealtimeProfilePlay`。
    - 排练：关闭 Demo 演出显示 → 同上门禁 → 开始 → `RealtimeProfilePlay`（rehearsal 参数）。
 4. 每局结束 `CommonRecover` 回主页 → `TaskProgress` 计数 → 循环或 `TaskOutcome`。
 
 ### 2. 协力演出（CooperativeLive）
 
-1. `CooperativeLiveConfigure` 依次配置：入房方式/档位/房号/难度/次数/结算动作/成员退出
-   策略/调试。
+1. `CooperativeLiveConfigure` 依次配置入房方式/档位/房号/难度/次数/结算动作/成员退出
+   策略/调试；仍在主页时执行与单人相同的流速检查。
 2. 主页 → 演出选择 → 协力入口；按配置进普通房、好友邀请或私房；`verify_room_entry`
    确认已离开房间选择页。
-3. 房间准备：等准备页 → 点难度并复核 → 演出特效/流速门禁（跳过时仍处理预武装/推迟）→
+3. 房间准备：等准备页 → 点难度并复核 → 只复用主页设置结果并处理预武装/推迟，禁止打开设置 →
    点“准备完毕”并确认按钮消失（最多 3 次）。
 4. `RealtimeProfilePlay`（cooperative 参数）：最终封面必确认（黑场与 5 封面准备页处理）；
    Native deferred 预武装；首拍门控拦截“其他成员正在准备中”弹窗；
@@ -187,7 +187,7 @@ pytest 临时目录固定在 `.local/pytest-<进程号>`（Git 忽略），不�
 
 ### 3. 一键实时演奏（ContinuousRealtimeLive）
 
-1. 进程互斥；要求最近 15 分钟内有演出视觉设置读回复核（`require_recent_visual_settings`）。
+1. 进程互斥；开关开启时要求最近 15 分钟内有流速读回复核（`require_recent_speed_settings`），关闭时不检查。
 2. 被动监听：每 0.1s 截图检测生命条（数值 ≥20 连续 3 帧）；检测到歌曲开始就调用一次
    `RealtimeProfilePlay`（`ignore_note_speed`、`require_completion=false`），
    打完继续监听下一首，直到用户停止。
@@ -195,7 +195,7 @@ pytest 临时目录固定在 `.local/pytest-<进程号>`（Git 忽略），不�
 
 ### 4. 实时校准（RealtimeCalibration）
 
-1. 进程互斥 → 主页 → 演出特效门禁（服从 `game_effect_settings_enabled`）→ 读难度/歌曲模式/续跑模式/调试选项。
+1. 进程互斥 → 主页完成流速检查（服从 `note_speed_settings_enabled`）→ 读难度/歌曲模式/续跑模式/调试选项。
 2. `CalibrationSessionStore` 新建或续跑会话（`auto`/`restart`）；环境签名一致才复用；
    生成 `accepted=false` 的候选 Profile。
 3. 阶段固定为 `rehearsal-1`（一首排练）→ `formal-validation`（一首正式验证）。
@@ -206,7 +206,7 @@ pytest 临时目录固定在 `.local/pytest-<进程号>`（Git 忽略），不�
 
 ### 5. 挑战演出（ChallengeLive）
 
-1. 进程互斥 → 主页 → 演出特效门禁 → 局数门控 → `RealtimeProfileCheck`。
+1. 进程互斥 → 主页完成流速检查 → 局数门控 → `RealtimeProfileCheck`。
 2. 主页 → 演出选择 → 挑战入口 → 歌曲标记 → `RealtimeDifficultySelect` → 准备页。
 3. 挑战点数选择/确认 → 乐队标记 → `RealtimeFormalPreflight`（关闭自动演出、3D Cut-in、
    3D/MV）→ `RealtimePerformanceSettingsGate` → 开始 → `RealtimeProfilePlay`。
@@ -322,16 +322,16 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
 7. **启动恢复必须有界**：未知界面最多按 ESC 恢复 60 秒；仍无法识别主页才重启游戏。登录画面应先识别“点击任意处/开始”，登录阶段不得过早发送 ESC。
 8. **部署必须从包含所有已合并功能的分支进行**：`launch-mfa.ps1` 用当前工作树的 `interface.json` 和 Agent 覆盖运行目录。功能合并回 `main` 后一律从 `main` 部署；多个未合并 feature 分支并存时，从缺少某功能的旧分支部署，会把该功能从 MFA 里“部署丢”。合并并部署完成后删除 feature/fix 分支，避免残留分支误导后续工作。
 9. **MFA 任务列表有“用户删除记忆”**：某次部署的 interface 缺少某个任务时，MFA 会把它记进 `config/instances/default.json` 的 `CurrentTasks`（`任务名<|||>Entry` 键）当作“用户已删除”，之后 interface 恢复该任务也不会加回。恢复方法：停止 MFA，从 `CurrentTasks` 删掉对应键再启动；不要在 MFA 运行时直接改该文件（内存会覆盖）。
-10. **演出设置自动保存会覆盖用户设置**：MFA 演出设置页在读取 Profile 失败时会把界面默认值整体写回 `profiles/selection.json`，清空用户运行时选项（Native、演出特效、TAP EFFECT、判定辅助、重试次数、校准流速等）。MFA 侧已加“读取成功前禁止自动保存”的保护。新增运行时选项必须四处同步：`profile_store.py` 的 `DEFAULT_RUNTIME_OPTIONS` 与 `_validated_runtime_options`、MFA `PerformanceProfileSettingsUserControlModel.cs` 的属性/加载/Capture、AXAML 开关。
+10. **演出设置自动保存会覆盖用户设置**：MFA 演出设置页在读取 Profile 失败时会把界面默认值整体写回 `profiles/selection.json`，清空用户运行时选项（Native、流速检查、重试次数、校准流速等）。MFA 侧已加“读取成功前禁止自动保存”的保护。新增运行时选项必须四处同步：`profile_store.py` 的 `DEFAULT_RUNTIME_OPTIONS` 与 `_validated_runtime_options`、MFA `PerformanceProfileSettingsUserControlModel.cs` 的属性/加载/Capture、AXAML 开关。
 11. **登录下载确认框会被退出确认的取消模板误命中**：下载框与退出确认框都有灰色“取消”按钮，`quit_confirm_cancel.png` 在下载框上得分 0.952（阈值 0.9）。下载确认必须先于通用模态取消处理；下载进行中用进度标记被动等待，不发送 BACK/ESC。
-12. **流速校准与演出特效设置同类**：`game_effect_settings_enabled=false` 时，开演前不打开齿轮读/改流速，直接信任声明值（`RealtimePerformanceSettingsGate` 已支持跳过）。不要把两者拆成两套开关语义。
+12. **只自动检查流速**：`note_speed_settings_enabled=false` 时，开演前不打开设置页读/改流速，直接信任声明值；镜像、判定辅助、连击显示、FAST/SLOW、NOTE TYPE 与 TAP EFFECT 均由用户按 README 手动配置，运行时不检查、不修改。
 13. **协力准备完毕点击必须确认送达**：点“准备完毕”后要确认按钮消失，最多重试 3 次，防止触控未送达导致倒计时结束后空演奏/跳车。协力结果与一次性弹窗用“点右下角确定 + ESC”交替循环推进（用户验证过可应付大多数页面）。
 14. **抽卡任务的页面陷阱**：左侧卡池列表滑动找“每日3次免费演出招募”时，滑动起点避开列表底部的“生日纪念服装贩售”入口（否则被当成点击进商店）；9.4.3 免费单抽有“TOUCH TO CUT”剪票引导需要点一下；状态判断统一用“点免费按钮后是否出现确认弹窗”，不要用“剩余N回/尚未完成”状态模板（会互相误匹配）。协力漏键抖动只对 Native 路径生效，由 `cooperative_jitter_enabled` 开关控制。
 15. **协力“其他成员正在准备中”弹窗会误触发首拍门控**：弹窗在演奏场建立后出现/消失（含缩放动画），或弹窗出现时背景变暗，会让判定带整行颜色大幅变化，被当成第一颗音符，把谱面时钟提前启动。Native 协力首拍门控必须：弹窗主体（中下部白色圆角矩形 + 左侧粉色图标）存在时不建立颜色基线；弹窗消失的那一帧只重置基线；冻结基线后若判定带大面积同向变化，视为弹窗/变暗转场而不是首音。首音只能是窄列局部变化；单人/校准/挑战不得引入该弹窗门控。
 16. **协力漏键抖动的 jittered 副本会被误判为预武装谱面不一致**：开启 `cooperative_jitter_enabled` 后，Native 预武装解析会把同一首歌替换成 `debug/jittered-charts/<run_id>.json` 副本，而最终封面复核得到的仍是 canonical 路径；用路径判等会直接失败，导致本局零输入、生命归零。判等必须比较歌曲身份（`bestdori_song_id` + `difficulty` + `level`），身份一致时以预武装副本为准消费。
 17. **Legacy 演奏的长条头不能既 DOWN 又 TAP**：视觉回退局里，hold 起手后其头部碎片会在后续帧被 first-visible rescue 成同轨道 TAP，一颗长条被按两次。抑制器必须记录各轨最近 hold 起手时刻，在 `hold_start_suppress_seconds` 窗口内拦截同轨道 TAP/FLICK；Native 路径不受影响。
 18. **协力黑场转场不能被当成“没有封面”**：准备完成后游戏会先整屏黑一下，随后封面或演奏场淡入；final cover 等待在黑场时进入无 sleep 的密集采样窗口，并在该窗口结束前不因演奏场出现而放弃。标题 OCR 还会把省略号或右侧提示读成杂字（如“…”→“今の”），`title_similarity` 必须容忍首尾噪声，否则准备页谱面无法确认。
-19. **跳过演出设置页不能跳过 Native 预武装**：`game_effect_settings_enabled=false` 时 `RealtimePerformanceSettingsGate` 直接返回，但单人非 deferred 流程的 Native 预武装就在这个门禁里；跳过时仍必须调用 `prepare_native_for_settings_gate`（或按 `defer_native_prearm` 推迟），否则开演前消费会报“预武装不存在或已被消费”，整局零输入。
+19. **跳过流速设置页不能跳过 Native 预武装**：`note_speed_settings_enabled=false` 时 `RealtimePerformanceSettingsGate` 不要求主页流速结果，但单人非 deferred 流程的 Native 预武装仍在这个门禁里；跳过时仍必须调用 `prepare_native_for_settings_gate`（或按 `defer_native_prearm` 推迟），否则开演前消费会报“预武装不存在或已被消费”，整局零输入。
 20. **协力结算后识别不到房间页不能终止任务**：成员退出弹窗关闭后往往还在结算页，重连不能直接 `ensure_room_page`；应先继续推进结算回房间/主页，仍失败走 `CommonRecover` 重启游戏再进。非 stay 路径结算回不去时把本局计入完成并恢复主页继续下一局，最后一局 stay 失败直接按完成返回。演出结束后的结算导航不识别成员退出弹窗：`wait_for_post_score_destination` 必须传 `detect_member_exit=False`，成员退出检测只保留在房间/准备阶段。
 21. **成员退出弹窗只在进入演奏前出现**：该弹窗只会在进入演奏前（整屏黑场转场之前）的房间/准备阶段出现，演奏过程中和结算画面绝对不会出现。检测只应保留在房间/准备阶段（当前 `wait_for_post_score_destination` 已传 `detect_member_exit=False`）。当前版本弹窗标题是“错误”（正文“由于XX退出房间。将返回房间选择界面。”，底部居中“确定”），`member_exit_title.png` 已替换为完整的“错误”标题（56×27，1280×720 实拍提取），锚点 `(399,158)`、确定按钮点击 `(638,525)`；因“错误”是通用标题，模板检测必须继续限制在房间/准备阶段。2026-09-07 用户实测补充：点“准备完毕”之后、黑场转场之前的窗口里成员退出弹窗仍会出现（此时已离开房间等待页，常规检测不覆盖），会挡住转场导致整局卡死；已加 `watch_member_exit_before_black()`——准备完毕后高频轮询到黑场出现，看到弹窗点“确定”并按成员退出策略处理，看到黑场立即退出窗口。
 22. **协力生命归零的“断网跳车”流程（真实弹窗已提取，MuMu 断网机制受限）**：生命归零后按顺序执行：切断游戏网络 → 游戏退后台再切回 → 弹窗1“通信已中断。是否继续演出？※本次演出将变为单人演出※”点**左侧“中断”** `(508,447)` → 弹窗2“确认中断当前演出返回主页吗？※中断当前演出的话，将不会获得演出报酬。”点**右侧粉色“中断”** `(754,439)` → 恢复网络 → “连接失败。”弹窗有界点“重试”直到回主页。模板 `disconnect_continue_body.png`（锚点 488,313）与 `disconnect_confirm_body.png`（锚点 495,307）已从 2026-09-07 雷电录像提取。关键约束：**禁止用 `svc wifi` / 飞行模式开关网络**——实测（2026-09-06 与 2026-09-07 两次）`svc wifi disable` 和 `settings put global airplane_mode_on 1`+广播都会打断 MuMu 的 adb 通道（设备离线），因为 MuMu 客户机只有 `wlan0` 一张网卡，游戏流量和 adb 的 NAT 转发同路，任何真实断网都会连带杀掉引擎的截图/触控通道。**MuMu 按 UID 断网目前不可行**：Android 12 内核无 `xt_owner` 匹配模块、无 `nft`、无 `bpftool`，`cmd netpolicy` 也没有 `set uid-policy`。**iptables 门禁已在雷电实测可用**：`adb root` 后 shell uid 0，owner 模块存在，`GameNetworkGate` 对游戏 UID 的 REJECT/恢复端到端验证通过（2026-09-07）；MuMu 上会 fail-closed。MuMu root 已开（`root_permission=true`）。已实现：`cooperative_network.py` 按 UID 屏蔽/恢复、`connect_failed_body.png`、`dismiss_connect_failed`、`disconnect_jump_out()` 两段弹窗编排（全程 finally 恢复、模板缺失直接 fail-closed、带单元测试）、引擎生命归零钩子与 UI“断网跳车”选项。MuMu 上的可行路线待用户定：手动断网后自动化处理弹窗，或找 MuMu 主机侧网络开关；`mumu-cli control --vmindex 0 tool cmd -c "<guest cmd>"` 是独立于客户机网络的宿主机通道，adb 断掉时可用它执行 `settings put global airplane_mode_on 0` 恢复。
@@ -349,9 +349,11 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
 
 32. **Special 的实际难度与方向语义必须 fail-closed**：协力、单人实时、挑战和 AutoLive 请求 Special 时，只有在 Special 按钮不可选时才允许显式回退 Expert；实时校准仍要求精确选中 Special。单人实时、挑战和协力必须把 `requested_difficulty=Special`、`effective_difficulty=Expert` 贯穿准备页身份、Profile、流速门禁、谱面、Native 预武装、播放和结果证据，不能在已选 Expert 后又按 Special 查谱；AutoLive 至少必须在难度选择日志中记录请求与实际难度。实际选中 Special 时，Native 与 Legacy 都必须先确认可信本地谱面；Legacy 强制启用 ChartPredictor 恢复 Directional Left/Right，缺谱、身份冲突或最终封面未确认时在触控前失败。Bestdori Directional `width=1..7` 表示横跨轨道数/判定尺寸并影响最低滑动阈值；当前固定水平滑动距离已覆盖七档。2026-09-12 雷电 Native 单人真机五局全部 MISS 0，其中两张谱面覆盖 Left/Right 与 `width=1..3`；据此保持既有手势距离与 190ms 首音补偿。协力仍无本轮真实房间证据，不得由单人结果推断 broad-change 门禁已经验收。
 
-33. **协力开演前截图只能复用本轮未改动的准备页**：2026-09-12 的 28 次开发 MFA 协力记录中，从点击难度到点击“演出开始”平均约 3.57 秒，中位数 3.41 秒，主要成本是设置门禁关闭后仍串行执行两次完整刷新截图。只有流速门禁刚完成截图、且因 `game_effect_settings_enabled=false` 没有打开或改动游戏设置页时，才可把独立的 `cooperative_prestart_image` 交给演出模式确认和“准备完毕”按钮检测；不要复用较早的身份取证截图。缓存帧看不到按钮时必须再采一张新图后才能按“已准备”处理，切换演出模式后同样必须刷新。点击后的按钮消失、成员退出和黑场观察属于触控送达与开演安全门禁，不得为缩短耗时而删除。优化后雷电 Native 两局实测约 0.76 秒和 0.43 秒，平均约 0.59 秒；两局均第一次点击送达、完整演奏并正常结算。
+33. **协力开演前截图只能复用本轮未改动的准备页**：2026-09-12 的 28 次开发 MFA 协力记录中，从点击难度到点击“演出开始”平均约 3.57 秒，中位数 3.41 秒，主要成本是设置门禁关闭后仍串行执行两次完整刷新截图。流速门禁刚完成截图且没有在准备页打开或改动游戏设置页时，才可把独立的 `cooperative_prestart_image` 交给演出模式确认和“准备完毕”按钮检测；不要复用较早的身份取证截图。缓存帧看不到按钮时必须再采一张新图后才能按“已准备”处理，切换演出模式后同样必须刷新。点击后的按钮消失、成员退出和黑场观察属于触控送达与开演安全门禁，不得为缩短耗时而删除。优化后雷电 Native 两局实测约 0.76 秒和 0.43 秒，平均约 0.59 秒；两局均第一次点击送达、完整演奏并正常结算。
 
-34. **协力准备弹窗按固定缩放中心区分首批音符**：2026-09-12 外部 v1.3.7 的歌曲 538 Hard 证据中，真实“其他成员正在准备中”弹窗先持续 60 帧并消失，beat 7.75 的白底粉色双 FLICK 又让像素启发式产生一次仅 16ms 的 `prepare-popup-visible`；门控重置后在 1.066 秒后的下一颗附近才触发，而谱面前两组间隔 0.985 秒，造成整局晚一颗并快速空血。真实弹窗从画面约 66% 高度的固定中心等比例放大、缩小，可能完全不出现，也可能未放大到完整尺寸便缩小消失；检测必须按该中心位置区分判定线附近更靠下的白底粉色双 FLICK，不能要求弹窗一定出现、达到完整尺寸或持续多帧。任意一帧真实弹窗仍须拦截，消失帧仍须重置判定带，演奏场、500ms 前奏宽限和 broad-change 门禁继续保留。外部 trace 从 Native 启动后才开始低频记录，无法替代首音 60FPS 帧；修改检测器必须同时回归弹窗不出现、冻结后只闪一帧、正常完整出现、缩放中间态和首批双 FLICK，再做真机协力验收。
+34. **流速只允许在主页复核**：`note_speed_settings_enabled=false` 时所有任务永不检查设置页，直接信任用户声明值；开启时单人、协力、校准和挑战每次任务在离开主页前，由 `RealtimeGameSpeedSettingsGate` 只读取、按需修正并复核流速。准备页的 `RealtimePerformanceSettingsGate` 只复用本次任务的主页流速结果，目标不一致或缺少主页结果时 fail-closed，禁止再次打开设置页；不得保存或复用跨任务持久凭据。旧 Profile/校准 JSON 中的视觉字段只为读取兼容保留，不再参与匹配或续跑判定。
+
+35. **协力准备弹窗按固定缩放中心区分首批音符**：2026-09-12 外部 v1.3.7 的歌曲 538 Hard 证据中，真实“其他成员正在准备中”弹窗先持续 60 帧并消失，beat 7.75 的白底粉色双 FLICK 又让像素启发式产生一次仅 16ms 的 `prepare-popup-visible`；门控重置后在 1.066 秒后的下一颗附近才触发，而谱面前两组间隔 0.985 秒，造成整局晚一颗并快速空血。真实弹窗从画面约 66% 高度的固定中心等比例放大、缩小，可能完全不出现，也可能未放大到完整尺寸便缩小消失；检测必须按该中心位置区分判定线附近更靠下的白底粉色双 FLICK，不能要求弹窗一定出现、达到完整尺寸或持续多帧。任意一帧真实弹窗仍须拦截，消失帧仍须重置判定带，演奏场、500ms 前奏宽限和 broad-change 门禁继续保留。外部 trace 从 Native 启动后才开始低频记录，无法替代首音 60FPS 帧；修改检测器必须同时回归弹窗不出现、冻结后只闪一帧、正常完整出现、缩放中间态和首批双 FLICK，再做真机协力验收。
 
 ## 后续开发方向（已记录，暂缓或未开始）
 
@@ -405,7 +407,7 @@ MaaBanGDream 和定制 MFAAvalonia 是两个独立 Git 仓库。若一次修复�
 1. **紫色外圈不是 FLICK**：普通音符的紫色外圈只能作为普通 TAP 的补充可见区域；只有检测到成组、同向的粉色箭头/折线后才能升级为 FLICK。修改颜色阈值时必须同时回归普通紫色音符与真实粉色箭头。
 2. **实时热路径禁止阻塞**：截图、检测、跟踪和触控派发路径不得使用 `sleep`、ADB 前台查询或同步等待手势完成。FLICK 必须按帧推进 DOWN/MOVE/UP；停止、异常和歌曲终态必须立即释放全部触点。
 3. **HOLD 必须有轨迹证据**：绿色技能特效、短圆环和判定线残影不能单独启动长按。HOLD 需要连续绿色轨迹、可信形状或跨帧一致运动；无绿条歌曲的离线重放必须保持 `hold_start=0`。
-4. **游戏流速必须读取后修正**：`interface.json` 的 `note_speed` 只是目标声明，不能作为游戏已经采用该值的证据。准备界面齿轮会记住上次使用的标签页，每次调整流速前必须先点击第一个“演出设定”标签 `(297,155)`；不要再点击 `(430,155)`（该坐标属于“演出效果·音量设定”）。流速范围为 `1.00–12.00` 且首尾循环，按钮从左到右为 `-0.50/-0.10/-0.01/+0.01/+0.10/+0.50`；连续减法不能归一到最小值。每首歌必须用固定数字模板读取当前值、按差值修正并再次读取复核后才能开演。
+4. **游戏流速只在流速开关开启时于主页读取后修正**：`interface.json` 的 `note_speed` 只是目标声明；`note_speed_settings_enabled=false` 时永不进入设置页并直接信任该声明，开启时每次任务都必须真实进入主页“选项”弹窗，用固定数字模板读取、按差值修正并再次读取。弹窗会记住上次使用的标签页，进入检查时必须先点击第一个“演出设定”标签 `(297,155)`；不要再点击 `(430,155)`（该坐标属于“演出效果·音量设定”）。流速范围为 `1.00–12.00` 且首尾循环，按钮从左到右为 `-0.50/-0.10/-0.01/+0.01/+0.10/+0.50`；连续减法不能归一到最小值。准备页不得补做，也不得用跨任务持久凭据跳过主页读回。
 5. **一个 Profile 固定一种流速**：Profile 环境签名继续精确记录流速。不同难度或同一难度可有不同流速 Profile，但一次四首歌校准过程中不得逐曲自适应修改流速；需要试验新流速时生成新的 Profile。
 6. **密集同轨音符不得固定宽合并**：跟踪与轮廓拆分阈值必须随透视和音符头尺寸缩放。修改后至少覆盖同轨间距 8–20 px 的回归用例。
 7. **日志必须可直接验收**：实时终态至少输出实际/期望流速、是否修正、TAP/FLICK/HOLD 动作数、帧间隔 P50/P95/最大值、有效 FPS 和明确终止原因。

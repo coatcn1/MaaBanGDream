@@ -83,7 +83,7 @@
       ]
     },
     "next": [
-      "RealtimeLiveEffectSettingsGate"
+      "RealtimeLiveSpeedSettingsGate"
     ],
     "focus": {
       "Node.Action.Failed": {
@@ -109,10 +109,18 @@
       "RealtimeLiveFailure"
     ]
   },
-  "RealtimeLiveEffectSettingsGate": {
+  "RealtimeLiveSpeedSettingsGate": {
     "recognition": "DirectHit",
     "action": "Custom",
-    "custom_action": "RealtimeGameEffectSettingsGate",
+    "custom_action": "RealtimeGameSpeedSettingsGate",
+    "custom_action_param": {
+      "entry_mode": "home",
+      "difficulty": "Easy",
+      "require_profile": true,
+      "dpi": 240,
+      "game_fps": 60,
+      "render_quality": "standard"
+    },
     "next": [
       "RealtimeLiveRoundGate"
     ],
@@ -141,7 +149,7 @@
       }
     }
   },
-  "RealtimeGameEffectSwipe": {
+  "RealtimeSettingsSwipe": {
     "recognition": "DirectHit",
     "action": "Swipe",
     "begin": [
@@ -163,7 +171,7 @@
     ],
     "post_delay": 0
   },
-  "RealtimeGameEffectClick": {
+  "RealtimeSettingsClick": {
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "ForegroundClick",
@@ -571,26 +579,6 @@
       }
     }
   },
-  "RealtimeLiveVisualEvaluationRequireProfile": {
-    "recognition": "DirectHit",
-    "action": "Custom",
-    "custom_action": "RealtimeProfileCheck",
-    "custom_action_param": {
-      "difficulty": "Easy",
-      "dpi": 240,
-      "game_fps": 60,
-      "render_quality": "standard",
-      "note_speed": 2.0,
-      "visual_evaluation": true
-    },
-    "next": [
-      "RealtimeLiveRehearsalToFormal",
-      "RealtimeLiveFormalReady"
-    ],
-    "on_error": [
-      "RealtimeLiveFailure"
-    ]
-  },
   "RealtimeLiveRehearsalToFormal": {
     "recognition": "TemplateMatch",
     "template": "rehearsal_mode_marker.png",
@@ -662,103 +650,6 @@
         ]
       }
     }
-  },
-  "RealtimeLiveVisualEvaluationSettingsGate": {
-    "recognition": "DirectHit",
-    "action": "Custom",
-    "custom_action": "RealtimePerformanceSettingsGate",
-    "custom_action_param": {
-      "confirm_preparation_identity": true,
-      "difficulty": "Easy",
-      "require_profile": true,
-      "dpi": 240,
-      "game_fps": 60,
-      "render_quality": "standard",
-      "visual_evaluation": true
-    },
-    "next": [
-      "RealtimeLiveVisualEvaluationStart"
-    ],
-    "on_error": [
-      "RealtimeLiveFailure"
-    ]
-  },
-  "RealtimeLiveVisualEvaluationStart": {
-    "recognition": "TemplateMatch",
-    "template": "live_start.png",
-    "threshold": 0.88,
-    "action": "Custom",
-    "custom_action": "ForegroundClick",
-    "target": true,
-    "next": [
-      "RealtimeLiveVisualEvaluationPostStart"
-    ],
-    "focus": {
-      "Node.Action.Failed": {
-        "content": "❌ 点击失败：游戏不在前台、控制器拒绝输入或页面位置已变化",
-        "display": [
-          "log"
-        ]
-      }
-    }
-  },
-  "RealtimeLiveVisualEvaluationPostStart": {
-    "recognition": "DirectHit",
-    "action": "DoNothing",
-    "post_delay": 1500,
-    "next": [
-      "RealtimeLiveVisualEvaluationSettingsConfirm",
-      "RealtimeLiveVisualEvaluationPlay"
-    ]
-  },
-  "RealtimeLiveVisualEvaluationSettingsConfirm": {
-    "recognition": "TemplateMatch",
-    "template": "pre_live_settings_confirm.png",
-    "roi": [
-      600,
-      520,
-      380,
-      180
-    ],
-    "threshold": 0.88,
-    "action": "Custom",
-    "custom_action": "ForegroundClick",
-    "target": true,
-    "post_delay": 500,
-    "next": [
-      "RealtimeLiveVisualEvaluationPlay"
-    ]
-  },
-  "RealtimeLiveVisualEvaluationPlay": {
-    "recognition": "DirectHit",
-    "action": "Custom",
-    "custom_action": "RealtimeProfilePlay",
-    "custom_action_param": {
-      "difficulty": "Easy",
-      "require_profile": true,
-      "settings_gate_required": true,
-      "debug_recording": false,
-      "duration_seconds": 600,
-      "startup_timeout_seconds": 60,
-      "dpi": 240,
-      "game_fps": 60,
-      "render_quality": "standard",
-      "note_speed": 2.0,
-      "wait_for_completion": true,
-      "completion_missing_frames": 120,
-      "require_completion": true,
-      "save_result_frame": true,
-      "result_back_attempts": 30,
-      "result_back_interval_seconds": 1.5,
-      "visual_evaluation": true,
-      "run_mode": "visual-evaluation"
-    },
-    "next": [
-      "RealtimeLiveReturnHome"
-    ],
-    "on_error": [
-      "RealtimeLiveRetryCheck"
-    ]
   },
   "RealtimeLiveRehearsalSettingsGate": {
     "recognition": "DirectHit",

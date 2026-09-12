@@ -799,10 +799,6 @@ def test_cooperative_prepare_falls_back_special_to_effective_expert(monkeypatch)
             )
             return True
 
-    class VisualGate:
-        def run(self, _context, _argv):
-            return True
-
     class PerformanceGate:
         def run(self, _context, argv):
             performance_params.append(json.loads(argv.custom_action_param))
@@ -811,9 +807,6 @@ def test_cooperative_prepare_falls_back_special_to_effective_expert(monkeypatch)
 
     monkeypatch.setattr(
         cooperative_action, "RealtimeDifficultySelect", DifficultyAction
-    )
-    monkeypatch.setattr(
-        cooperative_action, "RealtimeGameEffectSettingsGate", VisualGate
     )
     monkeypatch.setattr(
         cooperative_action, "RealtimePerformanceSettingsGate", PerformanceGate
@@ -874,6 +867,17 @@ def test_cooperative_interface_exposes_requested_modes_and_five_difficulties():
     assert [case["name"] for case in options["CooperativeDifficulty"]["cases"]] == [
         "Easy", "Normal", "Hard", "Expert", "Special",
     ]
+    for case in options["CooperativeDifficulty"]["cases"]:
+        assert case["pipeline_override"]["CooperativeSpeedSettingsGate"][
+            "custom_action_param"
+        ] == {
+            "entry_mode": "home",
+            "difficulty": case["name"],
+            "require_profile": True,
+            "dpi": 240,
+            "game_fps": 60,
+            "render_quality": "standard",
+        }
     assert [
         case["name"] for case in options["CooperativeDisconnectJump"]["cases"]
     ] == ["Off", "On"]
@@ -929,6 +933,15 @@ def test_cooperative_interface_exposes_requested_modes_and_five_difficulties():
 def test_cooperative_pipeline_is_one_round_and_backs_out_of_repeat_popup():
     nodes = load(ROOT / "resource" / "pipeline" / "cooperative_live.json")
     assert nodes["CooperativeLive"]["next"] == ["CooperativeProcessConflictGuard"]
+    assert nodes["CooperativeDisconnectJumpConfigure"]["next"] == [
+        "CooperativeSpeedSettingsGate"
+    ]
+    assert nodes["CooperativeSpeedSettingsGate"]["custom_action"] == (
+        "RealtimeGameSpeedSettingsGate"
+    )
+    assert nodes["CooperativeSpeedSettingsGate"]["next"] == [
+        "CooperativeHomeLive"
+    ]
     assert nodes["CooperativeRun"]["next"] == ["CooperativeReturnHome"]
     assert nodes["CooperativeReturnHome"]["next"] == ["CooperativeComplete"]
     assert nodes["CooperativeReturnHome"]["custom_action"] == (
@@ -1613,11 +1626,7 @@ def _preflight_fakes(reason: str | None = None):
             self.root = root
 
         def runtime_options(self):
-            return {
-                "note_skin_type": 1,
-                "tap_effect": 4,
-                "judgement_assist_effect": False,
-            }
+            return {}
 
         def resolve_latest_for_environment(self, *, difficulty, current_signature):
             if reason is not None:
@@ -1640,26 +1649,20 @@ def _preflight_fakes(reason: str | None = None):
 
 def test_profile_preflight_reports_env_mismatch_before_navigation(monkeypatch):
     fake_store, context = _preflight_fakes(
-        reason="钉选 Profile 与当前非流速环境不匹配：TAP EFFECT 1 ≠ 4"
+        reason="钉选 Profile 与当前非流速环境不匹配：DPI 240 ≠ 320"
     )
     monkeypatch.setattr(cooperative_action, "RealtimeProfileStore", fake_store)
-    monkeypatch.setattr(
-        cooperative_action, "verified_game_visual_settings", lambda: None
-    )
 
     reason = cooperative_profile_preflight(context, "Expert")
 
     assert reason is not None
     assert "开局前" in reason
-    assert "TAP EFFECT 1 ≠ 4" in reason
+    assert "DPI 240 ≠ 320" in reason
 
 
 def test_profile_preflight_passes_when_environment_matches(monkeypatch):
     fake_store, context = _preflight_fakes(reason=None)
     monkeypatch.setattr(cooperative_action, "RealtimeProfileStore", fake_store)
-    monkeypatch.setattr(
-        cooperative_action, "verified_game_visual_settings", lambda: None
-    )
 
     assert cooperative_profile_preflight(context, "Expert") is None
 

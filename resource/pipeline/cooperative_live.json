@@ -126,6 +126,21 @@
     "custom_action_param": {
       "disconnect_jump_enabled": false
     },
+    "next": ["CooperativeSpeedSettingsGate"],
+    "on_error": ["CooperativeFailure"]
+  },
+  "CooperativeSpeedSettingsGate": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "RealtimeGameSpeedSettingsGate",
+    "custom_action_param": {
+      "entry_mode": "home",
+      "difficulty": "Expert",
+      "require_profile": true,
+      "dpi": 240,
+      "game_fps": 60,
+      "render_quality": "standard"
+    },
     "next": ["CooperativeHomeLive"],
     "on_error": ["CooperativeFailure"]
   },

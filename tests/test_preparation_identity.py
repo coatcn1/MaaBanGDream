@@ -49,7 +49,6 @@ def test_solo_pipeline_and_calibration_require_preparation_identity():
         assert source["RealtimeLiveDifficulty"]["custom_action_param"]["defer_song_title_to_preparation"]
         for node in ("RealtimeLiveFormalSettingsGate", "RealtimeLiveRehearsalSettingsGate"):
             assert source[node]["custom_action_param"]["confirm_preparation_identity"]
-    assert pipeline["RealtimeLiveVisualEvaluationSettingsGate"]["custom_action_param"]["confirm_preparation_identity"]
 
 
 @pytest.mark.parametrize("difficulty", ["Easy", "Normal", "Hard", "Expert", "Special"])
@@ -64,7 +63,6 @@ def test_mfa_difficulty_override_keeps_identity_gates(tmp_path, difficulty):
         "RealtimeLiveDifficulty": "defer_song_title_to_preparation",
         "RealtimeLiveFormalSettingsGate": "confirm_preparation_identity",
         "RealtimeLiveRehearsalSettingsGate": "confirm_preparation_identity",
-        "RealtimeLiveVisualEvaluationSettingsGate": "confirm_preparation_identity",
     }
     # AgentServer 导入会替换当前进程的绑定，使用独立进程加载实际 MaaFramework。
     code = """

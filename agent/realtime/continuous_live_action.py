@@ -20,30 +20,42 @@ except ImportError:
     from task_reporting import record_failure_reason
 
 from .life_monitor import LifeDetector
-from .game_effect_settings_action import verified_game_visual_settings
+from .performance_settings_action import verified_settings
+from .profile_action import PROJECT_ROOT
 from .profile_play_action import RealtimeProfilePlay, resolve_profile_for_settings_gate
+from .profile_store import RealtimeProfileStore
 from .vision_io import imwrite_unicode
 
 
-CONTINUOUS_VISUAL_VERIFICATION_MAX_AGE_SECONDS = 15 * 60
+CONTINUOUS_SPEED_VERIFICATION_MAX_AGE_SECONDS = 15 * 60
 
 
-def require_recent_visual_settings():
-    """Require a bounded-age readback for the navigation-free listener.
+def require_recent_speed_settings(
+    difficulty: str,
+    *,
+    enabled: bool = True,
+):
+    """为无导航的一键模式检查有时效的流速读回。
 
-    Continuous mode deliberately cannot open the settings UI.  It therefore
-    refuses to infer the actual environment from configured target values or
-    from an unlimited-lifetime cache left by an earlier task.
+    一键模式不会主动打开游戏设置页：开关关闭时完全跳过检查，开启时只接受
+    最近任务留下的限时流速读回结果，不能用 MFA 目标值冒充游戏实际状态。
     """
-    visual = verified_game_visual_settings(
-        max_age_seconds=CONTINUOUS_VISUAL_VERIFICATION_MAX_AGE_SECONDS,
+    if not enabled:
+        print(
+            "ContinuousRealtimeLive speed_check=skipped enabled=false",
+            flush=True,
+        )
+        return None
+    verified = verified_settings(
+        difficulty,
+        max_age_seconds=CONTINUOUS_SPEED_VERIFICATION_MAX_AGE_SECONDS,
     )
-    if visual is None:
+    if verified is None:
         raise RuntimeError(
-            "一键实时演奏需要最近 15 分钟内完成一次游戏视觉设置读回复核；"
+            "一键实时演奏需要最近 15 分钟内完成一次游戏流速读回复核；"
             "不能用 MFA 目标配置冒充游戏实际状态"
         )
-    return visual
+    return verified
 
 
 class ListenerDiagnosticCapture:
@@ -150,12 +162,17 @@ class ContinuousRealtimeLive(CustomAction):
         params = json.loads(argv.custom_action_param or "{}")
         if context.tasker.stopping:
             return True
-        require_recent_visual_settings()
-        settings = resolve_profile_for_settings_gate(
-            context,
-            params,
-            require_verified_visual=True,
+        settings_check_enabled = bool(
+            RealtimeProfileStore(
+                PROJECT_ROOT / "profiles"
+            ).runtime_options().get("note_speed_settings_enabled", True)
         )
+        difficulty = str(params.get("difficulty", "Easy"))
+        require_recent_speed_settings(
+            difficulty,
+            enabled=settings_check_enabled,
+        )
+        settings = resolve_profile_for_settings_gate(context, params)
         print(
             "ContinuousRealtimeLive started "
             f"profile={settings.profile_path.name} "
@@ -172,7 +189,10 @@ class ContinuousRealtimeLive(CustomAction):
         def play_song() -> bool:
             if context.tasker.stopping:
                 return True
-            require_recent_visual_settings()
+            require_recent_speed_settings(
+                difficulty,
+                enabled=settings_check_enabled,
+            )
             song_argv = SimpleNamespace(
                 custom_action_param=json.dumps(song_params, ensure_ascii=False)
             )

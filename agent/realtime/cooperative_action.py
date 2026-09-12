@@ -27,10 +27,6 @@ except ImportError:
     from task_reporting import TaskProgress, record_failure_reason
 
 from .difficulty_action import RealtimeDifficultySelect
-from .game_effect_settings_action import (
-    RealtimeGameEffectSettingsGate,
-    verified_game_visual_settings,
-)
 from .game_effect_settings_action import _click as _maa_click
 from .vision_io import imread_unicode, imwrite_unicode
 from .game_effect_settings_action import _swipe as _maa_swipe
@@ -259,12 +255,9 @@ def current_cooperative_settings() -> dict[str, object]:
 def cooperative_profile_preflight(context: Context, difficulty: str) -> str | None:
     """任务一开始就校验 Profile 与环境签名，失败返回可读原因。
 
-    原实现把 Profile 解析放在准备页的流速门禁里：环境不匹配（例如任务
-    执行过程中手动改过 TAP EFFECT）时，自动化已经完成了主页→演出选择→
-    协力入口→房间→准备页的整段导航，才在准备页被拒，用户只看到“没点
-    开始”。这里用与门禁相同的签名构造（截图分辨率 + 固定 DPI/帧率/画质
-    + 运行时演出选项）提前做一次解析：失败立刻作为任务错误返回，导航
-    一步都不做；截图不可用时回退到准备页的既有门禁。
+    原实现把 Profile 解析放在准备页的流速门禁里，自动化已经完成整段导航
+    才可能被拒。这里提前用截图分辨率、固定 DPI/帧率/画质和引擎构造签名；
+    旧 Profile 中的视觉设置字段只兼容读取，不参与匹配。
     """
     store = RealtimeProfileStore(PROJECT_ROOT / "profiles")
     try:
@@ -272,7 +265,6 @@ def cooperative_profile_preflight(context: Context, difficulty: str) -> str | No
     except Exception:
         # 控制器尚未就绪时无法构造签名，交给准备页门禁处理。
         return None
-    visual = verified_game_visual_settings()
     options = store.runtime_options()
     signature = EnvironmentSignature(
         frame_resolution(image),
@@ -280,16 +272,7 @@ def cooperative_profile_preflight(context: Context, difficulty: str) -> str | No
         COOPERATIVE_GAME_FPS,
         COOPERATIVE_RENDER_QUALITY,
         1.0,
-        int(visual.note_skin_type)
-        if visual is not None
-        else int(options["note_skin_type"]),
-        int(visual.tap_effect)
-        if visual is not None
-        else int(options["tap_effect"]),
-        bool(visual.judgement_assist_effect)
-        if visual is not None
-        else bool(options["judgement_assist_effect"]),
-        engine_from_native_flag(
+        engine=engine_from_native_flag(
             options.get("native_realtime_enabled", False)
         ),
     )
@@ -821,16 +804,6 @@ class CooperativeLiveFlow:
                 f"请求 {difficulty}，实际 {effective_difficulty}"
             )
         self.effective_difficulty = effective_difficulty
-
-        visual_params = {
-            "entry_mode": "preparation",
-            "max_attempts": 1,
-            "coordinates": {"preparation_gear": (946, 650)},
-        }
-        if not RealtimeGameEffectSettingsGate().run(
-            self.context, self.action_argv(visual_params)
-        ):
-            raise RuntimeError("协力准备页演出视觉设置复核失败")
 
         performance_params = {
             "difficulty": effective_difficulty,

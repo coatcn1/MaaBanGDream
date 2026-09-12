@@ -36,7 +36,6 @@ from .runtime_options import (
     diagnostic_trace_enabled,
 )
 from .difficulty_action import DIFFICULTY_TARGETS
-from .game_effect_settings_action import verified_game_visual_settings
 from .live_session import append_current_run_event, current_song_id
 from .song_identity import UNKNOWN_SONG_ID
 
@@ -344,16 +343,10 @@ class RealtimeCalibration(CustomAction):
         resume_mode = calibration_resume_mode()
         round_number = 0
 
-        visual = verified_game_visual_settings()
-        if visual is None:
-            raise RuntimeError("校准未经过游戏视觉设置读回验证")
         image = context.tasker.controller.post_screencap().wait().get()
         signature = EnvironmentSignature(
             frame_resolution(image), 240, 60, "standard", note_speed,
-            visual.note_skin_type,
-            visual.tap_effect,
-            visual.judgement_assist_effect,
-            engine_from_native_flag(
+            engine=engine_from_native_flag(
                 runtime_options.get("native_realtime_enabled", False)
             ),
         )

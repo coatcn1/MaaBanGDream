@@ -46,13 +46,10 @@ def test_update_replaces_the_context_without_mutating_existing_references():
 
 def test_live_run_mapping_is_ready_for_json_artifacts():
     current = reset_live_run(
-        mode="visual-evaluation",
+        mode="formal",
         difficulty="Expert",
         profile_name="expert.json",
         expected_note_speed=5.0,
-        note_skin_type=3,
-        tap_effect=1,
-        judgement_assist=False,
         debug_recording=True,
     )
 
@@ -60,13 +57,10 @@ def test_live_run_mapping_is_ready_for_json_artifacts():
 
     assert payload["started_at"].endswith("Z")
     assert payload["song_id"] == UNKNOWN_SONG_ID
-    assert payload["mode"] == "visual-evaluation"
+    assert payload["mode"] == "formal"
     assert payload["settings"] == {
         "expected_note_speed": 5.0,
         "actual_note_speed": None,
-        "note_skin_type": 3,
-        "tap_effect": 1,
-        "judgement_assist": False,
     }
     assert payload["debug_recording"] is True
     assert payload["recording_path"] is None

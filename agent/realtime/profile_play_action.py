@@ -27,7 +27,6 @@ from .controller_touch import ControllerTouchDispatcher
 from .debug_recorder import RealtimeDebugRecorder, append_lifecycle_event
 from .engine import EngineStats, RealtimeEngine
 from .final_cover import FinalCoverResolution, FinalCoverResolver
-from .game_effect_settings_action import verified_game_visual_settings
 from .life_monitor import LifeDetector, LifeGuard, PlayfieldCompletionGuard
 from .live_failed_detector import (
     LiveFailedPopupDetector,
@@ -579,8 +578,6 @@ def _run_mode(params: dict, *, is_rehearsal: bool) -> str:
     explicit = params.get("run_mode")
     if explicit:
         return str(explicit)
-    if params.get("visual_evaluation"):
-        return "visual-evaluation"
     if params.get("calibration_report"):
         return "calibration"
     if params.get("ignore_note_speed"):
@@ -597,7 +594,6 @@ _RECORDING_KIND_BY_RUN_MODE = {
     "calibration-rehearsal": "calibration-rehearsal",
     "calibration-formal": "calibration-formal",
     "continuous": "continuous",
-    "visual-evaluation": "visual-eval",
 }
 
 
@@ -1463,40 +1459,14 @@ def collect_result(
     )
 
 
-def _visual_signature_values(
-    store: RealtimeProfileStore,
-    *,
-    require_verified: bool,
-) -> tuple[int, int, bool]:
-    verified = verified_game_visual_settings()
-    if verified is not None:
-        return (
-            verified.note_skin_type,
-            verified.tap_effect,
-            verified.judgement_assist_effect,
-        )
-    if require_verified:
-        raise RuntimeError("本次开演前尚未实际验证游戏视觉设置")
-    options = store.runtime_options()
-    return (
-        int(options.get("note_skin_type", 1)),
-        int(options.get("tap_effect", 1)),
-        bool(options.get("judgement_assist_effect", True)),
-    )
-
-
 def resolve_profile_for_settings_gate(
     context: Context,
     params: dict,
     *,
     controller=None,
-    require_verified_visual: bool = False,
 ):
     controller = controller or context.tasker.controller
     store = RealtimeProfileStore(PROJECT_ROOT / "profiles")
-    note_skin_type, tap_effect, judgement_assist_effect = (
-        _visual_signature_values(store, require_verified=require_verified_visual)
-    )
     image = controller.post_screencap().wait().get()
     signature = EnvironmentSignature(
         frame_resolution(image),
@@ -1504,19 +1474,11 @@ def resolve_profile_for_settings_gate(
         int(params.get("game_fps", 60)),
         str(params.get("render_quality", "standard")),
         1.0,
-        note_skin_type,
-        tap_effect,
-        judgement_assist_effect,
-        engine_from_native_flag(
+        engine=engine_from_native_flag(
             store.runtime_options().get("native_realtime_enabled", False)
         ),
     )
-    resolver = (
-        store.resolve_latest_for_visual_evaluation_environment
-        if params.get("visual_evaluation")
-        else store.resolve_latest_for_environment
-    )
-    return resolver(
+    return store.resolve_latest_for_environment(
         difficulty=str(params.get("difficulty", "Easy")),
         current_signature=signature,
     )
@@ -1534,12 +1496,6 @@ def resolve_profile(context: Context, params: dict, *, controller=None):
         else float(params.get("note_speed", 2.0))
     )
     store = RealtimeProfileStore(PROJECT_ROOT / "profiles")
-    note_skin_type, tap_effect, judgement_assist_effect = (
-        _visual_signature_values(
-            store,
-            require_verified=bool(params.get("settings_gate_required", False)),
-        )
-    )
     image = controller.post_screencap().wait().get()
     signature = EnvironmentSignature(
         frame_resolution(image),
@@ -1547,29 +1503,17 @@ def resolve_profile(context: Context, params: dict, *, controller=None):
         int(params.get("game_fps", 60)),
         str(params.get("render_quality", "standard")),
         note_speed,
-        note_skin_type,
-        tap_effect,
-        judgement_assist_effect,
-        engine_from_native_flag(
+        engine=engine_from_native_flag(
             store.runtime_options().get("native_realtime_enabled", False)
         ),
     )
-    visual_evaluation = bool(params.get("visual_evaluation", False))
     if verified is not None and verified.profile:
-        resolver = (
-            store.resolve_for_visual_evaluation
-            if visual_evaluation else store.resolve
-        )
-        return resolver(
+        return store.resolve(
             verified.profile,
             difficulty=difficulty,
             current_signature=signature,
         )
-    latest_resolver = (
-        store.resolve_latest_for_visual_evaluation
-        if visual_evaluation else store.resolve_latest
-    )
-    return latest_resolver(
+    return store.resolve_latest(
         difficulty=difficulty,
         current_signature=signature,
     )
@@ -1585,9 +1529,7 @@ class RealtimeProfileCheck(CustomAction):
             if context.tasker.stopping:
                 return True
             params = json.loads(argv.custom_action_param or "{}")
-            settings = resolve_profile_for_settings_gate(
-                context, params, require_verified_visual=True,
-            )
+            settings = resolve_profile_for_settings_gate(context, params)
             print(
                 "RealtimeProfileCheck "
                 f"profile={settings.profile_path.name} "
@@ -1607,7 +1549,6 @@ class RealtimeProfileCheck(CustomAction):
                     params=params,
                     terminal_stage="profile_check",
                     reason=reason,
-                    visual_settings=verified_game_visual_settings(),
                 )
             except Exception as artifact_error:
                 print(
@@ -1640,7 +1581,6 @@ class RealtimeProfilePlay(CustomAction):
             return True
         verified = None
         settings = None
-        visual = None
         recorder = None
         try:
             controller = context.tasker.controller
@@ -1668,12 +1608,6 @@ class RealtimeProfilePlay(CustomAction):
                 and verified is None
             ):
                 raise RuntimeError("本次开演前尚未实际验证游戏流速")
-            visual = verified_game_visual_settings()
-            if (
-                bool(params.get("settings_gate_required", False))
-                and visual is None
-            ):
-                raise RuntimeError("本次开演前尚未实际验证游戏视觉设置")
             settings = (
                 (
                     resolve_profile_for_settings_gate(
@@ -1868,14 +1802,6 @@ class RealtimeProfilePlay(CustomAction):
                 profile_name=(settings.profile_path.name if settings else None),
                 expected_note_speed=expected_note_speed,
                 actual_note_speed=actual_note_speed,
-                note_skin_type=(
-                    visual.note_skin_type if visual is not None else None
-                ),
-                tap_effect=(visual.tap_effect if visual is not None else None),
-                judgement_assist=(
-                    visual.judgement_assist_effect
-                    if visual is not None else None
-                ),
                 debug_recording=debug_recording,
                 recording_path=None,
             )
@@ -2172,7 +2098,6 @@ class RealtimeProfilePlay(CustomAction):
                     params=params,
                     terminal_stage="profile_play_preflight",
                     reason=reason,
-                    visual_settings=visual,
                     performance_snapshot=performance_snapshot,
                 )
             except Exception as artifact_error:
@@ -2619,9 +2544,6 @@ class RealtimeProfilePlay(CustomAction):
             f"frame_outliers={len(stats.frame_interval_outliers)} "
             f"actual_speed={live_run.actual_note_speed} "
             f"expected_speed={live_run.expected_note_speed} "
-            f"note_skin_type={live_run.note_skin_type} "
-            f"tap_effect={live_run.tap_effect} "
-            f"judgement_assist={live_run.judgement_assist} "
             f"touch_recoveries={stats.recovered_contacts} "
             f"down_recoveries={stats.down_recoveries} "
             f"stale_move_recoveries={stats.stale_move_recoveries} "
@@ -2971,10 +2893,7 @@ class RealtimeProfilePlay(CustomAction):
                 timing_offset_ms=timing_offset_ms,
                 suggested_timing_offset_ms=suggestion,
                 run_context=live_run,
-                result_status=(
-                    "experimental"
-                    if run_mode == "visual-evaluation" else "stable"
-                ),
+                result_status="stable",
             )
             if screenshot_error is not None:
                 stable_payload["result_screenshot_error"] = screenshot_error
@@ -2996,7 +2915,7 @@ class RealtimeProfilePlay(CustomAction):
                 f"->{effective_timing_offset_ms}->{suggestion}",
                 flush=True,
             )
-            # 正式演奏（非排练/校准/视觉评估）在结算稳定后把建议写回 Profile，
+            # 正式演奏（非排练/校准）在结算稳定后把建议写回 Profile，
             # 修正会话输入延迟漂移；下一次开演即使用修正后的起始偏移。
             if (
                 settings is not None
@@ -3006,7 +2925,6 @@ class RealtimeProfilePlay(CustomAction):
                 not in {
                     "calibration-rehearsal",
                     "calibration-formal",
-                    "visual-evaluation",
                 }
                 and suggestion != timing_offset_ms
             ):

@@ -24,9 +24,6 @@ class LiveRunContext:
     song_title_confidence: float | None = None
     expected_note_speed: float | None = None
     actual_note_speed: float | None = None
-    note_skin_type: int | None = None
-    tap_effect: int | None = None
-    judgement_assist: bool | None = None
     debug_recording: bool = False
     recording_path: str | None = None
     final_cover_confirmed: bool = False
@@ -68,9 +65,6 @@ class LiveRunContext:
             "settings": {
                 "expected_note_speed": self.expected_note_speed,
                 "actual_note_speed": self.actual_note_speed,
-                "note_skin_type": self.note_skin_type,
-                "tap_effect": self.tap_effect,
-                "judgement_assist": self.judgement_assist,
             },
             "debug_recording": self.debug_recording,
             "recording_path": self.recording_path,
@@ -95,9 +89,6 @@ def reset_live_run(
     profile_name: str | None = None,
     expected_note_speed: float | None = None,
     actual_note_speed: float | None = None,
-    note_skin_type: int | None = None,
-    tap_effect: int | None = None,
-    judgement_assist: bool | None = None,
     debug_recording: bool = False,
     prepared_for_play: bool = False,
 ) -> LiveRunContext:
@@ -112,9 +103,6 @@ def reset_live_run(
         profile_name=profile_name,
         expected_note_speed=expected_note_speed,
         actual_note_speed=actual_note_speed,
-        note_skin_type=note_skin_type,
-        tap_effect=tap_effect,
-        judgement_assist=judgement_assist,
         debug_recording=bool(debug_recording),
         prepared_for_play=bool(prepared_for_play),
     )

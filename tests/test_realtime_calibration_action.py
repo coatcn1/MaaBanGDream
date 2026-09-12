@@ -376,15 +376,6 @@ def test_user_stop_after_nested_round_is_neutral_before_result_lookup(
     monkeypatch.setattr(calibration_action_module, "calibration_resume_mode", lambda: "auto")
     monkeypatch.setattr(calibration_action_module, "frame_resolution", lambda _image: (1280, 720))
     monkeypatch.setattr(
-        calibration_action_module,
-        "verified_game_visual_settings",
-        lambda: SimpleNamespace(
-            note_skin_type=1,
-            tap_effect=1,
-            judgement_assist_effect=True,
-        ),
-    )
-    monkeypatch.setattr(
         calibration_action_module, "result_report_snapshot", lambda _root: set(),
     )
     argv = SimpleNamespace(custom_action_param="{}")
