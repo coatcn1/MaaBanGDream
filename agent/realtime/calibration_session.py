@@ -103,7 +103,18 @@ class CalibrationSessionStore:
             return False
         if session.get("song_mode") != song_mode:
             return False
-        if session.get("environment") != environment.to_mapping():
+        try:
+            saved_environment = EnvironmentSignature.from_mapping(
+                session.get("environment", {})
+            )
+        except ValueError:
+            return False
+        if (
+            RealtimeProfileStore._non_speed_mismatches(
+                saved_environment, environment
+            )
+            or saved_environment.note_speed != environment.note_speed
+        ):
             return False
         if song_mode == "current":
             before = session.get("current_song_id")

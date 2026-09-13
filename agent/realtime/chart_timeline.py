@@ -56,6 +56,7 @@ class ChartJudgement:
     note_index: int
     flick: bool = False
     direction: str | None = None
+    directional_width: int = 1
     tail_flick: bool = False
 
 
@@ -186,6 +187,11 @@ class ChartTimeline:
                     raise ValueError(
                         f"unsupported directional flick: {direction!r}"
                     )
+                width = int(note.get("width", 1))
+                if width < 1 or width > 7:
+                    raise ValueError(
+                        f"unsupported directional flick width: {width!r}"
+                    )
                 judgements.append(ChartJudgement(
                     tempo_map.seconds_at(note.get("beat")),
                     _lane(note.get("lane")),
@@ -193,6 +199,7 @@ class ChartTimeline:
                     note_index,
                     flick=True,
                     direction=direction,
+                    directional_width=width,
                 ))
                 note_index += 1
                 continue

@@ -77,7 +77,7 @@
     {
       "name": "ContinuousRealtimeLive",
       "label": "⚡ 一键实时演奏",
-      "description": "持续检测演奏页面并自动演奏，不导航、不确认、不读取结算；需在最近 15 分钟内完成一次游戏视觉设置读回复核。",
+      "description": "识别开场封面与标题，确认本地曲目后按任务所选难度自动演奏一首；识别演出完成后任务自动结束，不导航、不读取结算。流速检查开关开启时需有最近 15 分钟内的流速读回，关闭时不检查。",
       "entry": "ContinuousRealtimeLive",
       "option": [
         "ContinuousRealtimeDifficulty",
@@ -247,35 +247,40 @@
           "name": "Easy",
           "label": "Easy",
           "pipeline_override": {
-            "CooperativeDifficultyConfigure": {"custom_action_param": {"difficulty": "Easy"}}
+            "CooperativeDifficultyConfigure": {"custom_action_param": {"difficulty": "Easy"}},
+            "CooperativeSpeedSettingsGate": {"custom_action_param": {"entry_mode": "home", "difficulty": "Easy", "require_profile": true, "dpi": 240, "game_fps": 60, "render_quality": "standard"}}
           }
         },
         {
           "name": "Normal",
           "label": "Normal",
           "pipeline_override": {
-            "CooperativeDifficultyConfigure": {"custom_action_param": {"difficulty": "Normal"}}
+            "CooperativeDifficultyConfigure": {"custom_action_param": {"difficulty": "Normal"}},
+            "CooperativeSpeedSettingsGate": {"custom_action_param": {"entry_mode": "home", "difficulty": "Normal", "require_profile": true, "dpi": 240, "game_fps": 60, "render_quality": "standard"}}
           }
         },
         {
           "name": "Hard",
           "label": "Hard",
           "pipeline_override": {
-            "CooperativeDifficultyConfigure": {"custom_action_param": {"difficulty": "Hard"}}
+            "CooperativeDifficultyConfigure": {"custom_action_param": {"difficulty": "Hard"}},
+            "CooperativeSpeedSettingsGate": {"custom_action_param": {"entry_mode": "home", "difficulty": "Hard", "require_profile": true, "dpi": 240, "game_fps": 60, "render_quality": "standard"}}
           }
         },
         {
           "name": "Expert",
           "label": "Expert",
           "pipeline_override": {
-            "CooperativeDifficultyConfigure": {"custom_action_param": {"difficulty": "Expert"}}
+            "CooperativeDifficultyConfigure": {"custom_action_param": {"difficulty": "Expert"}},
+            "CooperativeSpeedSettingsGate": {"custom_action_param": {"entry_mode": "home", "difficulty": "Expert", "require_profile": true, "dpi": 240, "game_fps": 60, "render_quality": "standard"}}
           }
         },
         {
           "name": "Special",
           "label": "Special",
           "pipeline_override": {
-            "CooperativeDifficultyConfigure": {"custom_action_param": {"difficulty": "Special"}}
+            "CooperativeDifficultyConfigure": {"custom_action_param": {"difficulty": "Special"}},
+            "CooperativeSpeedSettingsGate": {"custom_action_param": {"entry_mode": "home", "difficulty": "Special", "require_profile": true, "dpi": 240, "game_fps": 60, "render_quality": "standard"}}
           }
         }
       ]
@@ -554,10 +559,13 @@
           "label": "Easy",
           "pipeline_override": {
             "AutoLiveDifficulty": {
-              "target": [
-                715,
-                545
-              ]
+              "custom_action_param": {
+                "difficulty": "Easy",
+                "max_attempts": 3,
+                "verify_delay_seconds": 0.35,
+                "track_live_run": false,
+                "song_identity": false
+              }
             }
           }
         },
@@ -566,10 +574,13 @@
           "label": "Normal",
           "pipeline_override": {
             "AutoLiveDifficulty": {
-              "target": [
-                827,
-                545
-              ]
+              "custom_action_param": {
+                "difficulty": "Normal",
+                "max_attempts": 3,
+                "verify_delay_seconds": 0.35,
+                "track_live_run": false,
+                "song_identity": false
+              }
             }
           }
         },
@@ -578,10 +589,13 @@
           "label": "Hard",
           "pipeline_override": {
             "AutoLiveDifficulty": {
-              "target": [
-                940,
-                545
-              ]
+              "custom_action_param": {
+                "difficulty": "Hard",
+                "max_attempts": 3,
+                "verify_delay_seconds": 0.35,
+                "track_live_run": false,
+                "song_identity": false
+              }
             }
           }
         },
@@ -590,10 +604,13 @@
           "label": "Expert",
           "pipeline_override": {
             "AutoLiveDifficulty": {
-              "target": [
-                1051,
-                545
-              ]
+              "custom_action_param": {
+                "difficulty": "Expert",
+                "max_attempts": 3,
+                "verify_delay_seconds": 0.35,
+                "track_live_run": false,
+                "song_identity": false
+              }
             }
           }
         },
@@ -602,10 +619,16 @@
           "label": "Special",
           "pipeline_override": {
             "AutoLiveDifficulty": {
-              "target": [
-                1180,
-                545
-              ]
+              "custom_action_param": {
+                "difficulty": "Special",
+                "max_attempts": 3,
+                "verify_delay_seconds": 0.35,
+                "track_live_run": false,
+                "song_identity": false,
+                "fallback_difficulties": [
+                  "Expert"
+                ]
+              }
             }
           }
         }
@@ -655,22 +678,6 @@
               ]
             }
           }
-        },
-        {
-          "name": "VisualEvaluation",
-          "label": "视觉设置评估（实验）",
-          "pipeline_override": {
-            "RealtimeLiveFormalModeGate": {
-              "next": [
-                "RealtimeLiveVisualEvaluationRequireProfile"
-              ]
-            },
-            "RealtimeLiveFormalReady": {
-              "next": [
-                "RealtimeLiveVisualEvaluationSettingsGate"
-              ]
-            }
-          }
         }
       ]
     },
@@ -712,6 +719,16 @@
           "name": "Easy",
           "label": "Easy",
           "pipeline_override": {
+            "RealtimeLiveSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Easy",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            },
             "RealtimeLiveDifficulty": {
               "custom_action_param": {
                 "defer_song_title_to_preparation": true,
@@ -760,16 +777,6 @@
                 "note_speed": 2.0
               }
             },
-            "RealtimeLiveVisualEvaluationRequireProfile": {
-              "custom_action_param": {
-                "difficulty": "Easy",
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "note_speed": 2.0,
-                "visual_evaluation": true
-              }
-            },
             "RealtimeLiveFormalSettingsGate": {
               "custom_action_param": {
                 "confirm_preparation_identity": true,
@@ -778,39 +785,6 @@
                 "dpi": 240,
                 "game_fps": 60,
                 "render_quality": "standard"
-              }
-            },
-            "RealtimeLiveVisualEvaluationSettingsGate": {
-              "custom_action_param": {
-                "confirm_preparation_identity": true,
-                "difficulty": "Easy",
-                "require_profile": true,
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "visual_evaluation": true
-              }
-            },
-            "RealtimeLiveVisualEvaluationPlay": {
-              "custom_action_param": {
-                "difficulty": "Easy",
-                "require_profile": true,
-                "settings_gate_required": true,
-                "debug_recording": false,
-                "duration_seconds": 600,
-                "startup_timeout_seconds": 60,
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "note_speed": 2.0,
-                "wait_for_completion": true,
-                "completion_missing_frames": 120,
-                "require_completion": true,
-                "save_result_frame": true,
-                "result_back_attempts": 30,
-                "result_back_interval_seconds": 1.5,
-                "visual_evaluation": true,
-                "run_mode": "visual-evaluation"
               }
             },
             "RealtimeLiveRehearsalSettingsGate": {
@@ -830,6 +804,16 @@
           "name": "Normal",
           "label": "Normal",
           "pipeline_override": {
+            "RealtimeLiveSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Normal",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            },
             "RealtimeLiveDifficulty": {
               "custom_action_param": {
                 "defer_song_title_to_preparation": true,
@@ -878,16 +862,6 @@
                 "note_speed": 2.0
               }
             },
-            "RealtimeLiveVisualEvaluationRequireProfile": {
-              "custom_action_param": {
-                "difficulty": "Normal",
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "note_speed": 2.0,
-                "visual_evaluation": true
-              }
-            },
             "RealtimeLiveFormalSettingsGate": {
               "custom_action_param": {
                 "confirm_preparation_identity": true,
@@ -896,39 +870,6 @@
                 "dpi": 240,
                 "game_fps": 60,
                 "render_quality": "standard"
-              }
-            },
-            "RealtimeLiveVisualEvaluationSettingsGate": {
-              "custom_action_param": {
-                "confirm_preparation_identity": true,
-                "difficulty": "Normal",
-                "require_profile": true,
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "visual_evaluation": true
-              }
-            },
-            "RealtimeLiveVisualEvaluationPlay": {
-              "custom_action_param": {
-                "difficulty": "Normal",
-                "require_profile": true,
-                "settings_gate_required": true,
-                "debug_recording": false,
-                "duration_seconds": 600,
-                "startup_timeout_seconds": 60,
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "note_speed": 2.0,
-                "wait_for_completion": true,
-                "completion_missing_frames": 120,
-                "require_completion": true,
-                "save_result_frame": true,
-                "result_back_attempts": 30,
-                "result_back_interval_seconds": 1.5,
-                "visual_evaluation": true,
-                "run_mode": "visual-evaluation"
               }
             },
             "RealtimeLiveRehearsalSettingsGate": {
@@ -948,6 +889,16 @@
           "name": "Hard",
           "label": "Hard",
           "pipeline_override": {
+            "RealtimeLiveSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Hard",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            },
             "RealtimeLiveDifficulty": {
               "custom_action_param": {
                 "defer_song_title_to_preparation": true,
@@ -996,16 +947,6 @@
                 "note_speed": 2.0
               }
             },
-            "RealtimeLiveVisualEvaluationRequireProfile": {
-              "custom_action_param": {
-                "difficulty": "Hard",
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "note_speed": 2.0,
-                "visual_evaluation": true
-              }
-            },
             "RealtimeLiveFormalSettingsGate": {
               "custom_action_param": {
                 "confirm_preparation_identity": true,
@@ -1014,39 +955,6 @@
                 "dpi": 240,
                 "game_fps": 60,
                 "render_quality": "standard"
-              }
-            },
-            "RealtimeLiveVisualEvaluationSettingsGate": {
-              "custom_action_param": {
-                "confirm_preparation_identity": true,
-                "difficulty": "Hard",
-                "require_profile": true,
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "visual_evaluation": true
-              }
-            },
-            "RealtimeLiveVisualEvaluationPlay": {
-              "custom_action_param": {
-                "difficulty": "Hard",
-                "require_profile": true,
-                "settings_gate_required": true,
-                "debug_recording": false,
-                "duration_seconds": 600,
-                "startup_timeout_seconds": 60,
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "note_speed": 2.0,
-                "wait_for_completion": true,
-                "completion_missing_frames": 120,
-                "require_completion": true,
-                "save_result_frame": true,
-                "result_back_attempts": 30,
-                "result_back_interval_seconds": 1.5,
-                "visual_evaluation": true,
-                "run_mode": "visual-evaluation"
               }
             },
             "RealtimeLiveRehearsalSettingsGate": {
@@ -1066,6 +974,16 @@
           "name": "Expert",
           "label": "Expert",
           "pipeline_override": {
+            "RealtimeLiveSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Expert",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            },
             "RealtimeLiveDifficulty": {
               "custom_action_param": {
                 "defer_song_title_to_preparation": true,
@@ -1114,16 +1032,6 @@
                 "note_speed": 5.0
               }
             },
-            "RealtimeLiveVisualEvaluationRequireProfile": {
-              "custom_action_param": {
-                "difficulty": "Expert",
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "note_speed": 5.0,
-                "visual_evaluation": true
-              }
-            },
             "RealtimeLiveFormalSettingsGate": {
               "custom_action_param": {
                 "confirm_preparation_identity": true,
@@ -1132,39 +1040,6 @@
                 "dpi": 240,
                 "game_fps": 60,
                 "render_quality": "standard"
-              }
-            },
-            "RealtimeLiveVisualEvaluationSettingsGate": {
-              "custom_action_param": {
-                "confirm_preparation_identity": true,
-                "difficulty": "Expert",
-                "require_profile": true,
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "visual_evaluation": true
-              }
-            },
-            "RealtimeLiveVisualEvaluationPlay": {
-              "custom_action_param": {
-                "difficulty": "Expert",
-                "require_profile": true,
-                "settings_gate_required": true,
-                "debug_recording": false,
-                "duration_seconds": 600,
-                "startup_timeout_seconds": 60,
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "note_speed": 5.0,
-                "wait_for_completion": true,
-                "completion_missing_frames": 120,
-                "require_completion": true,
-                "save_result_frame": true,
-                "result_back_attempts": 30,
-                "result_back_interval_seconds": 1.5,
-                "visual_evaluation": true,
-                "run_mode": "visual-evaluation"
               }
             },
             "RealtimeLiveRehearsalSettingsGate": {
@@ -1184,11 +1059,24 @@
           "name": "Special",
           "label": "Special",
           "pipeline_override": {
+            "RealtimeLiveSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Special",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            },
             "RealtimeLiveDifficulty": {
               "custom_action_param": {
                 "defer_song_title_to_preparation": true,
                 "difficulty": "Special",
-                "max_attempts": 3
+                "max_attempts": 3,
+                "fallback_difficulties": [
+                  "Expert"
+                ]
               }
             },
             "RealtimeLiveRehearsalStart": {
@@ -1232,16 +1120,6 @@
                 "note_speed": 5.0
               }
             },
-            "RealtimeLiveVisualEvaluationRequireProfile": {
-              "custom_action_param": {
-                "difficulty": "Special",
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "note_speed": 5.0,
-                "visual_evaluation": true
-              }
-            },
             "RealtimeLiveFormalSettingsGate": {
               "custom_action_param": {
                 "confirm_preparation_identity": true,
@@ -1250,39 +1128,6 @@
                 "dpi": 240,
                 "game_fps": 60,
                 "render_quality": "standard"
-              }
-            },
-            "RealtimeLiveVisualEvaluationSettingsGate": {
-              "custom_action_param": {
-                "confirm_preparation_identity": true,
-                "difficulty": "Special",
-                "require_profile": true,
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "visual_evaluation": true
-              }
-            },
-            "RealtimeLiveVisualEvaluationPlay": {
-              "custom_action_param": {
-                "difficulty": "Special",
-                "require_profile": true,
-                "settings_gate_required": true,
-                "debug_recording": false,
-                "duration_seconds": 600,
-                "startup_timeout_seconds": 60,
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "note_speed": 5.0,
-                "wait_for_completion": true,
-                "completion_missing_frames": 120,
-                "require_completion": true,
-                "save_result_frame": true,
-                "result_back_attempts": 30,
-                "result_back_interval_seconds": 1.5,
-                "visual_evaluation": true,
-                "run_mode": "visual-evaluation"
               }
             },
             "RealtimeLiveRehearsalSettingsGate": {
@@ -1377,13 +1222,10 @@
           "name": "Easy",
           "label": "Easy",
           "pipeline_override": {
-            "ContinuousRealtimeWatcher": {
+            "ContinuousRealtimeDifficultyConfigure": {
               "custom_action_param": {
-                "difficulty": "Easy",
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "debug_recording": false
+                "reset": true,
+                "difficulty": "Easy"
               }
             }
           }
@@ -1392,13 +1234,10 @@
           "name": "Normal",
           "label": "Normal",
           "pipeline_override": {
-            "ContinuousRealtimeWatcher": {
+            "ContinuousRealtimeDifficultyConfigure": {
               "custom_action_param": {
-                "difficulty": "Normal",
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "debug_recording": false
+                "reset": true,
+                "difficulty": "Normal"
               }
             }
           }
@@ -1407,13 +1246,10 @@
           "name": "Hard",
           "label": "Hard",
           "pipeline_override": {
-            "ContinuousRealtimeWatcher": {
+            "ContinuousRealtimeDifficultyConfigure": {
               "custom_action_param": {
-                "difficulty": "Hard",
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "debug_recording": false
+                "reset": true,
+                "difficulty": "Hard"
               }
             }
           }
@@ -1422,13 +1258,10 @@
           "name": "Expert",
           "label": "Expert",
           "pipeline_override": {
-            "ContinuousRealtimeWatcher": {
+            "ContinuousRealtimeDifficultyConfigure": {
               "custom_action_param": {
-                "difficulty": "Expert",
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "debug_recording": false
+                "reset": true,
+                "difficulty": "Expert"
               }
             }
           }
@@ -1437,13 +1270,10 @@
           "name": "Special",
           "label": "Special",
           "pipeline_override": {
-            "ContinuousRealtimeWatcher": {
+            "ContinuousRealtimeDifficultyConfigure": {
               "custom_action_param": {
-                "difficulty": "Special",
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "debug_recording": false
+                "reset": true,
+                "difficulty": "Special"
               }
             }
           }
@@ -1459,7 +1289,7 @@
           "name": "Light",
           "label": "轻量 Trace（推荐）",
           "pipeline_override": {
-            "ContinuousRealtimeWatcher": {
+            "ContinuousRealtimeDebugConfigure": {
               "custom_action_param": {
                 "debug_recording": false,
                 "diagnostic_trace": true
@@ -1471,7 +1301,7 @@
           "name": "Off",
           "label": "完全关闭",
           "pipeline_override": {
-            "ContinuousRealtimeWatcher": {
+            "ContinuousRealtimeDebugConfigure": {
               "custom_action_param": {
                 "debug_recording": false,
                 "diagnostic_trace": false
@@ -1483,7 +1313,7 @@
           "name": "Full",
           "label": "完整录像（MKV + Trace，大文件）",
           "pipeline_override": {
-            "ContinuousRealtimeWatcher": {
+            "ContinuousRealtimeDebugConfigure": {
               "custom_action_param": {
                 "debug_recording": true,
                 "diagnostic_trace": true
@@ -1546,6 +1376,16 @@
           "name": "Easy",
           "label": "Easy",
           "pipeline_override": {
+            "RealtimeCalibrationSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Easy",
+                "require_profile": false,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            },
             "CalibrationDifficultySetting": {
               "custom_action_param": {
                 "difficulty": "Easy"
@@ -1557,6 +1397,16 @@
           "name": "Normal",
           "label": "Normal",
           "pipeline_override": {
+            "RealtimeCalibrationSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Normal",
+                "require_profile": false,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            },
             "CalibrationDifficultySetting": {
               "custom_action_param": {
                 "difficulty": "Normal"
@@ -1568,6 +1418,16 @@
           "name": "Hard",
           "label": "Hard",
           "pipeline_override": {
+            "RealtimeCalibrationSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Hard",
+                "require_profile": false,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            },
             "CalibrationDifficultySetting": {
               "custom_action_param": {
                 "difficulty": "Hard"
@@ -1579,6 +1439,16 @@
           "name": "Expert",
           "label": "Expert",
           "pipeline_override": {
+            "RealtimeCalibrationSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Expert",
+                "require_profile": false,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            },
             "CalibrationDifficultySetting": {
               "custom_action_param": {
                 "difficulty": "Expert"
@@ -1590,6 +1460,16 @@
           "name": "Special",
           "label": "Special",
           "pipeline_override": {
+            "RealtimeCalibrationSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Special",
+                "require_profile": false,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            },
             "CalibrationDifficultySetting": {
               "custom_action_param": {
                 "difficulty": "Special"
@@ -1651,6 +1531,17 @@
           "name": "Easy",
           "label": "Easy",
           "pipeline_override": {
+            "ChallengeSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Easy",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard",
+                "run_mode": "challenge"
+              }
+            },
             "ChallengeDifficulty": {
               "custom_action_param": {
                 "difficulty": "Easy",
@@ -1689,6 +1580,17 @@
           "name": "Normal",
           "label": "Normal",
           "pipeline_override": {
+            "ChallengeSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Normal",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard",
+                "run_mode": "challenge"
+              }
+            },
             "ChallengeDifficulty": {
               "custom_action_param": {
                 "difficulty": "Normal",
@@ -1727,6 +1629,17 @@
           "name": "Hard",
           "label": "Hard",
           "pipeline_override": {
+            "ChallengeSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Hard",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard",
+                "run_mode": "challenge"
+              }
+            },
             "ChallengeDifficulty": {
               "custom_action_param": {
                 "difficulty": "Hard",
@@ -1765,6 +1678,17 @@
           "name": "Expert",
           "label": "Expert",
           "pipeline_override": {
+            "ChallengeSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Expert",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard",
+                "run_mode": "challenge"
+              }
+            },
             "ChallengeDifficulty": {
               "custom_action_param": {
                 "difficulty": "Expert",
@@ -1803,11 +1727,25 @@
           "name": "Special",
           "label": "Special",
           "pipeline_override": {
+            "ChallengeSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Special",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard",
+                "run_mode": "challenge"
+              }
+            },
             "ChallengeDifficulty": {
               "custom_action_param": {
                 "difficulty": "Special",
                 "max_attempts": 3,
-                "mode": "challenge"
+                "mode": "challenge",
+                "fallback_difficulties": [
+                  "Expert"
+                ]
               }
             },
             "ChallengeProfileCheck": {

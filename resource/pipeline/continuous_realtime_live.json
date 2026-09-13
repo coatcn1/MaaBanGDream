@@ -11,6 +11,36 @@
     "action": "Custom",
     "custom_action": "ProcessConflictGuard",
     "next": [
+      "ContinuousRealtimeDifficultyConfigure"
+    ],
+    "on_error": [
+      "ContinuousRealtimeFailure"
+    ]
+  },
+  "ContinuousRealtimeDifficultyConfigure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "ContinuousRealtimeLiveConfigure",
+    "custom_action_param": {
+      "reset": true,
+      "difficulty": "Easy"
+    },
+    "next": [
+      "ContinuousRealtimeDebugConfigure"
+    ],
+    "on_error": [
+      "ContinuousRealtimeFailure"
+    ]
+  },
+  "ContinuousRealtimeDebugConfigure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "ContinuousRealtimeLiveConfigure",
+    "custom_action_param": {
+      "debug_recording": false,
+      "diagnostic_trace": true
+    },
+    "next": [
       "ContinuousRealtimeWatcher"
     ],
     "on_error": [
@@ -21,17 +51,40 @@
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "ContinuousRealtimeLive",
-    "custom_action_param": {
-      "difficulty": "Easy",
-      "dpi": 240,
-      "game_fps": 60,
-      "render_quality": "standard",
-      "debug_recording": false,
-      "diagnostic_trace": true
+    "focus": {
+      "Node.Action.Starting": {
+        "content": "🔎 一键实时演奏已开始识别：请按任务所选难度进入演出，识别到开场封面与标题后将自动演奏；识别演出完成后任务自动结束",
+        "display": [
+          "log",
+          "toast"
+        ]
+      }
     },
+    "next": [
+      "ContinuousRealtimeComplete"
+    ],
     "on_error": [
       "ContinuousRealtimeFailure"
     ]
+  },
+  "ContinuousRealtimeComplete": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "TaskOutcome",
+    "custom_action_param": {
+      "task_name": "ContinuousRealtimeLive",
+      "label": "一键实时演奏",
+      "status": "success"
+    },
+    "focus": {
+      "Node.Action.Succeeded": {
+        "content": "✅ 已识别演出完成，一键实时演奏任务自动结束",
+        "display": [
+          "log",
+          "toast"
+        ]
+      }
+    }
   },
   "ContinuousRealtimeFailure": {
     "recognition": "DirectHit",

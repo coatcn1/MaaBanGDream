@@ -369,6 +369,10 @@ ChartTimeline ChartTimeline::from_json_string(const std::string& text) {
             if (direction == 0) {
                 throw ChartParseError("unsupported directional flick direction");
             }
+            const int width = note.value("width", 1);
+            if (width < 1 || width > 7) {
+                throw ChartParseError("unsupported directional flick width");
+            }
             ChartJudgement judgement;
             judgement.time_s =
                 timeline.tempo_map.seconds_at(
@@ -379,6 +383,7 @@ ChartTimeline ChartTimeline::from_json_string(const std::string& text) {
             judgement.note_index = note_index++;
             judgement.flick = true;
             judgement.direction = static_cast<int8_t>(direction);
+            judgement.directional_width = static_cast<uint8_t>(width);
             timeline.judgements.push_back(judgement);
             continue;
         }

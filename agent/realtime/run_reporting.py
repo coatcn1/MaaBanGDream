@@ -26,8 +26,6 @@ def _preflight_mode(params: dict, current_mode: str) -> str:
     explicit = params.get("run_mode")
     if explicit:
         return str(explicit)
-    if bool(params.get("visual_evaluation", False)):
-        return "visual-evaluation"
     if str(current_mode).lower() in {"realtime", "pending"}:
         return "formal"
     return str(current_mode)
@@ -62,7 +60,7 @@ def result_report_payload(
         and context.get("song_id", "unknown") == "unknown"
     ):
         status = "unknown_song"
-    valid = result is not None and status in {"stable", "experimental"}
+    valid = result is not None and status == "stable"
     payload = {
         "schema_version": 1,
         "valid": valid,
@@ -73,13 +71,17 @@ def result_report_payload(
         "started_at": context.get("started_at"),
         "mode": context.get("mode"),
         "difficulty": context.get("difficulty"),
+        "requested_difficulty": context.get(
+            "requested_difficulty", context.get("difficulty")
+        ),
+        "effective_difficulty": context.get(
+            "effective_difficulty", context.get("difficulty")
+        ),
         "profile": context.get("profile_name"),
         "session": context,
         "settings": context.get("settings", {}),
         "debug_recording_path": context.get("recording_path"),
-        "eligible_for_profile_acceptance": (
-            valid and context.get("mode") != "visual-evaluation"
-        ),
+        "eligible_for_profile_acceptance": valid,
         "initial_timing_offset_ms": timing_offset_ms,
         "current_timing_offset_ms": stats.final_timing_offset_ms,
         "suggested_timing_offset_ms": suggested_timing_offset_ms,
@@ -127,7 +129,6 @@ def result_report_payload(
 def _prepare_preflight_context(
     params: dict,
     *,
-    visual_settings: Any | None,
     performance_snapshot: PreflightPerformanceSnapshot | None,
     run_context: LiveRunContext | None,
 ) -> LiveRunContext | None:
@@ -138,9 +139,6 @@ def _prepare_preflight_context(
         "mode": _preflight_mode(params, base.mode),
         "difficulty": str(params.get("difficulty", base.difficulty)),
         "actual_note_speed": None,
-        "note_skin_type": None,
-        "tap_effect": None,
-        "judgement_assist": None,
         # ProfilePlay 可能已经在最终封面阶段创建证据包；失败报告必须继续
         # 指向同一 run，不能因“preflight”分类把关联路径清空。
         "recording_path": base.recording_path,
@@ -148,14 +146,6 @@ def _prepare_preflight_context(
     }
     if params.get("note_speed") is not None:
         changes["expected_note_speed"] = float(params["note_speed"])
-    if visual_settings is not None:
-        changes.update({
-            "note_skin_type": int(visual_settings.note_skin_type),
-            "tap_effect": int(visual_settings.tap_effect),
-            "judgement_assist": bool(
-                visual_settings.judgement_assist_effect
-            ),
-        })
     if performance_snapshot is not None:
         changes.update({
             "expected_note_speed": float(
@@ -179,7 +169,6 @@ def write_preflight_terminal_result(
     params: dict,
     terminal_stage: str,
     reason: str,
-    visual_settings: Any | None = None,
     performance_snapshot: PreflightPerformanceSnapshot | None = None,
     performance_settings: Any | None = None,
     run_context: LiveRunContext | None = None,
@@ -198,7 +187,6 @@ def write_preflight_terminal_result(
         )
     run_context = _prepare_preflight_context(
         params,
-        visual_settings=visual_settings,
         performance_snapshot=performance_snapshot,
         run_context=run_context,
     )

@@ -49,9 +49,7 @@ def test_unaccepted_profile_cannot_control_realtime_play(tmp_path):
 @pytest.mark.parametrize(
     ("field", "value"),
     [("resolution", [1920, 1080]), ("dpi", 320), ("game_fps", 90),
-     ("render_quality", "high"), ("note_speed", 2.5),
-     ("note_skin_type", 7), ("tap_effect", 5),
-     ("judgement_assist_effect", False)],
+     ("render_quality", "high"), ("note_speed", 2.5)],
 )
 def test_every_environment_field_invalidates_profile(tmp_path, field, value):
     store = RealtimeProfileStore(tmp_path)
@@ -59,7 +57,7 @@ def test_every_environment_field_invalidates_profile(tmp_path, field, value):
     current = SIGNATURE.to_mapping()
     current[field] = value
 
-    with pytest.raises(ValueError, match=field):
+    with pytest.raises(ValueError):
         store.resolve(
             path.name,
             difficulty="Easy",
@@ -121,45 +119,41 @@ def test_select_for_settings_gate_still_rejects_non_speed_environment_drift(tmp_
         )
 
 
-def test_select_for_settings_gate_reports_pinned_mismatch_fields(tmp_path):
+def test_select_for_settings_gate_reports_pinned_core_mismatch_fields(tmp_path):
     store = RealtimeProfileStore(tmp_path)
     path = store.write(payload(
         difficulty="Expert",
         environment=EnvironmentSignature(
-            (1280, 720), 240, 60, "standard", 5.0,
-            note_skin_type=1, tap_effect=1, judgement_assist_effect=False,
+            (1280, 720), 320, 60, "standard", 5.0,
         ).to_mapping(),
     ))
     store.pin("Expert", path.name)
 
-    with pytest.raises(ValueError, match=r"TAP EFFECT 1 ≠ 4") as excinfo:
+    with pytest.raises(ValueError, match=r"DPI 320 ≠ 240") as excinfo:
         store.resolve_latest_for_environment(
             difficulty="Expert",
             current_signature=EnvironmentSignature(
                 (1280, 720), 240, 60, "standard", 2.0,
-                note_skin_type=1, tap_effect=4, judgement_assist_effect=False,
             ),
         )
     # 报错必须点名具体 Profile 文件，避免用户把新 Profile 钉错难度槽位。
     assert path.name in str(excinfo.value)
 
 
-def test_select_for_settings_gate_reports_unpinned_mismatch_fields(tmp_path):
+def test_select_for_settings_gate_reports_unpinned_core_mismatch_fields(tmp_path):
     store = RealtimeProfileStore(tmp_path)
     store.write(payload(
         difficulty="Expert",
         environment=EnvironmentSignature(
-            (1280, 720), 240, 60, "standard", 5.0,
-            note_skin_type=1, tap_effect=1, judgement_assist_effect=False,
+            (1280, 720), 320, 60, "standard", 5.0,
         ).to_mapping(),
     ))
 
-    with pytest.raises(ValueError, match=r"TAP EFFECT 1 ≠ 4"):
+    with pytest.raises(ValueError, match=r"DPI 320 ≠ 240"):
         store.resolve_latest_for_environment(
             difficulty="Expert",
             current_signature=EnvironmentSignature(
                 (1280, 720), 240, 60, "standard", 2.0,
-                note_skin_type=1, tap_effect=4, judgement_assist_effect=False,
             ),
         )
 
@@ -177,13 +171,14 @@ def test_runtime_options_accept_game_note_speed_upper_bound(tmp_path):
     assert set(updated["calibration_note_speeds"].values()) == {12.0}
 
 
-def test_runtime_options_default_to_detector_friendly_game_effects(tmp_path):
+def test_runtime_options_default_to_speed_only_settings(tmp_path):
     options = RealtimeProfileStore(tmp_path).runtime_options()
 
-    assert options["game_effect_settings_enabled"] is True
-    assert options["note_skin_type"] == 1
-    assert options["judgement_assist_effect"] is True
-    assert options["tap_effect"] == 1
+    assert options["note_speed_settings_enabled"] is True
+    assert "game_effect_settings_enabled" not in options
+    assert "note_skin_type" not in options
+    assert "judgement_assist_effect" not in options
+    assert "tap_effect" not in options
     assert options["skip_process_conflict_cleanup"] is False
 
 
@@ -198,24 +193,24 @@ def test_runtime_options_persist_process_conflict_cleanup_switch(tmp_path):
     assert store.runtime_options()["skip_process_conflict_cleanup"] is True
 
 
-@pytest.mark.parametrize("tap_effect", [0, 6, "bad"])
-def test_runtime_options_reject_invalid_tap_effect(tmp_path, tap_effect):
+def test_legacy_runtime_visual_options_are_migrated_to_speed_only(tmp_path):
     store = RealtimeProfileStore(tmp_path)
     options = store.runtime_options()
-    options["tap_effect"] = tap_effect
+    options.update({
+        "game_effect_settings_enabled": False,
+        "note_skin_type": 7,
+        "tap_effect": 5,
+        "judgement_assist_effect": True,
+    })
+    options.pop("note_speed_settings_enabled")
 
-    with pytest.raises(ValueError, match="tap_effect"):
-        store.update_runtime_options(options)
+    updated = store.update_runtime_options(options)
 
-
-@pytest.mark.parametrize("note_skin_type", [0, 8, "bad", True])
-def test_runtime_options_reject_invalid_note_skin_type(tmp_path, note_skin_type):
-    store = RealtimeProfileStore(tmp_path)
-    options = store.runtime_options()
-    options["note_skin_type"] = note_skin_type
-
-    with pytest.raises(ValueError, match="note_skin_type"):
-        store.update_runtime_options(options)
+    assert updated["note_speed_settings_enabled"] is False
+    assert "game_effect_settings_enabled" not in updated
+    assert "note_skin_type" not in updated
+    assert "tap_effect" not in updated
+    assert "judgement_assist_effect" not in updated
 
 
 def test_legacy_profile_visual_signature_defaults_preserve_type1_configuration(
@@ -238,82 +233,31 @@ def test_legacy_profile_visual_signature_defaults_preserve_type1_configuration(
     assert resolved.profile_path == path
 
 
-def test_visual_evaluation_reuses_accepted_geometry_across_visual_factors(tmp_path):
+def test_legacy_visual_fields_do_not_invalidate_profile(tmp_path):
     store = RealtimeProfileStore(tmp_path)
-    path = store.write(payload())
-    experimental_signature = EnvironmentSignature(
+    legacy_environment = SIGNATURE.to_mapping()
+    legacy_environment.update({
+        "note_skin_type": 7,
+        "tap_effect": 5,
+        "judgement_assist_effect": True,
+    })
+    path = store.write(payload(environment=legacy_environment))
+    current_signature = EnvironmentSignature(
         (1280, 720),
         240,
         60,
         "standard",
         2.0,
-        note_skin_type=7,
-        tap_effect=5,
+        note_skin_type=1,
+        tap_effect=4,
         judgement_assist_effect=False,
     )
 
-    resolved = store.resolve_latest_for_visual_evaluation(
-        difficulty="Easy",
-        current_signature=experimental_signature,
+    resolved = store.resolve(
+        path.name, difficulty="Easy", current_signature=current_signature,
     )
 
     assert resolved.profile_path == path
-    with pytest.raises(ValueError, match="note_skin_type"):
-        store.resolve(
-            path.name,
-            difficulty="Easy",
-            current_signature=experimental_signature,
-        )
-
-
-@pytest.mark.parametrize(
-    ("accepted", "note_speed"),
-    [(False, 2.0), (True, 2.01)],
-)
-def test_visual_evaluation_still_requires_accepted_matching_core_environment(
-    tmp_path,
-    accepted,
-    note_speed,
-):
-    store = RealtimeProfileStore(tmp_path)
-    store.write(payload(accepted=accepted))
-    current = EnvironmentSignature(
-        (1280, 720), 240, 60, "standard", note_speed, 7, 5, False
-    )
-
-    with pytest.raises(ValueError, match="Profile"):
-        store.resolve_latest_for_visual_evaluation(
-            difficulty="Easy",
-            current_signature=current,
-        )
-
-
-def test_visual_evaluation_precheck_defers_speed_and_visual_fields(tmp_path):
-    store = RealtimeProfileStore(tmp_path)
-    path = store.write(payload())
-    precheck = EnvironmentSignature(
-        (1280, 720), 240, 60, "standard", 1.0, 7, 5, False
-    )
-
-    resolved = store.resolve_latest_for_visual_evaluation_environment(
-        difficulty="Easy",
-        current_signature=precheck,
-    )
-
-    assert resolved.profile_path == path
-
-
-def test_visual_evaluation_precheck_keeps_core_device_fields_strict(tmp_path):
-    store = RealtimeProfileStore(tmp_path)
-    store.write(payload())
-
-    with pytest.raises(ValueError, match="Profile"):
-        store.resolve_latest_for_visual_evaluation_environment(
-            difficulty="Easy",
-            current_signature=EnvironmentSignature(
-                (1920, 1080), 240, 60, "standard", 1.0, 7, 5, False
-            ),
-        )
 
 
 def test_resolve_latest_rejects_when_no_profile_was_accepted(tmp_path):

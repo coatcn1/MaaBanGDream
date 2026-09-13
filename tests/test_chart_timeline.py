@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from agent.realtime.chart_timeline import ChartTimeline
 
 
@@ -122,7 +124,10 @@ def test_directional_note_preserves_horizontal_flick_semantics(tmp_path):
     path = tmp_path / "directional.json"
     path.write_text(json.dumps([
         {"type": "BPM", "beat": 0, "bpm": 120},
-        {"type": "Directional", "beat": 2, "lane": 4, "direction": "Left"},
+        {
+            "type": "Directional", "beat": 2, "lane": 4,
+            "direction": "Left", "width": 3,
+        },
     ]), encoding="utf-8")
 
     chart = ChartTimeline.from_json(path)
@@ -131,6 +136,38 @@ def test_directional_note_preserves_horizontal_flick_semantics(tmp_path):
     assert judgement.kind == "tap"
     assert judgement.flick
     assert judgement.direction == "Left"
+    assert judgement.directional_width == 3
+
+
+@pytest.mark.parametrize("width", range(1, 8))
+def test_directional_width_accepts_all_game_sizes(tmp_path, width):
+    path = tmp_path / f"directional-width-{width}.json"
+    path.write_text(json.dumps([
+        {"type": "BPM", "beat": 0, "bpm": 120},
+        {
+            "type": "Directional", "beat": 2, "lane": 4,
+            "direction": "Right", "width": width,
+        },
+    ]), encoding="utf-8")
+
+    judgement = ChartTimeline.from_json(path).next_judgement(4, 0)
+
+    assert judgement.direction == "Right"
+    assert judgement.directional_width == width
+
+
+def test_directional_width_outside_game_range_fails_closed(tmp_path):
+    path = tmp_path / "directional-width-invalid.json"
+    path.write_text(json.dumps([
+        {"type": "BPM", "beat": 0, "bpm": 120},
+        {
+            "type": "Directional", "beat": 2, "lane": 4,
+            "direction": "Right", "width": 8,
+        },
+    ]), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="directional flick width"):
+        ChartTimeline.from_json(path)
 
 
 def test_one_point_slide_is_repaired_to_single_judgement(tmp_path):

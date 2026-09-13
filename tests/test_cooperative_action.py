@@ -29,6 +29,7 @@ from agent.realtime.cooperative_action import (
     should_stay_in_room,
 )
 from agent.realtime.life_monitor import LifeReading
+from agent.realtime.live_session import reset_live_run, update_live_run
 
 
 ROOT = Path(__file__).parents[1]
@@ -550,6 +551,54 @@ def test_ready_up_observes_black_during_post_click_delivery_window():
     assert clicks == [(140, 220)]
 
 
+def test_ready_up_reuses_verified_preparation_image_without_refresh():
+    cached = np.full((720, 1280, 3), 128, dtype=np.uint8)
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    flow.capture = lambda: (_ for _ in ()).throw(
+        AssertionError("可信准备页帧包含按钮时不应重复刷新")
+    )
+    flow.template_box = lambda image, name, threshold: (
+        (100, 200, 80, 40) if image is cached else None
+    )
+    flow.watch_ready_delivery_after_click = lambda: "button-gone"
+    clicks = []
+    flow.click = clicks.append
+
+    assert flow.ready_up_and_verify(initial_image=cached) == "button-gone"
+    assert clicks == [(140, 220)]
+
+
+def test_ready_up_refreshes_when_cached_image_does_not_contain_button():
+    cached = np.zeros((720, 1280, 3), dtype=np.uint8)
+    fresh = np.full((720, 1280, 3), 128, dtype=np.uint8)
+    captures = []
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    flow.capture = lambda: (captures.append(True), fresh)[1]
+    flow.template_box = lambda image, name, threshold: (
+        (100, 200, 80, 40) if image is fresh else None
+    )
+    flow.watch_ready_delivery_after_click = lambda: "button-gone"
+    clicks = []
+    flow.click = clicks.append
+
+    assert flow.ready_up_and_verify(initial_image=cached) == "button-gone"
+    assert len(captures) == 1
+    assert clicks == [(140, 220)]
+
+
+def test_performance_mode_check_returns_reusable_confirmed_image():
+    cached = np.zeros((720, 1280, 3), dtype=np.uint8)
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    flow.capture = lambda: (_ for _ in ()).throw(
+        AssertionError("已有可信准备页帧时不应重复刷新")
+    )
+
+    assert flow.ensure_performance_mode_off(initial_image=cached) is cached
+
+
 
 @pytest.mark.parametrize(
     ("target", "initial_hue", "target_hue", "start", "end"),
@@ -719,6 +768,73 @@ def test_cooperative_play_continues_to_the_jump_out_gate_after_depletion():
     assert params["native_prearm_deferred"] is True
 
 
+def test_cooperative_play_uses_effective_fallback_difficulty():
+    params = cooperative_play_params(
+        {
+            "difficulty": "Special",
+            "debug_recording": False,
+            "diagnostic_trace": False,
+        },
+        effective_difficulty="Expert",
+    )
+
+    assert params["difficulty"] == "Expert"
+
+
+def test_cooperative_prepare_falls_back_special_to_effective_expert(monkeypatch):
+    difficulty_params = []
+    performance_params = []
+    cached = np.zeros((720, 1280, 3), dtype=np.uint8)
+    reused = []
+
+    class DifficultyAction:
+        def run(self, _context, argv):
+            params = json.loads(argv.custom_action_param)
+            difficulty_params.append(params)
+            reset_live_run(
+                mode="cooperative",
+                difficulty="Expert",
+                requested_difficulty="Special",
+                prepared_for_play=True,
+            )
+            return True
+
+    class PerformanceGate:
+        def run(self, _context, argv):
+            performance_params.append(json.loads(argv.custom_action_param))
+            update_live_run(cooperative_prestart_image=cached)
+            return True
+
+    monkeypatch.setattr(
+        cooperative_action, "RealtimeDifficultySelect", DifficultyAction
+    )
+    monkeypatch.setattr(
+        cooperative_action, "RealtimePerformanceSettingsGate", PerformanceGate
+    )
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    flow.settings = {
+        "difficulty": "Special",
+        "debug_recording": False,
+    }
+    flow.ensure_performance_mode_off = lambda initial_image=None: (
+        reused.append(("mode", initial_image)),
+        initial_image,
+    )[1]
+    flow.ready_up_and_verify = lambda initial_image=None: (
+        reused.append(("ready", initial_image)),
+        "black",
+    )[1]
+
+    flow.prepare()
+
+    assert difficulty_params[0]["fallback_difficulties"] == ["Expert"]
+    assert performance_params[0]["difficulty"] == "Expert"
+    assert performance_params[0]["cache_preparation_image"] is True
+    assert flow.effective_difficulty == "Expert"
+    assert reused == [("mode", cached), ("ready", cached)]
+
+
 def test_cooperative_interface_exposes_requested_modes_and_five_difficulties():
     interface = load(ROOT / "interface.json")
     task = next(task for task in interface["task"] if task["name"] == "CooperativeLive")
@@ -751,6 +867,17 @@ def test_cooperative_interface_exposes_requested_modes_and_five_difficulties():
     assert [case["name"] for case in options["CooperativeDifficulty"]["cases"]] == [
         "Easy", "Normal", "Hard", "Expert", "Special",
     ]
+    for case in options["CooperativeDifficulty"]["cases"]:
+        assert case["pipeline_override"]["CooperativeSpeedSettingsGate"][
+            "custom_action_param"
+        ] == {
+            "entry_mode": "home",
+            "difficulty": case["name"],
+            "require_profile": True,
+            "dpi": 240,
+            "game_fps": 60,
+            "render_quality": "standard",
+        }
     assert [
         case["name"] for case in options["CooperativeDisconnectJump"]["cases"]
     ] == ["Off", "On"]
@@ -806,6 +933,15 @@ def test_cooperative_interface_exposes_requested_modes_and_five_difficulties():
 def test_cooperative_pipeline_is_one_round_and_backs_out_of_repeat_popup():
     nodes = load(ROOT / "resource" / "pipeline" / "cooperative_live.json")
     assert nodes["CooperativeLive"]["next"] == ["CooperativeProcessConflictGuard"]
+    assert nodes["CooperativeDisconnectJumpConfigure"]["next"] == [
+        "CooperativeSpeedSettingsGate"
+    ]
+    assert nodes["CooperativeSpeedSettingsGate"]["custom_action"] == (
+        "RealtimeGameSpeedSettingsGate"
+    )
+    assert nodes["CooperativeSpeedSettingsGate"]["next"] == [
+        "CooperativeHomeLive"
+    ]
     assert nodes["CooperativeRun"]["next"] == ["CooperativeReturnHome"]
     assert nodes["CooperativeReturnHome"]["next"] == ["CooperativeComplete"]
     assert nodes["CooperativeReturnHome"]["custom_action"] == (
@@ -1490,11 +1626,7 @@ def _preflight_fakes(reason: str | None = None):
             self.root = root
 
         def runtime_options(self):
-            return {
-                "note_skin_type": 1,
-                "tap_effect": 4,
-                "judgement_assist_effect": False,
-            }
+            return {}
 
         def resolve_latest_for_environment(self, *, difficulty, current_signature):
             if reason is not None:
@@ -1517,26 +1649,20 @@ def _preflight_fakes(reason: str | None = None):
 
 def test_profile_preflight_reports_env_mismatch_before_navigation(monkeypatch):
     fake_store, context = _preflight_fakes(
-        reason="钉选 Profile 与当前非流速环境不匹配：TAP EFFECT 1 ≠ 4"
+        reason="钉选 Profile 与当前非流速环境不匹配：DPI 240 ≠ 320"
     )
     monkeypatch.setattr(cooperative_action, "RealtimeProfileStore", fake_store)
-    monkeypatch.setattr(
-        cooperative_action, "verified_game_visual_settings", lambda: None
-    )
 
     reason = cooperative_profile_preflight(context, "Expert")
 
     assert reason is not None
     assert "开局前" in reason
-    assert "TAP EFFECT 1 ≠ 4" in reason
+    assert "DPI 240 ≠ 320" in reason
 
 
 def test_profile_preflight_passes_when_environment_matches(monkeypatch):
     fake_store, context = _preflight_fakes(reason=None)
     monkeypatch.setattr(cooperative_action, "RealtimeProfileStore", fake_store)
-    monkeypatch.setattr(
-        cooperative_action, "verified_game_visual_settings", lambda: None
-    )
 
     assert cooperative_profile_preflight(context, "Expert") is None
 

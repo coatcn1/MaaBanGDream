@@ -10,8 +10,8 @@
     "render_quality": "standard",
     "note_speed": 2.0,
     "note_skin_type": 1,
-    "tap_effect": 1,
-    "judgement_assist_effect": true
+    "tap_effect": 4,
+    "judgement_assist_effect": false
   },
   "settings": {
     "target_fps": 60,

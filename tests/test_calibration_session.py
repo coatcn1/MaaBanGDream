@@ -232,6 +232,26 @@ def test_resume_after_rehearsal_starts_at_formal(tmp_path):
     assert resumed["next_stage"] == FORMAL_STAGE
 
 
+def test_resume_ignores_legacy_visual_environment_fields(tmp_path):
+    store = create_store(tmp_path)
+    session = store.start(
+        difficulty="Hard", song_mode="current",
+        environment=signature(), initial_offset_ms=0,
+        current_song_id="song-a",
+    )
+
+    current = EnvironmentSignature(
+        (1280, 720), 240, 60, "standard", 5.0, 7, 5, False,
+    )
+    resumed = store.start(
+        difficulty="Hard", song_mode="current",
+        environment=current, initial_offset_ms=0,
+        current_song_id="song-a", resume_mode="auto",
+    )
+
+    assert resumed["session_id"] == session["session_id"]
+
+
 def test_restart_preserves_old_session_and_creates_new_candidate(tmp_path):
     store = create_store(tmp_path)
     old = store.start(

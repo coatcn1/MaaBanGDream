@@ -57,147 +57,6 @@ def test_formal_mode_requires_profile_and_uses_distinct_profile_nodes():
         )
 
 
-def test_visual_evaluation_is_explicit_and_uses_formal_profile_path():
-    interface = load("interface.json")
-    nodes = load("resource/pipeline/realtime_multi_live.json")
-    experiment = next(
-        case
-        for case in interface["option"]["RealtimeMode"]["cases"]
-        if case["name"] == "VisualEvaluation"
-    )
-    override = experiment["pipeline_override"]
-    assert override["RealtimeLiveFormalModeGate"]["next"] == [
-        "RealtimeLiveVisualEvaluationRequireProfile"
-    ]
-    assert override["RealtimeLiveFormalReady"]["next"] == [
-        "RealtimeLiveVisualEvaluationSettingsGate"
-    ]
-    assert "RealtimeLiveRequireProfile" not in override
-    assert "RealtimeLiveFormalSettingsGate" not in override
-    eval_profile = nodes["RealtimeLiveVisualEvaluationRequireProfile"]
-    assert eval_profile["custom_action"] == "RealtimeProfileCheck"
-    assert eval_profile["custom_action_param"]["visual_evaluation"] is True
-    assert eval_profile["next"] == [
-        "RealtimeLiveRehearsalToFormal",
-        "RealtimeLiveFormalReady",
-    ]
-    eval_settings = nodes["RealtimeLiveVisualEvaluationSettingsGate"]
-    assert eval_settings["custom_action"] == "RealtimePerformanceSettingsGate"
-    assert eval_settings["custom_action_param"]["visual_evaluation"] is True
-    assert eval_settings["next"] == ["RealtimeLiveVisualEvaluationStart"]
-    eval_start = nodes["RealtimeLiveVisualEvaluationStart"]
-    assert eval_start["custom_action"] == "ForegroundClick"
-    assert eval_start["next"] == [
-        "RealtimeLiveVisualEvaluationPostStart"
-    ]
-    assert nodes["RealtimeLiveVisualEvaluationPostStart"]["next"] == [
-        "RealtimeLiveVisualEvaluationSettingsConfirm",
-        "RealtimeLiveVisualEvaluationPlay",
-    ]
-    eval_play = nodes["RealtimeLiveVisualEvaluationPlay"]
-    assert eval_play["custom_action"] == "RealtimeProfilePlay"
-    assert eval_play["custom_action_param"]["visual_evaluation"] is True
-    assert eval_play["custom_action_param"]["run_mode"] == "visual-evaluation"
-    for node in (
-        "RealtimeLiveFormalPlay",
-        "RealtimeLiveFormalPlayNormal",
-        "RealtimeLiveFormalPlayHard",
-        "RealtimeLiveFormalPlayExpert",
-        "RealtimeLiveFormalPlaySpecial",
-    ):
-        assert node not in override
-
-
-def test_visual_evaluation_keeps_experimental_profile_checks_with_every_difficulty():
-    interface = load("interface.json")
-    nodes = load("resource/pipeline/realtime_multi_live.json")
-    difficulty_option = interface["option"]["RealtimeLiveDifficulty"]
-
-    for difficulty, note_speed in {
-        "Easy": 2.0,
-        "Normal": 2.0,
-        "Hard": 2.0,
-        "Expert": 5.0,
-        "Special": 5.0,
-    }.items():
-        difficulty_case = next(
-            case for case in difficulty_option["cases"]
-            if case["name"] == difficulty
-        )
-        difficulty_override = difficulty_case["pipeline_override"]
-        assert "RealtimeLiveVisualEvaluationRequireProfile" in difficulty_override
-        assert "RealtimeLiveVisualEvaluationSettingsGate" in difficulty_override
-        assert difficulty_override["RealtimeLiveRehearsalSettingsGate"][
-            "custom_action_param"
-        ]["run_mode"] == "rehearsal"
-
-        merged = apply_selected_task_options(
-            interface,
-            nodes,
-            "RealtimeLive",
-            {
-                "RealtimeMode": "VisualEvaluation",
-                "RealtimeLiveDifficulty": difficulty,
-            },
-        )
-
-        assert merged["RealtimeLiveFormalModeGate"]["next"] == [
-            "RealtimeLiveVisualEvaluationRequireProfile"
-        ]
-        assert merged["RealtimeLiveVisualEvaluationRequireProfile"][
-            "custom_action_param"
-        ] == {
-            "difficulty": difficulty,
-            "dpi": 240,
-            "game_fps": 60,
-            "render_quality": "standard",
-            "note_speed": note_speed,
-            "visual_evaluation": True,
-        }
-        assert merged["RealtimeLiveFormalReady"]["next"] == [
-            "RealtimeLiveVisualEvaluationSettingsGate"
-        ]
-        assert merged["RealtimeLiveVisualEvaluationSettingsGate"][
-            "custom_action_param"
-        ] == {
-            "confirm_preparation_identity": True,
-            "difficulty": difficulty,
-            "require_profile": True,
-            "dpi": 240,
-            "game_fps": 60,
-            "render_quality": "standard",
-            "visual_evaluation": True,
-        }
-        assert merged["RealtimeLiveVisualEvaluationSettingsGate"]["next"] == [
-            "RealtimeLiveVisualEvaluationStart"
-        ]
-        assert merged["RealtimeLiveVisualEvaluationStart"]["next"] == [
-            "RealtimeLiveVisualEvaluationPostStart"
-        ]
-        assert merged["RealtimeLiveVisualEvaluationPlay"][
-            "custom_action_param"
-        ] == {
-            "difficulty": difficulty,
-            "require_profile": True,
-            "settings_gate_required": True,
-            "debug_recording": False,
-            "duration_seconds": 600,
-            "startup_timeout_seconds": 60,
-            "dpi": 240,
-            "game_fps": 60,
-            "render_quality": "standard",
-            "note_speed": note_speed,
-            "wait_for_completion": True,
-            "completion_missing_frames": 120,
-            "require_completion": True,
-            "save_result_frame": True,
-            "result_back_attempts": 30,
-            "result_back_interval_seconds": 1.5,
-            "visual_evaluation": True,
-            "run_mode": "visual-evaluation",
-        }
-
-
 def test_formal_mode_keeps_strict_profile_checks_with_every_difficulty():
     interface = load("interface.json")
     nodes = load("resource/pipeline/realtime_multi_live.json")
@@ -253,13 +112,20 @@ def test_calibration_is_single_task_with_three_rehearsal_contract():
         "RealtimeCalibrationRecover"
     ]
     assert nodes["RealtimeCalibrationRecover"]["next"] == [
-        "RealtimeCalibrationVisualSettingsGate"
+        "RealtimeCalibrationSpeedSettingsGate"
     ]
-    assert nodes["RealtimeCalibrationVisualSettingsGate"]["custom_action"] == (
-        "RealtimeGameEffectSettingsGate"
+    assert nodes["RealtimeCalibrationSpeedSettingsGate"]["custom_action"] == (
+        "RealtimeGameSpeedSettingsGate"
     )
-    assert "custom_action_param" not in nodes["RealtimeCalibrationVisualSettingsGate"]
-    assert nodes["RealtimeCalibrationVisualSettingsGate"]["next"] == [
+    assert nodes["RealtimeCalibrationSpeedSettingsGate"]["custom_action_param"] == {
+        "entry_mode": "home",
+        "difficulty": "Easy",
+        "require_profile": False,
+        "dpi": 240,
+        "game_fps": 60,
+        "render_quality": "standard",
+    }
+    assert nodes["RealtimeCalibrationSpeedSettingsGate"]["next"] == [
         "CalibrationDifficultySetting"
     ]
     assert nodes["RealtimeCalibrationRun"]["custom_action"] == "RealtimeCalibrationRun"
@@ -292,11 +158,20 @@ def test_challenge_points_and_profile_contract():
     assert nodes["ChallengeProfileCheck"]["custom_action_param"]["run_mode"] == (
         "challenge"
     )
-    assert nodes["ChallengeRecover"]["next"] == ["ChallengeVisualSettingsGate"]
-    assert nodes["ChallengeVisualSettingsGate"]["custom_action"] == (
-        "RealtimeGameEffectSettingsGate"
+    assert nodes["ChallengeRecover"]["next"] == ["ChallengeSpeedSettingsGate"]
+    assert nodes["ChallengeSpeedSettingsGate"]["custom_action"] == (
+        "RealtimeGameSpeedSettingsGate"
     )
-    assert nodes["ChallengeVisualSettingsGate"]["next"] == [
+    assert nodes["ChallengeSpeedSettingsGate"]["custom_action_param"] == {
+        "entry_mode": "home",
+        "difficulty": "Easy",
+        "require_profile": True,
+        "dpi": 240,
+        "game_fps": 60,
+        "render_quality": "standard",
+        "run_mode": "challenge",
+    }
+    assert nodes["ChallengeSpeedSettingsGate"]["next"] == [
         "ChallengeRoundGate"
     ]
     assert nodes["ChallengeBandMarker"]["next"] == ["ChallengeSettingsGate"]
@@ -329,6 +204,10 @@ def test_challenge_points_and_profile_contract():
         assert override["ChallengeDifficulty"]["custom_action_param"]["mode"] == (
             "challenge"
         )
+        fallback = override["ChallengeDifficulty"]["custom_action_param"].get(
+            "fallback_difficulties"
+        )
+        assert fallback == (["Expert"] if case["name"] == "Special" else None)
         assert override["ChallengeProfileCheck"]["custom_action_param"][
             "run_mode"
         ] == "challenge"

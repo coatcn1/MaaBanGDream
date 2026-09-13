@@ -9,6 +9,13 @@ from pathlib import Path
 from typing import Any
 
 
+# 这些字段只为兼容既有 Profile/校准 JSON 的版本 1 结构保留；运行时不再
+# 自动检查或据此拒绝旧文件。数值沿用当前已验证环境，供新文件稳定序列化。
+LEGACY_NOTE_SKIN_TYPE = 1
+LEGACY_TAP_EFFECT = 4
+LEGACY_JUDGEMENT_ASSIST_EFFECT = False
+
+
 @dataclass(frozen=True)
 class EnvironmentSignature:
     resolution: tuple[int, int]
@@ -16,19 +23,22 @@ class EnvironmentSignature:
     game_fps: int
     render_quality: str
     note_speed: float
-    note_skin_type: int = 1
-    tap_effect: int = 1
-    judgement_assist_effect: bool = True
+    note_skin_type: int = LEGACY_NOTE_SKIN_TYPE
+    tap_effect: int = LEGACY_TAP_EFFECT
+    judgement_assist_effect: bool = LEGACY_JUDGEMENT_ASSIST_EFFECT
     engine: str = "legacy"
 
     @classmethod
     def from_mapping(cls, value: dict[str, Any]) -> "EnvironmentSignature":
         try:
             resolution = value["resolution"]
-            note_skin_type = value.get("note_skin_type", 1)
-            tap_effect = value.get("tap_effect", 1)
+            note_skin_type = value.get(
+                "note_skin_type", LEGACY_NOTE_SKIN_TYPE
+            )
+            tap_effect = value.get("tap_effect", LEGACY_TAP_EFFECT)
             judgement_assist_effect = value.get(
-                "judgement_assist_effect", True
+                "judgement_assist_effect",
+                LEGACY_JUDGEMENT_ASSIST_EFFECT,
             )
             engine = value.get("engine", "legacy")
             if isinstance(note_skin_type, bool) or isinstance(tap_effect, bool):
@@ -114,10 +124,7 @@ class RealtimeProfileStore:
     SELECTION_FILE = "selection.json"
     DEFAULT_RUNTIME_OPTIONS = {
         "skip_process_conflict_cleanup": False,
-        "game_effect_settings_enabled": True,
-        "note_skin_type": 1,
-        "judgement_assist_effect": True,
-        "tap_effect": 1,
+        "note_speed_settings_enabled": True,
         "chart_prediction_enabled": True,
         "chart_predict_presses": True,
         "native_realtime_enabled": False,
@@ -197,13 +204,14 @@ class RealtimeProfileStore:
             raise ValueError(f"无法读取 Profile 选择状态: {exc}") from exc
         if not isinstance(state, dict) or state.get("version") != 1 or not isinstance(state.get("pinned"), dict):
             raise ValueError("Profile 选择状态格式无效")
-        return {
+        result = {
             "version": 1,
             "pinned": {str(key): str(value) for key, value in state["pinned"].items()},
             "runtime_options": self._validated_runtime_options(
                 state.get("runtime_options", self.DEFAULT_RUNTIME_OPTIONS)
             ),
         }
+        return result
 
     def _write_selection(self, pinned: dict[str, str]) -> None:
         state = self._read_state()
@@ -224,30 +232,12 @@ class RealtimeProfileStore:
         skip_conflict_cleanup = options.get("skip_process_conflict_cleanup", False)
         if not isinstance(skip_conflict_cleanup, bool):
             raise ValueError("skip_process_conflict_cleanup must be boolean")
-        effect_settings_enabled = options.get("game_effect_settings_enabled", True)
-        if not isinstance(effect_settings_enabled, bool):
-            raise ValueError("game_effect_settings_enabled 必须是布尔值")
-        judgement_assist = options.get("judgement_assist_effect", True)
-        if not isinstance(judgement_assist, bool):
-            raise ValueError("judgement_assist_effect 必须是布尔值")
-        note_skin_raw = options.get("note_skin_type", 1)
-        if isinstance(note_skin_raw, bool):
-            raise ValueError("note_skin_type 必须是 1..7 的整数")
-        try:
-            note_skin_type = int(note_skin_raw)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("note_skin_type 必须是 1..7 的整数") from exc
-        if note_skin_raw != note_skin_type or not 1 <= note_skin_type <= 7:
-            raise ValueError("note_skin_type 必须是 1..7 的整数")
-        tap_effect_raw = options.get("tap_effect", 1)
-        if isinstance(tap_effect_raw, bool):
-            raise ValueError("tap_effect 必须是 1..5 的整数")
-        try:
-            tap_effect = int(tap_effect_raw)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("tap_effect 必须是 1..5 的整数") from exc
-        if tap_effect_raw != tap_effect or not 1 <= tap_effect <= 5:
-            raise ValueError("tap_effect 必须是 1..5 的整数")
+        speed_settings_enabled = options.get(
+            "note_speed_settings_enabled",
+            options.get("game_effect_settings_enabled", True),
+        )
+        if not isinstance(speed_settings_enabled, bool):
+            raise ValueError("note_speed_settings_enabled 必须是布尔值")
         chart_prediction_enabled = options.get("chart_prediction_enabled", True)
         if not isinstance(chart_prediction_enabled, bool):
             raise ValueError("chart_prediction_enabled 必须是布尔值")
@@ -299,10 +289,7 @@ class RealtimeProfileStore:
             speeds[difficulty] = speed
         return {
             "skip_process_conflict_cleanup": skip_conflict_cleanup,
-            "game_effect_settings_enabled": effect_settings_enabled,
-            "note_skin_type": note_skin_type,
-            "judgement_assist_effect": judgement_assist,
-            "tap_effect": tap_effect,
+            "note_speed_settings_enabled": speed_settings_enabled,
             "chart_prediction_enabled": chart_prediction_enabled,
             "chart_predict_presses": chart_predict_presses,
             "native_realtime_enabled": native_realtime_enabled,
@@ -367,68 +354,14 @@ class RealtimeProfileStore:
         if profile.get("difficulty") not in self.compatible_difficulties(difficulty):
             raise ValueError(f"Profile 难度为 {profile.get('difficulty')!r}，不兼容任务难度 {difficulty!r}")
         saved = EnvironmentSignature.from_mapping(profile.get("environment", {}))
-        if saved != current_signature:
-            before, now = saved.to_mapping(), current_signature.to_mapping()
-            mismatches = [key for key in now if before[key] != now[key]]
-            details = ", ".join(f"{key}={before[key]!r}（当前 {now[key]!r}）" for key in mismatches)
+        mismatches = self._non_speed_mismatches(saved, current_signature)
+        if saved.note_speed != current_signature.note_speed:
+            mismatches.append(
+                f"流速 {saved.note_speed} ≠ {current_signature.note_speed}"
+            )
+        if mismatches:
+            details = "；".join(mismatches)
             raise ValueError(f"Profile 与当前环境不匹配: {details}")
-        settings = self._validated_settings(profile.get("settings", {}))
-        return RuntimeSettings(
-            **settings,
-            profile_path=profile["_path"],
-            note_speed=saved.note_speed,
-        )
-
-    @staticmethod
-    def _same_visual_evaluation_environment(
-        saved: EnvironmentSignature,
-        current: EnvironmentSignature,
-    ) -> bool:
-        """Match every gameplay invariant except the three visual factors."""
-        return (
-            saved.resolution == current.resolution
-            and saved.dpi == current.dpi
-            and saved.game_fps == current.game_fps
-            and saved.render_quality == current.render_quality
-            and saved.note_speed == current.note_speed
-            and saved.engine == current.engine
-        )
-
-    def resolve_for_visual_evaluation(
-        self,
-        value: str | Path,
-        *,
-        difficulty: str,
-        current_signature: EnvironmentSignature,
-    ) -> RuntimeSettings:
-        """Resolve accepted geometry for an isolated visual-factor experiment."""
-        current_signature.validate()
-        profile = self.load(value)
-        if profile.get("accepted") is not True:
-            raise ValueError("Profile 尚未通过用户真机验收")
-        if profile.get("difficulty") not in self.compatible_difficulties(difficulty):
-            raise ValueError(
-                f"Profile 难度为 {profile.get('difficulty')!r}，"
-                f"不兼容任务难度 {difficulty!r}"
-            )
-        saved = EnvironmentSignature.from_mapping(profile.get("environment", {}))
-        if not self._same_visual_evaluation_environment(saved, current_signature):
-            before, now = saved.to_mapping(), current_signature.to_mapping()
-            visual_keys = {
-                "note_skin_type", "tap_effect", "judgement_assist_effect"
-            }
-            mismatches = [
-                key
-                for key in now
-                if key not in visual_keys and before[key] != now[key]
-            ]
-            details = ", ".join(
-                f"{key}={before[key]!r} (当前 {now[key]!r})"
-                for key in mismatches
-            )
-            raise ValueError(
-                "Profile 与视觉评估核心环境不匹配: " + details
-            )
         settings = self._validated_settings(profile.get("settings", {}))
         return RuntimeSettings(
             **settings,
@@ -452,108 +385,6 @@ class RealtimeProfileStore:
                     continue
         raise ValueError(f"没有已验收且环境匹配的 {difficulty} Profile")
 
-    def resolve_latest_for_visual_evaluation(
-        self,
-        *,
-        difficulty: str,
-        current_signature: EnvironmentSignature,
-    ) -> RuntimeSettings:
-        current_signature.validate()
-        pinned = self.pinned_profile(difficulty)
-        if pinned:
-            try:
-                return self.resolve_for_visual_evaluation(
-                    pinned,
-                    difficulty=difficulty,
-                    current_signature=current_signature,
-                )
-            except ValueError as exc:
-                raise ValueError(
-                    f"钉选 Profile 不可用于视觉评估，禁止自动回退: {exc}"
-                ) from exc
-        for source in self.compatible_difficulties(difficulty):
-            candidates = [
-                profile
-                for profile in self.list_profiles(accepted_only=True)
-                if profile.get("difficulty") == source
-            ]
-            for profile in candidates:
-                try:
-                    return self.resolve_for_visual_evaluation(
-                        profile["_path"].name,
-                        difficulty=difficulty,
-                        current_signature=current_signature,
-                    )
-                except ValueError:
-                    continue
-        raise ValueError(
-            f"没有已验收且核心环境匹配的 {difficulty} Profile"
-        )
-
-    @staticmethod
-    def _same_visual_evaluation_precheck_environment(
-        saved: EnvironmentSignature,
-        current: EnvironmentSignature,
-    ) -> bool:
-        return (
-            saved.resolution == current.resolution
-            and saved.dpi == current.dpi
-            and saved.game_fps == current.game_fps
-            and saved.render_quality == current.render_quality
-            and saved.engine == current.engine
-        )
-
-    def resolve_latest_for_visual_evaluation_environment(
-        self,
-        *,
-        difficulty: str,
-        current_signature: EnvironmentSignature,
-    ) -> RuntimeSettings:
-        """Precheck an experiment before the accepted speed is read.
-
-        Only the speed and visual factors are deferred.  Play must later call
-        ``resolve_latest_for_visual_evaluation`` with the verified speed.
-        """
-        current_signature.validate()
-        pinned = self.pinned_profile(difficulty)
-        if pinned:
-            profile = self.load(pinned)
-            if profile.get("accepted") is not True:
-                raise ValueError("钉选 Profile 尚未通过用户真机验收")
-            if profile.get("difficulty") not in self.compatible_difficulties(difficulty):
-                raise ValueError("钉选 Profile 难度不兼容")
-            saved = EnvironmentSignature.from_mapping(profile.get("environment", {}))
-            if not self._same_visual_evaluation_precheck_environment(
-                saved, current_signature
-            ):
-                raise ValueError("钉选 Profile 与视觉评估核心环境不匹配")
-            return self.resolve_for_visual_evaluation(
-                pinned,
-                difficulty=difficulty,
-                current_signature=saved,
-            )
-        for source in self.compatible_difficulties(difficulty):
-            candidates = [
-                profile
-                for profile in self.list_profiles(accepted_only=True)
-                if profile.get("difficulty") == source
-            ]
-            for profile in candidates:
-                saved = EnvironmentSignature.from_mapping(
-                    profile.get("environment", {})
-                )
-                if self._same_visual_evaluation_precheck_environment(
-                    saved, current_signature
-                ):
-                    return self.resolve_for_visual_evaluation(
-                        profile["_path"].name,
-                        difficulty=difficulty,
-                        current_signature=saved,
-                    )
-        raise ValueError(
-            f"没有已验收且核心环境匹配的 {difficulty} Profile"
-        )
-
     @staticmethod
     def _same_non_speed_environment(
         saved: EnvironmentSignature,
@@ -566,7 +397,7 @@ class RealtimeProfileStore:
         saved: EnvironmentSignature,
         current: EnvironmentSignature,
     ) -> list[str]:
-        """列出除音符流速外不一致的签名字段，供拒绝信息直接提示用户。"""
+        """列出仍受运行时约束的非流速字段；旧视觉字段只读取不比较。"""
         mismatches: list[str] = []
         if saved.resolution != current.resolution:
             mismatches.append(f"分辨率 {saved.resolution} ≠ {current.resolution}")
@@ -577,19 +408,6 @@ class RealtimeProfileStore:
         if saved.render_quality != current.render_quality:
             mismatches.append(
                 f"画质 {saved.render_quality!r} ≠ {current.render_quality!r}"
-            )
-        if saved.note_skin_type != current.note_skin_type:
-            mismatches.append(
-                f"音符皮肤 {saved.note_skin_type} ≠ {current.note_skin_type}"
-            )
-        if saved.tap_effect != current.tap_effect:
-            mismatches.append(
-                f"TAP EFFECT {saved.tap_effect} ≠ {current.tap_effect}"
-            )
-        if saved.judgement_assist_effect != current.judgement_assist_effect:
-            mismatches.append(
-                f"判定辅助 {saved.judgement_assist_effect} ≠ "
-                f"{current.judgement_assist_effect}"
             )
         if saved.engine != current.engine:
             mismatches.append(f"引擎 {saved.engine} ≠ {current.engine}")
@@ -666,7 +484,13 @@ class RealtimeProfileStore:
         if not candidates:
             raise ValueError(f"没有可验收的 {difficulty} Profile 草稿")
         profile = candidates[0]
-        if EnvironmentSignature.from_mapping(profile.get("environment", {})) != current_signature:
+        saved = EnvironmentSignature.from_mapping(profile.get("environment", {}))
+        mismatches = self._non_speed_mismatches(saved, current_signature)
+        if saved.note_speed != current_signature.note_speed:
+            mismatches.append(
+                f"流速 {saved.note_speed} ≠ {current_signature.note_speed}"
+            )
+        if mismatches:
             raise ValueError("Profile 草稿与当前环境不匹配，不能验收")
         path = profile.pop("_path")
         profile["accepted"] = True

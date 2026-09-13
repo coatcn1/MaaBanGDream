@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import time
 import traceback
 from collections.abc import Callable
@@ -29,11 +28,16 @@ from .profile_store import (
     engine_from_native_flag,
 )
 from .rehearsal_action import frame_resolution
-from .live_session import current_live_run
+from .live_session import (
+    current_live_run,
+    effective_difficulty_for_current_run,
+    update_live_run,
+)
 from .native_prearm import (
     discard_prearmed_backend,
     prepare_native_for_settings_gate,
 )
+from .chart_repository import LocalChartRepository
 from .run_reporting import (
     PreflightPerformanceSnapshot,
     write_preflight_terminal_result,
@@ -56,12 +60,6 @@ _MAXIMUM_NOTE_SPEED = 12.0
 _DIGIT_TEMPLATE_PATH = (
     PROJECT_ROOT / "resource" / "image" / "performance_settings" / "speed_digits.png"
 )
-_TYPE_DIGIT_TEMPLATE_PATH = (
-    PROJECT_ROOT / "resource" / "image" / "performance_settings" / "type_digits.png"
-)
-_TYPE_LABEL_DIR = (
-    PROJECT_ROOT / "resource" / "image" / "performance_settings" / "type_labels"
-)
 
 # Coordinates are in MaaFramework's canonical 1280x720 game frame.
 DEFAULT_COORDINATES = {
@@ -81,6 +79,16 @@ DEFAULT_COORDINATES = {
     "close": (640, 600),
 }
 
+_SPEED_SETTINGS_POLICY_VERSION = 1
+_ACTIVE_SPEED_TARGET: dict | None = None
+
+
+def _speed_settings_target(*, note_speed: float) -> dict:
+    return {
+        "policy_version": _SPEED_SETTINGS_POLICY_VERSION,
+        "note_speed": round(float(note_speed), 2),
+    }
+
 
 def verified_settings(
     difficulty: str,
@@ -96,6 +104,34 @@ def verified_settings(
 
 def clear_verified_settings() -> None:
     _VERIFIED.clear()
+
+
+def clear_active_speed_settings_target() -> None:
+    global _ACTIVE_SPEED_TARGET
+    _ACTIVE_SPEED_TARGET = None
+
+
+def publish_verified_performance_settings(
+    *,
+    difficulty: str,
+    actual_note_speed: float,
+    expected_note_speed: float,
+    profile: str | None,
+) -> VerifiedPerformanceSettings:
+    value = VerifiedPerformanceSettings(
+        difficulty=difficulty,
+        actual_note_speed=actual_note_speed,
+        expected_note_speed=expected_note_speed,
+        profile=profile,
+        verified_at=time.monotonic(),
+    )
+    _VERIFIED[difficulty] = value
+    return value
+
+
+def activate_speed_settings_target(target: dict) -> None:
+    global _ACTIVE_SPEED_TARGET
+    _ACTIVE_SPEED_TARGET = dict(target)
 
 
 def _speed_cents(value: float) -> int:
@@ -142,42 +178,6 @@ def _digit_templates() -> tuple[np.ndarray, ...]:
     if sprite is None or sprite.shape != (28, 200):
         raise RuntimeError(f"流速数字模板损坏：{_DIGIT_TEMPLATE_PATH}")
     return tuple(sprite[:, index * 20:(index + 1) * 20] >= 128 for index in range(10))
-
-
-@lru_cache(maxsize=1)
-def _type_digit_templates() -> tuple[np.ndarray, ...]:
-    """Return TYPE1..TYPE7 suffix templates captured from the real game UI.
-
-    The TYPE labels use a narrower font than the note-speed display, so the
-    shared speed templates misread TYPE5 as 3.  These templates are sampled
-    from the 1280x720 演出皮肤设定 page rows.
-    """
-    sprite = imread_unicode(_TYPE_DIGIT_TEMPLATE_PATH, cv2.IMREAD_GRAYSCALE)
-    if sprite is None or sprite.shape != (28, 200):
-        raise RuntimeError(f"TYPE 数字模板损坏：{_TYPE_DIGIT_TEMPLATE_PATH}")
-    return tuple(
-        sprite[:, index * 20:(index + 1) * 20] >= 128
-        for index in range(10)
-    )
-
-
-@lru_cache(maxsize=1)
-def _type_label_templates() -> tuple[tuple[int, np.ndarray], ...]:
-    """Return (TYPE value, label template) pairs for TYPE1..TYPE7.
-
-    The whole ``TYPE<n>`` label is matched instead of classifying the narrow
-    suffix digit alone, because the digit glyph is unstable at 20x28 after
-    nearest-neighbour downsampling (TYPE5 could be read as 3, and TYPE1 can
-    pick up serif pixels and read as 3 as well).
-    """
-    result = []
-    for value in range(1, 8):
-        path = _TYPE_LABEL_DIR / f"type_label_{value}.png"
-        template = imread_unicode(path, cv2.IMREAD_COLOR)
-        if template is None or template.shape != (34, 95, 3):
-            raise RuntimeError(f"TYPE 标签模板损坏：{path}")
-        result.append((value, template))
-    return tuple(result)
 
 
 def _classify_digit(mask: np.ndarray) -> int:
@@ -246,46 +246,18 @@ def _expected_speed(context: Context, params: dict, image) -> tuple[float, str |
     difficulty = str(params.get("difficulty", "Easy"))
     store = RealtimeProfileStore(PROJECT_ROOT / "profiles")
     if bool(params.get("require_profile", False)):
-        # Imported lazily because the visual gate reuses this module's fixed
-        # digit classifier.  At runtime the gate module is already registered.
-        from .game_effect_settings_action import verified_game_visual_settings
-
-        visual = verified_game_visual_settings()
         runtime_options = store.runtime_options()
-        note_skin_type = (
-            visual.note_skin_type
-            if visual is not None
-            else int(runtime_options["note_skin_type"])
-        )
-        tap_effect = (
-            visual.tap_effect
-            if visual is not None
-            else int(runtime_options["tap_effect"])
-        )
-        judgement_assist_effect = (
-            visual.judgement_assist_effect
-            if visual is not None
-            else bool(runtime_options["judgement_assist_effect"])
-        )
         signature = EnvironmentSignature(
             frame_resolution(image),
             int(params.get("dpi", 240)),
             int(params.get("game_fps", 60)),
             str(params.get("render_quality", "standard")),
             1.0,
-            note_skin_type,
-            tap_effect,
-            judgement_assist_effect,
-            engine_from_native_flag(
+            engine=engine_from_native_flag(
                 runtime_options.get("native_realtime_enabled", False)
             ),
         )
-        resolver = (
-            store.resolve_latest_for_visual_evaluation_environment
-            if bool(params.get("visual_evaluation", False))
-            else store.resolve_latest_for_environment
-        )
-        settings = resolver(
+        settings = store.resolve_latest_for_environment(
             difficulty=difficulty, current_signature=signature
         )
         return settings.note_speed, settings.profile_path.name
@@ -322,6 +294,7 @@ def _select_first_tab_and_read(
     *,
     attempts: int,
     settle_delay_seconds: float,
+    click_point: Callable[[tuple[int, int]], None] | None = None,
 ) -> float:
     """Select 演出设定 with a visual readback loop.
 
@@ -331,8 +304,9 @@ def _select_first_tab_and_read(
     read cycle.
     """
     last_error: RuntimeError | None = None
+    click_point = click_point or (lambda point: _click(controller, point))
     for _ in range(max(1, attempts)):
-        _click(controller, coordinates["first_tab"])
+        click_point(coordinates["first_tab"])
         time.sleep(settle_delay_seconds)
         try:
             return _read_speed_stable(read_current)
@@ -354,6 +328,7 @@ def _adjust_speed(
     settle_delay_seconds: float,
     round_limit: int,
     read_current,
+    click_point: Callable[[tuple[int, int]], None] | None = None,
 ) -> tuple[bool, float | None]:
     """Click in a closed read-click-reread loop until the display matches.
 
@@ -363,6 +338,7 @@ def _adjust_speed(
     display is forbidden: a persistent read failure blocks the run instead.
     """
     reading = actual
+    click_point = click_point or (lambda point: _click(controller, point))
     for round_index in range(round_limit):
         plan = _speed_click_plan(reading, expected)
         if not plan:
@@ -371,7 +347,7 @@ def _adjust_speed(
             for _ in range(count):
                 if context.tasker.stopping:
                     return False, None
-                _click(controller, coordinates[coordinate_name])
+                click_point(coordinates[coordinate_name])
                 if button_delay_seconds > 0:
                     time.sleep(button_delay_seconds)
         time.sleep(settle_delay_seconds)
@@ -397,14 +373,20 @@ def _close_settings_dialog(
     *,
     attempts: int,
     delay_seconds: float,
+    click_point: Callable[[tuple[int, int]], None] | None = None,
+    capture_current: Callable[[], object] | None = None,
 ) -> None:
     """Close the settings dialog and prove that the speed display vanished."""
+    click_point = click_point or (lambda point: _click(controller, point))
+    capture_current = capture_current or (
+        lambda: controller.post_screencap().wait().get()
+    )
     for attempt in range(1, max(1, attempts) + 1):
         if context.tasker.stopping:
             return
-        _click(controller, coordinates["close"])
+        click_point(coordinates["close"])
         time.sleep(delay_seconds)
-        image = controller.post_screencap().wait().get()
+        image = capture_current()
         try:
             _read_speed(image, coordinates["speed_roi"])
         except (RuntimeError, StopIteration):
@@ -419,6 +401,39 @@ def _close_settings_dialog(
         f"演出设置关闭按钮连续点击 {max(1, attempts)} 次后，"
         "流速显示仍然可见"
     )
+
+
+def require_special_chart_for_settings_gate(difficulty: str):
+    """Special 必须在点击开始前持有本局可信本地谱面。"""
+    if difficulty.casefold() != "special":
+        return None
+    run = current_live_run()
+    if (
+        run is None
+        or not run.prepared_for_play
+        or run.difficulty.casefold() != "special"
+    ):
+        raise RuntimeError("Special 开演前缺少本局实际难度证据")
+    resolution = LocalChartRepository(
+        PROJECT_ROOT / "resource" / "charts"
+    ).resolve(
+        run.song_id,
+        difficulty,
+        level=run.song_level,
+        title=run.song_title,
+    )
+    if resolution.selection is None:
+        raise RuntimeError(
+            "Special 必须先确认可信本地谱面，禁止按视觉回退开演："
+            f"{resolution.reason}"
+        )
+    print(
+        "RealtimePerformanceSettingsGate special_chart=confirmed "
+        f"bestdori_song_id={resolution.selection.bestdori_song_id} "
+        f"difficulty={resolution.selection.difficulty}",
+        flush=True,
+    )
+    return resolution.selection
 
 
 @AgentServer.custom_action("RealtimePerformanceSettingsGate")
@@ -462,18 +477,11 @@ class RealtimePerformanceSettingsGate(CustomAction):
                     evidence_path = evidence_dir / f"preparation-identity-{latest_run.run_id}.png"
                     if not imwrite_unicode(evidence_path, latest_run.preparation_identity_image):
                         print("RealtimePreparationIdentity evidence_save_failed=true", flush=True)
-                # Lazy import avoids the visual gate's dependency on this
-                # module's fixed digit classifier.
-                from .game_effect_settings_action import (
-                    verified_game_visual_settings,
-                )
-
                 write_preflight_terminal_result(
                     output_dir=PROJECT_ROOT / "screencap",
                     params=params,
                     terminal_stage="performance_settings_gate",
                     reason=reason,
-                    visual_settings=verified_game_visual_settings(),
                     performance_snapshot=performance_snapshot,
                     run_context=run_context,
                 )
@@ -499,11 +507,23 @@ class RealtimePerformanceSettingsGate(CustomAction):
         *,
         on_expected: Callable[[PreflightPerformanceSnapshot], None] | None = None,
     ) -> bool:
+        global _ACTIVE_SPEED_TARGET
         if context.tasker.stopping:
             return True
-        difficulty = str(params.get("difficulty", "Easy"))
+        requested_difficulty = str(params.get("difficulty", "Easy"))
+        difficulty = effective_difficulty_for_current_run(
+            requested_difficulty
+        )
         if difficulty not in RealtimeProfileStore.DIFFICULTIES:
             raise ValueError(f"不支持的难度：{difficulty}")
+        effective_params = dict(params)
+        effective_params["difficulty"] = difficulty
+        if difficulty != requested_difficulty:
+            print(
+                "RealtimePerformanceSettingsGate difficulty_fallback=true "
+                f"requested={requested_difficulty} effective={difficulty}",
+                flush=True,
+            )
         controller = context.tasker.controller
         before = controller.post_screencap().wait().get()
         if context.tasker.stopping:
@@ -516,41 +536,45 @@ class RealtimePerformanceSettingsGate(CustomAction):
             confirm_preparation_identity(before, difficulty)
             if context.tasker.stopping:
                 return True
-        expected, profile = _expected_speed(context, params, before)
+        require_special_chart_for_settings_gate(difficulty)
+        expected, profile = _expected_speed(
+            context, effective_params, before
+        )
         _speed_cents(expected)
         if on_expected is not None:
             on_expected(PreflightPerformanceSnapshot(
                 expected_note_speed=expected,
                 profile=profile,
             ))
-        options = RealtimeProfileStore(
-            PROJECT_ROOT / "profiles"
-        ).runtime_options()
-        if not bool(options.get("game_effect_settings_enabled", True)):
-            # 流速校准与演出特效设置同属“开演前改游戏设置页”一类；用户
-            # 关闭演出特效设置后整类跳过，直接信任声明的流速，不再打开
-            # 齿轮读取或修正。下游签名仍需要完整的 actual_note_speed。
-            _VERIFIED[difficulty] = VerifiedPerformanceSettings(
+        store = RealtimeProfileStore(PROJECT_ROOT / "profiles")
+        options = store.runtime_options()
+
+        def finish_without_dialog(source: str) -> bool:
+            publish_verified_performance_settings(
                 difficulty=difficulty,
                 actual_note_speed=expected,
                 expected_note_speed=expected,
                 profile=profile,
-                verified_at=time.monotonic(),
             )
             print(
-                "RealtimePerformanceSettingsGate enabled=false skipped=true "
-                f"difficulty={difficulty} expected={expected:.2f} "
-                f"source=configured-values profile={profile or 'calibration-setting'}",
+                "RealtimePerformanceSettingsGate settings_dialog=skipped "
+                f"source={source} difficulty={difficulty} "
+                f"expected={expected:.2f} "
+                f"profile={profile or 'calibration-setting'}",
                 flush=True,
             )
-            # 跳过“打开游戏设置页读/改流速”不等于跳过 Native 预武装。单人
-            # 非 deferred 流程依赖这里生成预武装后端；漏掉会让开演前消费
-            # 直接报“不存在或已被消费”，整局零输入。
+            if bool(params.get("cache_preparation_image", False)):
+                update_live_run(cooperative_prestart_image=before.copy())
+                print(
+                    "RealtimePerformanceSettingsGate preparation_image=cached "
+                    f"reason={source}",
+                    flush=True,
+                )
             if bool(params.get("defer_native_prearm", False)):
                 discard_prearmed_backend("deferred-until-final-cover")
                 print(
                     "RealtimePerformanceSettingsGate native_prearm=deferred "
-                    "reason=skip-game-settings",
+                    f"reason={source}",
                     flush=True,
                 )
             else:
@@ -569,108 +593,28 @@ class RealtimePerformanceSettingsGate(CustomAction):
             if context.tasker.stopping:
                 discard_prearmed_backend("user-stopped-after-prearm")
             return True
-        coordinates = dict(DEFAULT_COORDINATES)
-        coordinates.update(params.get("coordinates", {}))
-        coordinates = {
-            key: tuple(int(value) for value in point)
-            for key, point in coordinates.items()
-        }
-        opened = False
-        verified_successfully = False
-        try:
-            _click(controller, coordinates["gear"])
-            opened = True
-            time.sleep(float(params.get("open_delay_seconds", 0.6)))
-            # The game reopens the settings dialog on the last-used tab, so
-            # the speed display is not guaranteed to be visible. Land on the
-            # first "演出设定" tab explicitly before every read/adjust loop.
-            read_current = lambda: _read_speed(
-                controller.post_screencap().wait().get(),
-                coordinates["speed_roi"],
-            )
-            actual_before = _select_first_tab_and_read(
-                controller,
-                coordinates,
-                read_current,
-                attempts=int(params.get("first_tab_attempts", 3)),
-                settle_delay_seconds=float(
-                    params.get("first_tab_delay_seconds", 0.3)
-                ),
-            )
-            completed, confirmed = _adjust_speed(
-                context,
-                controller,
-                coordinates,
-                actual_before,
-                expected,
-                button_delay_seconds=float(params.get("button_delay_seconds", 0.15)),
-                settle_delay_seconds=float(params.get("adjust_delay_seconds", 0.35)),
-                round_limit=int(params.get("adjust_round_limit", 6)),
-                read_current=read_current,
-            )
-            if not completed:
-                return True
-            _VERIFIED[difficulty] = VerifiedPerformanceSettings(
-                difficulty=difficulty,
-                actual_note_speed=confirmed,
-                expected_note_speed=expected,
-                profile=profile,
-                verified_at=time.monotonic(),
-            )
+
+        if not bool(options.get("note_speed_settings_enabled", True)):
+            # 用户关闭流速自动检查后，准备页直接信任声明值；Native 预武装
+            # 与准备页身份校验仍必须照常完成。
             print(
-                "RealtimePerformanceSettingsGate "
-                f"difficulty={difficulty} before={actual_before:.2f} "
-                f"actual={confirmed:.2f} expected={expected:.2f} "
-                f"method=fixed-digit-template "
-                f"profile={profile or 'calibration-setting'}",
+                "RealtimePerformanceSettingsGate enabled=false skipped=true "
+                f"difficulty={difficulty} expected={expected:.2f} "
+                f"source=configured-values profile={profile or 'calibration-setting'}",
                 flush=True,
             )
-            verified_successfully = True
-        finally:
-            if opened:
-                try:
-                    if verified_successfully:
-                        _close_settings_dialog(
-                            context,
-                            controller,
-                            coordinates,
-                            attempts=int(params.get("close_attempts", 3)),
-                            delay_seconds=float(
-                                params.get("close_delay_seconds", 0.5)
-                            ),
-                        )
-                    else:
-                        _click(controller, coordinates["close"])
-                        time.sleep(
-                            float(params.get("close_delay_seconds", 0.5))
-                        )
-                except Exception:
-                    traceback.print_exc()
-                    if verified_successfully:
-                        raise
-        if context.tasker.stopping:
-            return True
-        if bool(params.get("defer_native_prearm", False)):
-            discard_prearmed_backend("deferred-until-final-cover")
-            print(
-                "RealtimePerformanceSettingsGate native_prearm=deferred "
-                "reason=wait-final-cover",
-                flush=True,
+            return finish_without_dialog("configured-values")
+
+        speed_target = _speed_settings_target(note_speed=expected)
+        if _ACTIVE_SPEED_TARGET == speed_target:
+            _ACTIVE_SPEED_TARGET = dict(speed_target)
+            return finish_without_dialog("home-task-speed-result")
+        if _ACTIVE_SPEED_TARGET is not None:
+            raise RuntimeError(
+                "主页流速校验与本局目标不一致；"
+                "为避免在开演前打开设置页，本局已阻止开演"
             )
-        else:
-            prepare_native_for_settings_gate(
-                controller=controller,
-                live_run=current_live_run(),
-                difficulty=difficulty,
-                project_root=PROJECT_ROOT,
-                ready_timeout_s=float(
-                    params.get(
-                        "native_ready_timeout_seconds",
-                        10.0,
-                    )
-                ),
-                ttl_s=float(params.get("native_prearm_ttl_seconds", 30.0)),
-            )
-        if context.tasker.stopping:
-            discard_prearmed_backend("user-stopped-after-prearm")
-        return True
+        raise RuntimeError(
+            "开关已开启，但本任务必须先在主页完成流速校验；"
+            "准备页禁止打开设置齿轮"
+        )

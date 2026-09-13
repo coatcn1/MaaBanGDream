@@ -41,6 +41,20 @@ class ChartResolution:
     reason: str
 
 
+@dataclass(frozen=True, slots=True)
+class CatalogSongIdentity:
+    bestdori_song_id: int
+    title: str
+    titles: tuple[str, ...]
+    fingerprints: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogSongResolution:
+    identity: CatalogSongIdentity | None
+    reason: str
+
+
 class LocalChartRepository:
     """Resolve a confirmed song fingerprint and exact difficulty locally."""
 
@@ -50,6 +64,82 @@ class LocalChartRepository:
         self.root = Path(root).resolve()
         self.manifest_path = self.root / "manifest.json"
 
+    def identify_by_cover_title(
+        self,
+        song_fingerprint: str,
+        title: str,
+        *,
+        full_badge: bool | None = None,
+    ) -> CatalogSongResolution:
+        """只用开场封面与标题确认歌曲，不要求该难度已有本地谱面。"""
+        if song_fingerprint == UNKNOWN_SONG_ID:
+            return CatalogSongResolution(None, "song fingerprint is unknown")
+        if not str(title).strip():
+            return CatalogSongResolution(None, "song title is not confirmed")
+        songs = self._load_manifest()["songs"]
+        cover_matches = [
+            song for song in songs
+            if any(
+                same_song(song_fingerprint, confirmed)
+                for confirmed in song["fingerprints"]
+            )
+        ]
+        if not cover_matches:
+            # 一键监听没有准备页等级可作第二重约束。只有标题先独立收窄出
+            # 候选后，才允许用宽松封面阈值吸收开场页裁切和边框差异。
+            title_scope = _unique_title_matches(songs, title)
+            cover_matches = [
+                song for song in title_scope
+                if any(
+                    same_song(
+                        song_fingerprint,
+                        confirmed,
+                        max_distance=LOOSE_SAME_SONG_DISTANCE,
+                    )
+                    for confirmed in song["fingerprints"]
+                )
+            ]
+        if not cover_matches:
+            return CatalogSongResolution(
+                None,
+                "song fingerprint is not confirmed",
+            )
+        if full_badge is not None:
+            badge_matches = [
+                song for song in cover_matches
+                if _catalog_song_is_full(song) is bool(full_badge)
+            ]
+            if not badge_matches:
+                return CatalogSongResolution(
+                    None,
+                    "FULL badge conflicts with final cover candidates",
+                )
+            cover_matches = badge_matches
+        title_matches = _unique_title_matches(cover_matches, title)
+        if not title_matches:
+            return CatalogSongResolution(
+                None,
+                "song title does not match final cover",
+            )
+        if len(title_matches) != 1:
+            return CatalogSongResolution(
+                None,
+                "song cover and title mapping is ambiguous",
+            )
+        song = title_matches[0]
+        titles = tuple(str(value) for value in song.get("titles", ()))
+        return CatalogSongResolution(
+            CatalogSongIdentity(
+                bestdori_song_id=int(song["bestdori_song_id"]),
+                title=str(song.get("display_title") or titles[0]),
+                titles=titles,
+                fingerprints=tuple(
+                    str(value) for value in song.get("fingerprints", ())
+                ),
+            ),
+            "confirmed song by final cover and title",
+        )
+
     def resolve(
         self,
         song_fingerprint: str,
@@ -57,9 +147,20 @@ class LocalChartRepository:
         *,
         level: int | None = None,
         title: str | None = None,
+        bestdori_song_id: int | None = None,
     ) -> ChartResolution:
         manifest = self._load_manifest()
         songs = manifest["songs"]
+        if bestdori_song_id is not None:
+            songs = [
+                song for song in songs
+                if int(song["bestdori_song_id"]) == int(bestdori_song_id)
+            ]
+            if not songs:
+                return ChartResolution(
+                    None,
+                    "confirmed song id is not present in local catalog",
+                )
         if title and _FULL_TITLE_PREFIX.match(re.sub(r"['\"‘’]", "", str(title))):
             # 明确读到 FULL 就是版本证据，不能被首尾噪声裁剪抹成普通版。
             songs = [song for song in songs if any(
@@ -309,3 +410,11 @@ def _local_title_match_forms(title: Any) -> tuple[str, ...]:
     if without_full and without_full != value:
         return value, without_full
     return (value,)
+
+
+def _catalog_song_is_full(song: dict[str, Any]) -> bool:
+    """曲库条目是否明确属于带 FULL 前缀的长谱面。"""
+    return any(
+        _FULL_TITLE_PREFIX.match(str(title))
+        for title in song.get("titles", ())
+    )

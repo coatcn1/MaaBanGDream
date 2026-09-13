@@ -121,6 +121,39 @@ foreach ($runtimeDirectory in ($profileDirectory, $recordingDirectory, $captureD
 }
 Copy-Item -Path (Join-Path $sourceResource '*') -Destination $deployedResource -Recurse -Force
 
+# Copy-Item 不会清理已从源码删除的文件；仅移除这次流速化后明确废弃的
+# NOTE TYPE 识别模板，避免开发运行目录继续携带已经删除的视觉设置资产。
+$deployedPerformanceRoot = [System.IO.Path]::GetFullPath(
+    (Join-Path $deployedResource 'image\performance_settings')
+)
+$deployedPerformancePrefix = $deployedPerformanceRoot.TrimEnd(
+    [System.IO.Path]::DirectorySeparatorChar
+) + [System.IO.Path]::DirectorySeparatorChar
+$obsoletePerformanceAssets = @(
+    'type_digits.png',
+    'type_labels\type_label_1.png',
+    'type_labels\type_label_2.png',
+    'type_labels\type_label_3.png',
+    'type_labels\type_label_4.png',
+    'type_labels\type_label_5.png',
+    'type_labels\type_label_6.png',
+    'type_labels\type_label_7.png'
+)
+foreach ($relativeAsset in $obsoletePerformanceAssets) {
+    $obsoleteAsset = [System.IO.Path]::GetFullPath(
+        (Join-Path $deployedPerformanceRoot $relativeAsset)
+    )
+    if (-not $obsoleteAsset.StartsWith(
+        $deployedPerformancePrefix,
+        [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw "Refusing to remove asset outside deployment root: $obsoleteAsset"
+    }
+    if (Test-Path -LiteralPath $obsoleteAsset -PathType Leaf) {
+        Remove-Item -LiteralPath $obsoleteAsset -Force
+    }
+}
+
 foreach ($aboutAsset in @('docs/about.md', 'docs/contact.md', 'docs/assets/maabangdream-logo-v1.png')) {
     $aboutDestination = Join-Path $MfaRoot $aboutAsset
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $aboutDestination) | Out-Null

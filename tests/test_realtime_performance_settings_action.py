@@ -8,21 +8,25 @@ import numpy as np
 import pytest
 
 from agent.realtime import performance_settings_action
-from agent.realtime.live_session import reset_live_run, update_live_run
+from agent.realtime.live_session import (
+    current_live_run,
+    reset_live_run,
+    update_live_run,
+)
 from agent.realtime.performance_settings_action import (
     DEFAULT_COORDINATES,
     RealtimePerformanceSettingsGate,
+    _adjust_speed,
     _digit_templates,
     _expected_speed,
     _close_settings_dialog,
     _read_speed,
+    _read_speed_stable,
+    _select_first_tab_and_read,
     _speed_click_plan,
     clear_verified_settings,
+    require_special_chart_for_settings_gate,
     verified_settings,
-)
-from agent.realtime.game_effect_settings_action import (
-    _publish_verified_game_visual_settings,
-    clear_verified_game_visual_settings,
 )
 
 
@@ -42,6 +46,9 @@ class _Controller:
 @pytest.fixture(autouse=True)
 def _isolate_native_prearm(monkeypatch):
     monkeypatch.setattr(
+        performance_settings_action, "_ACTIVE_SPEED_TARGET", None
+    )
+    monkeypatch.setattr(
         performance_settings_action,
         "prepare_native_for_settings_gate",
         lambda **kwargs: None,
@@ -53,8 +60,169 @@ def _isolate_native_prearm(monkeypatch):
     )
     monkeypatch.setattr(
         "agent.realtime.performance_settings_action.RealtimeProfileStore.runtime_options",
-        lambda _store: {"game_effect_settings_enabled": True},
+        lambda _store: {"note_speed_settings_enabled": True},
     )
+
+
+def test_speed_gate_uses_current_task_home_result_without_opening_dialog(monkeypatch):
+    clear_verified_settings()
+    clicks = []
+    options = {"note_speed_settings_enabled": True}
+    target = performance_settings_action._speed_settings_target(note_speed=5.0)
+    monkeypatch.setattr(
+        performance_settings_action,
+        "_expected_speed",
+        lambda context, params, image: (5.0, "expert.json"),
+    )
+    monkeypatch.setattr(
+        performance_settings_action.RealtimeProfileStore,
+        "runtime_options",
+        lambda _store: options,
+    )
+    monkeypatch.setattr(
+        performance_settings_action,
+        "_ACTIVE_SPEED_TARGET",
+        target,
+    )
+    monkeypatch.setattr(
+        performance_settings_action,
+        "_click",
+        lambda _controller, point: clicks.append(point),
+    )
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=_Controller()),
+    )
+
+    assert RealtimePerformanceSettingsGate()._run(
+        context,
+        {"difficulty": "Expert", "require_profile": True},
+    ) is True
+
+    assert clicks == []
+    assert verified_settings("Expert").actual_note_speed == 5.0
+
+
+def test_speed_gate_never_opens_dialog_when_task_home_result_is_missing(monkeypatch):
+    clear_verified_settings()
+    options = {"note_speed_settings_enabled": True}
+    monkeypatch.setattr(
+        performance_settings_action,
+        "_expected_speed",
+        lambda context, params, image: (5.0, "expert.json"),
+    )
+    monkeypatch.setattr(
+        performance_settings_action.RealtimeProfileStore,
+        "runtime_options",
+        lambda _store: options,
+    )
+    monkeypatch.setattr(
+        performance_settings_action,
+        "_click",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("准备页不得再打开设置弹窗")
+        ),
+    )
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=_Controller()),
+    )
+
+    with pytest.raises(RuntimeError, match="必须先在主页完成流速校验"):
+        RealtimePerformanceSettingsGate()._run(
+            context,
+            {"difficulty": "Expert", "require_profile": True},
+        )
+
+
+def test_enabled_gate_fails_closed_when_home_gate_was_not_run(monkeypatch):
+    clear_verified_settings()
+    clicks = []
+    options = {"note_speed_settings_enabled": True}
+    monkeypatch.setattr(
+        performance_settings_action,
+        "_expected_speed",
+        lambda context, params, image: (5.0, "expert.json"),
+    )
+    monkeypatch.setattr(
+        performance_settings_action.RealtimeProfileStore,
+        "runtime_options",
+        lambda _store: options,
+    )
+    monkeypatch.setattr(
+        performance_settings_action,
+        "_click",
+        lambda _controller, point: clicks.append(point),
+    )
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=_Controller()),
+    )
+
+    with pytest.raises(RuntimeError, match="必须先在主页"):
+        RealtimePerformanceSettingsGate()._run(
+            context,
+            {"difficulty": "Expert", "require_profile": True},
+        )
+
+    assert clicks == []
+
+
+def test_special_chart_gate_rejects_missing_reliable_local_chart(monkeypatch):
+    reset_live_run(
+        mode="challenge",
+        difficulty="Special",
+        requested_difficulty="Special",
+        prepared_for_play=True,
+    )
+    update_live_run(
+        song_id="unknown",
+        song_level=30,
+        song_title="Special Song",
+    )
+
+    class Repository:
+        def resolve(self, *_args, **_kwargs):
+            return SimpleNamespace(
+                selection=None,
+                reason="no local special chart for confirmed song",
+            )
+
+    monkeypatch.setattr(
+        performance_settings_action,
+        "LocalChartRepository",
+        lambda _root: Repository(),
+    )
+
+    with pytest.raises(RuntimeError, match="禁止按视觉回退开演"):
+        require_special_chart_for_settings_gate("Special")
+
+
+def test_special_chart_gate_accepts_exact_special_selection(monkeypatch):
+    reset_live_run(
+        mode="cooperative",
+        difficulty="Special",
+        requested_difficulty="Special",
+        prepared_for_play=True,
+    )
+    update_live_run(
+        song_id="unknown",
+        song_level=30,
+        song_title="Special Song",
+    )
+    selection = SimpleNamespace(
+        bestdori_song_id=30,
+        difficulty="special",
+    )
+
+    class Repository:
+        def resolve(self, *_args, **_kwargs):
+            return SimpleNamespace(selection=selection, reason="confirmed")
+
+    monkeypatch.setattr(
+        performance_settings_action,
+        "LocalChartRepository",
+        lambda _root: Repository(),
+    )
+
+    assert require_special_chart_for_settings_gate("Special") is selection
 
 
 def test_fixed_digit_template_reader_decodes_two_digit_upper_bound():
@@ -94,110 +262,34 @@ def test_speed_click_plan_uses_half_tenth_cent_steps_without_wrapping():
     ]
 
 
-def test_visual_evaluation_uses_precheck_resolver_before_speed_read(monkeypatch):
-    clear_verified_game_visual_settings()
-    _publish_verified_game_visual_settings(
-        note_skin_type=7,
-        tap_effect=5,
-        judgement_assist_effect=False,
-    )
-    calls = []
-    settings = SimpleNamespace(
-        note_speed=5.0,
-        profile_path=SimpleNamespace(name="expert.json"),
-    )
-    monkeypatch.setattr(
-        "agent.realtime.performance_settings_action.RealtimeProfileStore.runtime_options",
-        lambda _store: {
-            "note_skin_type": 1,
-            "tap_effect": 1,
-            "judgement_assist_effect": True,
-        },
-    )
-    monkeypatch.setattr(
-        "agent.realtime.performance_settings_action.RealtimeProfileStore.resolve_latest_for_visual_evaluation_environment",
-        lambda _store, **kwargs: calls.append(kwargs) or settings,
-    )
-    monkeypatch.setattr(
-        "agent.realtime.performance_settings_action.RealtimeProfileStore.resolve_latest_for_environment",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("strict resolver must not run during evaluation precheck")
-        ),
-    )
-
-    speed, profile = _expected_speed(
-        SimpleNamespace(),
-        {
-            "difficulty": "Expert",
-            "require_profile": True,
-            "visual_evaluation": True,
-        },
-        np.zeros((720, 1280, 3), dtype=np.uint8),
-    )
-
-    assert (speed, profile) == (5.0, "expert.json")
-    signature = calls[0]["current_signature"]
-    assert signature.note_speed == 1.0
-    assert signature.note_skin_type == 7
-    assert signature.tap_effect == 5
-    assert signature.judgement_assist_effect is False
-
-
-def test_gate_reads_current_speed_and_uses_real_half_tenth_cent_buttons(monkeypatch):
-    clear_verified_settings()
+def test_speed_adjustment_uses_real_half_tenth_cent_buttons(monkeypatch):
     clicks = []
-    prearm_calls = []
-    readings = iter([2.37, 5.0])
-    monkeypatch.setattr(
-        "agent.realtime.performance_settings_action._expected_speed",
-        lambda context, params, image: (5.0, "expert.json"),
-    )
-    monkeypatch.setattr(
-        "agent.realtime.performance_settings_action._read_speed",
-        lambda image, roi: next(readings),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        "agent.realtime.performance_settings_action._click",
-        lambda controller, point: clicks.append(point),
-    )
     monkeypatch.setattr(
         "agent.realtime.performance_settings_action.time.sleep",
         lambda seconds: None,
     )
-
-    def prepare_prearm(**kwargs):
-        # 预武装只能发生在设置弹窗确认关闭之后。
-        assert clicks[-1] == DEFAULT_COORDINATES["close"]
-        prearm_calls.append(kwargs)
-
-    monkeypatch.setattr(
-        performance_settings_action,
-        "prepare_native_for_settings_gate",
-        prepare_prearm,
-    )
     context = SimpleNamespace(
-        tasker=SimpleNamespace(stopping=False, controller=_Controller()),
+        tasker=SimpleNamespace(stopping=False),
     )
 
-    assert RealtimePerformanceSettingsGate()._run(context, {
-        "difficulty": "Expert",
-        "require_profile": True,
-    })
+    completed, confirmed = _adjust_speed(
+        context,
+        None,
+        DEFAULT_COORDINATES,
+        2.37,
+        5.0,
+        button_delay_seconds=0,
+        settle_delay_seconds=0,
+        round_limit=3,
+        read_current=lambda: 5.0,
+        click_point=clicks.append,
+    )
 
-    # Gear first, then the first 演出设定 tab explicitly (the game remembers
-    # the last-used tab), never the second tab. Then +2.63.
-    assert clicks[:2] == [(960, 650), (297, 155)]
-    assert (430, 155) not in clicks
+    assert completed is True
+    assert confirmed == 5.0
     assert clicks.count((635, 312)) == 5  # +0.50
     assert clicks.count((575, 312)) == 1  # +0.10
     assert clicks.count((513, 312)) == 3  # +0.01
-    assert clicks[-1] == (640, 600)
-    assert prearm_calls[0]["difficulty"] == "Expert"
-    verified = verified_settings("Expert")
-    assert verified is not None
-    assert verified.actual_note_speed == 5.0
-    assert verified.profile == "expert.json"
 
 
 def test_gate_skips_speed_read_when_game_effect_settings_disabled(monkeypatch):
@@ -220,7 +312,7 @@ def test_gate_skips_speed_read_when_game_effect_settings_disabled(monkeypatch):
     )
     monkeypatch.setattr(
         "agent.realtime.performance_settings_action.RealtimeProfileStore.runtime_options",
-        lambda _store: {"game_effect_settings_enabled": False},
+        lambda _store: {"note_speed_settings_enabled": False},
     )
     monkeypatch.setattr(
         performance_settings_action,
@@ -247,6 +339,60 @@ def test_gate_skips_speed_read_when_game_effect_settings_disabled(monkeypatch):
     assert verified.expected_note_speed == 5.0
 
 
+def test_gate_uses_confirmed_expert_when_special_button_was_unavailable(
+    monkeypatch,
+):
+    clear_verified_settings()
+    reset_live_run(
+        mode="formal",
+        difficulty="Expert",
+        requested_difficulty="Special",
+        prepared_for_play=True,
+    )
+    identity_difficulties = []
+    expected_params = []
+    prearm_calls = []
+    monkeypatch.setattr(
+        "agent.realtime.preparation_identity.confirm_preparation_identity",
+        lambda image, difficulty: identity_difficulties.append(difficulty),
+    )
+    monkeypatch.setattr(
+        performance_settings_action,
+        "_expected_speed",
+        lambda context, params, image: (
+            expected_params.append(dict(params)) or (5.0, "expert.json")
+        ),
+    )
+    monkeypatch.setattr(
+        "agent.realtime.performance_settings_action.RealtimeProfileStore.runtime_options",
+        lambda _store: {"note_speed_settings_enabled": False},
+    )
+    monkeypatch.setattr(
+        performance_settings_action,
+        "prepare_native_for_settings_gate",
+        lambda **kwargs: prearm_calls.append(kwargs),
+    )
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=_Controller()),
+    )
+
+    assert RealtimePerformanceSettingsGate()._run(context, {
+        "difficulty": "Special",
+        "require_profile": True,
+        "confirm_preparation_identity": True,
+    })
+
+    assert identity_difficulties == ["Expert"]
+    assert expected_params[0]["difficulty"] == "Expert"
+    assert prearm_calls[0]["difficulty"] == "Expert"
+    assert verified_settings("Special") is None
+    assert verified_settings("Expert") is not None
+    run = current_live_run()
+    assert run is not None
+    assert run.requested_difficulty == "Special"
+    assert run.difficulty == "Expert"
+
+
 def test_skipped_gate_still_defers_native_prearm_when_requested(monkeypatch):
     clear_verified_settings()
     discarded = []
@@ -256,7 +402,7 @@ def test_skipped_gate_still_defers_native_prearm_when_requested(monkeypatch):
     )
     monkeypatch.setattr(
         "agent.realtime.performance_settings_action.RealtimeProfileStore.runtime_options",
-        lambda _store: {"game_effect_settings_enabled": False},
+        lambda _store: {"note_speed_settings_enabled": False},
     )
     monkeypatch.setattr(
         performance_settings_action,
@@ -282,39 +428,66 @@ def test_skipped_gate_still_defers_native_prearm_when_requested(monkeypatch):
     assert discarded == ["deferred-until-final-cover"]
 
 
-def test_gate_fails_closed_when_native_prearm_fails_after_dialog_close(
-    monkeypatch,
-):
+def test_skipped_gate_caches_fresh_cooperative_preparation_image(monkeypatch):
     clear_verified_settings()
-    closed = []
+    frame = np.full((720, 1280, 3), 37, dtype=np.uint8)
+
+    class Controller:
+        def post_screencap(self):
+            return SimpleNamespace(
+                wait=lambda: SimpleNamespace(get=lambda: frame),
+            )
+
+    reset_live_run(
+        mode="cooperative",
+        difficulty="Expert",
+        prepared_for_play=True,
+    )
     monkeypatch.setattr(
         performance_settings_action,
         "_expected_speed",
         lambda context, params, image: (5.0, "expert.json"),
     )
     monkeypatch.setattr(
-        performance_settings_action,
-        "_select_first_tab_and_read",
-        lambda *args, **kwargs: 5.0,
+        "agent.realtime.performance_settings_action.RealtimeProfileStore.runtime_options",
+        lambda _store: {"note_speed_settings_enabled": False},
     )
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=Controller()),
+    )
+
+    assert RealtimePerformanceSettingsGate()._run(context, {
+        "difficulty": "Expert",
+        "require_profile": True,
+        "defer_native_prearm": True,
+        "cache_preparation_image": True,
+    })
+
+    run = current_live_run()
+    assert run is not None
+    assert run.cooperative_prestart_image is not frame
+    assert np.array_equal(run.cooperative_prestart_image, frame)
+
+
+def test_gate_fails_closed_when_native_prearm_fails_after_home_result(
+    monkeypatch,
+):
+    clear_verified_settings()
+    options = {"note_speed_settings_enabled": True}
+    target = performance_settings_action._speed_settings_target(note_speed=5.0)
+    monkeypatch.setattr(
+        performance_settings_action.RealtimeProfileStore,
+        "runtime_options",
+        lambda _store: options,
+    )
+    monkeypatch.setattr(performance_settings_action, "_ACTIVE_SPEED_TARGET", target)
     monkeypatch.setattr(
         performance_settings_action,
-        "_adjust_speed",
-        lambda *args, **kwargs: (True, 5.0),
-    )
-    monkeypatch.setattr(
-        performance_settings_action,
-        "_click",
-        lambda *args, **kwargs: None,
-    )
-    monkeypatch.setattr(
-        performance_settings_action,
-        "_close_settings_dialog",
-        lambda *args, **kwargs: closed.append(True),
+        "_expected_speed",
+        lambda context, params, image: (5.0, "expert.json"),
     )
 
     def fail_prearm(**kwargs):
-        assert closed == [True]
         raise RuntimeError("simulated prearm failure")
 
     monkeypatch.setattr(
@@ -335,30 +508,18 @@ def test_gate_fails_closed_when_native_prearm_fails_after_dialog_close(
 
 def test_gate_can_defer_native_prearm_until_final_cover(monkeypatch):
     clear_verified_settings()
+    options = {"note_speed_settings_enabled": True}
+    target = performance_settings_action._speed_settings_target(note_speed=5.0)
+    monkeypatch.setattr(
+        performance_settings_action.RealtimeProfileStore,
+        "runtime_options",
+        lambda _store: options,
+    )
+    monkeypatch.setattr(performance_settings_action, "_ACTIVE_SPEED_TARGET", target)
     monkeypatch.setattr(
         performance_settings_action,
         "_expected_speed",
         lambda context, params, image: (5.0, "expert.json"),
-    )
-    monkeypatch.setattr(
-        performance_settings_action,
-        "_select_first_tab_and_read",
-        lambda *args, **kwargs: 5.0,
-    )
-    monkeypatch.setattr(
-        performance_settings_action,
-        "_adjust_speed",
-        lambda *args, **kwargs: (True, 5.0),
-    )
-    monkeypatch.setattr(
-        performance_settings_action,
-        "_click",
-        lambda *args, **kwargs: None,
-    )
-    monkeypatch.setattr(
-        performance_settings_action,
-        "_close_settings_dialog",
-        lambda *args, **kwargs: None,
     )
     prepared = []
     discarded = []
@@ -402,40 +563,28 @@ def test_gate_rejects_speed_outside_game_range(monkeypatch):
         raise AssertionError("expected an out-of-range speed to be rejected")
 
 
-def test_gate_never_blindly_decrements_across_wrapping_minimum(monkeypatch):
-    clear_verified_settings()
+def test_speed_adjustment_never_decrements_across_wrapping_minimum(monkeypatch):
     clicks = []
-    readings = iter([1.0, 1.0])
-    monkeypatch.setattr(
-        "agent.realtime.performance_settings_action._expected_speed",
-        lambda context, params, image: (1.0, None),
-    )
-    monkeypatch.setattr(
-        "agent.realtime.performance_settings_action._read_speed",
-        lambda image, roi: next(readings),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        "agent.realtime.performance_settings_action._click",
-        lambda controller, point: clicks.append(point),
-    )
-    monkeypatch.setattr(
-        "agent.realtime.performance_settings_action.time.sleep",
-        lambda seconds: None,
-    )
     context = SimpleNamespace(
-        tasker=SimpleNamespace(stopping=False, controller=_Controller()),
+        tasker=SimpleNamespace(stopping=False),
     )
 
-    assert RealtimePerformanceSettingsGate()._run(context, {
-        "difficulty": "Easy",
-    })
+    completed, confirmed = _adjust_speed(
+        context,
+        None,
+        DEFAULT_COORDINATES,
+        1.0,
+        1.0,
+        button_delay_seconds=0,
+        settle_delay_seconds=0,
+        round_limit=3,
+        read_current=lambda: 1.0,
+        click_point=clicks.append,
+    )
 
-    assert clicks.count((207, 312)) == 0
-    assert clicks.count((268, 312)) == 0
-    assert clicks.count((330, 312)) == 0
-    assert clicks.count(DEFAULT_COORDINATES["close"]) == 2
-    assert verified_settings("Easy").actual_note_speed == 1.0
+    assert completed is True
+    assert confirmed == 1.0
+    assert clicks == []
 
 
 def test_settings_close_retries_until_speed_display_disappears(monkeypatch):
@@ -475,103 +624,77 @@ def test_settings_close_retries_until_speed_display_disappears(monkeypatch):
     ]
 
 
-def _patch_gate_io(monkeypatch, readings, clicks, expected=2.0):
-    monkeypatch.setattr(
-        "agent.realtime.performance_settings_action._expected_speed",
-        lambda context, params, image: (expected, None),
-    )
-    monkeypatch.setattr(
-        "agent.realtime.performance_settings_action._read_speed",
-        lambda image, roi: next(readings),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        "agent.realtime.performance_settings_action._click",
-        lambda controller, point: clicks.append(point),
-    )
-    monkeypatch.setattr(
-        "agent.realtime.performance_settings_action.time.sleep",
-        lambda seconds: None,
-    )
-
-
-def test_gate_replans_from_fresh_reading_after_dropped_clicks(monkeypatch):
-    clear_verified_settings()
+def test_speed_adjustment_replans_after_dropped_clicks(monkeypatch):
     clicks = []
-    # 5.00 -> 2.00 needs -3.00. Two -0.50 clicks get dropped, so the first
-    # reread shows 3.00; the closed loop must click -1.00 more.
-    readings = iter([5.0, 3.0, 2.0])
-    _patch_gate_io(monkeypatch, readings, clicks, expected=2.0)
+    # 5.00 调到 2.00 共需 -3.00；丢失两次 -0.50 点击后首次读回为 3.00，
+    # 闭环必须据此重新规划并补点 -1.00。
+    readings = iter([3.0, 2.0])
+    monkeypatch.setattr(performance_settings_action.time, "sleep", lambda _: None)
     context = SimpleNamespace(
-        tasker=SimpleNamespace(stopping=False, controller=_Controller()),
+        tasker=SimpleNamespace(stopping=False),
     )
 
-    assert RealtimePerformanceSettingsGate()._run(context, {
-        "difficulty": "Expert",
-    })
+    completed, confirmed = _adjust_speed(
+        context,
+        None,
+        DEFAULT_COORDINATES,
+        5.0,
+        2.0,
+        button_delay_seconds=0,
+        settle_delay_seconds=0,
+        round_limit=3,
+        read_current=lambda: next(readings),
+        click_point=clicks.append,
+    )
 
+    assert completed is True
+    assert confirmed == 2.0
     assert clicks.count((207, 312)) == 6 + 2  # -0.50 x6, then -0.50 x2
-    assert verified_settings("Expert").actual_note_speed == 2.0
 
 
-def test_gate_blocks_when_clicks_have_no_effect(monkeypatch):
-    clear_verified_settings()
+def test_speed_adjustment_blocks_when_clicks_have_no_effect(monkeypatch):
     clicks = []
-    readings = iter([5.0] * 20)
-    _patch_gate_io(monkeypatch, readings, clicks, expected=2.0)
+    monkeypatch.setattr(performance_settings_action.time, "sleep", lambda _: None)
     context = SimpleNamespace(
-        tasker=SimpleNamespace(stopping=False, controller=_Controller()),
+        tasker=SimpleNamespace(stopping=False),
     )
 
-    try:
-        RealtimePerformanceSettingsGate()._run(context, {"difficulty": "Easy"})
-    except RuntimeError as exc:
-        assert "未生效" in str(exc) or "未收敛" in str(exc)
-    else:
-        raise AssertionError("expected the gate to block on dead buttons")
+    with pytest.raises(RuntimeError, match="未生效|未收敛"):
+        _adjust_speed(
+            context,
+            None,
+            DEFAULT_COORDINATES,
+            5.0,
+            2.0,
+            button_delay_seconds=0,
+            settle_delay_seconds=0,
+            round_limit=3,
+            read_current=lambda: 5.0,
+            click_point=clicks.append,
+        )
 
 
-def test_gate_blocks_instead_of_blind_clicking_when_unreadable(monkeypatch):
-    clear_verified_settings()
+def test_first_tab_read_blocks_instead_of_blind_speed_clicking(monkeypatch):
     clicks = []
-    monkeypatch.setattr(
-        "agent.realtime.performance_settings_action._expected_speed",
-        lambda context, params, image: (2.0, None),
-    )
-
-    def _always_fail(image, roi):
+    def always_fail():
         raise RuntimeError("glyph unreadable")
 
-    monkeypatch.setattr(
-        "agent.realtime.performance_settings_action._read_speed",
-        _always_fail,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        "agent.realtime.performance_settings_action._click",
-        lambda controller, point: clicks.append(point),
-    )
-    monkeypatch.setattr(
-        "agent.realtime.performance_settings_action.time.sleep",
-        lambda seconds: None,
-    )
-    context = SimpleNamespace(
-        tasker=SimpleNamespace(stopping=False, controller=_Controller()),
-    )
+    with pytest.raises(RuntimeError, match="仍不可读取"):
+        _select_first_tab_and_read(
+            None,
+            DEFAULT_COORDINATES,
+            always_fail,
+            attempts=2,
+            settle_delay_seconds=0,
+            click_point=clicks.append,
+        )
 
-    try:
-        RealtimePerformanceSettingsGate()._run(context, {"difficulty": "Easy"})
-    except RuntimeError as exc:
-        assert "不可识别" in str(exc)
-    else:
-        raise AssertionError("expected the gate to block on unreadable digits")
-    assert clicks.count((207, 312)) == 0
+    assert clicks == [DEFAULT_COORDINATES["first_tab"]] * 2
 
 
-def test_gate_reclicks_first_tab_when_the_initial_tab_switch_is_dropped(
+def test_first_tab_read_reclicks_when_initial_switch_is_dropped(
     monkeypatch,
 ):
-    clear_verified_settings()
     clicks = []
     attempts = iter([
         RuntimeError("wrong settings tab"),
@@ -579,51 +702,28 @@ def test_gate_reclicks_first_tab_when_the_initial_tab_switch_is_dropped(
         RuntimeError("wrong settings tab"),
         2.0,
     ])
-    monkeypatch.setattr(
-        "agent.realtime.performance_settings_action._expected_speed",
-        lambda context, params, image: (2.0, None),
-    )
-
-    def _read_after_retry(_image, _roi):
+    def read_after_retry():
         value = next(attempts)
         if isinstance(value, Exception):
             raise value
         return value
+    monkeypatch.setattr(performance_settings_action.time, "sleep", lambda _: None)
 
-    monkeypatch.setattr(
-        "agent.realtime.performance_settings_action._read_speed",
-        _read_after_retry,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        "agent.realtime.performance_settings_action._click",
-        lambda controller, point: clicks.append(point),
-    )
-    monkeypatch.setattr(
-        "agent.realtime.performance_settings_action.time.sleep",
-        lambda seconds: None,
-    )
-    context = SimpleNamespace(
-        tasker=SimpleNamespace(stopping=False, controller=_Controller()),
-    )
-
-    assert RealtimePerformanceSettingsGate()._run(context, {
-        "difficulty": "Easy",
-    })
+    assert _select_first_tab_and_read(
+        None,
+        DEFAULT_COORDINATES,
+        read_after_retry,
+        attempts=2,
+        settle_delay_seconds=0,
+        click_point=clicks.append,
+    ) == 2.0
     assert clicks.count(DEFAULT_COORDINATES["first_tab"]) == 2
-    assert verified_settings("Easy").actual_note_speed == 2.0
 
 
 def test_settings_gate_failure_writes_structured_preflight_result(
     monkeypatch, tmp_path,
 ):
     clear_verified_settings()
-    clear_verified_game_visual_settings()
-    _publish_verified_game_visual_settings(
-        note_skin_type=6,
-        tap_effect=4,
-        judgement_assist_effect=False,
-    )
     reset_live_run(
         mode="realtime",
         difficulty="Expert",
@@ -650,7 +750,6 @@ def test_settings_gate_failure_writes_structured_preflight_result(
         "dpi": 240,
         "game_fps": 60,
         "render_quality": "standard",
-        "visual_evaluation": True,
     }))
 
     assert RealtimePerformanceSettingsGate().run(context, argv) is False
@@ -663,14 +762,9 @@ def test_settings_gate_failure_writes_structured_preflight_result(
     assert payload["terminal_stage"] == "performance_settings_gate"
     assert payload["run_id"] == payload["session"]["run_id"]
     assert payload["song_id"] == "song-phash-v1-0011223344556677"
-    assert payload["mode"] == "visual-evaluation"
-    assert payload["settings"] == {
-        "expected_note_speed": 5.0,
-        "actual_note_speed": None,
-        "note_skin_type": 6,
-        "tap_effect": 4,
-        "judgement_assist": False,
-    }
+    assert payload["mode"] == "formal"
+    assert payload["settings"]["expected_note_speed"] == 5.0
+    assert payload["settings"]["actual_note_speed"] is None
     assert payload["processed_frames"] == 0
     assert payload["dispatched_actions"] == 0
     assert payload["debug_recording_path"] is None
@@ -682,12 +776,6 @@ def test_settings_readback_failure_keeps_expected_profile_snapshot(
     monkeypatch, tmp_path,
 ):
     clear_verified_settings()
-    clear_verified_game_visual_settings()
-    _publish_verified_game_visual_settings(
-        note_skin_type=3,
-        tap_effect=2,
-        judgement_assist_effect=True,
-    )
     live_run = reset_live_run(
         mode="challenge",
         difficulty="Expert",

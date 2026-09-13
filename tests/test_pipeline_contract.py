@@ -241,12 +241,6 @@ def test_realtime_start_handles_optional_pre_live_settings_confirmation():
             "RealtimeLiveFormalSettingsConfirm",
             "RealtimeLiveFormalPlay",
         ),
-        (
-            "RealtimeLiveVisualEvaluationStart",
-            "RealtimeLiveVisualEvaluationPostStart",
-            "RealtimeLiveVisualEvaluationSettingsConfirm",
-            "RealtimeLiveVisualEvaluationPlay",
-        ),
     )
     for start_name, post_start_name, confirm_name, play_name in cases:
         assert nodes[start_name]["next"] == [post_start_name]
@@ -323,6 +317,10 @@ def test_multi_live_options_and_loop_contract():
     assert nodes["AutoLiveRoundGate"]["max_hit"] == 1
     assert nodes["AutoLiveRandomSong"]["target"] == [687, 642]
     assert nodes["AutoLiveRandomSong"]["custom_action"] == "RandomSongSelect"
+    assert nodes["AutoLiveDifficulty"]["custom_action"] == (
+        "RealtimeDifficultySelect"
+    )
+    assert nodes["AutoLiveDifficulty"]["on_error"] == ["AutoLiveFailure"]
     assert nodes["AutoLiveResult"]["next"] == ["AutoLiveRoundCompleted"]
     assert nodes["AutoLiveRoundCompleted"]["next"] == [
         "AutoLiveRoundGate",
@@ -332,7 +330,7 @@ def test_multi_live_options_and_loop_contract():
     assert nodes["AutoLiveComplete"]["custom_action_param"]["status"] == "success"
 
 
-def test_difficulty_cases_override_only_the_difficulty_target():
+def test_auto_live_difficulty_cases_use_verified_selection():
     interface = load(ROOT / "interface.json")
     cases = interface["option"]["AutoLiveDifficulty"]["cases"]
     assert [case["name"] for case in cases] == [
@@ -342,11 +340,69 @@ def test_difficulty_cases_override_only_the_difficulty_target():
         "Expert",
         "Special",
     ]
-    assert all(
-        list(case["pipeline_override"]) == ["AutoLiveDifficulty"]
-        and list(case["pipeline_override"]["AutoLiveDifficulty"]) == ["target"]
-        for case in cases
+    for case in cases:
+        assert list(case["pipeline_override"]) == ["AutoLiveDifficulty"]
+        override = case["pipeline_override"]["AutoLiveDifficulty"]
+        assert list(override) == ["custom_action_param"]
+        expected_params = {
+            "difficulty": case["name"],
+            "max_attempts": 3,
+            "verify_delay_seconds": 0.35,
+            "track_live_run": False,
+            "song_identity": False,
+        }
+        if case["name"] == "Special":
+            expected_params["fallback_difficulties"] = ["Expert"]
+        assert override["custom_action_param"] == expected_params
+
+
+def test_auto_live_difficulty_overrides_resolve_in_real_maafw(tmp_path):
+    import subprocess
+    import sys
+
+    interface = load(ROOT / "interface.json")
+    pipeline = load(ROOT / "resource/pipeline/auto_live.json")
+    cases = interface["option"]["AutoLiveDifficulty"]["cases"]
+    code = """
+import json, sys
+from maa.resource import Resource
+from maa.toolkit import Toolkit
+data = json.load(sys.stdin)
+Toolkit.init_option(data['log_dir'])
+resource = Resource()
+assert resource.override_pipeline({'AutoLiveDifficulty': data['base']})
+effective = {}
+for name, override in data['overrides'].items():
+    assert resource.override_pipeline({'AutoLiveDifficulty': override})
+    effective[name] = resource.get_node_data('AutoLiveDifficulty')['action']['param']['custom_action_param']
+print(json.dumps(effective))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        input=json.dumps({
+            "log_dir": str(tmp_path),
+            "base": pipeline["AutoLiveDifficulty"],
+            "overrides": {
+                case["name"]: case["pipeline_override"]["AutoLiveDifficulty"]
+                for case in cases
+            },
+        }),
+        text=True,
+        capture_output=True,
+        check=True,
     )
+    effective = json.loads(result.stdout)
+    for difficulty, params in effective.items():
+        expected_params = {
+            "difficulty": difficulty,
+            "max_attempts": 3,
+            "verify_delay_seconds": 0.35,
+            "track_live_run": False,
+            "song_identity": False,
+        }
+        if difficulty == "Special":
+            expected_params["fallback_difficulties"] = ["Expert"]
+        assert params == expected_params
 
 
 def test_realtime_observe_is_screenshot_only_and_bounded():
@@ -434,12 +490,20 @@ def test_realtime_multi_live_contract_and_options():
         "RealtimeLiveProcessConflictGuard"
     ]
     assert nodes["RealtimeLiveRecover"]["next"] == [
-        "RealtimeLiveEffectSettingsGate"
+        "RealtimeLiveSpeedSettingsGate"
     ]
-    assert nodes["RealtimeLiveEffectSettingsGate"]["custom_action"] == (
-        "RealtimeGameEffectSettingsGate"
+    assert nodes["RealtimeLiveSpeedSettingsGate"]["custom_action"] == (
+        "RealtimeGameSpeedSettingsGate"
     )
-    assert nodes["RealtimeLiveEffectSettingsGate"]["next"] == [
+    assert nodes["RealtimeLiveSpeedSettingsGate"]["custom_action_param"] == {
+        "entry_mode": "home",
+        "difficulty": "Easy",
+        "require_profile": True,
+        "dpi": 240,
+        "game_fps": 60,
+        "render_quality": "standard",
+    }
+    assert nodes["RealtimeLiveSpeedSettingsGate"]["next"] == [
         "RealtimeLiveRoundGate"
     ]
     assert nodes["RealtimeLiveRoundGate"]["max_hit"] == 1
@@ -519,9 +583,22 @@ def test_realtime_multi_live_contract_and_options():
         target, play_node = expected[case["name"]]
         override = case["pipeline_override"]
         selection = override["RealtimeLiveDifficulty"]["custom_action_param"]
-        assert selection == {
+        expected_selection = {
             "difficulty": case["name"], "max_attempts": 3,
             "defer_song_title_to_preparation": True,
+        }
+        if case["name"] == "Special":
+            expected_selection["fallback_difficulties"] = ["Expert"]
+        assert selection == expected_selection
+        assert override["RealtimeLiveSpeedSettingsGate"][
+            "custom_action_param"
+        ] == {
+            "entry_mode": "home",
+            "difficulty": case["name"],
+            "require_profile": True,
+            "dpi": 240,
+            "game_fps": 60,
+            "render_quality": "standard",
         }
         assert target == tuple(DIFFICULTY_TARGETS[case["name"]])
         assert override["RealtimeLiveRehearsalStart"]["next"] == [
@@ -641,9 +718,35 @@ def test_continuous_realtime_live_is_a_pure_listener_task():
     assert nodes["ContinuousRealtimeProcessConflictGuard"]["custom_action"] == (
         "ProcessConflictGuard"
     )
+    assert nodes["ContinuousRealtimeProcessConflictGuard"]["next"] == [
+        "ContinuousRealtimeDifficultyConfigure"
+    ]
+    difficulty_gate = nodes["ContinuousRealtimeDifficultyConfigure"]
+    assert difficulty_gate["custom_action"] == "ContinuousRealtimeLiveConfigure"
+    assert difficulty_gate["custom_action_param"] == {
+        "reset": True,
+        "difficulty": "Easy",
+    }
+    assert difficulty_gate["next"] == ["ContinuousRealtimeDebugConfigure"]
+    debug_gate = nodes["ContinuousRealtimeDebugConfigure"]
+    assert debug_gate["custom_action"] == "ContinuousRealtimeLiveConfigure"
+    assert debug_gate["custom_action_param"] == {
+        "debug_recording": False,
+        "diagnostic_trace": True,
+    }
+    assert debug_gate["next"] == ["ContinuousRealtimeWatcher"]
     watcher = nodes["ContinuousRealtimeWatcher"]
     assert watcher["custom_action"] == "ContinuousRealtimeLive"
-    assert "next" not in watcher
+    assert watcher["next"] == ["ContinuousRealtimeComplete"]
+    starting = watcher["focus"]["Node.Action.Starting"]
+    assert "已开始识别" in starting["content"]
+    assert "任务所选难度" in starting["content"]
+    assert "自动结束" in starting["content"]
+    assert starting["display"] == ["log", "toast"]
+    complete = nodes["ContinuousRealtimeComplete"]
+    assert complete["custom_action"] == "TaskOutcome"
+    assert complete["custom_action_param"]["status"] == "success"
+    assert "自动结束" in complete["focus"]["Node.Action.Succeeded"]["content"]
     serialized = json.dumps(nodes, ensure_ascii=False)
     assert "Click" not in serialized
     assert "result" not in serialized.lower()
@@ -654,18 +757,21 @@ def test_continuous_realtime_live_is_a_pure_listener_task():
         "Easy", "Normal", "Hard", "Expert", "Special",
     ]
     for case in difficulty["cases"]:
-        params = case["pipeline_override"]["ContinuousRealtimeWatcher"][
+        params = case["pipeline_override"][
+            "ContinuousRealtimeDifficultyConfigure"
+        ][
             "custom_action_param"
         ]
-        assert params["difficulty"] == case["name"]
-        assert params["debug_recording"] is False
+        assert params == {"reset": True, "difficulty": case["name"]}
     debug = interface["option"]["ContinuousRealtimeDebug"]
     assert debug["default_case"] == "Light"
     assert [case["name"] for case in debug["cases"]] == [
         "Light", "Off", "Full",
     ]
     params = {
-        case["name"]: case["pipeline_override"]["ContinuousRealtimeWatcher"][
+        case["name"]: case["pipeline_override"][
+            "ContinuousRealtimeDebugConfigure"
+        ][
             "custom_action_param"
         ]
         for case in debug["cases"]
@@ -674,6 +780,64 @@ def test_continuous_realtime_live_is_a_pure_listener_task():
         "Light": {"debug_recording": False, "diagnostic_trace": True},
         "Off": {"debug_recording": False, "diagnostic_trace": False},
         "Full": {"debug_recording": True, "diagnostic_trace": True},
+    }
+
+
+def test_continuous_difficulty_and_debug_resolve_in_real_maafw(tmp_path):
+    import subprocess
+    import sys
+
+    interface = load(ROOT / "interface.json")
+    pipeline = load(ROOT / "resource/pipeline/continuous_realtime_live.json")
+    difficulty_case = next(
+        case for case in interface["option"]["ContinuousRealtimeDifficulty"][
+            "cases"
+        ]
+        if case["name"] == "Expert"
+    )
+    debug_case = next(
+        case for case in interface["option"]["ContinuousRealtimeDebug"]["cases"]
+        if case["name"] == "Light"
+    )
+    code = """
+import json, sys
+from maa.resource import Resource
+from maa.toolkit import Toolkit
+data = json.load(sys.stdin)
+Toolkit.init_option(data['log_dir'])
+resource = Resource()
+assert resource.override_pipeline(data['base'])
+assert resource.override_pipeline(data['difficulty'])
+assert resource.override_pipeline(data['debug'])
+print(json.dumps({
+    node: resource.get_node_data(node)['action']['param']['custom_action_param']
+    for node in data['base']
+}))
+"""
+    nodes = (
+        "ContinuousRealtimeDifficultyConfigure",
+        "ContinuousRealtimeDebugConfigure",
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        input=json.dumps({
+            "log_dir": str(tmp_path),
+            "base": {node: pipeline[node] for node in nodes},
+            "difficulty": difficulty_case["pipeline_override"],
+            "debug": debug_case["pipeline_override"],
+        }),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    effective = json.loads(result.stdout)
+    assert effective["ContinuousRealtimeDifficultyConfigure"] == {
+        "reset": True,
+        "difficulty": "Expert",
+    }
+    assert effective["ContinuousRealtimeDebugConfigure"] == {
+        "debug_recording": False,
+        "diagnostic_trace": True,
     }
 
 
@@ -715,7 +879,7 @@ def test_task_entries_bootstrap_before_round_execution():
             "RealtimeMultiLive",
             "RealtimeLiveProcessConflictGuard",
             "RealtimeLiveRecover",
-            "RealtimeLiveEffectSettingsGate",
+            "RealtimeLiveSpeedSettingsGate",
         ),
         (
             "cooperative_live.json",
@@ -729,14 +893,14 @@ def test_task_entries_bootstrap_before_round_execution():
             "RealtimeCalibration",
             "RealtimeCalibrationProcessConflictGuard",
             "RealtimeCalibrationRecover",
-            "RealtimeCalibrationVisualSettingsGate",
+            "RealtimeCalibrationSpeedSettingsGate",
         ),
         (
             "challenge_live.json",
             "ChallengeLive",
             "ChallengeProcessConflictGuard",
             "ChallengeRecover",
-            "ChallengeVisualSettingsGate",
+            "ChallengeSpeedSettingsGate",
         ),
     )
     for filename, entry_name, guard_name, recover_name, gate_name in entries:

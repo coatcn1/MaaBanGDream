@@ -1,35 +1,24 @@
 # 实时演奏稳定性验收
 
-本轮改动先建立可关联、可复现的观测能力，再用真机数据选择视觉设置和截图后端。除非截图基准证明当前后端无法满足门禁，否则不改变实时触控策略。
+本轮改动先建立可关联、可复现的观测能力，再用真机数据评估截图后端。除非截图基准证明当前后端无法满足门禁，否则不改变实时触控策略。
 
 ## 产物关联
 
-每轮演奏生成唯一 `run_id`。结果 JSON、校准报告和 Debug Recorder `summary.json` 必须同时记录相同的 `run_id` 与 `song_id`；Debug 关闭时 `debug_recording_path` 为 `null`。正式结果还记录经游戏界面读回验证的实际流速、按键类型、点击特效和判定辅助状态。
+每轮演奏生成唯一 `run_id`。结果 JSON、校准报告和 Debug Recorder `summary.json` 必须同时记录相同的 `run_id` 与 `song_id`；Debug 关闭时 `debug_recording_path` 为 `null`。正式结果记录目标流速和经游戏界面读回验证的实际流速。
 
 `song_id` 使用难度选择成功时已有截图的 `song-phash-v1` 感知哈希，不增加截图。无法可靠识别时记录 `unknown`；校准不会把 `unknown` 当作有效歌曲。
 
 所有原始截图、录像、trace、基准结果和实验结果保留在 Git 忽略目录，禁止提交设备序列号、日志或 Profile。
 
-“一键实时演奏”保持纯监听、不导航的既有语义，因此不会自行打开设置页。它只接受最近 15 分钟内由视觉设置门禁产生的实际读回；缓存缺失或过期时会拒绝启动，绝不使用 MFA 目标配置冒充游戏实际状态。
+“开演前自动设置并验证流速”关闭时不读取、修改或验证设置页；开启时，普通演出任务每次都在离开主页前真实进入设置弹窗，只读取、按需修正并复核流速，准备页禁止再次打开设置，也不保存跨任务跳过凭据。镜像、判定辅助、连击显示、FAST/SLOW、NOTE TYPE 与 TAP EFFECT 由用户按 README 手动配置，自动流程不再检查或修改。
+
+“一键实时演奏”保持纯监听、不导航的既有语义，因此不会自行打开设置页。流速开关开启时，它只接受最近 15 分钟内由流速门禁产生的实际读回；缓存缺失或过期时会拒绝启动。流速开关关闭时完全跳过这项检查并信任用户声明值。
 
 ## 开演前结构化终态
 
-在已建立 `LiveRunContext` 的正常任务路径中，ProfileCheck、流速设置门禁或 ProfilePlay 的引擎前准备失败时，也必须写入 `screencap/realtime-result-*.json`。该结果使用 `valid:false`、`result_status:"preflight_error"`，并通过 `terminal_stage` 区分 `profile_check`、`performance_settings_gate` 与 `profile_play_preflight`；同时保留本轮 `run_id`、`song_id`、模式、难度、已经实际读回的视觉/流速设置及明确 `reason`。写入终态时会消费本轮一次性 Play token，后续直接调用不得复用旧歌曲身份。
+在已建立 `LiveRunContext` 的正常任务路径中，ProfileCheck、流速设置门禁或 ProfilePlay 的引擎前准备失败时，也必须写入 `screencap/realtime-result-*.json`。该结果使用 `valid:false`、`result_status:"preflight_error"`，并通过 `terminal_stage` 区分 `profile_check`、`performance_settings_gate` 与 `profile_play_preflight`；同时保留本轮 `run_id`、`song_id`、模式、难度、已经实际读回的流速及明确 `reason`。写入终态时会消费本轮一次性 Play token，后续直接调用不得复用旧歌曲身份。
 
-开演前失败不得伪造 PERFECT/MISS 等结算字段，`processed_frames` 与 `dispatched_actions` 均为零，`debug_recording_path` 为 `null`，也不得生成 Recorder `summary.json`。视觉评估路径的此类结果继续设置 `eligible_for_profile_acceptance:false`。结构化产物写入采用尽力而为语义：产物写入失败不得掩盖最初的门禁失败原因。
-
-## 视觉组合筛选
-
-所有样本使用同一歌曲、难度、流速和高密度时间段，并通过 MFA 的 `视觉设置评估（实验）`运行。实验结果不得更新 accepted Profile。
-
-Project Interface 的多个选项覆盖按任务选项顺序应用，同一节点字段采用后写替换，不会深度合并 `custom_action_param`。因此视觉评估模式不再向正式节点写入只有实验标记的局部参数：模式选项只做结构路由，依次进入专用的 `RealtimeLiveVisualEvaluationRequireProfile`、`RealtimeLiveVisualEvaluationSettingsGate`、`RealtimeLiveVisualEvaluationStart` 与 `RealtimeLiveVisualEvaluationPlay`；五档难度为实验检查、设置和 Play 节点提供完整参数。普通 Formal 仍走原有节点，保持严格环境匹配。
-
-1. 固定点击特效 1、关闭判定辅助，依次录制 TYPE1–7 的相同短片。淘汰错误 HOLD、重复动作、粘连或严重遮挡的类型，并按检测完整性、轨迹连续性、置信度和动作时序抖动排序。前两名各做两次同曲完整实验。
-2. 固定胜出的按键类型、关闭判定辅助，依次录制 TAP EFFECT 1–5 的相同短片。前两名各做两次同曲完整实验。
-3. 对最终按键/特效组合分别录制判定辅助开启和关闭的标准短片。开启没有提高完整性或降低 miss 时默认关闭。
-4. 使用最终组合重新正常校准，再做三次同曲正式演出。至少两次 FC，另一轮 miss 不超过 1；不得出现错误 HOLD、粘住触点、业务失败或无法解释的长帧。
-
-完整演出的排序依次使用 miss 中位数、最差 miss、动作一致性。不要把当前偏移或推测值写死，最终偏移由新校准结果确定。
+开演前失败不得伪造 PERFECT/MISS 等结算字段，`processed_frames` 与 `dispatched_actions` 均为零，`debug_recording_path` 为 `null`，也不得生成 Recorder `summary.json`。结构化产物写入采用尽力而为语义：产物写入失败不得掩盖最初的门禁失败原因。
 
 ## Recorder 关闭门禁
 

@@ -25,7 +25,11 @@ from agent.realtime.profile_play_action import (
 )
 from agent.realtime.result_parser import LiveResult
 from agent.realtime.performance_settings_action import clear_verified_settings
-from agent.realtime.live_session import reset_live_run, update_live_run
+from agent.realtime.live_session import (
+    current_live_run,
+    reset_live_run,
+    update_live_run,
+)
 
 
 def test_recording_kind_distinguishes_play_types():
@@ -278,6 +282,52 @@ def test_profile_play_reuses_one_agent_controller_proxy(monkeypatch):
     assert engine_options[0]["startup_timeout_seconds"] == 60.0
     assert engine_construction_options[0]["life_detector"] is not None
     assert engine_construction_options[0]["life_guard"] is not None
+
+
+def test_profile_play_uses_confirmed_expert_for_special_fallback(monkeypatch):
+    reset_live_run(
+        mode="formal",
+        difficulty="Expert",
+        requested_difficulty="Special",
+        prepared_for_play=True,
+    )
+    verified_calls = []
+    resolved_params = []
+    monkeypatch.setattr(
+        profile_play_action,
+        "verified_settings",
+        lambda difficulty: verified_calls.append(difficulty),
+    )
+
+    def stop_after_resolution(context, params, *, controller=None):
+        resolved_params.append(dict(params))
+        raise RuntimeError("stop after effective difficulty resolution")
+
+    monkeypatch.setattr(
+        profile_play_action,
+        "resolve_profile",
+        stop_after_resolution,
+    )
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=object()),
+    )
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Special",
+        "require_profile": True,
+    }))
+
+    with pytest.raises(
+        RuntimeError,
+        match="stop after effective difficulty resolution",
+    ):
+        RealtimeProfilePlay()._run(context, argv)
+
+    assert verified_calls == ["Expert"]
+    assert resolved_params[0]["difficulty"] == "Expert"
+    run = current_live_run()
+    assert run is not None
+    assert run.requested_difficulty == "Special"
+    assert run.difficulty == "Expert"
 
 
 def test_explicit_native_initialization_failure_never_falls_back(
@@ -1241,18 +1291,9 @@ def test_profile_resolution_failure_writes_correlated_preflight_result(
         profile="normal.json",
         verified_at=1.0,
     )
-    visual = SimpleNamespace(
-        note_skin_type=7,
-        tap_effect=5,
-        judgement_assist_effect=False,
-    )
     monkeypatch.setattr(
         "agent.realtime.profile_play_action.verified_settings",
         lambda _difficulty: verified,
-    )
-    monkeypatch.setattr(
-        "agent.realtime.profile_play_action.verified_game_visual_settings",
-        lambda: visual,
     )
     monkeypatch.setattr(
         "agent.realtime.profile_play_action.resolve_profile",
@@ -1292,14 +1333,11 @@ def test_profile_resolution_failure_writes_correlated_preflight_result(
     assert payload["profile"] == "normal.json"
     assert payload["settings"]["expected_note_speed"] == pytest.approx(3.5)
     assert payload["settings"]["actual_note_speed"] == pytest.approx(3.5)
-    assert payload["settings"]["note_skin_type"] == 7
-    assert payload["settings"]["tap_effect"] == 5
-    assert payload["settings"]["judgement_assist"] is False
     assert payload["reason"] == "ValueError: profile mismatch"
     assert failure_reasons == ["ValueError: profile mismatch"]
 
 
-def test_late_preflight_failure_preserves_verified_visual_and_speed(
+def test_late_preflight_failure_preserves_verified_speed(
     monkeypatch, tmp_path,
 ):
     reset_live_run(
@@ -1319,18 +1357,9 @@ def test_late_preflight_failure_preserves_verified_visual_and_speed(
         profile="normal.json",
         verified_at=1.0,
     )
-    visual = SimpleNamespace(
-        note_skin_type=7,
-        tap_effect=5,
-        judgement_assist_effect=False,
-    )
     monkeypatch.setattr(
         "agent.realtime.profile_play_action.verified_settings",
         lambda _difficulty: verified,
-    )
-    monkeypatch.setattr(
-        "agent.realtime.profile_play_action.verified_game_visual_settings",
-        lambda: visual,
     )
     monkeypatch.setattr(
         "agent.realtime.profile_play_action.RealtimeProfileStore.runtime_options",
@@ -1365,9 +1394,6 @@ def test_late_preflight_failure_preserves_verified_visual_and_speed(
     assert payload["settings"] == {
         "expected_note_speed": 3.5,
         "actual_note_speed": 3.5,
-        "note_skin_type": 7,
-        "tap_effect": 5,
-        "judgement_assist": False,
     }
 
 
@@ -1789,6 +1815,22 @@ def test_direct_profile_play_does_not_reuse_unprepared_song_identity(
     payload = json.loads(report.read_text(encoding="utf-8"))
     assert payload["song_id"] == "unknown"
     assert payload["song_id_method"] == "unknown"
+
+
+def test_continuous_play_preserves_preconfirmed_opening_identity(
+    tmp_path, monkeypatch,
+):
+    root, _, _ = _completed_play_harness(
+        monkeypatch,
+        tmp_path,
+        debug_recording=False,
+        run_mode="continuous",
+    )
+
+    report = next((root / "screencap").glob("realtime-result-*.json"))
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["mode"] == "continuous"
+    assert payload["song_id"] == "song-phash-v1-0123456789abcdef"
 
 
 def test_completed_with_debug_recording_writes_json_and_screenshot(

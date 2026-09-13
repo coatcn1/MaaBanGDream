@@ -137,6 +137,24 @@ def test_calibration_round_plan_forces_formal_mode_gate():
     ]
 
 
+def test_special_calibration_does_not_fallback_to_expert():
+    _, override = calibration_round_plan(
+        difficulty="Special",
+        note_speed=5.0,
+        calibration_debug=False,
+        formal=False,
+        play_node="RealtimeLivePlaySpecial",
+        offset=0,
+        report_path=Path("screencap/calibration-round-test.json"),
+    )
+
+    difficulty_params = override["RealtimeLiveDifficulty"][
+        "custom_action_param"
+    ]
+    assert difficulty_params["difficulty"] == "Special"
+    assert "fallback_difficulties" not in difficulty_params
+
+
 def test_calibration_round_plan_random_preserves_filter_and_excludes_used_songs():
     _, override = calibration_round_plan(
         difficulty="Hard",
@@ -357,15 +375,6 @@ def test_user_stop_after_nested_round_is_neutral_before_result_lookup(
     monkeypatch.setattr(calibration_action_module, "calibration_song_mode", lambda: "current")
     monkeypatch.setattr(calibration_action_module, "calibration_resume_mode", lambda: "auto")
     monkeypatch.setattr(calibration_action_module, "frame_resolution", lambda _image: (1280, 720))
-    monkeypatch.setattr(
-        calibration_action_module,
-        "verified_game_visual_settings",
-        lambda: SimpleNamespace(
-            note_skin_type=1,
-            tap_effect=1,
-            judgement_assist_effect=True,
-        ),
-    )
     monkeypatch.setattr(
         calibration_action_module, "result_report_snapshot", lambda _root: set(),
     )

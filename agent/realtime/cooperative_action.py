@@ -27,10 +27,6 @@ except ImportError:
     from task_reporting import TaskProgress, record_failure_reason
 
 from .difficulty_action import RealtimeDifficultySelect
-from .game_effect_settings_action import (
-    RealtimeGameEffectSettingsGate,
-    verified_game_visual_settings,
-)
 from .game_effect_settings_action import _click as _maa_click
 from .vision_io import imread_unicode, imwrite_unicode
 from .game_effect_settings_action import _swipe as _maa_swipe
@@ -191,9 +187,13 @@ class CooperativePlayfieldEntryEvidence:
         return self._narrow_motion_streak >= self._REQUIRED_NARROW_EVENTS
 
 
-def cooperative_play_params(settings: dict[str, object]) -> dict[str, object]:
+def cooperative_play_params(
+    settings: dict[str, object],
+    *,
+    effective_difficulty: str | None = None,
+) -> dict[str, object]:
     return {
-        "difficulty": str(settings["difficulty"]),
+        "difficulty": str(effective_difficulty or settings["difficulty"]),
         "require_profile": True,
         "settings_gate_required": True,
         "debug_recording": bool(settings["debug_recording"]),
@@ -255,12 +255,9 @@ def current_cooperative_settings() -> dict[str, object]:
 def cooperative_profile_preflight(context: Context, difficulty: str) -> str | None:
     """任务一开始就校验 Profile 与环境签名，失败返回可读原因。
 
-    原实现把 Profile 解析放在准备页的流速门禁里：环境不匹配（例如任务
-    执行过程中手动改过 TAP EFFECT）时，自动化已经完成了主页→演出选择→
-    协力入口→房间→准备页的整段导航，才在准备页被拒，用户只看到“没点
-    开始”。这里用与门禁相同的签名构造（截图分辨率 + 固定 DPI/帧率/画质
-    + 运行时演出选项）提前做一次解析：失败立刻作为任务错误返回，导航
-    一步都不做；截图不可用时回退到准备页的既有门禁。
+    原实现把 Profile 解析放在准备页的流速门禁里，自动化已经完成整段导航
+    才可能被拒。这里提前用截图分辨率、固定 DPI/帧率/画质和引擎构造签名；
+    旧 Profile 中的视觉设置字段只兼容读取，不参与匹配。
     """
     store = RealtimeProfileStore(PROJECT_ROOT / "profiles")
     try:
@@ -268,7 +265,6 @@ def cooperative_profile_preflight(context: Context, difficulty: str) -> str | No
     except Exception:
         # 控制器尚未就绪时无法构造签名，交给准备页门禁处理。
         return None
-    visual = verified_game_visual_settings()
     options = store.runtime_options()
     signature = EnvironmentSignature(
         frame_resolution(image),
@@ -276,16 +272,7 @@ def cooperative_profile_preflight(context: Context, difficulty: str) -> str | No
         COOPERATIVE_GAME_FPS,
         COOPERATIVE_RENDER_QUALITY,
         1.0,
-        int(visual.note_skin_type)
-        if visual is not None
-        else int(options["note_skin_type"]),
-        int(visual.tap_effect)
-        if visual is not None
-        else int(options["tap_effect"]),
-        bool(visual.judgement_assist_effect)
-        if visual is not None
-        else bool(options["judgement_assist_effect"]),
-        engine_from_native_flag(
+        engine=engine_from_native_flag(
             options.get("native_realtime_enabled", False)
         ),
     )
@@ -344,6 +331,7 @@ class CooperativeLiveFlow:
     ) -> None:
         self.context = context
         self.settings = settings
+        self.effective_difficulty = str(settings["difficulty"])
         self.progress_callback = progress_callback
         self.detector = LifeDetector()
         # 准备完毕后的短黑场可能只持续一帧；漏检时先用与本局身份一致的
@@ -796,44 +784,62 @@ class CooperativeLiveFlow:
             "mode": "cooperative",
             "debug_recording": bool(self.settings["debug_recording"]),
         }
+        if difficulty == "Special":
+            # 协力歌曲由房间决定；Special 不存在时显式回退 Expert，后续流程
+            # 必须只消费实际选中的难度，不能继续拿 Special 谱面演奏。
+            difficulty_params["fallback_difficulties"] = ["Expert"]
         if not RealtimeDifficultySelect().run(
             self.context, self.action_argv(difficulty_params)
         ):
             raise RuntimeError(f"协力准备页未能选择并复核 {difficulty} 难度")
-
-        visual_params = {
-            "entry_mode": "preparation",
-            "max_attempts": 1,
-            "coordinates": {"preparation_gear": (946, 650)},
-        }
-        if not RealtimeGameEffectSettingsGate().run(
-            self.context, self.action_argv(visual_params)
+        run = current_live_run()
+        if run is None or not run.prepared_for_play:
+            raise RuntimeError("协力难度选择成功但缺少本局实际难度证据")
+        effective_difficulty = str(run.difficulty)
+        if effective_difficulty != difficulty and not (
+            difficulty == "Special" and effective_difficulty == "Expert"
         ):
-            raise RuntimeError("协力准备页演出视觉设置复核失败")
+            raise RuntimeError(
+                "协力实际难度不符合回退策略："
+                f"请求 {difficulty}，实际 {effective_difficulty}"
+            )
+        self.effective_difficulty = effective_difficulty
 
         performance_params = {
-            "difficulty": difficulty,
+            "difficulty": effective_difficulty,
             "require_profile": True,
             "dpi": COOPERATIVE_DPI,
             "game_fps": COOPERATIVE_GAME_FPS,
             "render_quality": COOPERATIVE_RENDER_QUALITY,
             "coordinates": {"gear": (946, 650)},
             "defer_native_prearm": True,
+            "cache_preparation_image": True,
         }
         if not RealtimePerformanceSettingsGate().run(
             self.context, self.action_argv(performance_params)
         ):
             raise RuntimeError("协力准备页流速复核失败")
-        self.ensure_performance_mode_off()
-        ready_transition = self.ready_up_and_verify()
+        run = current_live_run()
+        initial_image = None if run is None else run.cooperative_prestart_image
+        ready_image = self.ensure_performance_mode_off(
+            initial_image=initial_image,
+        )
+        ready_transition = self.ready_up_and_verify(initial_image=ready_image)
         if ready_transition != "black":
             self.watch_member_exit_before_black()
         print(
-            f"CooperativeLive ready=true difficulty={difficulty} speed_gate=verified",
+            "CooperativeLive ready=true "
+            f"requested_difficulty={difficulty} "
+            f"effective_difficulty={effective_difficulty} "
+            "speed_gate=verified",
             flush=True,
         )
 
-    def ensure_performance_mode_off(self) -> None:
+    def ensure_performance_mode_off(
+        self,
+        *,
+        initial_image: np.ndarray | None = None,
+    ) -> np.ndarray | None:
         """协力房间页关闭 3D/MV 演出表现，防止演出场背景变化提前触发谱面。
 
         房间页左下角与单人准备页同布局：循环箭头切换按钮位于
@@ -841,18 +847,23 @@ class CooperativeLiveFlow:
         强饱和色即视为 OFF。点击后仍无法确认关闭（例如界面改版或坐标
         漂移）时不阻断本局：保留证据截图并继续，让既有门控推进演出。
         """
+        image = initial_image
         for attempt in range(4):
-            image = self.capture()
+            reused = image is not None
+            if image is None:
+                image = self.capture()
             if live_performance_mode_is_off(image):
                 print(
-                    "CooperativeLive performance_mode=off confirmed=true",
+                    "CooperativeLive performance_mode=off confirmed=true "
+                    f"reused_preparation_image={str(reused).lower()}",
                     flush=True,
                 )
-                return
+                return image
             if attempt == 0:
                 self._save_performance_mode_evidence(image, "before")
             self.click(MODE_TOGGLE_POINT)
             time.sleep(0.6)
+            image = None
         try:
             self._save_performance_mode_evidence(self.capture(), "after")
         except InterruptedError:
@@ -862,6 +873,7 @@ class CooperativeLiveFlow:
             "action=continue-with-warning attempts=4",
             flush=True,
         )
+        return None
 
     def _save_performance_mode_evidence(self, image: np.ndarray, stage: str) -> None:
         try:
@@ -880,13 +892,26 @@ class CooperativeLiveFlow:
                 flush=True,
             )
 
-    def ready_up_and_verify(self) -> str:
+    def ready_up_and_verify(
+        self,
+        *,
+        initial_image: np.ndarray | None = None,
+    ) -> str:
         """点击“准备完毕”并确认按钮消失，防止触控未送达造成空演奏。"""
+        image = initial_image
         for attempt in range(3):
             if self.stopped():
                 raise InterruptedError("用户已停止任务")
-            image = self.capture()
+            reused = image is not None
+            if image is None:
+                image = self.capture()
             box = self.template_box(image, "ready_button", 0.90)
+            if box is None and reused:
+                # 缓存帧只用于加速肯定匹配；若没看到按钮，必须再采一张新图，
+                # 避免拿过期画面把“按钮缺失”误判成已经准备完毕。
+                image = self.capture()
+                reused = False
+                box = self.template_box(image, "ready_button", 0.90)
             if box is None:
                 # 按钮已消失：已进入准备完毕/成员等待或加载流程。
                 print(
@@ -895,6 +920,12 @@ class CooperativeLiveFlow:
                 )
                 return "already-confirmed"
             left, top, width, height = box
+            print(
+                "CooperativeLive ready_click "
+                f"attempt={attempt + 1} "
+                f"reused_preparation_image={str(reused).lower()}",
+                flush=True,
+            )
             self.click((left + width // 2, top + height // 2))
             delivery = self.watch_ready_delivery_after_click()
             if delivery != "still-visible":
@@ -904,6 +935,7 @@ class CooperativeLiveFlow:
                     flush=True,
                 )
                 return delivery
+            image = None
         raise RuntimeError("点击准备完毕后按钮仍在，触控可能未送达")
 
     def watch_ready_delivery_after_click(
@@ -1113,7 +1145,14 @@ class CooperativeLiveFlow:
         print("CooperativeLive member_download=complete playfield_visible=true", flush=True)
 
     def play(self) -> bool:
-        params = cooperative_play_params(self.settings)
+        params = cooperative_play_params(
+            self.settings,
+            effective_difficulty=getattr(
+                self,
+                "effective_difficulty",
+                str(self.settings.get("difficulty", "Expert")),
+            ),
+        )
         success = RealtimeProfilePlay().run(
             self.context, self.action_argv(params)
         )

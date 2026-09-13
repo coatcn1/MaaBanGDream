@@ -133,10 +133,7 @@ def test_selection_state_is_written_atomically(tmp_path):
         "pinned": {"Easy": path.name},
         "runtime_options": {
             "skip_process_conflict_cleanup": False,
-            "game_effect_settings_enabled": True,
-            "note_skin_type": 1,
-            "judgement_assist_effect": True,
-            "tap_effect": 1,
+            "note_speed_settings_enabled": True,
             "chart_prediction_enabled": True,
             "chart_predict_presses": True,
             "native_realtime_enabled": False,
@@ -164,11 +161,8 @@ def test_runtime_options_default_and_atomic_update_do_not_invalidate_profile(tmp
     )
     assert listed["runtime_options"] == {
         "skip_process_conflict_cleanup": False,
-        "game_effect_settings_enabled": True,
-        "note_skin_type": 1,
-        "judgement_assist_effect": True,
-        "tap_effect": 1,
-            "chart_prediction_enabled": True,
+        "note_speed_settings_enabled": True,
+        "chart_prediction_enabled": True,
             "chart_predict_presses": True,
             "native_realtime_enabled": False,
             "cooperative_jitter_enabled": True,
@@ -202,31 +196,22 @@ def test_runtime_options_default_and_atomic_update_do_not_invalidate_profile(tmp
     assert not list(tmp_path.glob("*.tmp"))
 
 
-def test_list_uses_configured_visual_settings_when_environment_omits_them(tmp_path):
+def test_list_ignores_legacy_profile_visual_fields(tmp_path):
     store = RealtimeProfileStore(tmp_path)
-    visual_environment = SIGNATURE.to_mapping()
-    visual_environment.update({
-        "note_skin_type": 7,
-        "tap_effect": 4,
-        "judgement_assist_effect": False,
-    })
-    store.write(payload(environment=visual_environment, accepted=True))
-    runtime = store.runtime_options()
-    runtime.update({
-        "note_skin_type": 7,
-        "tap_effect": 4,
-        "judgement_assist_effect": False,
-    })
-    store.update_runtime_options(runtime)
     legacy_environment = SIGNATURE.to_mapping()
-    for key in ("note_skin_type", "tap_effect", "judgement_assist_effect"):
-        legacy_environment.pop(key)
+    legacy_environment.update({
+        "note_skin_type": 7,
+        "tap_effect": 5,
+        "judgement_assist_effect": True,
+    })
+    store.write(payload(environment=legacy_environment, accepted=True))
+    current_environment = SIGNATURE.to_mapping()
 
     result = handle_request(
         {
             "operation": "list",
             "difficulty": "Easy",
-            "environment": legacy_environment,
+            "environment": current_environment,
         },
         root=tmp_path,
     )

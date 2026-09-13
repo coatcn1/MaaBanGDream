@@ -15,6 +15,7 @@ class LiveRunContext:
     started_at: datetime
     mode: str
     difficulty: str
+    requested_difficulty: str | None = None
     profile_name: str | None = None
     song_id: str = UNKNOWN_SONG_ID
     song_id_method: str = "unknown"
@@ -23,9 +24,6 @@ class LiveRunContext:
     song_title_confidence: float | None = None
     expected_note_speed: float | None = None
     actual_note_speed: float | None = None
-    note_skin_type: int | None = None
-    tap_effect: int | None = None
-    judgement_assist: bool | None = None
     debug_recording: bool = False
     recording_path: str | None = None
     final_cover_confirmed: bool = False
@@ -40,6 +38,9 @@ class LiveRunContext:
     prepared_for_play: bool = False
     # 保留本局准备页证据，待演奏记录器建立后归入同一个证据包，不序列化像素。
     preparation_identity_image: object | None = None
+    # 协力跳过设置页时保留最新准备页截图，供模式确认和准备按钮立即复用；
+    # 与身份取证截图分开，避免打开过设置页后误用旧画面。
+    cooperative_prestart_image: object | None = None
     # 漏掉短黑场但已确认最终封面时，把同一帧和解析结果交给演奏入口；
     # 这些对象只在本局内存中传递，不进入结果 JSON。
     startup_final_cover_image: object | None = None
@@ -51,6 +52,10 @@ class LiveRunContext:
             "started_at": self.started_at.isoformat().replace("+00:00", "Z"),
             "mode": self.mode,
             "difficulty": self.difficulty,
+            "requested_difficulty": (
+                self.requested_difficulty or self.difficulty
+            ),
+            "effective_difficulty": self.difficulty,
             "profile_name": self.profile_name,
             "song_id": self.song_id,
             "song_id_method": self.song_id_method,
@@ -60,9 +65,6 @@ class LiveRunContext:
             "settings": {
                 "expected_note_speed": self.expected_note_speed,
                 "actual_note_speed": self.actual_note_speed,
-                "note_skin_type": self.note_skin_type,
-                "tap_effect": self.tap_effect,
-                "judgement_assist": self.judgement_assist,
             },
             "debug_recording": self.debug_recording,
             "recording_path": self.recording_path,
@@ -83,12 +85,10 @@ def reset_live_run(
     *,
     mode: str,
     difficulty: str,
+    requested_difficulty: str | None = None,
     profile_name: str | None = None,
     expected_note_speed: float | None = None,
     actual_note_speed: float | None = None,
-    note_skin_type: int | None = None,
-    tap_effect: int | None = None,
-    judgement_assist: bool | None = None,
     debug_recording: bool = False,
     prepared_for_play: bool = False,
 ) -> LiveRunContext:
@@ -99,12 +99,10 @@ def reset_live_run(
         started_at=datetime.now(timezone.utc),
         mode=str(mode),
         difficulty=str(difficulty),
+        requested_difficulty=str(requested_difficulty or difficulty),
         profile_name=profile_name,
         expected_note_speed=expected_note_speed,
         actual_note_speed=actual_note_speed,
-        note_skin_type=note_skin_type,
-        tap_effect=tap_effect,
-        judgement_assist=judgement_assist,
         debug_recording=bool(debug_recording),
         prepared_for_play=bool(prepared_for_play),
     )
@@ -116,6 +114,25 @@ def reset_live_run(
 def current_live_run() -> LiveRunContext | None:
     with _LOCK:
         return _CURRENT_LIVE_RUN
+
+
+def effective_difficulty_for_current_run(requested_difficulty: str) -> str:
+    """仅把已确认的 Special→Expert 回退传给本局后续开演节点。"""
+    requested = str(requested_difficulty)
+    run = current_live_run()
+    if run is None or not run.prepared_for_play:
+        return requested
+    recorded_request = str(
+        run.requested_difficulty or run.difficulty
+    ).casefold()
+    if recorded_request != requested.casefold():
+        return requested
+    if (
+        requested.casefold() == "special"
+        and str(run.difficulty).casefold() == "expert"
+    ):
+        return str(run.difficulty)
+    return requested
 
 
 def update_live_run(**changes) -> LiveRunContext:
