@@ -71,6 +71,10 @@
 
 精确版本组合记录在 [runtime-compatibility.json](runtime-compatibility.json)。
 
+> [!NOTE]
+> 实时演奏目前在 MuMu 模拟器上的测试样本较少，推荐使用已进行较多真机验证的
+> [雷电模拟器 9（9.5.30.1）](https://ldstore.ldmnq.com/mngt/apk/arknights-ldinstaller-9.5.30.1.exe)。
+
 ## 🎼 演奏与谱面辅助
 
 MaaBanGDream 的实时演奏并不是简单的固定坐标点击，而是由视觉识别、触控规划与本地谱面共同完成。
