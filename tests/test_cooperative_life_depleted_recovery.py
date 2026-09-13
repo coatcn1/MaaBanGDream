@@ -172,6 +172,48 @@ def test_failed_disconnect_jump_falls_back_to_client_restart(monkeypatch):
     ]
 
 
+class _MemberExitStub:
+    handle_member_exit = FLOW.handle_member_exit
+
+    def __init__(self, streak):
+        self.member_exit_streak = streak
+        self.settings = {
+            "member_exit_policy": "reconnect",
+            "max_reconnects": 3,
+        }
+        self.recoveries = []
+        self.dismissed = 0
+
+    def dismiss_member_exit(self):
+        self.dismissed += 1
+        return True
+
+    def recover_after_play_failure(self, reason):
+        self.recoveries.append(reason)
+        return True
+
+
+def test_member_exit_reconnect_limit_recovers_and_continues(monkeypatch):
+    monkeypatch.setattr(ca, "record_failure_reason", lambda *a, **k: None)
+    stub = _MemberExitStub(streak=0)
+
+    result = stub.handle_member_exit(3)
+
+    assert result == 0
+    assert stub.member_exit_streak == 1
+    assert stub.recoveries == ["成员退出重连达到上限"]
+
+
+def test_member_exit_reconnect_limit_ends_task_after_three_streak(monkeypatch):
+    monkeypatch.setattr(ca, "record_failure_reason", lambda *a, **k: None)
+    stub = _MemberExitStub(streak=ca.MEMBER_EXIT_STREAK_LIMIT - 1)
+
+    result = stub.handle_member_exit(3)
+
+    assert result is None
+    assert stub.recoveries == []
+
+
 def test_late_trigger_without_popup_still_requires_full_quiet_window():
     # 2026-09-12 20:22：演奏场 9.657s 才出现，触发点在 9.09s 之后。
     # 旧实现用 8 秒窗口，阈值退回 120ms，于是冻结在 133ms 的假安静窗口上。

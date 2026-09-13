@@ -116,6 +116,10 @@ MEMBER_DOWNLOAD_TIMEOUT_SECONDS = 60.0
 # 错过开演转场后，多久没看到“真实生命条”就判定本局根本没开演。
 # 准备页上成员的下载进度条会被生命检测器误读成很小的数值（实测 94），
 # 只有 >= 500 才可能是协力演出刚开场的队伍生命条。
+# 成员退出重连预算用尽后，连续多少轮才真正结束整场任务。
+# 2026-09-13 真机在 25/99 处因队友陆续退出触发上限而中止；99 局长局里
+# 三名队友退出属于正常波动，不应该判死整场。
+MEMBER_EXIT_STREAK_LIMIT = 3
 MISSED_TRANSITION_NO_LIFE_SECONDS = 10.0
 STRONG_LIFE_MINIMUM = 500
 ROOM_SONG_CHOICE_TIMEOUT_SECONDS = 180.0
@@ -358,6 +362,7 @@ class CooperativeLiveFlow:
         self.context = context
         self.settings = settings
         self.progress_callback = progress_callback
+        self.member_exit_streak = 0
         self.detector = LifeDetector()
         # 准备完毕后的短黑场可能只持续一帧；漏检时先用与本局身份一致的
         # 稳定最终封面放行，只有已经进入动态演奏场才走生命监控兜底。
@@ -1768,10 +1773,33 @@ class CooperativeLiveFlow:
             print(f"[任务][协力演出][成员退出][ERROR] {reason}", flush=True)
             return None
         if reconnects >= reconnect_limit:
-            reason = f"协力成员退出后已重连{reconnect_limit}次，达到上限"
-            record_failure_reason(reason)
-            print(f"[任务][协力演出][重连][ERROR] {reason}", flush=True)
-            return None
+            # 重连预算用尽不再直接结束整场任务。先做一次完整恢复继续下一局，
+            # 只有连续 MEMBER_EXIT_STREAK_LIMIT 次都用尽预算才结束。
+            self.member_exit_streak += 1
+            print(
+                "CooperativeLive member_exit=reconnect-limit "
+                f"streak={self.member_exit_streak}/"
+                f"{MEMBER_EXIT_STREAK_LIMIT} limit={reconnect_limit}",
+                flush=True,
+            )
+            if self.member_exit_streak >= MEMBER_EXIT_STREAK_LIMIT:
+                reason = (
+                    f"连续 {self.member_exit_streak} 次达到成员退出重连上限"
+                )
+                record_failure_reason(reason)
+                print(f"[任务][协力演出][重连][ERROR] {reason}", flush=True)
+                return None
+            try:
+                self.recover_after_play_failure("成员退出重连达到上限")
+            except InterruptedError:
+                raise
+            except Exception as error:  # noqa: BLE001 - 恢复失败也要继续
+                print(
+                    "CooperativeLive member_exit_recovery_failed="
+                    f"{type(error).__name__}: {error}",
+                    flush=True,
+                )
+            return 0
         reconnects += 1
         print(
             "CooperativeLive member_exit=reconnect "
@@ -1983,6 +2011,7 @@ class CooperativeLiveFlow:
             play_failures = 0
             entry_failures = 0
             exhausted_rounds = 0
+            self.member_exit_streak = 0
             callback = getattr(self, "progress_callback", None)
             if callback is not None:
                 callback(completed, total)
