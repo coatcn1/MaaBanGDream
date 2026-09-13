@@ -97,6 +97,8 @@ def result_report_payload(
         "dispatched_actions": stats.dispatched_actions,
         "action_counts": stats.action_counts,
         "engine_mode": getattr(stats, "engine_mode", "legacy"),
+        "anchor_invalid": bool(getattr(stats, "anchor_invalid", False)),
+        "anchor_invalid_reason": getattr(stats, "anchor_invalid_reason", None),
         "native": dict(getattr(stats, "native_report", {})),
         "life_monitor_diagnostics": dict(
             getattr(stats, "life_monitor_diagnostics", {})

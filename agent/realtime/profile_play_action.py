@@ -2401,6 +2401,9 @@ class RealtimeProfilePlay(CustomAction):
         startup_timeout_seconds = float(
             params.get("startup_timeout_seconds", 60)
         )
+        anchor_alive_grace_seconds = float(
+            params.get("anchor_alive_grace_seconds", 2.5)
+        )
         try:
             stall_safe_capture = StallSafeCapture(controller)
 
@@ -2418,6 +2421,7 @@ class RealtimeProfilePlay(CustomAction):
                     if disconnect_jump_request else None
                 ),
                 startup_timeout_seconds=startup_timeout_seconds,
+                anchor_alive_grace_seconds=anchor_alive_grace_seconds,
             )
             if recorder is not None and stall_safe_capture.last_image is not None:
                 _recorder_checkpoint(
@@ -2468,11 +2472,19 @@ class RealtimeProfilePlay(CustomAction):
                     "scope=device-execution-not-game-judgements",
                     flush=True,
                 )
-                if native_failures:
-                    native_error = RuntimeError(
-                        "Native 演奏未通过完整性门禁："
-                        + "; ".join(native_failures)
-                    )
+                if native_failures or stats.anchor_invalid:
+                    detail = "; ".join(native_failures)
+                    if stats.anchor_invalid:
+                        detail = (
+                            "首拍锚点无效（"
+                            f"{stats.anchor_invalid_reason or 'unknown'}）："
+                            "photogate 触发后生命条始终未确认存活，"
+                            "已按锚点校验提前结束本局"
+                            + (f"；{detail}" if detail else "")
+                        )
+                    else:
+                        detail = "Native 演奏未通过完整性门禁：" + detail
+                    native_error = RuntimeError(detail)
                     native_error.realtime_stats = stats
                     raise native_error
         except Exception as exc:
@@ -2558,6 +2570,7 @@ class RealtimeProfilePlay(CustomAction):
             f"stopped={stats.stopped} life_abort={stats.aborted_for_life} "
             f"life_depleted={stats.life_depleted} completed={stats.completed} "
             f"life_failed={stats.life_failed} "
+            f"anchor_invalid={stats.anchor_invalid} "
             f"feedback_fast={stats.timing_feedback_fast} "
             f"feedback_slow={stats.timing_feedback_slow} "
             f"feedback_valid={stats.timing_feedback_valid} "

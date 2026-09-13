@@ -215,6 +215,12 @@ class NativeStartPhotogate:
         playfield_detector: Callable[[Any], bool] | None = None,
         popup_detector: Callable[[Any], bool] | None = None,
         suppress_prepare_popup: bool | None = None,
+        popup_confirm_frames: int = 3,
+        popup_release_frames: int = 2,
+        popup_first_seen_window_s: float = 1.0,
+        popup_single_episode: bool = True,
+        no_popup_stable_ms: float = 1200.0,
+        no_popup_stable_window_s: float = 60.0,
     ) -> None:
         if not 0 <= from_row <= to_row < reference_height:
             raise ValueError("photogate 行范围无效")
@@ -226,6 +232,16 @@ class NativeStartPhotogate:
             raise ValueError("change_threshold 必须大于 0")
         if latency_ms < 0:
             raise ValueError("latency_ms 不能为负数")
+        if popup_confirm_frames < 1:
+            raise ValueError("popup_confirm_frames 必须大于 0")
+        if popup_release_frames < 1:
+            raise ValueError("popup_release_frames 必须大于 0")
+        if popup_first_seen_window_s < 0:
+            raise ValueError("popup_first_seen_window_s 不能为负数")
+        if no_popup_stable_ms < 0:
+            raise ValueError("no_popup_stable_ms 不能为负数")
+        if no_popup_stable_window_s < 0:
+            raise ValueError("no_popup_stable_window_s 不能为负数")
         self._from_row = int(from_row)
         self._to_row = int(to_row)
         self._reference_height = int(reference_height)
@@ -273,9 +289,31 @@ class NativeStartPhotogate:
         self.playfield_waited_frames = 0
         self.playfield_loss_events = 0
         self._playfield_active = False
+        # 弹窗门控去抖与采信窗口：单帧误判不得清零首拍基线。
+        self._popup_confirm_frames = int(popup_confirm_frames)
+        self._popup_release_frames = int(popup_release_frames)
+        self._popup_first_seen_window_s = float(popup_first_seen_window_s)
+        self._popup_single_episode = bool(popup_single_episode)
+        # 本轮没有确认到准备弹窗时，冻结基线必须建立在更长的安静期上。
+        # 弹窗漏检时（实测 raw=0）开歌转场只会表现为一次 broad change，
+        # 随后的冻结会落进歌曲前奏动画里，导致首拍取早约 6 秒。
+        self._no_popup_stable_s = float(no_popup_stable_ms) / 1000.0
+        self._no_popup_stable_window_s = float(no_popup_stable_window_s)
+        self.no_popup_long_quiet_freezes = 0
+        self.last_freeze_required_ms: float | None = None
         self._prepare_popup_active = False
+        # pending：尚未采信任何弹窗；armed：本段演奏场内已确认过弹窗，
+        # 仍会对弹窗出现/消失做出反应；closed：不再采信新的弹窗。
+        self._popup_gate_state = "pending"
+        self._popup_window_started_at_s: float | None = None
+        self._popup_hit_streak = 0
+        self._popup_miss_streak = 0
         self.prepare_popup_frames = 0
+        self.prepare_popup_raw_frames = 0
         self.prepare_popup_blocked_events = 0
+        self.prepare_popup_rejected_events = 0
+        self.prepare_popup_disarmed_events = 0
+        self.prepare_popup_disarmed_reason: str | None = None
         self._significant_events: deque[dict[str, object]] = deque(maxlen=32)
 
     def _reset_band_state(self) -> None:
@@ -288,6 +326,22 @@ class NativeStartPhotogate:
         self.frozen_at_s = None
         self.waited_frames = 0
         self.frozen = False
+
+    def _popup_first_seen_elapsed_s(self, frame_s: float) -> float:
+        """演奏场首次成立到当前帧的时长；窗口未开始时按 0 计。"""
+        if self._popup_window_started_at_s is None:
+            return 0.0
+        return max(0.0, float(frame_s) - self._popup_window_started_at_s)
+
+    def _close_popup_gate(self, frame_s: float, reason: str) -> None:
+        """关闭本段演奏场的弹窗门控：此后只统计，不再清零首拍基线。"""
+        if self._popup_gate_state == "closed":
+            return
+        self._popup_gate_state = "closed"
+        self._prepare_popup_active = False
+        self.prepare_popup_disarmed_events += 1
+        self.prepare_popup_disarmed_reason = str(reason)
+        self._record_event("prepare-popup-gate-closed", frame_s, 0.0)
 
     def _record_event(
         self,
@@ -346,8 +400,71 @@ class NativeStartPhotogate:
             "photogate_prepare_popup_blocked_events": (
                 self.prepare_popup_blocked_events
             ),
+            # 去抖与采信窗口诊断：raw=原始命中帧数，rejected=未采信的瞬时
+            # 命中帧数，disarmed_events/reason=门控被关闭的次数与原因。
+            "photogate_prepare_popup_raw_frames": self.prepare_popup_raw_frames,
+            "photogate_prepare_popup_rejected_events": (
+                self.prepare_popup_rejected_events
+            ),
+            "photogate_prepare_popup_disarmed_events": (
+                self.prepare_popup_disarmed_events
+            ),
+            "photogate_prepare_popup_disarmed_reason": (
+                self.prepare_popup_disarmed_reason
+            ),
+            "photogate_prepare_popup_gate_state": self._popup_gate_state,
+            "photogate_prepare_popup_confirm_frames": (
+                self._popup_confirm_frames
+            ),
+            "photogate_prepare_popup_release_frames": (
+                self._popup_release_frames
+            ),
+            "photogate_prepare_popup_first_seen_window_s": (
+                self._popup_first_seen_window_s
+            ),
+            "photogate_prepare_popup_single_episode": (
+                self._popup_single_episode
+            ),
+            "photogate_no_popup_stable_ms": self._no_popup_stable_s * 1000.0,
+            "photogate_no_popup_stable_window_s": (
+                self._no_popup_stable_window_s
+            ),
+            "photogate_no_popup_long_quiet_freezes": (
+                self.no_popup_long_quiet_freezes
+            ),
+            "photogate_last_freeze_required_ms": (
+                self.last_freeze_required_ms
+            ),
             "photogate_events": list(self._significant_events),
         }
+
+    def _required_stable_s(self, frame_s: float) -> float:
+        """本次冻结所需的连续安静时长。
+
+        正常局里弹窗门控已经排除了“准备弹窗出现/消失”这种整带变化，120ms
+        安静就足以冻结在首音之前。但实测存在弹窗完全漏检的局（raw=0）：开歌
+        转场只表现为一次 broad change，重置基线后立刻冻结就会落在歌曲前奏
+        动画里，首拍因此取早约 6 秒（15:51 局生命 1000→0 只用了 3.4 秒）。
+        因此“从未确认过弹窗”时要求更长的安静期。窗口默认覆盖整个等待过程
+        （60 秒）：2026-09-12 20:22 那局演奏场比平常晚了一倍才出现
+        （playfield_wait_ms=9657，平常约 4800），触发点落在旧 8 秒窗口之外，
+        阈值退回 120ms，结果冻结在 133ms 的假安静窗口上，首拍晚了约 10 秒，
+        整局只发出 33 个动作、共享生命直接归零。
+        """
+        if (
+            not self._popup_gate_enabled
+            or self.prepare_popup_frames > 0
+            or self._no_popup_stable_s <= self._stable_duration_s
+        ):
+            return self._stable_duration_s
+        if (
+            self.playfield_seen_at_s is not None
+            and self._no_popup_stable_window_s > 0
+            and frame_s - self.playfield_seen_at_s
+            > self._no_popup_stable_window_s
+        ):
+            return self._stable_duration_s
+        return self._no_popup_stable_s
 
     def observe(self, image: Any, now: float) -> float | None:
         """返回第一颗音符的绝对执行时刻；未触发时返回 ``None``。"""
@@ -378,37 +495,81 @@ class NativeStartPhotogate:
                 self._record_event("playfield-lost", frame_s, 0.0)
             self._playfield_active = False
             self._prepare_popup_active = False
+            self._popup_hit_streak = 0
+            self._popup_miss_streak = 0
             self._reset_band_state()
             return None
         if not self._playfield_active:
             self._playfield_active = True
             self.playfield_seen_at_s = frame_s
+            if self._popup_gate_state == "pending":
+                # 采信窗口跟随“尚未采信弹窗”阶段的演奏场成立时刻。
+                self._popup_window_started_at_s = frame_s
+            self._popup_hit_streak = 0
+            self._popup_miss_streak = 0
             self._reset_band_state()
             self._record_event("playfield-visible", frame_s, 0.0)
         if self._popup_gate_enabled:
             # 弹窗存在时不允许建立颜色基线，也不允许首拍触发；弹窗消失
             # 的那一帧同样只重置基线，避免把弹窗淡出当成第一颗音符。
+            # 去抖（v1.3.7 本地修正）：连续 popup_confirm_frames 帧命中才认
+            # 弹窗，连续 popup_release_frames 帧未命中才认消失；且只采信演奏
+            # 场成立后 popup_first_seen_window_s 内首次确认的弹窗——正常局
+            # 弹窗与演奏场同帧出现，晚到的“弹窗”几乎都是把演奏场内容认错。
+            # 否则单帧误判就会反复清零颜色基线，把首拍门控饿死到启动超时。
             if self._popup_detector is None:
                 raise RuntimeError("协力弹窗门控缺少检测器")
-            popup_visible = bool(self._popup_detector(image))
-            if popup_visible:
-                self.prepare_popup_frames += 1
-                if not self._prepare_popup_active:
-                    self._prepare_popup_active = True
-                    self.prepare_popup_blocked_events += 1
-                    self._record_event(
-                        "prepare-popup-visible",
-                        frame_s,
-                        0.0,
-                    )
-                self._reset_band_state()
-                return None
-            if self._prepare_popup_active:
-                self._prepare_popup_active = False
-                self.prepare_popup_blocked_events += 1
-                self._record_event("prepare-popup-gone", frame_s, 0.0)
-                self._reset_band_state()
-                return None
+            popup_raw = bool(self._popup_detector(image))
+            if popup_raw:
+                self.prepare_popup_raw_frames += 1
+                self._popup_hit_streak += 1
+                self._popup_miss_streak = 0
+            else:
+                self._popup_hit_streak = 0
+                self._popup_miss_streak += 1
+            popup_confirmed = (
+                self._popup_hit_streak >= self._popup_confirm_frames
+            )
+            if self._popup_gate_state == "pending" and popup_confirmed:
+                if (
+                    self._popup_first_seen_elapsed_s(frame_s)
+                    <= self._popup_first_seen_window_s
+                ):
+                    self._popup_gate_state = "armed"
+                else:
+                    self._close_popup_gate(frame_s, "late-first-sighting")
+            if self._popup_gate_state == "armed":
+                if popup_confirmed:
+                    self.prepare_popup_frames += 1
+                    if not self._prepare_popup_active:
+                        self._prepare_popup_active = True
+                        self.prepare_popup_blocked_events += 1
+                        self._record_event(
+                            "prepare-popup-visible",
+                            frame_s,
+                            0.0,
+                        )
+                    self._reset_band_state()
+                    return None
+                if self._prepare_popup_active:
+                    if self._popup_miss_streak >= self._popup_release_frames:
+                        self._prepare_popup_active = False
+                        self.prepare_popup_blocked_events += 1
+                        self._record_event(
+                            "prepare-popup-gone",
+                            frame_s,
+                            0.0,
+                        )
+                        if self._popup_single_episode:
+                            self._close_popup_gate(
+                                frame_s,
+                                "episode-finished",
+                            )
+                    self._reset_band_state()
+                    return None
+            elif popup_raw:
+                # 未采信的瞬时命中：只计数，绝不清零基线。
+                self.prepare_popup_rejected_events += 1
         if self._last_color is None:
             self._last_color = current
             self._previous_frame_s = frame_s
@@ -427,7 +588,11 @@ class NativeStartPhotogate:
                     self.waited_frames = 1
                 else:
                     self.waited_frames += 1
-                if frame_s - self.stable_since_s >= self._stable_duration_s:
+                required_stable_s = self._required_stable_s(frame_s)
+                if frame_s - self.stable_since_s >= required_stable_s:
+                    if required_stable_s > self._stable_duration_s:
+                        self.no_popup_long_quiet_freezes += 1
+                    self.last_freeze_required_ms = required_stable_s * 1000.0
                     self.frozen = True
                     self.frozen_at_s = frame_s
                     self._frozen_columns = image[
@@ -506,6 +671,17 @@ class NativeStartPhotogate:
             self.trigger_source = trigger_source
             self._record_event("trigger", frame_s, change_score)
             self._last_color = current
+            # 冻结后 500ms 宽限期内还在持续出现显著变化，说明冻结落点已经在
+            # 歌曲里（首音早就过去了），这样锚定的首拍必然偏晚：2026-09-12
+            # 20:22 与 09-13 17:24 两局分别是 8 / 14 次，整局只发出 33 / 125
+            # 个动作、共享生命直接归零；而正常局都是 0 次。
+            if self.ignored_prelude_events > 0:
+                print(
+                    "NativeStartPhotogate anchor_suspect=inside-song "
+                    f"prelude_events={self.ignored_prelude_events} "
+                    f"trigger_source={trigger_source}",
+                    flush=True,
+                )
             return trigger_s + self._latency_s
 
         self._previous_change = change_score

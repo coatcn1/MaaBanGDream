@@ -113,6 +113,11 @@ COOPERATIVE_DIFFICULTY_TARGETS = {
     "Special": (942, 575),
 }
 MEMBER_DOWNLOAD_TIMEOUT_SECONDS = 60.0
+# 错过开演转场后，多久没看到“真实生命条”就判定本局根本没开演。
+# 准备页上成员的下载进度条会被生命检测器误读成很小的数值（实测 94），
+# 只有 >= 500 才可能是协力演出刚开场的队伍生命条。
+MISSED_TRANSITION_NO_LIFE_SECONDS = 10.0
+STRONG_LIFE_MINIMUM = 500
 ROOM_SONG_CHOICE_TIMEOUT_SECONDS = 180.0
 SONG_CHOICE_TO_READY_TIMEOUT_SECONDS = 60.0
 POST_SCORE_NAVIGATION_TIMEOUT_SECONDS = 60.0
@@ -222,6 +227,14 @@ def cooperative_play_params(settings: dict[str, object]) -> dict[str, object]:
 
 class MemberExited(RuntimeError):
     pass
+
+
+class RoomEntryUnavailable(RuntimeError):
+    """点击房间后游戏仍停在房间选择页。
+
+    这是入房环节的故障（房间被退空、服务端拒绝、页面状态卡住等），不是演奏失败，
+    所以不应当消耗 play_failure_retry_count 的重试额度。
+    """
 
 
 class JumpOutUnavailable(RuntimeError):
@@ -565,6 +578,91 @@ class CooperativeLiveFlow:
         finally:
             gate.restore()
 
+    # 准备完毕/开演窗口里出现这些模板，说明本局已经退回到“选择类”页面，
+    # 演奏不可能再开始；继续等下去只会把整局任务拖死。
+    #
+    # 注意：room_wait / ready_button 在“准备完毕后的等待页”上同样存在，
+    # 2026-09-12 19:17 就因为它们把一局正常开演误判成“退回房间”，
+    # 因此这里只保留语义明确的选择页模板。
+    ROOM_RESIDENT_TEMPLATES = (
+        "room_search",
+        "song_unspecified",
+    )
+    ROOM_RESIDENT_HITS = 5
+
+    def resident_room_state(self, image: np.ndarray) -> str | None:
+        """识别是否已经退回到房间等待/选择/选曲/准备页。"""
+        for name in self.ROOM_RESIDENT_TEMPLATES:
+            if name not in self.templates:
+                continue
+            if self.visible(image, name):
+                return name
+        return None
+
+    def performance_aborted_by_disconnect(self, image: np.ndarray) -> bool:
+        """演出是否已经被网络中断（游戏自己弹出了“通信已中断”）。
+
+        2026-09-12 19:52 实测：协议断线让共享生命在 8 秒内从 1000 归零，
+        屏幕上就是 disconnect_continue_body。这种局已经没有任何可挽救的
+        内容，点两次“中断”退出演出后按普通单局失败重试即可，不该把 99
+        局任务判死。
+        """
+        return self.visible(image, "disconnect_continue_body", 0.93) or self.visible(
+            image, "disconnect_confirm_body", 0.93
+        )
+
+    def dismiss_disconnect_dialogs(self, image: np.ndarray) -> bool:
+        """开演前出现“通信已中断”弹窗时点“中断”放弃本局。
+
+        只在演奏尚未开始的窗口里调用：此时点“中断”等价于放弃本局，随后
+        由进房重试路径重新组队，不会把 99 局任务判死（2026-09-12 18:12
+        掉线局就是这样整整空等 60 秒后任务失败）。
+        """
+        if not self.visible(image, "disconnect_continue_body", 0.93):
+            return False
+        self._wait_and_click(
+            "disconnect_continue_body",
+            DISCONNECT_CONTINUE_INTERRUPT_POINT,
+            6.0,
+        )
+        self._wait_and_click(
+            "disconnect_confirm_body",
+            DISCONNECT_CONFIRM_INTERRUPT_POINT,
+            6.0,
+        )
+        return True
+
+    def restart_game_and_wait(self, settle_seconds: float = 18.0) -> None:
+        """强制退出游戏客户端并重新进入，把页面拉回已知状态后继续任务。
+
+        除用户停止任务外不抛异常：重启本身失败时由调用方的单局失败重试 /
+        恢复路径兜底，绝不因此把 99 局任务判死。
+        """
+        for label, call in (
+            ("stop", self.controller.post_stop_app),
+            ("start", self.controller.post_start_app),
+        ):
+            try:
+                call(GAME_PACKAGE).wait()
+                print(f"CooperativeLive game_restart={label}-sent", flush=True)
+            except Exception as error:  # noqa: BLE001 - 重启失败也要继续
+                print(
+                    f"CooperativeLive game_restart={label}-failed "
+                    f"{type(error).__name__}: {error}",
+                    flush=True,
+                )
+            if label == "stop":
+                time.sleep(1.5)
+        deadline = time.monotonic() + max(0.0, float(settle_seconds))
+        while time.monotonic() < deadline:
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
+            time.sleep(0.5)
+        print(
+            f"CooperativeLive game_restart=settled settle_s={settle_seconds}",
+            flush=True,
+        )
+
     def ensure_room_page(self, timeout: float = 15.0) -> np.ndarray:
         state, image = self.wait_for(("room_search",), timeout=timeout)
         if state is None:
@@ -585,9 +683,18 @@ class CooperativeLiveFlow:
                 return
             time.sleep(0.2)
 
+    ROOM_ENTRY_CLICK_ATTEMPTS = 3
+    ROOM_ENTRY_VERIFY_SECONDS = 8.0
+    ROOM_ENTRY_RETRY_DELAY_S = 4.0
+
     def select_normal_room(self) -> None:
         started = time.monotonic()
-        image = self.ensure_room_page()
+        try:
+            image = self.ensure_room_page()
+        except RuntimeError as exc:
+            # 房间选择页都认不出来，同样属于“进房环节”故障，
+            # 交给外层按进房重试处理而不占用演奏重试额度。
+            raise RoomEntryUnavailable(str(exc)) from exc
         target = str(self.settings["room_tier"])
         if target not in ROOM_TIER_INDEX:
             raise ValueError(f"不支持的协力房间档位：{target}")
@@ -646,18 +753,19 @@ class CooperativeLiveFlow:
             f"elapsed={time.monotonic() - started:.2f}s",
             flush=True,
         )
-        self.click((1060, 650))
-        self.verify_room_entry(
-            "点击所选协力房间后仍停留在房间选择页，未开始匹配"
-        )
+        self._click_room_with_retries(target)
         print(
             "CooperativeLive select_room room_entry_confirmed "
             f"elapsed={time.monotonic() - started:.2f}s",
             flush=True,
         )
 
-    def verify_room_entry(self, failure_reason: str) -> None:
-        deadline = time.monotonic() + 30.0
+    def verify_room_entry(
+        self,
+        failure_reason: str,
+        timeout: float = 30.0,
+    ) -> None:
+        deadline = time.monotonic() + max(1.0, float(timeout))
         departed_frames = 0
         while time.monotonic() < deadline:
             image = self.capture()
@@ -688,7 +796,75 @@ class CooperativeLiveFlow:
                     )
                     return
             time.sleep(0.25)
-        raise RuntimeError(failure_reason)
+        raise RoomEntryUnavailable(failure_reason)
+
+    def _settle_room_selection(self, target: str, timeout: float = 2.4) -> None:
+        """等房间选择页稳定后再点击。
+
+        从房间退回选择页时卡片仍在刷新，立刻点击会被吞掉（实测两次各
+        30 秒无响应），所以要求连续两帧档位识别一致。
+        """
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        previous: str | None = None
+        while time.monotonic() < deadline:
+            image = self.capture()
+            if not self.visible(image, "room_search"):
+                previous = None
+                time.sleep(0.2)
+                continue
+            actual = classify_room_tier(image)
+            if actual is not None and actual == previous:
+                return
+            previous = actual
+            time.sleep(0.25)
+
+    def _click_room_with_retries(self, target: str) -> None:
+        """点击房间并验证进房；失败时先 Back 清浮层再重试。
+
+        旧行为是“点一次 + 死等 30 秒”，失败即抛异常并消耗一次演奏重试；
+        实测 15:38/15:40 连续两次被吞就把 99 局任务直接打死。
+        """
+        reason = "点击所选协力房间后仍停留在房间选择页，未开始匹配"
+        attempts = self.ROOM_ENTRY_CLICK_ATTEMPTS
+        for attempt in range(1, attempts + 1):
+            self._settle_room_selection(target)
+            self.click((1060, 650))
+            try:
+                self.verify_room_entry(
+                    reason,
+                    timeout=self.ROOM_ENTRY_VERIFY_SECONDS,
+                )
+            except RoomEntryUnavailable as exc:
+                print(
+                    "CooperativeLive room_entry_retry=true "
+                    f"attempt={attempt}/{attempts} "
+                    f"waited={self.ROOM_ENTRY_VERIFY_SECONDS:.1f}s",
+                    flush=True,
+                )
+                if attempt >= attempts:
+                    raise RoomEntryUnavailable(
+                        f"{reason}（已点击 {attempts} 次仍无响应）"
+                    ) from exc
+                time.sleep(self.ROOM_ENTRY_RETRY_DELAY_S)
+                # 先按一次 Back 清掉可能残留的浮层，再确认还在房间选择页；
+                # 页面被推走时交给外层重新导航，绝不在这里硬等。
+                try:
+                    self.controller.post_click_key(4).wait()
+                    time.sleep(0.8)
+                    self.ensure_room_page(timeout=6.0)
+                except Exception as back_error:
+                    raise RoomEntryUnavailable(
+                        f"{reason}（重试时无法回到房间选择页："
+                        f"{type(back_error).__name__}: {back_error}）"
+                    ) from back_error
+                actual = classify_room_tier(self.capture())
+                if actual != target:
+                    raise RoomEntryUnavailable(
+                        f"{reason}（点击 {attempt} 次后档位漂移为 "
+                        f"{actual or 'unknown'}）"
+                    )
+            else:
+                return
 
     def open_room_search(self) -> None:
         self.ensure_room_page()
@@ -991,6 +1167,8 @@ class CooperativeLiveFlow:
             )
             return outcome
 
+        resident_room_hits = 0
+        life_like_samples = 0
         while time.monotonic() < deadline:
             if self.stopped():
                 raise InterruptedError("用户已停止任务")
@@ -1002,6 +1180,28 @@ class CooperativeLiveFlow:
                 finish("member-exit")
                 self.dismiss_member_exit()
                 raise MemberExited("协力成员退出房间")
+            if self.visible(image, "connect_failed_body", 0.90):
+                # 准备完毕后游戏报“连接失败。”：本局不可能开演，直接重试。
+                finish("connect-failed")
+                self.dismiss_connect_failed()
+                raise RoomEntryUnavailable(
+                    "开演前出现“连接失败”弹窗，本局未能开始"
+                )
+            if self.dismiss_disconnect_dialogs(image):
+                finish("disconnect")
+                raise RoomEntryUnavailable(
+                    "开演前通信中断，已中断本次演出并重试本局"
+                )
+            resident_state = self.resident_room_state(image)
+            resident_room_hits = (
+                resident_room_hits + 1 if resident_state else 0
+            )
+            if resident_room_hits >= self.ROOM_RESIDENT_HITS:
+                # 连续两帧看到房间页模板：本局已经退回房间，开演不会再来。
+                finish(f"back-to-{resident_state}")
+                raise RoomEntryUnavailable(
+                    f"准备完毕后退回{resident_state}，本局未能开始"
+                )
             if final_cover_resolver is not None:
                 cover_resolution = final_cover_resolver.observe(image)
                 if cover_resolution is not None:
@@ -1017,8 +1217,17 @@ class CooperativeLiveFlow:
             ):
                 finish("playfield-motion-missed-transition")
                 self.wait_for_life_depleted_after_missed_transition(image)
+            if self.detector.detect(image).visible:
+                life_like_samples += 1
             time.sleep(0.1)
         finish("timeout")
+        if life_like_samples == 0:
+            # 60 秒里既没有黑场、没有可确认的最终封面，也没有任何生命条：
+            # 本局根本没开演（选歌后成员跳车、成员下载卡死是常见原因）。
+            # 放弃本局回房间重排即可，不该像以前那样跳车并停止整场任务。
+            raise RoomEntryUnavailable(
+                "准备完毕后 60 秒内未进入演出，本局未能开始"
+            )
         self.jump_after_download_timeout()
 
     def wait_for_life_depleted_after_missed_transition(
@@ -1034,15 +1243,85 @@ class CooperativeLiveFlow:
         image = initial_image
         visible_samples = 0
         invisible_samples = 0
+        strong_samples = 0
 
+        resident_room_hits = 0
         while time.monotonic() < deadline:
             if self.stopped():
                 raise InterruptedError("用户已停止任务")
+            # 这一窗口是 fail-closed 的“只等生命归零”，但掉线/成员退出弹窗
+            # 与“退回房间页”必须立刻处理：2026-09-12 18:12 的掉线局里，网络
+            # 异常让房间在准备完毕后散伙，流程却在这里空等满 60 秒，最后把
+            # 14/99 的任务判死。弹窗/房间页说明本局没有开演，直接交回进房
+            # 重试路径（不消耗演奏重试额度）。
+            if self.visible(image, "member_exit_title", 0.93):
+                print(
+                    "CooperativeLive missed_transition_dialog=member-exit",
+                    flush=True,
+                )
+                self.dismiss_member_exit()
+                raise MemberExited("协力成员退出房间")
+            if self.visible(image, "connect_failed_body", 0.90):
+                print(
+                    "CooperativeLive missed_transition_dialog=connect-failed",
+                    flush=True,
+                )
+                self.dismiss_connect_failed()
+                raise RoomEntryUnavailable(
+                    "开演前出现“连接失败”弹窗，本局未能开始"
+                )
+            if self.dismiss_disconnect_dialogs(image):
+                print(
+                    "CooperativeLive missed_transition_dialog=disconnect",
+                    flush=True,
+                )
+                raise RoomEntryUnavailable(
+                    "开演前通信中断，已中断本次演出并重试本局"
+                )
+            resident_state = self.resident_room_state(image)
+            resident_room_hits = (
+                resident_room_hits + 1 if resident_state else 0
+            )
+            if resident_room_hits >= self.ROOM_RESIDENT_HITS:
+                print(
+                    "CooperativeLive missed_transition_state="
+                    f"{resident_state} "
+                    f"hits={resident_room_hits}",
+                    flush=True,
+                )
+                raise RoomEntryUnavailable(
+                    f"准备完毕后退回{resident_state}，本局未能开始"
+                )
             reading = self.detector.detect(image)
             if reading.visible:
                 visible_samples += 1
+                if (
+                    int(getattr(reading, "value", 0) or 0)
+                    >= STRONG_LIFE_MINIMUM
+                ):
+                    strong_samples += 1
             else:
                 invisible_samples += 1
+            if (
+                strong_samples == 0
+                and time.monotonic() - started_at
+                >= MISSED_TRANSITION_NO_LIFE_SECONDS
+            ):
+                # 从来没有出现过像样的生命条：本局根本没开演（选歌后成员
+                # 跳车/下载卡住的准备页就是这种样子）。此时既没有谱面可以
+                # 锚定，也不存在“在歌曲中段启动引擎”的风险，直接放弃本局
+                # 回房间重排，而不是空等 60 秒把整场任务判死。
+                print(
+                    "CooperativeLive missed_transition_no_life "
+                    f"elapsed_ms="
+                    f"{(time.monotonic() - started_at) * 1000.0:.1f} "
+                    f"visible_samples={visible_samples} "
+                    f"invisible_samples={invisible_samples}",
+                    flush=True,
+                )
+                raise RoomEntryUnavailable(
+                    "错过开演转场后未出现真实生命条，判定本局未开演"
+                )
             status = guard.update(reading)
             if status is LifeStatus.DEAD:
                 print(
@@ -1119,13 +1398,57 @@ class CooperativeLiveFlow:
         )
         run = current_live_run()
         if run is not None and bool(run.disconnect_jump_requested):
-            # 生命归零：不再自动断网跳车（门禁/弹窗在不同设备上不可靠）。
-            # 回主页 → 切回游戏 → 直接结束任务，由用户手动断网跳车。
-            self.controller.post_click_key(3).wait()
-            time.sleep(0.6)
-            self.controller.post_start_app(GAME_PACKAGE).wait()
-            time.sleep(0.8)
-            raise JumpOutUnavailable("生命归零，请手动断网跳车后重试")
+            # 生命归零分两种情况：
+            # 1) 游戏自己已经弹出“通信已中断”——这一局的演出是被网络掐断
+            #    的，没有任何可挽救的内容。点两次“中断”退出演出，按普通
+            #    单局失败重试（不消耗手动断网跳车的门禁），99 局任务继续。
+            # 2) 没有弹窗——可能是我们自己的判定失误，保持原来的保守策略：
+            #    回主页 → 切回游戏 → 结束任务，由用户手动断网跳车。
+            abort_image = self.capture()
+            if self.performance_aborted_by_disconnect(abort_image):
+                print(
+                    "CooperativeLive life_depleted=disconnect-aborted "
+                    "round_lost=true task_continue=true",
+                    flush=True,
+                )
+                self.dismiss_disconnect_dialogs(abort_image)
+                return False
+            # 2) 用户打开了“主动断网跳车”（GUI 的 CooperativeDisconnectJumpConfigure
+            #    → disconnect_jump_enabled）：屏蔽游戏出口流量 → 切后台再切回
+            #    → 点两次“中断” → 恢复网络 → 点“重试”回主页，然后按普通单局
+            #    失败重试继续 99 局任务。跳车失败则退回第三种情况。
+            if bool(self.settings.get("disconnect_jump_enabled", False)):
+                jumped = False
+                try:
+                    jumped = self.disconnect_jump_out()
+                except InterruptedError:
+                    raise
+                except Exception as error:  # noqa: BLE001 - 跳车失败也要继续
+                    print(
+                        "CooperativeLive disconnect_jump_error="
+                        f"{type(error).__name__}: {error}",
+                        flush=True,
+                    )
+                print(
+                    f"CooperativeLive disconnect_jump done={jumped} "
+                    "round_lost=true task_continue=true",
+                    flush=True,
+                )
+                if not jumped:
+                    self.restart_game_and_wait()
+                return False
+            # 3) 没开自动跳车、也没有弹窗：这一局已经废了（2026-09-12 20:22：
+            #    锚点晚了约
+            #    10 秒，整局只发出 33 个动作，共享生命直接归零）。按要求改成
+            #    “退出游戏重新进入”：force-stop 客户端 → 重新启动 → 交给
+            #    单局失败重试路径回房间继续下一局，不再把 99 局任务判死。
+            print(
+                "CooperativeLive life_depleted=game-restart-continue "
+                "round_lost=true task_continue=true",
+                flush=True,
+            )
+            self.restart_game_and_wait()
+            return False
         if not success:
             return False
         return True
@@ -1488,6 +1811,12 @@ class CooperativeLiveFlow:
         reconnects = 0
         reuse_room = False
         play_failures = 0
+        entry_failures = 0
+        entry_retry_limit = 3
+        entry_recoveries = 0
+        entry_recovery_limit = 3
+        exhausted_rounds = 0
+        exhausted_limit = 3
         retry_count = max(
             0,
             min(3, int(self.settings.get("play_failure_retry_count", 0))),
@@ -1505,6 +1834,48 @@ class CooperativeLiveFlow:
                 if next_reconnects is None:
                     return False
                 reconnects = next_reconnects
+                reuse_room = False
+                continue
+            except RoomEntryUnavailable as exc:
+                # 进房环节（点房间没反应、退回选择页、档位漂移）不是演奏失败，
+                # 单独计数重试，绝不消耗 play_failure_retry_count，否则一次
+                # 进房抖动就会把 99 局任务判死。
+                entry_failures += 1
+                reason = f"{type(exc).__name__}: {exc}"
+                if entry_failures > entry_retry_limit:
+                    record_failure_reason(reason)
+                    raise
+                print(
+                    "CooperativeLive entry_retry=true "
+                    f"attempt={entry_failures}/{entry_retry_limit} "
+                    f"play_failures_used={play_failures} "
+                    f"reason={reason}",
+                    flush=True,
+                )
+                if entry_failures >= 2:
+                    # 连续进不去房通常是页面状态卡住：走一次完整恢复（回主页
+                    # 重新进入协力），同样不消耗演奏重试额度。恢复成功后把
+                    # 进房计数清零——重启游戏/重登这种恢复能把页面拉回已知
+                    # 状态，不该继续占用这一次的进房重试预算。
+                    try:
+                        self.recover_after_play_failure(reason)
+                    except Exception as recovery_error:
+                        print(
+                            "CooperativeLive entry_retry_recovery_failed="
+                            f"{type(recovery_error).__name__}: "
+                            f"{recovery_error}",
+                            flush=True,
+                        )
+                    else:
+                        entry_recoveries += 1
+                        if entry_recoveries > entry_recovery_limit:
+                            record_failure_reason(
+                                "进房连续失败且恢复无效：" + reason
+                            )
+                            raise
+                        entry_failures = 0
+                else:
+                    time.sleep(6.0)
                 reuse_room = False
                 continue
             except JumpOutUnavailable as exc:
@@ -1549,7 +1920,35 @@ class CooperativeLiveFlow:
                 continue
             if not success:
                 if play_failures >= retry_count:
-                    return False
+                    # 单局重试预算用尽：不再直接把 99 局任务判死（2026-09-13
+                    # 网络抖动时连续两局失败就把整场结束）。做一次完整恢复后
+                    # 继续下一局，只有连续 exhausted_limit 轮都用尽预算才判死。
+                    exhausted_rounds += 1
+                    print(
+                        "CooperativeLive round_exhausted=true "
+                        f"streak={exhausted_rounds}/{exhausted_limit} "
+                        f"completed={completed}",
+                        flush=True,
+                    )
+                    if exhausted_rounds >= exhausted_limit:
+                        record_failure_reason(
+                            f"连续 {exhausted_rounds} 轮单局重试预算用尽"
+                        )
+                        return False
+                    try:
+                        self.recover_after_play_failure("单局重试预算用尽")
+                    except InterruptedError:
+                        raise
+                    except Exception as recovery_error:
+                        print(
+                            "CooperativeLive exhausted_recovery_failed="
+                            f"{type(recovery_error).__name__}: "
+                            f"{recovery_error}",
+                            flush=True,
+                        )
+                    play_failures = 0
+                    reuse_room = False
+                    continue
                 play_failures += 1
                 reason = "RealtimeProfilePlay 返回失败"
                 try:
@@ -1582,6 +1981,8 @@ class CooperativeLiveFlow:
 
             completed += 1
             play_failures = 0
+            entry_failures = 0
+            exhausted_rounds = 0
             callback = getattr(self, "progress_callback", None)
             if callback is not None:
                 callback(completed, total)

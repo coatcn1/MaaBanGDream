@@ -33,6 +33,25 @@ _STAGE_SAMPLE_CAPACITY = 120 * 600
 _FRAME_INTERVAL_SAMPLE_CAPACITY = 120 * 600
 
 
+def anchor_grace_expired(
+    native_anchor_at: float | None,
+    now: float,
+    grace_seconds: float,
+) -> bool:
+    """首拍锚点校验：触发后经过 grace_seconds 生命条仍未确认存活。
+
+    生命条在正常局里锚点确认后立刻可读（今天 14:16~15:50 的 8 局全部
+    alive_confirmed=True）；超过宽限仍不可读说明 photogate 取到的首拍是
+    错的（13:03 局锚点晚 12 秒、生命早已归零），此时继续空打只会白白
+    消耗 30 秒以上。
+    """
+    if native_anchor_at is None:
+        return False
+    if float(grace_seconds) <= 0:
+        return False
+    return (float(now) - float(native_anchor_at)) >= float(grace_seconds)
+
+
 class DebugRecorder:
     def record(
         self, image, timestamp, notes, actions, life_status,
@@ -81,6 +100,8 @@ class EngineStats:
     cleanup_errors: tuple[str, ...] = ()
     recorder_error: str | None = None
     startup_timed_out: bool = False
+    anchor_invalid: bool = False
+    anchor_invalid_reason: str | None = None
     engine_mode: str = "legacy"
     native_report: dict[str, object] = field(default_factory=dict)
     # 仅调试记录开启时填充；用于说明数值生命监控为何没有确认归零。
@@ -239,6 +260,7 @@ class RealtimeEngine:
         touch_reset_drop_threshold: int = 180,
         touch_reset_drop_window_seconds: float = 2.0,
         startup_timeout_seconds: float = 20.0,
+        anchor_alive_grace_seconds: float = 2.5,
     ) -> EngineStats:
         if duration_seconds is not None and not 1 <= duration_seconds <= 600:
             raise ValueError("duration_seconds 必须在 1..600 之间")
@@ -246,6 +268,11 @@ class RealtimeEngine:
             raise ValueError("target_fps 必须在 15..120 之间")
         if not 1 <= startup_timeout_seconds <= 120:
             raise ValueError("startup_timeout_seconds 必须在 1..120 之间")
+        # 首拍锚点校验宽限：触发后这么长时间内生命条仍未确认存活，就说明
+        # photogate 取到的首拍是错的（晚了，演奏早已归零），立即结束本局而不是
+        # 干等到 startup_timeout_seconds，把 30 秒级空打压缩到 2 秒级。
+        if not 0.5 <= anchor_alive_grace_seconds <= 30.0:
+            raise ValueError("anchor_alive_grace_seconds 必须在 0.5..30 之间")
         # Windows 默认计时器粒度约 15.6ms，会吞掉到期派发需要的 1~2ms 精度。
         # 提升到 1ms 只影响本进程，是节奏类实时循环的标准做法。
         try:
@@ -268,6 +295,10 @@ class RealtimeEngine:
         life_failed = False
         jump_requested = False
         startup_timed_out = False
+        anchor_invalid = False
+        anchor_invalid_reason: str | None = None
+        native_anchor_at: float | None = None
+        native_anchor_invalid_checked = False
         touch_resets = 0
         last_touch_reset_at = float("-inf")
         touch_reset_life_samples: deque[tuple[float, int]] = deque()
@@ -520,6 +551,8 @@ class RealtimeEngine:
                 stage_timings_ms=stage_timings_ms,
                 frame_interval_outliers=tuple(frame_interval_outliers),
                 startup_timed_out=startup_timed_out,
+                anchor_invalid=anchor_invalid,
+                anchor_invalid_reason=anchor_invalid_reason,
                 engine_mode="native" if native_exclusive else "legacy",
                 life_monitor_diagnostics=(
                     life_monitor_diagnostics.report(
@@ -625,6 +658,7 @@ class RealtimeEngine:
                         raise RuntimeError("Native 后端缺少 start() 会话接口")
                     start_native(float(first_action_anchor))
                     native_started = True
+                    native_anchor_at = now
                     if self.playfield_monitor is not None:
                         self.playfield_monitor.mark_active(now)
                     # 首拍之后截图只服务生命和终态识别，固定降到约 5Hz。
@@ -767,6 +801,44 @@ class RealtimeEngine:
                         # non-zero life bar has been confirmed.
                         if not self.life_guard.alive_confirmed:
                             frames += 1
+                            # 锚点校验：触发后生命条一直没确认存活，说明这一拍
+                            # 取早了/取晚了（演奏早已归零或根本还没开演），
+                            # 立刻收工走本局重试，不再对着空谱面打满 60 秒。
+                            if (
+                                not native_anchor_invalid_checked
+                                and anchor_grace_expired(
+                                    native_anchor_at,
+                                    now,
+                                    anchor_alive_grace_seconds,
+                                )
+                            ):
+                                native_anchor_invalid_checked = True
+                                anchor_invalid = True
+                                anchor_invalid_reason = (
+                                    "life-never-alive-after-anchor"
+                                )
+                                print(
+                                    "RealtimeEngine anchor_invalid="
+                                    "life-never-alive "
+                                    f"grace_s={anchor_alive_grace_seconds:g} "
+                                    f"since_anchor_s="
+                                    f"{now - native_anchor_at:.2f} "
+                                    f"life_visible_frames={frames}",
+                                    flush=True,
+                                )
+                                record_terminal_life_frame(
+                                    image,
+                                    now,
+                                    life_status=(
+                                        life_status
+                                        or LifeStatus.UNKNOWN.value
+                                    ),
+                                    life_value=int(
+                                        getattr(reading, "value", 0) or 0
+                                    ),
+                                    reason="anchor-invalid-life-never-alive",
+                                )
+                                break
                             if now - started_at >= startup_timeout_seconds:
                                 startup_timed_out = True
                                 record_startup_timeout_frame(
@@ -1126,6 +1198,12 @@ class RealtimeEngine:
                 terminal_reason = "演出失败：生命值归零"
             elif completed:
                 terminal_reason = "已识别演奏结束并进入结算"
+            elif anchor_invalid:
+                terminal_reason = (
+                    "首拍锚点无效：photogate 触发后 "
+                    f"{anchor_alive_grace_seconds:g} 秒内生命条仍未确认存活"
+                    "（取到的是错误的首拍），已提前结束本局"
+                )
             elif startup_timed_out:
                 terminal_reason = (
                     f"开演后 {startup_timeout_seconds:g} 秒仍未识别到"
