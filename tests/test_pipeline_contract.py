@@ -718,9 +718,35 @@ def test_continuous_realtime_live_is_a_pure_listener_task():
     assert nodes["ContinuousRealtimeProcessConflictGuard"]["custom_action"] == (
         "ProcessConflictGuard"
     )
+    assert nodes["ContinuousRealtimeProcessConflictGuard"]["next"] == [
+        "ContinuousRealtimeDifficultyConfigure"
+    ]
+    difficulty_gate = nodes["ContinuousRealtimeDifficultyConfigure"]
+    assert difficulty_gate["custom_action"] == "ContinuousRealtimeLiveConfigure"
+    assert difficulty_gate["custom_action_param"] == {
+        "reset": True,
+        "difficulty": "Easy",
+    }
+    assert difficulty_gate["next"] == ["ContinuousRealtimeDebugConfigure"]
+    debug_gate = nodes["ContinuousRealtimeDebugConfigure"]
+    assert debug_gate["custom_action"] == "ContinuousRealtimeLiveConfigure"
+    assert debug_gate["custom_action_param"] == {
+        "debug_recording": False,
+        "diagnostic_trace": True,
+    }
+    assert debug_gate["next"] == ["ContinuousRealtimeWatcher"]
     watcher = nodes["ContinuousRealtimeWatcher"]
     assert watcher["custom_action"] == "ContinuousRealtimeLive"
-    assert "next" not in watcher
+    assert watcher["next"] == ["ContinuousRealtimeComplete"]
+    starting = watcher["focus"]["Node.Action.Starting"]
+    assert "已开始识别" in starting["content"]
+    assert "任务所选难度" in starting["content"]
+    assert "自动结束" in starting["content"]
+    assert starting["display"] == ["log", "toast"]
+    complete = nodes["ContinuousRealtimeComplete"]
+    assert complete["custom_action"] == "TaskOutcome"
+    assert complete["custom_action_param"]["status"] == "success"
+    assert "自动结束" in complete["focus"]["Node.Action.Succeeded"]["content"]
     serialized = json.dumps(nodes, ensure_ascii=False)
     assert "Click" not in serialized
     assert "result" not in serialized.lower()
@@ -731,18 +757,21 @@ def test_continuous_realtime_live_is_a_pure_listener_task():
         "Easy", "Normal", "Hard", "Expert", "Special",
     ]
     for case in difficulty["cases"]:
-        params = case["pipeline_override"]["ContinuousRealtimeWatcher"][
+        params = case["pipeline_override"][
+            "ContinuousRealtimeDifficultyConfigure"
+        ][
             "custom_action_param"
         ]
-        assert params["difficulty"] == case["name"]
-        assert params["debug_recording"] is False
+        assert params == {"reset": True, "difficulty": case["name"]}
     debug = interface["option"]["ContinuousRealtimeDebug"]
     assert debug["default_case"] == "Light"
     assert [case["name"] for case in debug["cases"]] == [
         "Light", "Off", "Full",
     ]
     params = {
-        case["name"]: case["pipeline_override"]["ContinuousRealtimeWatcher"][
+        case["name"]: case["pipeline_override"][
+            "ContinuousRealtimeDebugConfigure"
+        ][
             "custom_action_param"
         ]
         for case in debug["cases"]
@@ -751,6 +780,64 @@ def test_continuous_realtime_live_is_a_pure_listener_task():
         "Light": {"debug_recording": False, "diagnostic_trace": True},
         "Off": {"debug_recording": False, "diagnostic_trace": False},
         "Full": {"debug_recording": True, "diagnostic_trace": True},
+    }
+
+
+def test_continuous_difficulty_and_debug_resolve_in_real_maafw(tmp_path):
+    import subprocess
+    import sys
+
+    interface = load(ROOT / "interface.json")
+    pipeline = load(ROOT / "resource/pipeline/continuous_realtime_live.json")
+    difficulty_case = next(
+        case for case in interface["option"]["ContinuousRealtimeDifficulty"][
+            "cases"
+        ]
+        if case["name"] == "Expert"
+    )
+    debug_case = next(
+        case for case in interface["option"]["ContinuousRealtimeDebug"]["cases"]
+        if case["name"] == "Light"
+    )
+    code = """
+import json, sys
+from maa.resource import Resource
+from maa.toolkit import Toolkit
+data = json.load(sys.stdin)
+Toolkit.init_option(data['log_dir'])
+resource = Resource()
+assert resource.override_pipeline(data['base'])
+assert resource.override_pipeline(data['difficulty'])
+assert resource.override_pipeline(data['debug'])
+print(json.dumps({
+    node: resource.get_node_data(node)['action']['param']['custom_action_param']
+    for node in data['base']
+}))
+"""
+    nodes = (
+        "ContinuousRealtimeDifficultyConfigure",
+        "ContinuousRealtimeDebugConfigure",
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        input=json.dumps({
+            "log_dir": str(tmp_path),
+            "base": {node: pipeline[node] for node in nodes},
+            "difficulty": difficulty_case["pipeline_override"],
+            "debug": debug_case["pipeline_override"],
+        }),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    effective = json.loads(result.stdout)
+    assert effective["ContinuousRealtimeDifficultyConfigure"] == {
+        "reset": True,
+        "difficulty": "Expert",
+    }
+    assert effective["ContinuousRealtimeDebugConfigure"] == {
+        "debug_recording": False,
+        "diagnostic_trace": True,
     }
 
 

@@ -1645,7 +1645,7 @@ class RealtimeProfilePlay(CustomAction):
                     "confirm_final_cover",
                     params.get("settings_gate_required", False),
                 )
-            ) and not ignore_note_speed
+            )
             ordered_startup = os.environ.get("MAABANGDREAM_ORDERED_STARTUP", "0") == "1"
             preflight_image = None
             native_prearm_deferred = bool(
@@ -1787,7 +1787,6 @@ class RealtimeProfilePlay(CustomAction):
             live_run = current_live_run()
             if (
                 live_run is None
-                or run_mode == "continuous"
                 or not live_run.prepared_for_play
             ):
                 live_run = reset_live_run(

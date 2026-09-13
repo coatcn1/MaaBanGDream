@@ -187,11 +187,19 @@ pytest 临时目录固定在 `.local/pytest-<进程号>`（Git 忽略），不�
 
 ### 3. 一键实时演奏（ContinuousRealtimeLive）
 
-1. 进程互斥；开关开启时要求最近 15 分钟内有流速读回复核（`require_recent_speed_settings`），关闭时不检查。
-2. 被动监听：每 0.1s 截图检测生命条（数值 ≥20 连续 3 帧）；检测到歌曲开始就调用一次
-   `RealtimeProfilePlay`（`ignore_note_speed`、`require_completion=false`），
-   打完继续监听下一首，直到用户停止。
-3. 停止/失败保存最后一帧诊断截图到 `debug/recordings/listener-*`。
+1. 进程互斥；难度与诊断选项先由独立 `ContinuousRealtimeLiveConfigure` 节点合并，避免 Custom Action
+   参数整块替换导致难度回落；开关开启时要求最近 15 分钟内有流速读回复核
+   （`require_recent_speed_settings`），关闭时不检查。没有 `custom_action_param` 的 Custom Action 可能收到
+   JSON 字符串 `null`，读取后必须先规范为空字典再做参数展开。
+2. 被动监听：每 0.1s 截图识别开场最终封面和标题；封面连续两帧稳定、标题与本地曲库一致后，
+   使用任务所选难度进入 `RealtimeProfilePlay`（`ignore_note_speed`、`require_completion=true`）。
+   一键流程没有准备页等级，严格 8 bit 封面匹配失败时，只能先由标题独立收窄候选，再对这些候选
+   使用 14 bit 宽松阈值；确认歌曲后用曲库标准指纹解析谱面，不能让同一实拍封面在第二道门禁再次失败。
+   该难度有本地谱面时把同一帧作为 `confirm_final_cover` 证据并允许 Native 延迟预武装；Easy/Normal
+   等无本地谱面的难度保留已确认曲目身份并整局走视觉 Legacy。没有完整身份时继续等待，不在歌曲中途启动；
+   第一首演出确认完成后立即进入成功终态并自动结束任务，不再继续监听下一首。
+3. 监听期间每两秒有界记录封面指纹、稳定帧、标题、拒绝原因与演奏场状态；用户停止或失败时把
+   最后一帧及最多八张稳定候选帧保存到 `debug/recordings/listener-*`，监听热路径不写盘。
 
 ### 4. 实时校准（RealtimeCalibration）
 

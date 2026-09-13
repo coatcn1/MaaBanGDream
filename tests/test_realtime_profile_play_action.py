@@ -1817,6 +1817,22 @@ def test_direct_profile_play_does_not_reuse_unprepared_song_identity(
     assert payload["song_id_method"] == "unknown"
 
 
+def test_continuous_play_preserves_preconfirmed_opening_identity(
+    tmp_path, monkeypatch,
+):
+    root, _, _ = _completed_play_harness(
+        monkeypatch,
+        tmp_path,
+        debug_recording=False,
+        run_mode="continuous",
+    )
+
+    report = next((root / "screencap").glob("realtime-result-*.json"))
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["mode"] == "continuous"
+    assert payload["song_id"] == "song-phash-v1-0123456789abcdef"
+
+
 def test_completed_with_debug_recording_writes_json_and_screenshot(
     tmp_path, monkeypatch,
 ):

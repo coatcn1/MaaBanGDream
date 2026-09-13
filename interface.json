@@ -77,7 +77,7 @@
     {
       "name": "ContinuousRealtimeLive",
       "label": "⚡ 一键实时演奏",
-      "description": "持续检测演奏页面并自动演奏，不导航、不确认、不读取结算；流速检查开关开启时需有最近 15 分钟内的流速读回，关闭时不检查。",
+      "description": "识别开场封面与标题，确认本地曲目后按任务所选难度自动演奏一首；识别演出完成后任务自动结束，不导航、不读取结算。流速检查开关开启时需有最近 15 分钟内的流速读回，关闭时不检查。",
       "entry": "ContinuousRealtimeLive",
       "option": [
         "ContinuousRealtimeDifficulty",
@@ -1222,13 +1222,10 @@
           "name": "Easy",
           "label": "Easy",
           "pipeline_override": {
-            "ContinuousRealtimeWatcher": {
+            "ContinuousRealtimeDifficultyConfigure": {
               "custom_action_param": {
-                "difficulty": "Easy",
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "debug_recording": false
+                "reset": true,
+                "difficulty": "Easy"
               }
             }
           }
@@ -1237,13 +1234,10 @@
           "name": "Normal",
           "label": "Normal",
           "pipeline_override": {
-            "ContinuousRealtimeWatcher": {
+            "ContinuousRealtimeDifficultyConfigure": {
               "custom_action_param": {
-                "difficulty": "Normal",
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "debug_recording": false
+                "reset": true,
+                "difficulty": "Normal"
               }
             }
           }
@@ -1252,13 +1246,10 @@
           "name": "Hard",
           "label": "Hard",
           "pipeline_override": {
-            "ContinuousRealtimeWatcher": {
+            "ContinuousRealtimeDifficultyConfigure": {
               "custom_action_param": {
-                "difficulty": "Hard",
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "debug_recording": false
+                "reset": true,
+                "difficulty": "Hard"
               }
             }
           }
@@ -1267,13 +1258,10 @@
           "name": "Expert",
           "label": "Expert",
           "pipeline_override": {
-            "ContinuousRealtimeWatcher": {
+            "ContinuousRealtimeDifficultyConfigure": {
               "custom_action_param": {
-                "difficulty": "Expert",
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "debug_recording": false
+                "reset": true,
+                "difficulty": "Expert"
               }
             }
           }
@@ -1282,13 +1270,10 @@
           "name": "Special",
           "label": "Special",
           "pipeline_override": {
-            "ContinuousRealtimeWatcher": {
+            "ContinuousRealtimeDifficultyConfigure": {
               "custom_action_param": {
-                "difficulty": "Special",
-                "dpi": 240,
-                "game_fps": 60,
-                "render_quality": "standard",
-                "debug_recording": false
+                "reset": true,
+                "difficulty": "Special"
               }
             }
           }
@@ -1304,7 +1289,7 @@
           "name": "Light",
           "label": "轻量 Trace（推荐）",
           "pipeline_override": {
-            "ContinuousRealtimeWatcher": {
+            "ContinuousRealtimeDebugConfigure": {
               "custom_action_param": {
                 "debug_recording": false,
                 "diagnostic_trace": true
@@ -1316,7 +1301,7 @@
           "name": "Off",
           "label": "完全关闭",
           "pipeline_override": {
-            "ContinuousRealtimeWatcher": {
+            "ContinuousRealtimeDebugConfigure": {
               "custom_action_param": {
                 "debug_recording": false,
                 "diagnostic_trace": false
@@ -1328,7 +1313,7 @@
           "name": "Full",
           "label": "完整录像（MKV + Trace，大文件）",
           "pipeline_override": {
-            "ContinuousRealtimeWatcher": {
+            "ContinuousRealtimeDebugConfigure": {
               "custom_action_param": {
                 "debug_recording": true,
                 "diagnostic_trace": true
