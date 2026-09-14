@@ -57,22 +57,40 @@ class RealtimeFormalPreflight(CustomAction):
                         return True
                     box = auto.box
                     require_game_foreground(controller)
+                    print(
+                        "RealtimeFormalPreflight action=disable_auto_live "
+                        f"target=({box.x + box.w // 2},{box.y + box.h // 2})",
+                        flush=True,
+                    )
                     controller.post_click(box.x + box.w // 2, box.y + box.h // 2).wait()
                     if not _wait(context, 1):
                         return False
                     continue
-                if cut_in_is_checked(image):
-                    require_game_foreground(controller)
-                    controller.post_click(500, 650).wait()
-                    if not _wait(context, 1):
-                        return False
-                    continue
+                # 3D 演出时 Cut-in 复选框尚未出现，同一区域显示的是成员头像；
+                # 必须先把演出模式切到 OFF，再读取随后出现的 Cut-in 复选框。
                 if not formal_live_mode_is_off(image):
                     require_game_foreground(controller)
+                    print(
+                        "RealtimeFormalPreflight action=cycle_performance_mode "
+                        f"target={MODE_TOGGLE_POINT}",
+                        flush=True,
+                    )
                     controller.post_click(*MODE_TOGGLE_POINT).wait()
                     if not _wait(context, .5):
                         return False
                     continue
+                if cut_in_is_checked(image):
+                    require_game_foreground(controller)
+                    print(
+                        "RealtimeFormalPreflight action=disable_3d_cut_in "
+                        "target=(500,650)",
+                        flush=True,
+                    )
+                    controller.post_click(500, 650).wait()
+                    if not _wait(context, 1):
+                        return False
+                    continue
+                print("RealtimeFormalPreflight completed=true", flush=True)
                 return True
             raise RuntimeError("无法在正式演奏前关闭自动演出和演出显示效果")
         except Exception as exc:
