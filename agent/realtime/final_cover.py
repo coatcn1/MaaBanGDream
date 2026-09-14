@@ -28,6 +28,8 @@ class FinalCoverConfirmation:
 class FinalCoverResolution:
     confirmation: FinalCoverConfirmation
     selection: Any
+    observed_title: str | None = None
+    observed_title_confidence: float = 0.0
 
 
 def _is_full_song(selection: Any) -> bool:
@@ -171,6 +173,7 @@ class FinalCoverResolver:
         observed_title_confidence: float = 0.0,
         selection: Any | None = None,
         repository: LocalChartRepository | None = None,
+        require_observed_title: bool = False,
     ) -> None:
         if selection is None and repository is None:
             raise ValueError("缺少最终封面谱面解析器")
@@ -178,10 +181,20 @@ class FinalCoverResolver:
         self.observed_level = (
             None if observed_level is None else int(observed_level)
         )
-        self.observed_title = (
-            None if observed_title is None else str(observed_title).strip()
+        self.require_observed_title = bool(require_observed_title)
+        trusted_initial_title = (
+            observed_title is not None
+            and float(observed_title_confidence or 0.0) >= 0.7
         )
-        self._observed_title_confidence = float(observed_title_confidence or 0.0)
+        self.observed_title = (
+            str(observed_title).strip()
+            if trusted_initial_title or not self.require_observed_title
+            else None
+        )
+        self._observed_title_confidence = (
+            float(observed_title_confidence or 0.0)
+            if self.observed_title else 0.0
+        )
         self.repository = repository
         self.gate = (
             FinalCoverGate(
@@ -255,6 +268,8 @@ class FinalCoverResolver:
             return FinalCoverResolution(
                 confirmation=confirmation,
                 selection=self.gate.selection,
+                observed_title=self.observed_title,
+                observed_title_confidence=self._observed_title_confidence,
             )
 
         identity = identify_final_song(image)
@@ -274,6 +289,9 @@ class FinalCoverResolver:
         # 协力加载画面会短暂经过多张高纹理图片，连续两帧稳定后才查谱面。
         if self._candidate_frames < 2:
             self.last_reason = "waiting for stable final cover jacket"
+            return None
+        if self.require_observed_title and not self.observed_title:
+            self.last_reason = "final cover title is not confirmed"
             return None
 
         assert self.repository is not None
@@ -323,4 +341,6 @@ class FinalCoverResolver:
         return FinalCoverResolution(
             confirmation=confirmation,
             selection=resolution.selection,
+            observed_title=self.observed_title,
+            observed_title_confidence=self._observed_title_confidence,
         )

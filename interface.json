@@ -3,7 +3,7 @@
   "interface_version": 2,
   "name": "MaaBanGDream",
   "label": "BanG Dream! 自动化（MaaFramework）",
-  "version": "1.3.7",
+  "version": "1.3.8",
   "description": "docs/about.md",
   "about_icon": "docs/assets/maabangdream-logo-v1.png",
   "contact": "docs/contact.md",
@@ -115,6 +115,17 @@
       ]
     },
     {
+      "name": "MedleyLive",
+      "label": "🎼 组曲演奏",
+      "description": "按输入次数完成整轮巡回演出，一首歌计为一次演奏；当前每轮固定三首，因此次数必须是 3 的倍数。自由巡演可选择当前曲目或每首随机，课题巡演使用页面预设歌曲与难度。",
+      "entry": "MedleyLive",
+      "option": [
+        "MedleyTourType",
+        "MedleyCount",
+        "MedleyDebug"
+      ]
+    },
+    {
       "name": "ManualFlowRecording",
       "label": "📹 手动流程录像",
       "description": "录制任意手动操作界面；启动后直接操作模拟器，完成后点击MFA停止按钮保存。",
@@ -127,6 +138,212 @@
     }
   ],
   "option": {
+    "MedleyTourType": {
+      "type": "select",
+      "label": "巡演类型",
+      "default_case": "Free",
+      "cases": [
+        {
+          "name": "Free",
+          "label": "自由巡演",
+          "option": [
+            "MedleySongMode",
+            "MedleyDifficulty"
+          ],
+          "pipeline_override": {
+            "MedleyTourTypeConfigure": {
+              "custom_action_param": {
+                "reset": true,
+                "tour_type": "free"
+              }
+            }
+          }
+        },
+        {
+          "name": "Task",
+          "label": "课题巡演（使用预设难度）",
+          "pipeline_override": {
+            "MedleyTourTypeConfigure": {
+              "custom_action_param": {
+                "reset": true,
+                "tour_type": "task"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "MedleySongMode": {
+      "type": "select",
+      "label": "自由巡演歌曲选择",
+      "default_case": "Random",
+      "cases": [
+        {
+          "name": "Current",
+          "label": "当前曲目",
+          "pipeline_override": {
+            "MedleySongModeConfigure": {
+              "custom_action_param": {
+                "song_mode": "current"
+              }
+            }
+          }
+        },
+        {
+          "name": "Random",
+          "label": "每首随机选曲",
+          "pipeline_override": {
+            "MedleySongModeConfigure": {
+              "custom_action_param": {
+                "song_mode": "random"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "MedleyCount": {
+      "type": "input",
+      "label": "演奏次数",
+      "inputs": [
+        {
+          "name": "Count",
+          "label": "次数（3 的倍数）",
+          "default": "3",
+          "pipeline_type": "int",
+          "verify": "^(?:3|6|9|1[258]|2[147]|3[0369]|4[258]|5[147]|6[0369]|7[258]|8[147]|9[0369])$",
+          "pattern_msg": "请输入 3 到 99 之间且为 3 的倍数的整数。"
+        }
+      ],
+      "pipeline_override": {
+        "MedleyCountConfigure": {
+          "custom_action_param": {"count": "{Count}"}
+        },
+        "MedleyComplete": {
+          "custom_action_param": {
+            "task_name": "MedleyLive",
+            "label": "组曲演奏",
+            "total": "{Count}",
+            "status": "success"
+          }
+        },
+        "MedleyFailure": {
+          "custom_action_param": {
+            "task_name": "MedleyLive",
+            "label": "组曲演奏",
+            "total": "{Count}",
+            "status": "failure",
+            "reason": "组曲演奏流程未完成",
+            "reason_source": "latest"
+          }
+        }
+      }
+    },
+    "MedleyDifficulty": {
+      "type": "select",
+      "label": "自由巡演统一难度",
+      "default_case": "Expert",
+      "cases": [
+        {
+          "name": "Easy",
+          "label": "Easy",
+          "pipeline_override": {
+            "MedleyDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Easy"
+              }
+            }
+          }
+        },
+        {
+          "name": "Normal",
+          "label": "Normal",
+          "pipeline_override": {
+            "MedleyDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Normal"
+              }
+            }
+          }
+        },
+        {
+          "name": "Hard",
+          "label": "Hard",
+          "pipeline_override": {
+            "MedleyDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Hard"
+              }
+            }
+          }
+        },
+        {
+          "name": "Expert",
+          "label": "Expert",
+          "pipeline_override": {
+            "MedleyDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Expert"
+              }
+            }
+          }
+        },
+        {
+          "name": "Special",
+          "label": "Special（不可选时回退 Expert）",
+          "pipeline_override": {
+            "MedleyDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Special"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "MedleyDebug": {
+      "type": "select",
+      "label": "诊断记录",
+      "default_case": "Light",
+      "cases": [
+        {
+          "name": "Light",
+          "label": "轻量 Trace（推荐）",
+          "pipeline_override": {
+            "MedleyDebugConfigure": {
+              "custom_action_param": {
+                "debug_recording": false,
+                "diagnostic_trace": true
+              }
+            }
+          }
+        },
+        {
+          "name": "Off",
+          "label": "完全关闭（只保存结果）",
+          "pipeline_override": {
+            "MedleyDebugConfigure": {
+              "custom_action_param": {
+                "debug_recording": false,
+                "diagnostic_trace": false
+              }
+            }
+          }
+        },
+        {
+          "name": "Full",
+          "label": "完整录像（每首独立 MKV + Trace）",
+          "pipeline_override": {
+            "MedleyDebugConfigure": {
+              "custom_action_param": {
+                "debug_recording": true,
+                "diagnostic_trace": true
+              }
+            }
+          }
+        }
+      ]
+    },
     "CooperativeEntryMethod": {
       "type": "select",
       "label": "入房方式",

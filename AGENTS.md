@@ -18,7 +18,7 @@
 基于 MaaFramework 的 BanG Dream! 自动化项目。通过 MFAAvalonia GUI 加载 Python Agent，控制 Android 模拟器完成自动演出、实时触控演奏、校准和挑战演出。
 
 - 仓库：`https://github.com/coatcn1/MaaBanGDream`
-- 当前版本：`v1.3.7`
+- 当前版本：`v1.3.8`
 - 许可证：GPL-3.0-only
 
 ## MaaBanGDream 运行布局
@@ -132,7 +132,8 @@ pytest 临时目录固定在 `.local/pytest-<进程号>`（Git 忽略），不�
 ## 演出类型流程
 
 任务入口定义在 `interface.json` 的 `task`，每个入口对应 `resource/pipeline/*.json`。
-所有演出任务都先经过进程互斥检查，再用 `CommonRecover` 恢复主页/登录；带次数的任务
+所有演出任务都先经过进程互斥检查。普通任务再用 `CommonRecover` 恢复主页/登录；组曲会先检查
+第 2/3 曲或延迟结算续跑现场，确认不是可续跑页面后才恢复主页。带次数的任务
 在每局结束回主页并由 `TaskProgress`/`TaskOutcome` 报告。单局演奏的统一核心是
 `RealtimeProfilePlay`（`agent/realtime/profile_play_action.py`）。
 
@@ -225,6 +226,27 @@ pytest 临时目录固定在 `.local/pytest-<进程号>`（Git 忽略），不�
 1. 进程互斥 → 主页 → 演出选择 → 自由演出 → 选难度 → 准备页。
 2. 模板识别自动演出开关（开/关）与配额耗尽；点开始后被动等结算（`CommonRecover`），
    回主页循环计数。此任务不使用实时触控引擎。
+
+### 7. 组曲演奏（MedleyLive）
+
+1. 演奏次数按歌曲计数，一首歌为 1 次；输入范围为 3–99 且必须是 3 的倍数。每组三首完整结算后回主页开始下一组，不支持在第 1/2 首后把未完成的一组计为成功。
+2. 进程互斥后先识别当前页面；第 2/3 曲准备页只有与 `profiles/medley-sessions/` 原子会话的
+   阶段、歌曲身份和自由巡演选项一致时才续跑，不能先执行 `CommonRecover` 破坏现场。
+3. 新组曲恢复主页后进入巡回演出：自由巡演逐个打开三个歌曲槽，第 4 张图只用
+   `RealtimeDifficultySelect(identity_read=false)` 选择并确认请求/实际难度，不读取标题、封面、等级或身份，
+   也不因当前曲目连续相同而拒绝；课题巡演只读三个预设槽，绝不点击难度。
+4. 三首 Profile 的流速必须一致。自由巡演离开主页前检查统一难度流速；课题巡演先读取阵容，
+   流速开关开启时回主页检查一次并重新进入确认阵容未变化，组曲中途禁止打开设置页。
+5. 自由巡演的会话先保存三个仅含序号、请求/实际难度、Profile 和流速的槽位；每首进入自己的准备页后，
+   再读取封面、等级、难度和去空白紧裁剪标题并原子填充身份。准备页没有可信标题或完整身份时，最终封面
+   必须同时确认封面和实际 OCR 标题并写回会话；仍失败则在发送演奏触控前停止，不能用曲库标准标题冒充实读证据。
+6. 每曲准备页还要复核封面、等级、难度和顶部阶段标记，再依次执行 `RealtimeProfileCheck`、
+   `RealtimeFormalPreflight`、`RealtimePerformanceSettingsGate` 和 `RealtimeProfilePlay`；每曲使用独立 run ID。
+7. 前两曲完成后不点“休息”。第三曲后按顺序读取三张 PGGBM，并用标题、等级和实际难度核对；
+   各曲待补全报告转为稳定结果后沿用正式演奏 timing offset 写回。
+8. 第一、二曲准备页出现“达成报酬一览”时只发送一次 Android BACK 后重新识别。第三曲后先识别组曲分数汇总页，
+   再读取三张 PGGBM；已知页先发送 BACK，未离开才点右下角 `(1065,650)`。持续未知结算页按 BACK/右下角交替推进，
+   超过有界次数后执行 `CommonRecover`（允许重启一次）恢复主页，同时保持任务失败事实，不把恢复成功冒充组曲成功。
 
 ### 非演出任务
 
@@ -363,6 +385,8 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
 
 35. **协力准备弹窗按固定缩放中心区分首批音符**：2026-09-12 外部 v1.3.7 的歌曲 538 Hard 证据中，真实“其他成员正在准备中”弹窗先持续 60 帧并消失，beat 7.75 的白底粉色双 FLICK 又让像素启发式产生一次仅 16ms 的 `prepare-popup-visible`；门控重置后在 1.066 秒后的下一颗附近才触发，而谱面前两组间隔 0.985 秒，造成整局晚一颗并快速空血。真实弹窗从画面约 66% 高度的固定中心等比例放大、缩小，可能完全不出现，也可能未放大到完整尺寸便缩小消失；检测必须按该中心位置区分判定线附近更靠下的白底粉色双 FLICK，不能要求弹窗一定出现、达到完整尺寸或持续多帧。任意一帧真实弹窗仍须拦截，消失帧仍须重置判定带，演奏场、500ms 前奏宽限和 broad-change 门禁继续保留。外部 trace 从 Native 启动后才开始低频记录，无法替代首音 60FPS 帧；修改检测器必须同时回归弹窗不出现、冻结后只闪一帧、正常完整出现、缩放中间态和首批双 FLICK，再做真机协力验收。
 
+36. **自由巡演身份必须延后到每曲准备页，当前曲目允许重复**：2026-09-14 雷电 Native 真实完成一组自由巡演（当前曲目、Expert、3 次），三个选曲槽都只确认实际难度，随后三曲分别在自己的准备页确认歌曲 125；三曲相同仍正常演奏、逐张保存 713P/0G/0M 的 PGGBM，处理活动故事弹窗并回到主页，MFA 成功终态用时 7 分 58 秒。最终原子会话为 `completed_total=3`、`results_completed=3`、`stage=completed`。不要恢复选曲页身份读取或重复歌曲拒绝；这次只验收了自由巡演“当前曲目”单组，随机歌曲、课题巡演、跨组计数和中断续跑仍需各自真机门禁。
+
 ## 后续开发方向（已记录，暂缓或未开始）
 
 - **关于页素材与 GitHub 限流**：关于页专用字段 `about_icon` 使用 `docs/assets/maabangdream-logo-v1.png`，`description` 使用 `docs/about.md`，`contact` 使用 `docs/contact.md`；部署与打包须同时携带三者。不要把 v1 填入通用 `icon`：该字段也会替换窗口/软件标志。软件继续使用默认内嵌 Logo，关于页通过渲染层居中缩放裁剪放大人物，不覆盖原图。Logo、联系方式、许可证等分区框须使用 MFA/Suki 原生 `GlassCard` 及其 `ControlGlassOpacity`，不能用普通 `Border + SukiCardBackground` 绕开框架玻璃透明度。`MaaInterface.Merge` 必须保留 `Icon/AboutIcon`，设置页延迟创建时须补载说明文件；Avalonia 缩放中心用 `50%,50%`，不是像素坐标 `0.5,0.5`。发布构建必须把 `docs/release-notes-v<version>.md` 复制为包内 `resource/Release.md`；“显示公告”和更新完成弹窗只读取本地文件，不得在点击时请求 GitHub，也不得在发现新版本时用远端正文覆盖当前版本说明。复用 `ChangelogView` 与原生下载提示；更新完成公告只能在包校验通过且核心整包最后写入匹配的 `update-manifest.json` 后展示。GitHub 标签带 `v`、安装版本不带 `v` 时须按语义比较版本，网络请求仍保留原始发布标签。GitHub REST 明确限流时，稳定版查询可回退 `releases/latest` 与 `releases/expanded_assets/<tag>`；继续执行同一套选包和 SHA-256 校验，不得将普通权限错误或预发布通道静默改成稳定版。
@@ -395,7 +419,7 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
   `MFAUpdater.exe` 等主进程正常退出后覆盖，保留用户目录、最后写版本清单。旧
   `scripts/update.ps1` 仅保留在 v1.3.5 已发布客户端中用于桥接到 v1.3.6；新包不再
   携带自建网络更新器。
-- **更多演出类型**：未开始。
+- **更多演出类型**：组曲演奏首版已实现；自由巡演“当前曲目”单组及完整结算已于 2026-09-14 真机验收，仍待随机歌曲、课题巡演、跨组计数和中断续跑真机验收。
 
 ## 修改后的最低验收
 

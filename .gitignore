@@ -7,6 +7,7 @@
 /screencap/
 /profiles/*.json
 /profiles/calibration-sessions/
+/profiles/medley-sessions/
 !/profiles/.gitkeep
 __pycache__/
 *.py[cod]

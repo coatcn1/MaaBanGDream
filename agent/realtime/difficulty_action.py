@@ -235,6 +235,7 @@ class RealtimeDifficultySelect(CustomAction):
             if context.tasker.stopping:
                 return True
             track_live_run = bool(params.get("track_live_run", True))
+            identity_read = bool(params.get("identity_read", True))
             if track_live_run:
                 reset_live_run(
                     mode=str(params.get("mode", "realtime")),
@@ -297,6 +298,20 @@ class RealtimeDifficultySelect(CustomAction):
                             "RealtimeDifficultySelect confirmed=true "
                             f"requested={requested} effective={effective} "
                             "track_live_run=false",
+                            flush=True,
+                        )
+                        return True
+                    if not identity_read:
+                        # 组曲选曲页只确认请求难度与实际难度；歌曲身份留到
+                        # 每一首自己的准备页或最终封面页读取。
+                        update_live_run(
+                            difficulty=effective,
+                            prepared_for_play=False,
+                        )
+                        print(
+                            "RealtimeDifficultySelect confirmed=true "
+                            f"requested={requested} effective={effective} "
+                            "identity_read=false",
                             flush=True,
                         )
                         return True

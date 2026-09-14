@@ -23,13 +23,13 @@ def test_all_pipeline_clicks_use_the_foreground_guard():
 def test_interface_references_existing_entry_and_resource():
     interface = load(ROOT / "interface.json")
     assert interface["interface_version"] == 2
-    assert interface["version"] == "1.3.7"
+    assert interface["version"] == "1.3.8"
     assert interface["github"] == "https://github.com/coatcn1/MaaBanGDream"
     assert "mirrorchyan_rid" not in interface
     assert [task["name"] for task in interface["task"]] == [
         "AutoLive", "RealtimeLive", "CooperativeLive", "ContinuousRealtimeLive",
         "RealtimeCalibration", "DailyFreeGacha", "ChallengeLive",
-        "ManualFlowRecording",
+        "MedleyLive", "ManualFlowRecording",
     ]
     assert {
         task["name"]: task["label"] for task in interface["task"]
@@ -41,6 +41,7 @@ def test_interface_references_existing_entry_and_resource():
         "RealtimeCalibration": "🎯 实时演奏校准",
         "DailyFreeGacha": "🎁 每日免费抽卡",
         "ChallengeLive": "🏆 挑战演出",
+        "MedleyLive": "🎼 组曲演奏",
         "ManualFlowRecording": "📹 手动流程录像",
     }
     assert interface["resource"][0]["path"] == ["./resource"]
@@ -49,6 +50,81 @@ def test_interface_references_existing_entry_and_resource():
         nodes.update(load(path))
     for task in interface["task"]:
         assert task["entry"] in nodes
+
+
+def test_medley_pipeline_merges_options_and_defers_recovery_to_flow():
+    interface = load(ROOT / "interface.json")
+    pipeline = load(ROOT / "resource" / "pipeline" / "medley_live.json")
+    options = interface["option"]
+
+    assert pipeline["MedleyProcessConflictGuard"]["next"] == [
+        "MedleyTourTypeConfigure"
+    ]
+    assert "MedleyRecover" not in pipeline
+    assert pipeline["MedleyTourTypeConfigure"]["next"] == [
+        "MedleySongModeConfigure"
+    ]
+    assert pipeline["MedleySongModeConfigure"]["next"] == [
+        "MedleyDifficultyConfigure"
+    ]
+    assert pipeline["MedleyDifficultyConfigure"]["next"] == [
+        "MedleyCountConfigure"
+    ]
+    assert pipeline["MedleyCountConfigure"]["next"] == ["MedleyDebugConfigure"]
+    assert pipeline["MedleyDebugConfigure"]["next"] == ["MedleyFlow"]
+    assert all(
+        pipeline[name]["custom_action"] == "MedleyLiveConfigure"
+        for name in (
+            "MedleyTourTypeConfigure",
+            "MedleySongModeConfigure",
+            "MedleyDifficultyConfigure",
+            "MedleyCountConfigure",
+            "MedleyDebugConfigure",
+        )
+    )
+    free = next(
+        case for case in options["MedleyTourType"]["cases"]
+        if case["name"] == "Free"
+    )
+    task = next(
+        case for case in options["MedleyTourType"]["cases"]
+        if case["name"] == "Task"
+    )
+    assert free["option"] == ["MedleySongMode", "MedleyDifficulty"]
+    assert "option" not in task
+    assert {
+        case["name"] for case in options["MedleyDifficulty"]["cases"]
+    } == {"Easy", "Normal", "Hard", "Expert", "Special"}
+    count = options["MedleyCount"]
+    assert count["type"] == "input"
+    assert count["inputs"][0]["default"] == "3"
+    assert count["inputs"][0]["pipeline_type"] == "int"
+    assert count["pipeline_override"]["MedleyCountConfigure"][
+        "custom_action_param"
+    ] == {"count": "{Count}"}
+    assert count["pipeline_override"]["MedleyComplete"][
+        "custom_action_param"
+    ] == {
+        "task_name": "MedleyLive",
+        "label": "组曲演奏",
+        "total": "{Count}",
+        "status": "success",
+    }
+    assert count["pipeline_override"]["MedleyFailure"][
+        "custom_action_param"
+    ] == {
+        "task_name": "MedleyLive",
+        "label": "组曲演奏",
+        "total": "{Count}",
+        "status": "failure",
+        "reason": "组曲演奏流程未完成",
+        "reason_source": "latest",
+    }
+    assert not any(
+        "result" in str(node.get("template", "")).casefold()
+        and "judgement" not in str(node.get("template", "")).casefold()
+        for node in pipeline.values()
+    )
 
 
 def test_minimal_navigation_contract():

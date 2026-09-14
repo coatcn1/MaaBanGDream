@@ -476,6 +476,92 @@ def test_refresh_observed_title_only_upgrades_validated_confidence(tmp_path):
     assert resolver.observed_title == "FIRE BIRD"
 
 
+def test_final_cover_resolver_can_require_title_after_early_ocr_failed():
+    cover, song_id = final_cover_frame()
+    selection = SimpleNamespace(
+        difficulty="expert",
+        level=28,
+        shared_jacket=False,
+        fingerprints=(song_id,),
+        bestdori_song_id=50,
+        title="FIRE BIRD",
+        titles=("FIRE BIRD",),
+    )
+
+    class Repository:
+        def resolve(self, _song_id, _difficulty, *, level, title):
+            assert level == 28
+            return ChartResolution(
+                selection if title == "FIRE BIRD" else None,
+                "confirmed" if title == "FIRE BIRD" else "title missing",
+            )
+
+    resolver = FinalCoverResolver(
+        difficulty="Expert",
+        observed_level=28,
+        observed_title="FIRE BIRD",
+        observed_title_confidence=0.0,
+        repository=Repository(),
+        require_observed_title=True,
+    )
+
+    assert resolver.observed_title is None
+    assert resolver.observe(cover) is None
+    assert resolver.observe(cover) is None
+    assert resolver.last_reason == "final cover title is not confirmed"
+    assert resolver.refresh_observed_title("FIRE BIRD", 0.93) is True
+    resolution = resolver.observe(cover)
+    assert resolution is not None
+    assert resolution.confirmation.bestdori_song_id == 50
+
+
+def test_required_final_cover_title_does_not_degrade_at_playfield(monkeypatch):
+    cover, _song_id = final_cover_frame()
+
+    class Job:
+        def wait(self):
+            return self
+
+        def get(self):
+            return cover
+
+    class Controller:
+        def post_screencap(self):
+            return Job()
+
+    class Repository:
+        def resolve(self, *_args, **_kwargs):
+            raise AssertionError("标题缺失时不应解析谱面")
+
+    monkeypatch.setattr(
+        profile_play_action,
+        "recognize_song_title",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        profile_play_action,
+        "PlayfieldDetector",
+        lambda: (lambda _image: True),
+    )
+
+    with pytest.raises(RuntimeError, match="最终封面页标题未确认"):
+        wait_for_final_cover(
+            Controller(),
+            SimpleNamespace(
+                song_level=28,
+                song_title="FIRE BIRD",
+                song_title_confidence=0.0,
+            ),
+            None,
+            "Expert",
+            lambda: False,
+            repository=Repository(),
+            timeout_seconds=1,
+            poll_interval_seconds=0,
+            require_observed_title=True,
+        )
+
+
 def test_wait_for_final_cover_refreshes_title_from_final_page(
     monkeypatch,
     tmp_path,
@@ -566,6 +652,8 @@ def test_wait_for_final_cover_refreshes_title_from_final_page(
 
     assert outcome.status == "confirmed"
     assert outcome.resolution.confirmation.bestdori_song_id == 102
+    assert outcome.resolution.observed_title == "Beta Song"
+    assert outcome.resolution.observed_title_confidence == pytest.approx(0.95)
     assert len(calls) == 1
     assert calls[0] == FINAL_COVER_TITLE_ROI
 

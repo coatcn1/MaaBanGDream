@@ -152,6 +152,44 @@ def test_successful_difficulty_verification_resets_and_identifies_the_round(monk
     assert controller.clicks == [DIFFICULTY_TARGETS["Expert"]]
 
 
+def test_difficulty_only_mode_records_effective_choice_without_reading_identity(
+    monkeypatch,
+):
+    controller = DifficultyController(difficulty_frame("Expert"))
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=controller),
+    )
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Special",
+        "fallback_difficulties": ["Expert"],
+        "identity_read": False,
+        "mode": "medley",
+        "verify_delay_seconds": 0,
+        "max_attempts": 1,
+    }))
+    monkeypatch.setattr(difficulty_action, "require_game_foreground", lambda _: None)
+    monkeypatch.setattr(difficulty_action.time, "sleep", lambda _: None)
+    monkeypatch.setattr(
+        difficulty_action,
+        "identify_song",
+        lambda _image: (_ for _ in ()).throw(
+            AssertionError("仅选难度时不应读取歌曲封面")
+        ),
+    )
+
+    assert RealtimeDifficultySelect().run(context, argv)
+
+    current = current_live_run()
+    assert current is not None
+    assert current.mode == "medley"
+    assert current.requested_difficulty == "Special"
+    assert current.difficulty == "Expert"
+    assert current.song_id == UNKNOWN_SONG_ID
+    assert current.song_level is None
+    assert current.prepared_for_play is False
+    assert controller.screencaps == 2
+
+
 def test_formal_round_can_continue_with_unknown_song_without_stale_identity(monkeypatch):
     controller = DifficultyController(difficulty_frame("Hard"))
     context = SimpleNamespace(

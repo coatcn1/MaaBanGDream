@@ -1,0 +1,177 @@
+{
+  "MedleyLive": {
+    "recognition": "DirectHit",
+    "action": "DoNothing",
+    "next": [
+      "MedleyProcessConflictGuard"
+    ],
+    "focus": {
+      "Node.Action.Starting": {
+        "content": "正在启动组曲演奏任务",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Succeeded": {
+        "content": "组曲演奏任务启动检查已开始",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "MedleyProcessConflictGuard": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "ProcessConflictGuard",
+    "next": [
+      "MedleyTourTypeConfigure"
+    ],
+    "on_error": [
+      "MedleyFailure"
+    ]
+  },
+  "MedleyTourTypeConfigure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "MedleyLiveConfigure",
+    "custom_action_param": {
+      "reset": true,
+      "tour_type": "free"
+    },
+    "next": [
+      "MedleySongModeConfigure"
+    ],
+    "on_error": [
+      "MedleyFailure"
+    ]
+  },
+  "MedleySongModeConfigure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "MedleyLiveConfigure",
+    "custom_action_param": {
+      "song_mode": "random"
+    },
+    "next": [
+      "MedleyDifficultyConfigure"
+    ],
+    "on_error": [
+      "MedleyFailure"
+    ]
+  },
+  "MedleyDifficultyConfigure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "MedleyLiveConfigure",
+    "custom_action_param": {
+      "difficulty": "Expert"
+    },
+    "next": [
+      "MedleyCountConfigure"
+    ],
+    "on_error": [
+      "MedleyFailure"
+    ]
+  },
+  "MedleyCountConfigure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "MedleyLiveConfigure",
+    "custom_action_param": {
+      "count": 3
+    },
+    "next": [
+      "MedleyDebugConfigure"
+    ],
+    "on_error": [
+      "MedleyFailure"
+    ]
+  },
+  "MedleyDebugConfigure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "MedleyLiveConfigure",
+    "custom_action_param": {
+      "debug_recording": false,
+      "diagnostic_trace": true
+    },
+    "next": [
+      "MedleyFlow"
+    ],
+    "on_error": [
+      "MedleyFailure"
+    ]
+  },
+  "MedleyFlow": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "MedleyLiveFlow",
+    "next": [
+      "MedleyComplete"
+    ],
+    "on_error": [
+      "MedleyFailure"
+    ],
+    "focus": {
+      "Node.Action.Starting": {
+        "content": "正在进入巡回演出并识别三首组曲",
+        "display": [
+          "log",
+          "toast"
+        ]
+      }
+    }
+  },
+  "MedleyComplete": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "TaskOutcome",
+    "custom_action_param": {
+      "task_name": "MedleyLive",
+      "label": "组曲演奏",
+      "total": 3,
+      "status": "success"
+    },
+    "focus": {
+      "Node.Action.Succeeded": {
+        "content": "✅ 三首组曲及全部结算已完成，任务结束",
+        "display": [
+          "log",
+          "toast"
+        ]
+      }
+    }
+  },
+  "MedleyFailure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "TaskOutcome",
+    "custom_action_param": {
+      "task_name": "MedleyLive",
+      "label": "组曲演奏",
+      "total": 3,
+      "status": "failure",
+      "reason": "组曲演奏流程未完成",
+      "reason_source": "latest"
+    }
+  },
+  "MedleyHomeMarker": {
+    "recognition": "TemplateMatch",
+    "template": "home_marker.png",
+    "threshold": 0.75,
+    "action": "DoNothing"
+  },
+  "MedleyPreLiveSettingsConfirm": {
+    "recognition": "TemplateMatch",
+    "template": "pre_live_settings_confirm.png",
+    "roi": [
+      600,
+      520,
+      380,
+      180
+    ],
+    "threshold": 0.88,
+    "action": "DoNothing"
+  }
+}
