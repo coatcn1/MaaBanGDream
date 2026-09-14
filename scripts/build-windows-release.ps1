@@ -63,6 +63,10 @@ foreach ($required in @(
     (Join-Path $projectRoot 'packaging\start-maabangdream.cmd'),
     (Join-Path $projectRoot 'docs\release-package.md'),
     (Join-Path $projectRoot $releaseNotesRelativePath),
+    (Join-Path $projectRoot 'LICENSING.md'),
+    (Join-Path $projectRoot 'TRADEMARKS.md'),
+    (Join-Path $projectRoot 'THIRD-PARTY-NOTICES.md'),
+    (Join-Path $projectRoot 'licenses\LICENSE-MaaFramework-LGPL-3.0.md'),
     (Join-Path $projectRoot 'scripts\start-release.ps1'),
     (Join-Path $projectRoot 'scripts\normalize-release-directory.ps1'),
     $zipBuilder
@@ -213,6 +217,16 @@ Copy-ProjectFile `
 Copy-ProjectFile `
     -RelativePath 'LICENSE' `
     -DestinationRelativePath 'LICENSE-MaaBanGDream.txt'
+Copy-ProjectFile `
+    -RelativePath 'LICENSING.md' `
+    -DestinationRelativePath 'LICENSING-MaaBanGDream.md'
+Copy-ProjectFile `
+    -RelativePath 'TRADEMARKS.md' `
+    -DestinationRelativePath 'TRADEMARKS-MaaBanGDream.md'
+Copy-ProjectFile -RelativePath 'THIRD-PARTY-NOTICES.md'
+Copy-ProjectFile `
+    -RelativePath 'licenses\LICENSE-MaaFramework-LGPL-3.0.md' `
+    -DestinationRelativePath 'LICENSE-MaaFramework-LGPL-3.0.md'
 Copy-Item `
     -LiteralPath $mfaLicense `
     -Destination (Join-Path $packageRoot 'LICENSE-MFAAvalonia.txt') `

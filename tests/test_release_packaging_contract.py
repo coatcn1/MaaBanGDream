@@ -110,6 +110,17 @@ def test_release_builder_uses_clean_sources_and_excludes_private_state():
     assert '"docs\\release-notes-v$Version.md"' in builder
     assert "resource\\Release.md" in builder
     assert '"resource/Release.md"' in validator
+    for notice in (
+        "LICENSING-MaaBanGDream.md",
+        "TRADEMARKS-MaaBanGDream.md",
+        "THIRD-PARTY-NOTICES.md",
+        "LICENSE-MaaFramework-LGPL-3.0.md",
+    ):
+        assert notice in builder
+        assert notice in validator
+    assert "PolyForm Noncommercial License 1.0.0" in validator
+    assert "Required Notice:" in validator
+    assert "GNU Lesser General Public License" in validator
     assert "tar.exe -a -c" not in builder
     assert r"agent\realtime\native\maabangdream_realtime.pyd" in builder
     assert "maabangdream_realtime.pyd" in validator
@@ -151,7 +162,7 @@ def test_release_readme_documents_sources_and_first_run():
     assert "coatcn1/MFAAvalonia" in release_readme
     assert "BUILD-INFO.json" in release_readme
     assert "Releases" in project_readme
-    assert "fix/native-realtime-ui-toggle" in project_readme
+    assert "fix/speed-only-settings" in project_readme
     assert "resource/Release.md" in release_readme
 
 

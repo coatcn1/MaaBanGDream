@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.3.9-ff6f9f" alt="Version"></a>
+  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.4.0-ff6f9f" alt="Version"></a>
   <img src="https://img.shields.io/badge/MaaFramework-5.10.2-4c8bf5" alt="MaaFramework">
   <img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?logo=windows11&logoColor=white" alt="Windows">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0--only-3da639" alt="License"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-6f42c1" alt="License"></a>
 </p>
 
 ---
@@ -162,7 +162,7 @@ Native 等待成本与启动延迟补偿已通过雷电真机验收，开发环�
 & '..\.tools\Miniconda3\envs\maabangdream\python.exe' `
   -m pip install -r .\requirements-release.txt
 
-.\scripts\build-windows-release.ps1 -Version 1.3.9
+.\scripts\build-windows-release.ps1 -Version 1.4.0
 ```
 
 发布包必须保持：
@@ -179,12 +179,12 @@ Native 等待成本与启动延迟补偿已通过雷电真机验收，开发环�
 ```text
 workplace/
 ├─ MaaBanGDream/
-└─ MFAAvalonia/  # fix/native-realtime-ui-toggle
+└─ MFAAvalonia/  # fix/speed-only-settings
 ```
 
 定制 MFA 源码：
 
-[coatcn1/MFAAvalonia · fix/native-realtime-ui-toggle](https://github.com/coatcn1/MFAAvalonia/tree/fix/native-realtime-ui-toggle)
+[coatcn1/MFAAvalonia · fix/speed-only-settings](https://github.com/coatcn1/MFAAvalonia/tree/fix/speed-only-settings)
 
 > [!WARNING]
 > 不要用同版本官方 Core DLL 覆盖定制版本，否则会丢失“演出设置”和启动保护。
@@ -213,7 +213,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\launch-mfa.ps1
 
 ## 🤝 贡献
 
-欢迎提交 Issue 和 Pull Request。
+欢迎提交 Issue 和 Pull Request。提交代码即表示贡献者有权提供该内容，并同意按
+[PolyForm Noncommercial 1.0.0](LICENSE) 向项目用户许可该贡献；需要其他授权时会
+另行取得贡献者的书面同意。
 
 开发约定：
 
@@ -236,6 +238,9 @@ git diff --check
 | --- | --- |
 | [CHANGELOG.md](CHANGELOG.md) | 版本变更与项目进度 |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献指南 |
+| [LICENSING.md](LICENSING.md) | 非商业许可范围、历史版本与第三方边界 |
+| [TRADEMARKS.md](TRADEMARKS.md) | MaaBanGDream 名称与 Logo 使用规则 |
+| [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) | 第三方组件、素材和数据权利说明 |
 | [AGENTS.md](AGENTS.md) | AI / Codex 开发上下文 |
 | [Bestdori 本地谱面仓库](docs/bestdori-chart-repository.md) | 谱面同步、格式、身份映射与离线门禁 |
 | [runtime-compatibility.json](runtime-compatibility.json) | 固定运行时版本组合 |
@@ -249,7 +254,20 @@ git diff --check
 
 ## 📝 许可证
 
-本项目使用 [GPL-3.0-only](LICENSE) 许可证。
+从 `v1.4.0` 起，MaaBanGDream 自有部分采用
+[PolyForm Noncommercial License 1.0.0](LICENSE)：允许为非商业目的查看、克隆、
+运行、研究、修改和分发，但不授权收费软件、收费分发、收费部署或维护、商业服务、
+商业产品集成及其他预期商业应用。本项目属于**源码可用（source-available）**，
+不再宣称为 OSI 定义下的开源软件。
+
+`v1.3.9` 及更早标签继续适用各版本随附的 GPL-3.0-only 许可证。第三方组件、游戏
+素材、谱面及模型继续适用各自权利条款。完整边界见 [LICENSING.md](LICENSING.md)
+与 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
+
+官方项目继续使用 **MaaBanGDream** 名称。公开发布的修改版或派生项目必须使用明显
+不同的名称和 Logo，不得利用 MaaBanGDream、官方 Logo 或作者身份宣传收费服务、
+暗示官方认可；事实性的讨论、教程、引用和来源说明不受限制。详见
+[TRADEMARKS.md](TRADEMARKS.md)。
 
 ---
 
