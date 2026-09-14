@@ -23,7 +23,7 @@ def test_all_pipeline_clicks_use_the_foreground_guard():
 def test_interface_references_existing_entry_and_resource():
     interface = load(ROOT / "interface.json")
     assert interface["interface_version"] == 2
-    assert interface["version"] == "1.3.8"
+    assert interface["version"] == "1.3.9"
     assert interface["github"] == "https://github.com/coatcn1/MaaBanGDream"
     assert "mirrorchyan_rid" not in interface
     assert [task["name"] for task in interface["task"]] == [
@@ -776,7 +776,7 @@ def test_realtime_multi_live_contract_and_options():
     assert not any(task["name"] == "RealtimeFullSong" for task in interface["task"])
 
 
-def test_continuous_realtime_live_is_a_pure_listener_task():
+def test_continuous_realtime_live_returns_home_after_internal_result_navigation():
     nodes = load(ROOT / "resource/pipeline/continuous_realtime_live.json")
     interface = load(ROOT / "interface.json")
     task = next(
@@ -817,12 +817,14 @@ def test_continuous_realtime_live_is_a_pure_listener_task():
     starting = watcher["focus"]["Node.Action.Starting"]
     assert "已开始识别" in starting["content"]
     assert "任务所选难度" in starting["content"]
-    assert "自动结束" in starting["content"]
+    assert "PGGBM" in starting["content"]
+    assert "返回主页" in starting["content"]
     assert starting["display"] == ["log", "toast"]
     complete = nodes["ContinuousRealtimeComplete"]
     assert complete["custom_action"] == "TaskOutcome"
     assert complete["custom_action_param"]["status"] == "success"
-    assert "自动结束" in complete["focus"]["Node.Action.Succeeded"]["content"]
+    assert "PGGBM" in complete["focus"]["Node.Action.Succeeded"]["content"]
+    assert "返回主页" in complete["focus"]["Node.Action.Succeeded"]["content"]
     serialized = json.dumps(nodes, ensure_ascii=False)
     assert "Click" not in serialized
     assert "result" not in serialized.lower()

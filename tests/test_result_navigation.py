@@ -6,6 +6,8 @@ from agent.realtime.result_navigation import (
     RESULT_ANIMATION_SKIP_POINT,
     ResultNavigationStatus,
     _wait_unless_stopping,
+    advance_result_cadence,
+    accelerated_back,
     navigate_result_pages,
     handle_story_page,
 )
@@ -144,6 +146,34 @@ def test_unknown_result_pages_repeat_click_recognise_back_click_until_terminal()
     ]
 
 
+def test_single_step_cadence_preserves_click_back_click_order():
+    actions = []
+
+    class Controller:
+        def post_click(self, x, y):
+            actions.append(("click", (x, y)))
+            return Job()
+
+        def post_click_key(self, key):
+            actions.append(("key", key))
+            return Job()
+
+    back_next = False
+    for index in range(3):
+        back_next = advance_result_cadence(
+            Controller(),
+            back_next=back_next,
+            phase=f"step-{index + 1}",
+        )
+
+    assert actions == [
+        ("click", RESULT_ANIMATION_SKIP_POINT),
+        ("key", 4),
+        ("click", RESULT_ANIMATION_SKIP_POINT),
+    ]
+    assert back_next is True
+
+
 def test_result_navigation_stop_before_first_click_is_input_neutral():
     class ControllerMustNotRun:
         def post_screencap(self):
@@ -195,3 +225,48 @@ def test_result_navigation_is_bounded_by_time_not_a_small_back_retry_cap():
     assert outcome.status is ResultNavigationStatus.TIMED_OUT
     assert len(backs) == 15
     assert outcome.back_attempts == 15
+
+
+def test_accelerated_back_refreshes_reverse_controller_after_each_guard():
+    actions = []
+    generation = [0]
+
+    class Controller:
+        def __init__(self, created_generation):
+            self.created_generation = created_generation
+
+        def _require_current(self):
+            if self.created_generation != generation[0]:
+                raise OSError(
+                    "exception: access violation reading 0xFFFFFFFFFFFFFFFF"
+                )
+
+        def post_click(self, x, y):
+            self._require_current()
+            actions.append(("click", (x, y), self.created_generation))
+            return Job()
+
+        def post_click_key(self, key):
+            self._require_current()
+            actions.append(("key", key, self.created_generation))
+            return Job()
+
+    def before_input():
+        # 真实 Agent 的前台保护会调用一次反向控制器；之后旧包装对象
+        # 可能指向已释放的原生代理，输入前必须重新获取。
+        generation[0] += 1
+
+    def current_controller():
+        return Controller(generation[0])
+
+    accelerated_back(
+        current_controller,
+        before_input=before_input,
+        phase="regression",
+    )
+
+    assert actions == [
+        ("click", RESULT_ANIMATION_SKIP_POINT, 1),
+        ("key", 4, 2),
+        ("click", RESULT_ANIMATION_SKIP_POINT, 3),
+    ]

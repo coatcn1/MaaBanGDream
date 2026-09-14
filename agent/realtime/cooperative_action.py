@@ -50,7 +50,11 @@ from .profile_store import (
 from .rehearsal_action import frame_resolution
 from .native_prearm import discard_prearmed_backend
 from .cooperative_network import GameNetworkGate
-from .result_navigation import RESULT_ANIMATION_SKIP_POINT, handle_story_page
+from .result_navigation import (
+    RESULT_ANIMATION_SKIP_POINT,
+    accelerated_back,
+    handle_story_page,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -1220,19 +1224,22 @@ class CooperativeLiveFlow:
         *,
         inspect_timeout: float,
     ) -> str | None:
-        """Skip animation, press Back, inspect, then perform the second tap."""
-        self.click(RESULT_ANIMATION_SKIP_POINT)
-        self.controller.post_click_key(4).wait()
-        state = self.wait_for_post_score_destination(
+        """完整执行安全像素→BACK→安全像素后再识别终点。"""
+        def before_input() -> None:
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
+            require_game_foreground(self.controller)
+
+        accelerated_back(
+            lambda: self.controller,
+            before_input=before_input,
+            phase="post-score",
+            log_prefix="CooperativeResult",
+        )
+        return self.wait_for_post_score_destination(
             names,
             timeout=inspect_timeout,
         )
-        # Keep the user-requested click-before/after-Back cadence.  This is now
-        # the literal bottom-right pixel, so it stays input-neutral even when
-        # the intervening recognition says Back has already reached Home.
-        if state != "story":
-            self.click(RESULT_ANIMATION_SKIP_POINT)
-        return state
 
     def navigate_to_cooperative_room_selection(self, origin: str) -> None:
         """Explicitly recover Home/live-select into cooperative room select."""
@@ -1338,7 +1345,7 @@ class CooperativeLiveFlow:
             attempts += 1
             print(
                 "CooperativeLive state=post-score "
-                "action=corner-back-recognise-corner"
+                "action=corner-back-corner-recognise"
                 f" attempt={attempts}",
                 flush=True,
             )
@@ -1377,9 +1384,8 @@ class CooperativeLiveFlow:
                 raise RuntimeError(
                     "未出现是否留在同一房间的提示，当前房间已经结束"
                 )
-            # Result pages are not a fixed sequence.  After every accelerated
-            # Back, inspect the fresh frame for the repeat-room popup; if it is
-            # absent, advance the next result page in the same way.
+            # 结算页数量不固定。每次先完整执行三步节拍，再检查最终房间弹窗；
+            # 未到终点时继续下一轮，不识别任何中间结算页面。
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise RuntimeError(
@@ -1392,7 +1398,7 @@ class CooperativeLiveFlow:
             result_back_attempts += 1
             print(
                 "CooperativeLive state=post-score "
-                "action=corner-back-recognise-corner"
+                "action=corner-back-corner-recognise"
                 f" attempt={result_back_attempts}",
                 flush=True,
             )

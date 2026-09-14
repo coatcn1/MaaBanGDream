@@ -17,8 +17,12 @@ from maa.context import Context
 from maa.custom_action import CustomAction
 
 try:
+    from ..common_recover import CommonRecover
+    from ..foreground_guard import GAME_PACKAGE
     from ..task_reporting import record_failure_reason
 except ImportError:
+    from common_recover import CommonRecover
+    from foreground_guard import GAME_PACKAGE
     from task_reporting import record_failure_reason
 
 from .chart_repository import CatalogSongIdentity, LocalChartRepository
@@ -29,6 +33,7 @@ from .playfield_monitor import PlayfieldDetector
 from .profile_action import PROJECT_ROOT
 from .profile_play_action import RealtimeProfilePlay, resolve_profile_for_settings_gate
 from .profile_store import RealtimeProfileStore
+from .result_navigation import RESULT_ANIMATION_SKIP_POINT, STORY_NODES
 from .song_identity import (
     UNKNOWN_SONG_ID,
     detect_full_badge,
@@ -240,9 +245,37 @@ def continuous_song_params(params: dict) -> dict:
             params.get("completion_missing_frames", 30)
         ),
         "require_completion": True,
-        "save_result_frame": False,
+        "save_result_frame": True,
         "continue_after_life_depleted": True,
     }
+
+
+def recover_continuous_result_home(context: Context) -> None:
+    """用所有演出共用的安全像素/BACK节拍从结算恢复主页。"""
+    params = {
+        "home_node": "RealtimeLiveHomeMarker",
+        "modal_cancel_nodes": ["QuitConfirmCancel"],
+        "click_nodes": [],
+        "back_only_click_nodes": list(STORY_NODES),
+        "back_only": True,
+        "back_acceleration_click_point": list(RESULT_ANIMATION_SKIP_POINT),
+        "escape_interval_ms": 500,
+        "escape_timeout_ms": 60000,
+        "restart_limit": 1,
+        "restart_wait_ms": 5000,
+        "startup_grace_ms": 12000,
+        "login_start_node": "AutoLiveLoginScreenMarker",
+        "login_start_target": [640, 635],
+        "login_tap_target": [640, 360],
+        "login_marker_priority_attempts": 3,
+        "escape_after_login_start": True,
+        "package": GAME_PACKAGE,
+    }
+    argv = SimpleNamespace(
+        custom_action_param=json.dumps(params, ensure_ascii=False)
+    )
+    if not CommonRecover().run(context, argv):
+        raise RuntimeError("一键实时演奏结算后无法恢复主页")
 
 
 @dataclass(frozen=True, slots=True)
@@ -467,7 +500,7 @@ class ContinuousRealtimeLiveConfigure(CustomAction):
 
 @AgentServer.custom_action("ContinuousRealtimeLive")
 class ContinuousRealtimeLive(CustomAction):
-    """被动识别并演奏一首歌曲，确认完成后自动结束任务。"""
+    """被动识别并演奏一首歌曲，结算回主页后自动结束任务。"""
 
     def run(self, context: Context, argv: CustomAction.RunArg) -> bool:
         try:
@@ -585,9 +618,10 @@ class ContinuousRealtimeLive(CustomAction):
             diagnostics.save("stopped")
             print("ContinuousRealtimeLive stopped by user", flush=True)
             return True
+        recover_continuous_result_home(context)
         print(
             "[任务][一键实时演奏][结束][SUCCESS] "
-            "已识别演出完成，任务自动结束",
+            "已读取 PGGBM 并用统一结算节拍返回主页",
             flush=True,
         )
         return True

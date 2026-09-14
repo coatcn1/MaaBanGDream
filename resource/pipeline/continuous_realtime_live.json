@@ -53,7 +53,7 @@
     "custom_action": "ContinuousRealtimeLive",
     "focus": {
       "Node.Action.Starting": {
-        "content": "🔎 一键实时演奏已开始识别：请按任务所选难度进入演出，识别到开场封面与标题后将自动演奏；识别演出完成后任务自动结束",
+        "content": "🔎 一键实时演奏已开始识别：请按任务所选难度进入演出，识别到开场封面与标题后将自动演奏；演出后会读取 PGGBM 并返回主页",
         "display": [
           "log",
           "toast"
@@ -78,7 +78,7 @@
     },
     "focus": {
       "Node.Action.Succeeded": {
-        "content": "✅ 已识别演出完成，一键实时演奏任务自动结束",
+        "content": "✅ 已完成一键实时演奏、读取 PGGBM 并返回主页",
         "display": [
           "log",
           "toast"

@@ -59,7 +59,13 @@ from .profile_store import (
     engine_from_native_flag,
 )
 from .rehearsal_action import frame_resolution
-from .result_navigation import handle_story_page
+from .result_navigation import (
+    RESULT_ANIMATION_SKIP_POINT,
+    STORY_NODES,
+    advance_result_cadence,
+    accelerated_back,
+    handle_story_page,
+)
 from .result_parser import LiveResult, ResultParser
 from .song_identity import (
     LOOSE_SAME_SONG_DISTANCE,
@@ -85,7 +91,6 @@ FREE_RANDOM_POINT = (687, 642)
 SONG_CONFIRM_POINT = (1065, 650)
 OVERVIEW_NEXT_POINT = (1125, 640)
 MEDLEY_START_POINT = (1125, 640)
-RESULT_FALLBACK_POINT = (1065, 650)
 TRUSTED_TITLE_CONFIDENCE = 0.7
 
 TASK_SLOT_LAYOUTS = (
@@ -151,9 +156,6 @@ RESULT_TITLE_ROI = (245, 15, 760, 55)
 RESULT_DIFFICULTY_ROI = (140, 15, 110, 50)
 RESULT_LEVEL_ROI = (1000, 15, 70, 40)
 RESULT_TEMPLATE = PROJECT_ROOT / "resource" / "image" / "result_judgement_details.png"
-SCORE_SUMMARY_TEMPLATE = (
-    PROJECT_ROOT / "resource" / "image" / "medley_score_rank_banner.png"
-)
 ESC_ONLY_REWARD_TEMPLATES = (
     PROJECT_ROOT / "resource" / "image" / "medley_achievement_reward_overview.png",
 )
@@ -161,9 +163,7 @@ REWARD_TEMPLATES = (
     PROJECT_ROOT / "resource" / "image" / "result_reward_confirm.png",
     PROJECT_ROOT / "resource" / "image" / "result_reward_ok.png",
 )
-UNKNOWN_RESULT_STABLE_SECONDS = 1.0
-UNKNOWN_RESULT_FORCE_SECONDS = 3.0
-UNKNOWN_RESULT_MAX_ACTIONS = 12
+RESULT_NAVIGATION_MAX_CYCLES = 60
 
 DEFAULT_SETTINGS: dict[str, object] = {
     "tour_type": "free",
@@ -734,16 +734,6 @@ def judgement_details_visible(image: np.ndarray) -> bool:
     return _template_score(image, RESULT_TEMPLATE)[0] >= 0.9
 
 
-def medley_score_summary_visible(image: np.ndarray) -> bool:
-    return _template_score(image, SCORE_SUMMARY_TEMPLATE)[0] >= 0.9
-
-
-def _frame_distance(left: np.ndarray, right: np.ndarray) -> float:
-    first = cv2.resize(left, (160, 90), interpolation=cv2.INTER_AREA)
-    second = cv2.resize(right, (160, 90), interpolation=cv2.INTER_AREA)
-    return float(np.mean(cv2.absdiff(first, second)))
-
-
 class MedleyFlow:
     def __init__(
         self,
@@ -810,7 +800,7 @@ class MedleyFlow:
             ),
         )
 
-    def recover_home(self) -> None:
+    def recover_home(self, *, result_navigation: bool = False) -> None:
         params = {
             "home_node": "MedleyHomeMarker",
             "modal_cancel_nodes": ["QuitConfirmCancel"],
@@ -831,8 +821,49 @@ class MedleyFlow:
             "escape_after_login_start": True,
             "package": GAME_PACKAGE,
         }
+        if result_navigation:
+            params.update({
+                "click_nodes": [],
+                "back_only_click_nodes": list(STORY_NODES),
+                "back_only": True,
+                "back_acceleration_click_point": list(
+                    RESULT_ANIMATION_SKIP_POINT
+                ),
+                "escape_interval_ms": 500,
+            })
         if not CommonRecover().run(self.context, self.action_argv(params)):
             raise RuntimeError("组曲流程无法恢复主页")
+
+    def accelerated_result_back(self, phase: str) -> None:
+        def before_input() -> None:
+            if self.context.tasker.stopping:
+                raise ScreenRefreshCancelled("task is stopping")
+            require_game_foreground(self.controller)
+
+        accelerated_back(
+            lambda: self.controller,
+            before_input=before_input,
+            phase=phase,
+            log_prefix="MedleyResult",
+        )
+
+    def result_cadence_step(self, phase: str) -> str:
+        """单步推进结算节拍，让组曲能在每次输入后检查 PGGBM。"""
+
+        def before_input() -> None:
+            if self.context.tasker.stopping:
+                raise ScreenRefreshCancelled("task is stopping")
+            require_game_foreground(self.controller)
+
+        back_next = bool(getattr(self, "_result_back_next", False))
+        self._result_back_next = advance_result_cadence(
+            lambda: self.controller,
+            back_next=back_next,
+            before_input=before_input,
+            phase=phase,
+            log_prefix="MedleyResult",
+        )
+        return "BACK" if back_next else "最右下角"
 
     def speed_gate(self, difficulty: str) -> None:
         params = {
@@ -1275,36 +1306,21 @@ class MedleyFlow:
         return session, song
 
     def dismiss_reward(self, image: np.ndarray) -> bool:
-        for template_path in ESC_ONLY_REWARD_TEMPLATES:
+        for template_path in (*ESC_ONLY_REWARD_TEMPLATES, *REWARD_TEMPLATES):
             score, _point = _template_score(image, template_path)
             if score < 0.9:
                 continue
-            # “达成报酬一览”覆盖在下一曲准备页上，只用 ESC 关闭。
-            # 不做坐标回退，避免误点后方的休息或演出开始按钮。
-            self.back()
+            # 曲间弹窗也服从统一结算节拍；安全像素只加速动画，
+            # 页面推进始终由 Android BACK 完成。
+            self.accelerated_result_back("between-songs-reward")
             self.wait(0.6)
             log_task(
                 "组曲演奏",
                 "曲间弹窗",
                 "INFO",
-                f"已用 ESC 关闭达成报酬一览（score={score:.3f}）",
+                "已用最右下角→BACK→最右下角关闭曲间弹窗"
+                f"（score={score:.3f}）",
             )
-            return True
-        for template_path in REWARD_TEMPLATES:
-            score, point = _template_score(image, template_path)
-            if score < 0.9:
-                continue
-            self.back()
-            self.wait(0.6)
-            after = self.capture()
-            if _template_score(after, template_path)[0] >= 0.9:
-                template = imread_unicode(template_path)
-                assert template is not None
-                self.click((
-                    point[0] + template.shape[1] // 2,
-                    point[1] + template.shape[0] // 2,
-                ))
-                self.wait(0.6)
             return True
         return False
 
@@ -1421,36 +1437,36 @@ class MedleyFlow:
         )
         return True
 
-    def advance_page(self, before: np.ndarray, *, pggbm: bool) -> None:
-        page_visible = (
-            judgement_details_visible if pggbm else medley_score_summary_visible
+    def advance_page(self, _before: np.ndarray) -> bool:
+        page_name = "PGGBM"
+        back_attempts = 0
+        step_index = 0
+        while back_attempts < RESULT_NAVIGATION_MAX_CYCLES:
+            step_index += 1
+            action = self.result_cadence_step(
+                f"{page_name}-step-{step_index}"
+            )
+            if action == "BACK":
+                back_attempts += 1
+            log_task(
+                "组曲演奏",
+                "结算兜底",
+                "INFO",
+                f"{page_name}页按统一节拍执行{action}，"
+                f"BACK {back_attempts}/{RESULT_NAVIGATION_MAX_CYCLES}",
+            )
+            self.wait(0.15 if action == "BACK" else 0.85)
+            if not judgement_details_visible(self.capture()):
+                return True
+
+        log_task(
+            "组曲演奏",
+            "结算兜底",
+            "WARN",
+            f"{page_name}页面连续 {RESULT_NAVIGATION_MAX_CYCLES} 轮 "
+            "最右下角/BACK加速推进后仍未离开",
         )
-        self.back()
-        disappeared = False
-        changed = False
-        deadline = time.monotonic() + 1.2
-        while time.monotonic() < deadline:
-            self.wait(0.12)
-            latest = self.capture()
-            if _frame_distance(before, latest) >= 4.0:
-                changed = True
-            if not page_visible(latest):
-                disappeared = True
-                break
-        if disappeared:
-            return
-        if not changed:
-            self.click(RESULT_FALLBACK_POINT)
-        # 结算页的退场动画会明显改变画面，但当前页标记仍可能短暂存在。
-        # 画面已变化时不能补点；只有确认标记消失后才允许读取下一页，
-        # 避免过渡帧再次触发 BACK 或右下角点击。
-        deadline = time.monotonic() + 4.0
-        while time.monotonic() < deadline:
-            self.wait(0.12)
-            if not page_visible(self.capture()):
-                return
-        page_name = "PGGBM" if pggbm else "巡演总分"
-        raise RuntimeError(f"{page_name}页面在返回键和右下角点击后仍未离开")
+        return False
 
     def home_or_tour_select(self, image: np.ndarray) -> bool:
         result = self.context.run_recognition("MedleyHomeMarker", image)
@@ -1514,20 +1530,17 @@ class MedleyFlow:
         result_index = int(session.get("results_completed", 0))
         if result_index >= 3:
             return session
+        self._result_back_next = False
         last_image: np.ndarray | None = None
-        unknown_image: np.ndarray | None = None
-        unknown_started_at = 0.0
-        unknown_stable_at = 0.0
-        unknown_actions = 0
-        unknown_back_next = True
+        unknown_back_attempts = 0
+        cadence_steps = 0
         failure_reason: str | None = None
         while time.monotonic() < deadline:
             image = self.capture()
             last_image = image
             if self.dismiss_quit_confirm(image):
-                unknown_image = None
-                unknown_actions = 0
-                unknown_back_next = True
+                unknown_back_attempts = 0
+                cadence_steps = 0
                 self.wait(0.5)
                 continue
             if self.home_or_tour_select(image):
@@ -1535,27 +1548,9 @@ class MedleyFlow:
                     "组曲结算尚未完整保存就已离开结算页面："
                     f"仅保存 {result_index}/3 张 PGGBM"
                 )
-            if self.dismiss_reward(image):
-                unknown_image = None
-                unknown_actions = 0
-                unknown_back_next = True
-                continue
-            if medley_score_summary_visible(image):
-                unknown_image = None
-                unknown_actions = 0
-                unknown_back_next = True
-                log_task(
-                    "组曲演奏",
-                    "结算",
-                    "INFO",
-                    "已识别巡演总分与演出报酬页，准备进入 PGGBM",
-                )
-                self.advance_page(image, pggbm=False)
-                continue
             if judgement_details_visible(image):
-                unknown_image = None
-                unknown_actions = 0
-                unknown_back_next = True
+                unknown_back_attempts = 0
+                cadence_steps = 0
                 if (
                     result_index > 0
                     and not song_identity_matches(
@@ -1573,7 +1568,13 @@ class MedleyFlow:
                         "INFO",
                         f"第{result_index}首 PGGBM 已保存，继续推进当前页面",
                     )
-                    self.advance_page(image, pggbm=True)
+                    if self.advance_page(image) is False:
+                        failure_reason = (
+                            f"第{result_index}张 PGGBM 页面连续 "
+                            f"{RESULT_NAVIGATION_MAX_CYCLES} 轮 "
+                            "最右下角/BACK加速推进后仍未离开"
+                        )
+                        break
                     continue
                 song = songs[result_index]
                 result, stable_image = self.parse_stable_result(song, image)
@@ -1601,53 +1602,42 @@ class MedleyFlow:
                     f"已读取并保存第{song.index}首 PGGBM 判定",
                 )
                 if result_index >= 3:
-                    # 第三张保存完成后交给 CommonRecover 恢复主页；不要在结果页
-                    # 继续盲按 BACK，以免到达主页后切出退出确认框。
+                    # 第三张保存后交给同一结算节拍恢复主页；CommonRecover
+                    # 只检查主页与最终剧情，不识别中间结算页面。
                     return session
-                self.advance_page(stable_image, pggbm=True)
+                if self.advance_page(stable_image) is False:
+                    failure_reason = (
+                        f"第{result_index}张 PGGBM 页面连续 "
+                        f"{RESULT_NAVIGATION_MAX_CYCLES} 轮 "
+                        "最右下角/BACK加速推进后仍未离开"
+                    )
+                    break
                 continue
             if self.story_handled(image):
-                unknown_image = None
-                unknown_actions = 0
-                unknown_back_next = True
+                unknown_back_attempts = 0
+                cadence_steps = 0
                 self.wait(0.5)
                 continue
-            now = time.monotonic()
-            if unknown_image is None:
-                unknown_image = image
-                unknown_started_at = now
-                unknown_stable_at = now
-                self.wait(0.25)
-                continue
-            if _frame_distance(unknown_image, image) >= 2.0:
-                unknown_image = image
-                unknown_stable_at = now
-            stable = now - unknown_stable_at >= UNKNOWN_RESULT_STABLE_SECONDS
-            forced = now - unknown_started_at >= UNKNOWN_RESULT_FORCE_SECONDS
-            if not stable and not forced:
-                self.wait(0.25)
-                continue
-            if unknown_back_next:
-                self.back()
-                action = "BACK"
-            else:
-                self.click(RESULT_FALLBACK_POINT)
-                action = "右下角点击"
-            unknown_actions += 1
-            unknown_back_next = not unknown_back_next
+            cadence_steps += 1
+            action = self.result_cadence_step(
+                f"awaiting-pggbm-{result_index + 1}-step-{cadence_steps}"
+            )
+            if action == "BACK":
+                unknown_back_attempts += 1
             log_task(
                 "组曲演奏",
                 "结算兜底",
                 "INFO",
-                f"稳定未知页执行{action}，连续动作 {unknown_actions}/"
-                f"{UNKNOWN_RESULT_MAX_ACTIONS}",
+                f"未识别到下一张 PGGBM，按统一节拍执行{action}，"
+                f"BACK {unknown_back_attempts}/"
+                f"{RESULT_NAVIGATION_MAX_CYCLES}",
             )
-            unknown_image = None
-            self.wait(0.35)
-            if unknown_actions >= UNKNOWN_RESULT_MAX_ACTIONS:
+            self.wait(0.15 if action == "BACK" else 0.85)
+            if unknown_back_attempts >= RESULT_NAVIGATION_MAX_CYCLES:
                 failure_reason = (
-                    "组曲结算稳定未知页面连续 "
-                    f"{unknown_actions} 次 BACK/右下角交替推进后仍未识别"
+                    "组曲结算连续 "
+                    f"{unknown_back_attempts} 次 BACK 加速推进后"
+                    "仍未识别下一张 PGGBM"
                 )
                 break
         if last_image is not None:
@@ -1663,9 +1653,8 @@ class MedleyFlow:
                 f"已读取 {result_index}/3 张 PGGBM"
             )
         try:
-            # 通用结算动作仍无法脱离时，复用全局恢复：先有界 ESC，
-            # 仍无法识别主页才重启游戏，避免任务无限卡在未知页面。
-            self.recover_home()
+            # 读取失败后仍用相同结算节拍有界恢复；无法到达主页时再重启。
+            self.recover_home(result_navigation=True)
         except ScreenRefreshCancelled:
             raise
         except RuntimeError as exc:
@@ -1706,7 +1695,7 @@ class MedleyFlow:
             terminal_reason=None,
         )
         target = int(self.settings.get("count", 3))
-        self.recover_home()
+        self.recover_home(result_navigation=True)
         if completed_total >= target:
             return True
         self._next_round_completed = completed_total
@@ -1766,23 +1755,52 @@ class MedleyFlow:
                 in {"results", "result-1", "result-2", "result-3", "post-results"}
             ):
                 if self.home_or_tour_select(image):
-                    raise RuntimeError(
-                        "组曲会话仍有待读取结算，但当前页面已不在结算流程"
+                    results_completed = int(active.get("results_completed", 0))
+                    if results_completed >= 3:
+                        completed_before = int(
+                            active.get("completed_before_round", 0)
+                        )
+                        log_task(
+                            "组曲演奏",
+                            "续跑",
+                            "INFO",
+                            "三张 PGGBM 已全部保存，"
+                            "正在补记上一组完成状态",
+                        )
+                        self.ensure_progress(
+                            completed_before + 3,
+                            next_started=False,
+                        )
+                        return self.finish_round(active)
+                    log_task(
+                        "组曲演奏",
+                        "续跑",
+                        "WARNING",
+                        "上一组结算已被人工退出，"
+                        f"仅保存 {results_completed}/3 张 PGGBM；"
+                        "保留旧会话记录并从第一曲开始新一组",
                     )
-                songs = tuple(
-                    MedleySong.from_mapping(value) for value in active["songs"]
-                )
-                _same_speed(songs)
-                session = active
-                completed_before = int(
-                    active.get("completed_before_round", 0)
-                )
-                self.ensure_progress(
-                    completed_before + 3,
-                    next_started=False,
-                )
-                session = self.collect_results(session, songs)
-                return self.finish_round(session)
+                    self.sessions.update(
+                        active,
+                        status="superseded",
+                        terminal_reason="result_pages_left_before_collection",
+                    )
+                    active = None
+                else:
+                    songs = tuple(
+                        MedleySong.from_mapping(value) for value in active["songs"]
+                    )
+                    _same_speed(songs)
+                    session = active
+                    completed_before = int(
+                        active.get("completed_before_round", 0)
+                    )
+                    self.ensure_progress(
+                        completed_before + 3,
+                        next_started=False,
+                    )
+                    session = self.collect_results(session, songs)
+                    return self.finish_round(session)
 
             if getattr(self, "_home_ready", False):
                 self._home_ready = False

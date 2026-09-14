@@ -61,6 +61,22 @@ def stage_frame(stage: int | None) -> np.ndarray:
     return image
 
 
+def install_result_cadence(flow: MedleyFlow, events: list[object]) -> None:
+    back_next = [False]
+
+    def step(_phase: str) -> str:
+        if back_next[0]:
+            events.append("back")
+            action = "BACK"
+        else:
+            events.append(medley_action.RESULT_ANIMATION_SKIP_POINT)
+            action = "最右下角"
+        back_next[0] = not back_next[0]
+        return action
+
+    flow.result_cadence_step = step
+
+
 def test_segmented_settings_merge_without_overwriting_other_choices():
     configure_medley_settings({
         "reset": True,
@@ -563,7 +579,7 @@ def test_task_tour_reader_uses_three_read_only_layouts(monkeypatch):
     assert covers == [(158, 158, 3), (158, 153, 3), (158, 158, 3)]
 
 
-def test_achievement_reward_overview_is_closed_by_esc_only():
+def test_achievement_reward_overview_uses_shared_result_cycle():
     template = medley_action.imread_unicode(
         medley_action.ESC_ONLY_REWARD_TEMPLATES[0]
     )
@@ -573,15 +589,80 @@ def test_achievement_reward_overview_is_closed_by_esc_only():
     image[55:55 + height, 467:467 + width] = template
     events = []
     flow = object.__new__(MedleyFlow)
-    flow.back = lambda: events.append("back")
     flow.wait = lambda _seconds: None
     flow.capture = lambda: (_ for _ in ()).throw(
-        AssertionError("ESC-only 弹窗不应进入坐标点击回退")
+        AssertionError("曲间弹窗推进后应由外层重新截图")
     )
-    flow.click = lambda point: events.append(point)
+    flow.accelerated_result_back = lambda _phase: events.extend([
+        medley_action.RESULT_ANIMATION_SKIP_POINT,
+        "back",
+        medley_action.RESULT_ANIMATION_SKIP_POINT,
+    ])
 
     assert flow.dismiss_reward(image) is True
-    assert events == ["back"]
+    assert events == [
+        medley_action.RESULT_ANIMATION_SKIP_POINT,
+        "back",
+        medley_action.RESULT_ANIMATION_SKIP_POINT,
+    ]
+
+
+def test_medley_result_cycle_reuses_shared_accelerated_back(monkeypatch):
+    events = []
+
+    class Job:
+        def wait(self):
+            return self
+
+    class Controller:
+        def post_click(self, x, y):
+            events.append(("click", (x, y)))
+            return Job()
+
+        def post_click_key(self, key):
+            events.append(("key", key))
+            return Job()
+
+    flow = object.__new__(MedleyFlow)
+    flow.context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=Controller())
+    )
+    monkeypatch.setattr(
+        medley_action,
+        "require_game_foreground",
+        lambda _controller: None,
+    )
+
+    flow.accelerated_result_back("test")
+
+    assert events == [
+        ("click", medley_action.RESULT_ANIMATION_SKIP_POINT),
+        ("key", 4),
+        ("click", medley_action.RESULT_ANIMATION_SKIP_POINT),
+    ]
+
+
+def test_medley_post_result_recovery_uses_back_only_shared_cadence(monkeypatch):
+    captured = []
+    flow = object.__new__(MedleyFlow)
+    flow.context = object()
+
+    def run(_context, argv):
+        captured.append(medley_action.json.loads(argv.custom_action_param))
+        return True
+
+    monkeypatch.setattr(
+        medley_action,
+        "CommonRecover",
+        lambda: SimpleNamespace(run=run),
+    )
+
+    flow.recover_home(result_navigation=True)
+
+    assert captured[0]["back_only"] is True
+    assert captured[0]["click_nodes"] == []
+    assert captured[0]["back_only_click_nodes"] == list(medley_action.STORY_NODES)
+    assert captured[0]["back_acceleration_click_point"] == [1279, 719]
 
 
 def test_initial_stage_capture_dismisses_reward_overlay_before_resume():
@@ -602,29 +683,27 @@ def test_initial_stage_capture_dismisses_reward_overlay_before_resume():
     assert dismissed == [1, 0]
 
 
-def test_result_advance_uses_lower_right_only_when_result_marker_does_not_leave(
+def test_result_advance_checks_after_each_shared_cadence_step(
     monkeypatch,
 ):
     before = np.zeros((720, 1280, 3), dtype=np.uint8)
     after = np.ones((720, 1280, 3), dtype=np.uint8)
     events = []
     flow = object.__new__(MedleyFlow)
-    flow.back = lambda: events.append("back")
     flow.wait = lambda _seconds: None
-    frames = iter((before.copy(), before.copy(), after))
+    frames = iter((after,))
     flow.capture = lambda: next(frames)
-    flow.click = lambda point: events.append(point)
+    install_result_cadence(flow, events)
     monkeypatch.setattr(
         medley_action,
         "judgement_details_visible",
         lambda image: int(image[0, 0, 0]) == 0,
     )
-    ticks = iter((0.0, 0.2, 0.4, 1.3, 1.4, 1.5))
-    monkeypatch.setattr(medley_action.time, "monotonic", lambda: next(ticks))
+    flow.advance_page(before)
 
-    flow.advance_page(before, pggbm=True)
-
-    assert events == ["back", medley_action.RESULT_FALLBACK_POINT]
+    assert events == [
+        medley_action.RESULT_ANIMATION_SKIP_POINT,
+    ]
 
 
 def test_result_advance_waits_for_result_marker_to_leave(monkeypatch):
@@ -632,81 +711,75 @@ def test_result_advance_waits_for_result_marker_to_leave(monkeypatch):
     after = np.full((720, 1280, 3), 20, dtype=np.uint8)
     events = []
     flow = object.__new__(MedleyFlow)
-    flow.back = lambda: events.append("back")
     flow.wait = lambda _seconds: None
     flow.capture = lambda: after
-    flow.click = lambda point: events.append(point)
+    install_result_cadence(flow, events)
     monkeypatch.setattr(
         medley_action,
         "judgement_details_visible",
         lambda image: image is before,
     )
-    ticks = iter((0.0, 0.2))
-    monkeypatch.setattr(medley_action.time, "monotonic", lambda: next(ticks))
+    flow.advance_page(before)
 
-    flow.advance_page(before, pggbm=True)
+    assert events == [
+        medley_action.RESULT_ANIMATION_SKIP_POINT,
+    ]
 
-    assert events == ["back"]
 
-
-def test_result_advance_does_not_click_during_visible_transition(monkeypatch):
+def test_result_advance_keeps_safe_cycle_running_during_visible_transition(
+    monkeypatch,
+):
     before = np.zeros((720, 1280, 3), dtype=np.uint8)
     transition = np.full((720, 1280, 3), 20, dtype=np.uint8)
     departed = np.full((720, 1280, 3), 30, dtype=np.uint8)
     events = []
     flow = object.__new__(MedleyFlow)
-    flow.back = lambda: events.append("back")
     flow.wait = lambda _seconds: None
     frames = iter((transition, transition, departed))
     flow.capture = lambda: next(frames)
-    flow.click = lambda point: events.append(point)
+    install_result_cadence(flow, events)
     monkeypatch.setattr(
         medley_action,
         "judgement_details_visible",
         lambda image: int(image[0, 0, 0]) != 30,
     )
-    ticks = iter((0.0, 0.2, 0.4, 1.3, 1.4, 1.5))
-    monkeypatch.setattr(medley_action.time, "monotonic", lambda: next(ticks))
+    flow.advance_page(before)
 
-    flow.advance_page(before, pggbm=True)
+    assert events == [
+        medley_action.RESULT_ANIMATION_SKIP_POINT,
+        "back",
+        medley_action.RESULT_ANIMATION_SKIP_POINT,
+    ]
 
-    assert events == ["back"]
 
-
-def test_summary_advance_waits_for_summary_marker_to_leave(monkeypatch):
+def test_pggbm_advance_bounds_complete_cycles(monkeypatch):
     before = np.zeros((720, 1280, 3), dtype=np.uint8)
-    transition = np.full((720, 1280, 3), 20, dtype=np.uint8)
-    departed = np.full((720, 1280, 3), 30, dtype=np.uint8)
     events = []
-    captures = []
     flow = object.__new__(MedleyFlow)
-    flow.back = lambda: events.append("back")
     flow.wait = lambda _seconds: None
-    frames = iter((transition, transition, departed))
-
-    def capture():
-        image = next(frames)
-        captures.append(int(image[0, 0, 0]))
-        return image
-
-    flow.capture = capture
-    flow.click = lambda point: events.append(point)
+    flow.capture = lambda: before
+    install_result_cadence(flow, events)
     monkeypatch.setattr(
         medley_action,
-        "medley_score_summary_visible",
-        lambda image: int(image[0, 0, 0]) != 30,
+        "judgement_details_visible",
+        lambda _image: True,
+    )
+    monkeypatch.setattr(
+        medley_action,
+        "RESULT_NAVIGATION_MAX_CYCLES",
+        4,
         raising=False,
     )
-    ticks = iter((0.0, 0.2, 0.4, 1.3, 1.4, 1.5))
-    monkeypatch.setattr(medley_action.time, "monotonic", lambda: next(ticks))
+    advanced = flow.advance_page(before)
 
-    flow.advance_page(before, pggbm=False)
+    assert advanced is False
+    assert events == [
+        medley_action.RESULT_ANIMATION_SKIP_POINT,
+        "back",
+    ] * 4
 
-    assert events == ["back"]
-    assert captures == [20, 20, 30]
 
-
-def test_collect_results_does_not_advance_transition_frames_or_third_result(
+def test_collect_results_only_identifies_three_pggbm_pages(
     monkeypatch,
 ):
     def frame(tag: int) -> np.ndarray:
@@ -714,10 +787,7 @@ def test_collect_results_does_not_advance_transition_frames_or_third_result(
         image[0, 0, 0] = tag
         return image
 
-    frames = iter((
-        frame(4), frame(0), frame(1), frame(0), frame(0),
-        frame(2), frame(0), frame(3),
-    ))
+    frames = iter((frame(4), frame(1), frame(4), frame(2), frame(4), frame(3)))
     flow = object.__new__(MedleyFlow)
     flow.capture = lambda: next(frames, frame(9))
     flow.wait = lambda _seconds: None
@@ -733,6 +803,8 @@ def test_collect_results_does_not_advance_transition_frames_or_third_result(
     flow.advance_page = lambda image, **_kwargs: advances.append(
         int(image[0, 0, 0])
     )
+    actions = []
+    install_result_cadence(flow, actions)
     flow.sessions = SimpleNamespace(
         update=lambda session, **changes: session | changes,
     )
@@ -740,12 +812,6 @@ def test_collect_results_does_not_advance_transition_frames_or_third_result(
         medley_action,
         "judgement_details_visible",
         lambda image: int(image[0, 0, 0]) in {1, 2, 3},
-    )
-    monkeypatch.setattr(
-        medley_action,
-        "medley_score_summary_visible",
-        lambda image: int(image[0, 0, 0]) == 4,
-        raising=False,
     )
     saved = []
     monkeypatch.setattr(
@@ -769,7 +835,12 @@ def test_collect_results_does_not_advance_transition_frames_or_third_result(
         "screencap/song2.json",
         "screencap/song3.json",
     ]
-    assert advances == [4, 1, 2]
+    assert advances == [1, 2]
+    assert actions == [
+        medley_action.RESULT_ANIMATION_SKIP_POINT,
+        "back",
+        medley_action.RESULT_ANIMATION_SKIP_POINT,
+    ]
 
 
 def test_collect_results_fails_immediately_if_home_arrives_before_third_result(
@@ -792,7 +863,68 @@ def test_collect_results_fails_immediately_if_home_arrives_before_third_result(
     assert advances == []
 
 
-def test_collect_results_alternates_back_and_lower_right_on_stable_unknown(
+def test_collect_results_treats_summary_as_unknown_and_recovers_with_same_cycle(
+    monkeypatch,
+    tmp_path,
+):
+    image = np.zeros((8, 8, 3), dtype=np.uint8)
+    flow = object.__new__(MedleyFlow)
+    flow.capture = lambda: image
+    flow.wait = lambda _seconds: None
+    flow.dismiss_quit_confirm = lambda _image: False
+    flow.home_or_tour_select = lambda _image: False
+    flow.story_handled = lambda _image: False
+    actions = []
+    install_result_cadence(flow, actions)
+    recovered = []
+    flow.recover_home = lambda **kwargs: recovered.append(kwargs)
+    monkeypatch.setattr(
+        medley_action,
+        "judgement_details_visible",
+        lambda _image: False,
+    )
+    monkeypatch.setattr(
+        medley_action,
+        "medley_score_summary_visible",
+        lambda _image: (_ for _ in ()).throw(
+            AssertionError("组曲结算不应识别巡演总分页")
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        medley_action,
+        "RESULT_NAVIGATION_MAX_CYCLES",
+        2,
+        raising=False,
+    )
+    monkeypatch.setattr(medley_action, "PROJECT_ROOT", tmp_path)
+    clock = [0.0]
+
+    def monotonic():
+        clock[0] += 10.0
+        return clock[0]
+
+    monkeypatch.setattr(medley_action.time, "monotonic", monotonic)
+
+    with pytest.raises(RuntimeError, match="连续 2 次 BACK"):
+        flow.collect_results(
+            {"session_id": "known-summary", "results_completed": 0},
+            (song(1), song(2), song(3)),
+        )
+
+    assert actions == [
+        medley_action.RESULT_ANIMATION_SKIP_POINT,
+        "back",
+        medley_action.RESULT_ANIMATION_SKIP_POINT,
+        "back",
+    ]
+    assert recovered == [{"result_navigation": True}]
+    assert (
+        tmp_path / "screencap" / "medley-result-timeout-known-summary.png"
+    ).exists()
+
+
+def test_collect_results_uses_complete_cycle_on_unidentified_page(
     monkeypatch,
 ):
     def frame(tag: int) -> np.ndarray:
@@ -805,15 +937,13 @@ def test_collect_results_alternates_back_and_lower_right_on_stable_unknown(
     flow = object.__new__(MedleyFlow)
 
     def capture():
-        if len(actions) < 2:
+        if len(actions) < 3:
             return frame(5)
         return next(result_frames, frame(9))
 
     flow.capture = capture
     flow.wait = lambda _seconds: None
-    flow.back = lambda: actions.append("back")
-    flow.click = lambda point: actions.append(point)
-    flow.dismiss_reward = lambda _image: False
+    install_result_cadence(flow, actions)
     flow.story_handled = lambda _image: False
     flow.dismiss_quit_confirm = lambda _image: False
     flow.home_or_tour_select = lambda image: int(image[0, 0, 0]) == 9
@@ -829,11 +959,6 @@ def test_collect_results_alternates_back_and_lower_right_on_stable_unknown(
         medley_action,
         "judgement_details_visible",
         lambda image: int(image[0, 0, 0]) in {1, 2, 3},
-    )
-    monkeypatch.setattr(
-        medley_action,
-        "medley_score_summary_visible",
-        lambda _image: False,
     )
     monkeypatch.setattr(
         medley_action,
@@ -858,7 +983,79 @@ def test_collect_results_alternates_back_and_lower_right_on_stable_unknown(
     )
 
     assert result["results_completed"] == 3
-    assert actions == ["back", medley_action.RESULT_FALLBACK_POINT]
+    assert actions == [
+        medley_action.RESULT_ANIMATION_SKIP_POINT,
+        "back",
+        medley_action.RESULT_ANIMATION_SKIP_POINT,
+    ]
+
+
+def test_collect_results_observes_pggbm_after_back_before_next_click(
+    monkeypatch,
+):
+    """PGGBM 在 BACK 后出现时，必须先截图，不能被下一次点击越过。"""
+
+    class PggbmObserved(RuntimeError):
+        pass
+
+    def frame(tag: int) -> np.ndarray:
+        image = np.zeros((8, 8, 3), dtype=np.uint8)
+        image[0, 0, 0] = tag
+        return image
+
+    state = {"page": "summary", "back_next": False}
+    actions = []
+    flow = object.__new__(MedleyFlow)
+    flow.capture = lambda: frame({
+        "summary": 4,
+        "pggbm": 1,
+        "home": 9,
+    }[state["page"]])
+    flow.wait = lambda _seconds: None
+    flow.story_handled = lambda _image: False
+    flow.dismiss_quit_confirm = lambda _image: False
+    flow.home_or_tour_select = lambda image: int(image[0, 0, 0]) == 9
+    flow.result_header_matches = lambda _expected, _image: True
+    flow.parse_stable_result = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        PggbmObserved("PGGBM observed before the next click")
+    )
+
+    def whole_cycle(_phase):
+        actions.extend([
+            medley_action.RESULT_ANIMATION_SKIP_POINT,
+            "back",
+            medley_action.RESULT_ANIMATION_SKIP_POINT,
+        ])
+        state["page"] = "home"
+
+    def cadence_step(_phase):
+        if state["back_next"]:
+            actions.append("back")
+            state["back_next"] = False
+            state["page"] = "pggbm"
+            return "BACK"
+        actions.append(medley_action.RESULT_ANIMATION_SKIP_POINT)
+        state["back_next"] = True
+        return "最右下角"
+
+    flow.accelerated_result_back = whole_cycle
+    flow.result_cadence_step = cadence_step
+    monkeypatch.setattr(
+        medley_action,
+        "judgement_details_visible",
+        lambda image: int(image[0, 0, 0]) == 1,
+    )
+
+    with pytest.raises(PggbmObserved, match="before the next click"):
+        flow.collect_results(
+            {"session_id": "checkpoint", "results_completed": 0},
+            (song(1), song(2), song(3)),
+        )
+
+    assert actions == [
+        medley_action.RESULT_ANIMATION_SKIP_POINT,
+        "back",
+    ]
 
 
 def test_unknown_result_exhaustion_recovers_home_before_failure(
@@ -869,14 +1066,13 @@ def test_unknown_result_exhaustion_recovers_home_before_failure(
     flow = object.__new__(MedleyFlow)
     flow.capture = lambda: image
     flow.wait = lambda _seconds: None
-    flow.back = lambda: None
-    flow.click = lambda _point: None
-    flow.dismiss_reward = lambda _image: False
+    actions = []
+    install_result_cadence(flow, actions)
     flow.story_handled = lambda _image: False
     flow.dismiss_quit_confirm = lambda _image: False
     flow.home_or_tour_select = lambda _image: False
     recovered = []
-    flow.recover_home = lambda: recovered.append("home")
+    flow.recover_home = lambda **kwargs: recovered.append(kwargs)
     monkeypatch.setattr(
         medley_action,
         "judgement_details_visible",
@@ -884,10 +1080,9 @@ def test_unknown_result_exhaustion_recovers_home_before_failure(
     )
     monkeypatch.setattr(
         medley_action,
-        "medley_score_summary_visible",
-        lambda _image: False,
+        "RESULT_NAVIGATION_MAX_CYCLES",
+        2,
     )
-    monkeypatch.setattr(medley_action, "UNKNOWN_RESULT_MAX_ACTIONS", 2, raising=False)
     monkeypatch.setattr(medley_action, "PROJECT_ROOT", tmp_path)
     clock = [0.0]
 
@@ -897,13 +1092,19 @@ def test_unknown_result_exhaustion_recovers_home_before_failure(
 
     monkeypatch.setattr(medley_action.time, "monotonic", monotonic)
 
-    with pytest.raises(RuntimeError, match="连续 2 次"):
+    with pytest.raises(RuntimeError, match="连续 2 次 BACK"):
         flow.collect_results(
             {"session_id": "test", "results_completed": 0},
             (song(1), song(2), song(3)),
         )
 
-    assert recovered == ["home"]
+    assert recovered == [{"result_navigation": True}]
+    assert actions == [
+        medley_action.RESULT_ANIMATION_SKIP_POINT,
+        "back",
+        medley_action.RESULT_ANIMATION_SKIP_POINT,
+        "back",
+    ]
     assert (tmp_path / "screencap" / "medley-result-timeout-test.png").exists()
 
 
@@ -941,7 +1142,7 @@ def test_matching_second_stage_resumes_without_home_recovery():
     confirmed = []
     flow.confirm_preparation = lambda current, _image: confirmed.append(current.index)
     recovery_calls = []
-    flow.recover_home = lambda: recovery_calls.append("home")
+    flow.recover_home = lambda **kwargs: recovery_calls.append(kwargs)
     flow.initialise_progress = lambda completed, **_kwargs: confirmed.append(
         ("progress", completed)
     )
@@ -960,7 +1161,137 @@ def test_matching_second_stage_resumes_without_home_recovery():
     assert flow.run() is True
     assert confirmed[:2] == [2, ("progress", 1)]
     assert played == [2, 3]
-    assert recovery_calls == ["home"]
+    assert recovery_calls == [{"result_navigation": True}]
+
+
+def test_restart_after_manually_leaving_pending_results_starts_new_round(
+    monkeypatch,
+):
+    """结算已被人工退出时，旧会话不可恢复，但不应阻塞下一次任务。"""
+    old_songs = (song(1), song(2), song(3))
+    old_session = {
+        "tour_type": "free",
+        "song_mode": "random",
+        "requested_difficulty": "Expert",
+        "completed_songs": 3,
+        "results_completed": 0,
+        "completed_before_round": 0,
+        "stage": "results",
+        "status": "paused",
+        "songs": [medley_action.asdict(item) for item in old_songs],
+    }
+    updates = []
+    starts = []
+
+    class Sessions:
+        def latest(self, _tour_type):
+            return old_session
+
+        def update(self, value, **changes):
+            updates.append(changes)
+            value.update(changes)
+            return value
+
+        def start(self, **kwargs):
+            starts.append(kwargs)
+            return {
+                "completed_before_round": 0,
+                "completed_songs": 0,
+                "results_completed": 0,
+            }
+
+    flow = object.__new__(MedleyFlow)
+    flow.settings = {
+        "tour_type": "free",
+        "song_mode": "random",
+        "difficulty": "Expert",
+        "count": 3,
+    }
+    flow.sessions = Sessions()
+    flow.profile_store = SimpleNamespace(
+        runtime_options=lambda: {"note_speed_settings_enabled": False}
+    )
+    home_image = object()
+    flow.capture_after_reward_overlays = lambda: home_image
+    flow.home_or_tour_select = lambda image: image is home_image
+    recovered = []
+    flow.recover_home = lambda **kwargs: recovered.append(kwargs)
+    flow.speed_gate = lambda _difficulty: None
+    flow.navigate_to_tour = lambda: object()
+    flow.choose_tour_type = lambda: object()
+    new_songs = (song(1), song(2), song(3))
+    flow.select_free_songs = lambda: new_songs
+    flow.validate_home_speed = lambda *_args, **_kwargs: 5.0
+    flow.click = lambda _point: None
+    flow.wait = lambda _seconds: None
+    flow.capture = lambda: object()
+    flow.confirm_preparation = lambda _song, _image: None
+    flow.ensure_progress = lambda *_args, **_kwargs: None
+    flow.wait_for_stage = lambda _index: object()
+    played = []
+
+    def play(current_session, current_song, _image):
+        played.append(current_song.index)
+        current_session["completed_songs"] = current_song.index
+        return current_session, current_song
+
+    flow.play_song = play
+    flow.progress = lambda _phase: True
+    flow.collect_results = lambda current, _songs: current
+    flow.finish_round = lambda _session: "finished"
+    monkeypatch.setattr(medley_action, "detect_medley_stage", lambda _image: None)
+
+    assert flow.run() == "finished"
+    assert updates[0] == {
+        "status": "superseded",
+        "terminal_reason": "result_pages_left_before_collection",
+    }
+    assert len(starts) == 1
+    assert played == [1, 2, 3]
+    assert recovered == [{}]
+
+
+def test_restart_at_home_after_all_results_saved_finishes_existing_round(
+    monkeypatch,
+):
+    """三张结果已落盘时，即使完成标记前中断，也不能重打一组。"""
+    saved_session = {
+        "tour_type": "free",
+        "song_mode": "random",
+        "requested_difficulty": "Expert",
+        "completed_songs": 3,
+        "results_completed": 3,
+        "completed_before_round": 0,
+        "stage": "post-results",
+        "status": "paused",
+        "songs": [medley_action.asdict(song(index)) for index in range(1, 4)],
+    }
+
+    flow = object.__new__(MedleyFlow)
+    flow.settings = {
+        "tour_type": "free",
+        "song_mode": "random",
+        "difficulty": "Expert",
+        "count": 3,
+    }
+    flow.sessions = SimpleNamespace(latest=lambda _tour_type: saved_session)
+    flow.profile_store = SimpleNamespace(
+        runtime_options=lambda: {"note_speed_settings_enabled": False}
+    )
+    home_image = object()
+    flow.capture_after_reward_overlays = lambda: home_image
+    flow.home_or_tour_select = lambda image: image is home_image
+    progress = []
+    flow.ensure_progress = lambda completed, **kwargs: progress.append(
+        (completed, kwargs)
+    )
+    finished = []
+    flow.finish_round = lambda session: finished.append(session) or "finished"
+    monkeypatch.setattr(medley_action, "detect_medley_stage", lambda _image: None)
+
+    assert flow.run() == "finished"
+    assert progress == [(3, {"next_started": False})]
+    assert finished == [saved_session]
 
 
 def test_finish_round_starts_the_next_full_round_when_count_is_six():
@@ -972,7 +1303,7 @@ def test_finish_round_starts_the_next_full_round_when_count_is_six():
     )
     recovered = []
     progress = []
-    flow.recover_home = lambda: recovered.append("home")
+    flow.recover_home = lambda **kwargs: recovered.append(kwargs)
     flow.progress = lambda phase: progress.append(phase) or True
     flow.run = lambda: "next-round"
 
@@ -982,7 +1313,7 @@ def test_finish_round_starts_the_next_full_round_when_count_is_six():
     assert updates[-1]["completed_total"] == 3
     assert updates[-1]["status"] == "completed"
     assert flow._next_round_completed == 3
-    assert recovered == ["home"]
+    assert recovered == [{"result_navigation": True}]
     assert progress == ["start"]
 
 

@@ -53,7 +53,6 @@ from .result_navigation import (
     RESULT_ANIMATION_SKIP_POINT,
     ResultNavigationStatus,
     accelerated_back,
-    back_then_click,
     navigate_result_pages,
     handle_story_page,
 )
@@ -859,7 +858,7 @@ def _dismiss_reward_popup(
     templates=(REWARD_CONFIRM_TEMPLATE, REWARD_OK_TEMPLATE),
     threshold: float = REWARD_TEMPLATE_THRESHOLD,
 ) -> bool:
-    """Click a visible central result-popup acknowledgement, if any."""
+    """识别结果弹窗后只执行统一安全像素/BACK节拍。"""
     best_point = _template_click_point(
         image,
         templates,
@@ -868,8 +867,12 @@ def _dismiss_reward_popup(
     )
     if best_point is None:
         return False
-    before_input()
-    controller.post_click(*best_point).wait()
+    accelerated_back(
+        controller,
+        before_input=before_input,
+        phase="reward-popup",
+        log_prefix="RealtimeResult",
+    )
     return True
 
 
@@ -998,7 +1001,7 @@ def _advance_result_rank_page(
     template_path=RESULT_NEXT_TEMPLATE,
     threshold: float = RESULT_NEXT_TEMPLATE_THRESHOLD,
 ) -> bool:
-    """Advance a recognised rank page through Android Back, never a click."""
+    """识别排名页后执行统一安全像素/BACK节拍。"""
     template = imread_unicode(template_path)
     if template is None:
         return False
@@ -1006,8 +1009,12 @@ def _advance_result_rank_page(
     _, score, _, location = cv2.minMaxLoc(matched)
     if score < threshold:
         return False
-    before_input()
-    controller.post_click_key(4).wait()
+    accelerated_back(
+        controller,
+        before_input=before_input,
+        phase="rank-page",
+        log_prefix="RealtimeResult",
+    )
     return True
 
 
@@ -1132,10 +1139,9 @@ def collect_result(
             )
         pending_image = navigation.image
         if cooperative_mode:
-            # The terminal marker has been recognised.  Advance PGGBM once,
-            # then the cooperative outer flow checks the repeat-room popup
-            # after every subsequent Back.
-            back_then_click(
+            # 识别到 PGGBM 后也必须完成完整三步节拍，随后由协力外层
+            # 继续以相同方式推进，直到最终房间或剧情终点。
+            accelerated_back(
                 controller,
                 before_input=before_input,
                 phase="pggbm",
@@ -1153,8 +1159,12 @@ def collect_result(
             )
 
     def post_result_back() -> None:
-        before_input()
-        controller.post_click_key(4).wait()
+        accelerated_back(
+            controller,
+            before_input=before_input,
+            phase="compatibility-result",
+            log_prefix="RealtimeResult",
+        )
 
     while clock() < deadline:
         if stopping():

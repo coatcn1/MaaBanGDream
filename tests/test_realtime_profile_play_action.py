@@ -2110,17 +2110,21 @@ def test_one_run_links_result_calibration_and_recorder_summary(
     assert result["song_id"] == summary["session"]["song_id"]
 
 
-def test_dismiss_reward_popup_clicks_matched_button():
+def test_dismiss_reward_popup_uses_safe_click_back_safe_click_cycle():
     template = cv2.imread(str(profile_play_action.REWARD_OK_TEMPLATE))
     assert template is not None
     image = np.zeros((720, 1280, 3), dtype=np.uint8)
     image[568:642, 562:716] = template
-    clicks = []
+    actions = []
     foreground_checks = []
 
     class FakeController:
         def post_click(self, x, y):
-            clicks.append((x, y))
+            actions.append(("click", (x, y)))
+            return SimpleNamespace(wait=lambda: None)
+
+        def post_click_key(self, key):
+            actions.append(("key", key))
             return SimpleNamespace(wait=lambda: None)
 
     assert _dismiss_reward_popup(
@@ -2129,8 +2133,12 @@ def test_dismiss_reward_popup_clicks_matched_button():
         before_input=lambda: foreground_checks.append(1),
         threshold=0.8,
     ) is True
-    assert clicks == [(639, 605)]
-    assert foreground_checks == [1]
+    assert actions == [
+        ("click", profile_play_action.RESULT_ANIMATION_SKIP_POINT),
+        ("key", 4),
+        ("click", profile_play_action.RESULT_ANIMATION_SKIP_POINT),
+    ]
+    assert foreground_checks == [1, 1, 1]
 
 
 def test_dismiss_reward_popup_ignores_clean_result_screen():
@@ -2207,5 +2215,5 @@ def test_collect_result_dismisses_reward_popup_before_stabilizing():
 
     assert outcome.status is ResultCollectionStatus.STABLE
     assert outcome.result is not None
-    assert clicks == []
+    assert clicks == [profile_play_action.RESULT_ANIMATION_SKIP_POINT] * 4
     assert keys == [4, 4]

@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.3.8-ff6f9f" alt="Version"></a>
+  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.3.9-ff6f9f" alt="Version"></a>
   <img src="https://img.shields.io/badge/MaaFramework-5.10.2-4c8bf5" alt="MaaFramework">
   <img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?logo=windows11&logoColor=white" alt="Windows">
@@ -103,7 +103,9 @@ Special 的难度策略不会静默冒充：按钮可选时必须实际选中 Sp
 
 Native 等待成本与启动延迟补偿已通过雷电真机验收，开发环境普通运行 `scripts/launch-mfa.ps1` 即会启用；仅在回归排查时使用 `-DisableNativeTimingCompensation` 临时关闭。正式安装目录不用于部署测试代码。
 
-“演出设置 → 流速”中只保留“开演前自动设置并验证流速”。关闭时程序永不进入游戏设置页，直接信任各难度的目标流速；开启时，每次单人、协力、挑战和校准任务都会先在主页真实进入设置页，只读取、按需修正并复核音符流速，不保存跨任务跳过凭据。“一键实时演奏”不会导航，开关开启时要求最近 15 分钟内已有流速读回；启动后等待开场封面与标题确认本地曲目，再按任务所选难度演奏一首，识别演出完成后自动结束任务。Easy/Normal 等没有本地谱面的难度会整局使用视觉 Legacy。
+“演出设置 → 流速”中只保留“开演前自动设置并验证流速”。关闭时程序永不进入游戏设置页，直接信任各难度的目标流速；开启时，每次单人、协力、挑战和校准任务都会先在主页真实进入设置页，只读取、按需修正并复核音符流速，不保存跨任务跳过凭据。“一键实时演奏”在监听和开演前不会主动导航，开关开启时要求最近 15 分钟内已有流速读回；启动后等待开场封面与标题确认本地曲目，再按任务所选难度演奏一首，读取 PGGBM 并恢复主页后自动结束任务。Easy/Normal 等没有本地谱面的难度会整局使用视觉 Legacy。
+
+所有演出任务在演出结束后统一循环“点击最右下角安全像素 `(1279,719)` → Android BACK → 再点击同一安全像素”。安全像素只用于加快页面动画，BACK 是唯一推进页面的输入；程序不会点击奖励、排名、活动、确定或下一步等可见按钮。普通演出读取一张 PGGBM，组曲按照会话断点读取总计三张，并在每次安全像素或 BACK 后先截图，防止越过刚出现的 PGGBM；之后只在最终剧情或主页等终点执行必要识别。
 
 其余演出设置不再由 MaaBanGDream 检查或修改，请用户在游戏内手动设为：
 
@@ -127,8 +129,8 @@ Native 等待成本与启动延迟补偿已通过雷电真机验收，开发环�
 - **自由巡演**：选择“当前曲目”或“每首随机”，并设置统一难度。程序进入三个歌曲槽各自的歌曲选择页后只点击并复核难度，不读取标题、封面、等级或歌曲身份；连续选择到同一首歌是合法结果，不会被重复门禁提前拒绝。
 - **课题巡演**：游戏已预设三首歌及难度，程序只读取封面、标题、等级和难度，不会点击修改。三首对应 Profile 的流速必须一致；流速自动检查开启时，会先读取阵容、回主页检查一次流速，再重新进入并确认阵容没有变化。
 - **身份与演奏**：每曲先在自己的准备页读取封面、标题、等级和实际难度，并把身份原子写入组曲会话；准备页没有可信标题或完整身份时，点击开始后由最终封面与该页实际 OCR 标题补全。最终仍无法确认时会在发送演奏触控前停止。每首使用独立 run ID。
-- **结算**：第三首完成后先处理组曲分数汇总页，再按顺序读取三张 PGGBM，分别写入结果并沿用正式演奏的 timing offset 回写规则。已知结算页优先发送 Android BACK，页面未离开时点击可见的右下角按钮；持续未知页面会交替执行两种输入，超过有界次数后调用 `CommonRecover`，必要时重启游戏恢复主页。
-- **续跑**：第 2/3 曲准备页只会在本地组曲会话与页面身份一致时继续；会话缺失、选项变化或歌曲冲突均会停止输入。会话单独保存在 `profiles/medley-sessions/`，不会改变旧 Profile、旧校准文件或校准会话的读取规则。
+- **结算**：第三首完成后不区分组曲分数汇总、奖励、排名等中间页，只按统一安全像素/BACK节拍推进并依次读取三张 PGGBM，分别写入结果并沿用正式演奏的 timing offset 回写规则。不会点击任何可见按钮；超过有界次数后调用 `CommonRecover`，必要时重启游戏恢复主页。
+- **续跑**：第 2/3 曲准备页只会在本地组曲会话与页面身份一致时继续；会话缺失、选项变化或歌曲冲突均会停止输入。若第三曲后停止任务并由用户手动离开尚未收全的结算，缺失的 PGGBM 无法补读，旧会话会保留为不可恢复记录，下一次任务从第一曲开始新一组，不会被旧会话阻塞或把缺失结果算作完成；若三张均已原子保存，则只补记上一组完成状态，不会重打。会话单独保存在 `profiles/medley-sessions/`，不会改变旧 Profile、旧校准文件或校准会话的读取规则。
 
 组曲中途不会打开设置页，也不会自动选择“休息”。请先为可能出现的三档实际难度选择已验收 Profile，并按上方推荐值手动配置流速以外的游戏内演出设置。
 
@@ -159,7 +161,7 @@ Native 等待成本与启动延迟补偿已通过雷电真机验收，开发环�
 & '..\.tools\Miniconda3\envs\maabangdream\python.exe' `
   -m pip install -r .\requirements-release.txt
 
-.\scripts\build-windows-release.ps1 -Version 1.3.8
+.\scripts\build-windows-release.ps1 -Version 1.3.9
 ```
 
 发布包必须保持：
