@@ -32,5 +32,5 @@
 ## 🧾 v1.3.8 以来的提交
 
 - [`837a914`](https://github.com/coatcn1/MaaBanGDream/commit/837a914938547607a13cd95fea08e0574fa5c428) `docs(release): expand v1.3.8 notes (#55)`
-- [`f02683c`](https://github.com/coatcn1/MaaBanGDream/commit/f02683c) `fix(result): unify post-live navigation`
+- [`9f20ab2`](https://github.com/coatcn1/MaaBanGDream/commit/9f20ab2c588d82d4961d68c16664f38e42a58301) `fix: unify post-live result navigation for v1.3.9 (#56)`
 - [查看 v1.3.8 到 v1.3.9 的完整提交对比](https://github.com/coatcn1/MaaBanGDream/compare/v1.3.8...v1.3.9)
