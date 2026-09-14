@@ -312,6 +312,7 @@ def wait_for_final_cover(
     require_black_transition: bool = False,
     initial_image=None,
     initial_resolution: FinalCoverResolution | None = None,
+    require_observed_title: bool = False,
 ) -> FinalCoverWaitOutcome:
     """确认最终封面；识别缺失时保留准备页谱面或降级到视觉演奏。"""
     if not 1 <= float(timeout_seconds) <= 180:
@@ -330,6 +331,7 @@ def wait_for_final_cover(
             repository
             if selection is None else None
         ),
+        require_observed_title=require_observed_title,
     )
     evidence_reason = resolver.evidence_reason()
     if evidence_reason is not None:
@@ -457,6 +459,11 @@ def wait_for_final_cover(
                 image=image,
             )
         if playfield_streak >= 2 and now_mono >= black_burst_until:
+            if require_observed_title:
+                raise RuntimeError(
+                    "最终封面页标题未确认，已在发送演奏触控前停止："
+                    f"{resolver.last_reason}"
+                )
             status = (
                 "degraded-selected-chart"
                 if can_keep_selection else "degraded-visual-legacy"
@@ -479,6 +486,11 @@ def wait_for_final_cover(
     if require_black_transition:
         stage = "全黑开演转场" if not black_seen else "黑场后的歌曲封面或完整演奏场"
         raise RuntimeError(f"启动阶段超时：{float(timeout_seconds):g} 秒内未确认{stage}；未启动输入或结算")
+    if require_observed_title:
+        raise RuntimeError(
+            "最终封面页标题未确认，已在发送演奏触控前停止："
+            f"{resolver.last_reason}"
+        )
     status = (
         "degraded-selected-chart"
         if can_keep_selection else "degraded-visual-legacy"
@@ -594,6 +606,7 @@ _RECORDING_KIND_BY_RUN_MODE = {
     "calibration-rehearsal": "calibration-rehearsal",
     "calibration-formal": "calibration-formal",
     "continuous": "continuous",
+    "medley": "medley",
 }
 
 
@@ -689,9 +702,20 @@ def _persist_profile_timing_offset(
     replace 原子替换以保留 accepted 状态，不产生需要重新验收的草稿。
     任何写回失败只记录日志，绝不影响本局结果与任务状态。
     """
+    _persist_profile_timing_offset_by_name(
+        settings.profile_path.name,
+        offset_ms,
+    )
+
+
+def _persist_profile_timing_offset_by_name(
+    profile_name: str,
+    offset_ms: int,
+) -> None:
+    """按文件名回写已验收 Profile，供延迟结算流程复用。"""
     try:
         store = RealtimeProfileStore(PROJECT_ROOT / "profiles")
-        payload = store.load(settings.profile_path.name)
+        payload = store.load(profile_name)
         payload.pop("_path", None)
         current = payload.get("settings")
         if not isinstance(current, dict):
@@ -704,10 +728,10 @@ def _persist_profile_timing_offset(
         current["timing_offset_ms"] = int(offset_ms)
         payload["settings"] = current
         payload["modified_at"] = datetime.now().isoformat(timespec="seconds")
-        store.replace(settings.profile_path.name, payload)
+        store.replace(profile_name, payload)
         print(
             "RealtimeProfilePlay timing_offset_persisted="
-            f"{offset_ms} profile={settings.profile_path.name}",
+            f"{offset_ms} profile={profile_name}",
             flush=True,
         )
     except (OSError, ValueError, TypeError, KeyError) as exc:
@@ -716,6 +740,82 @@ def _persist_profile_timing_offset(
             f"{type(exc).__name__}: {exc}",
             flush=True,
         )
+
+
+def finalize_deferred_result(
+    report_path: str | Path,
+    result: LiveResult,
+    *,
+    result_image=None,
+    save_screenshot: bool = True,
+) -> dict:
+    """用稍后出现的 PGGBM 补全一首组曲的演奏报告。"""
+    path = Path(report_path)
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    try:
+        path.resolve().relative_to((PROJECT_ROOT / "screencap").resolve())
+    except ValueError as exc:
+        raise ValueError("延迟结算报告必须位于 screencap 目录") from exc
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"无法读取延迟结算报告：{exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("延迟结算报告顶层必须是 JSON 对象")
+    status = payload.get("result_status")
+    if status == "stable":
+        existing = tuple(
+            int(payload.get(key, -1))
+            for key in ("perfect", "great", "good", "bad", "miss", "fast", "slow")
+        )
+        if existing == _result_counts(result):
+            return payload
+        raise ValueError("延迟结算报告已补全，但判定数字与当前页面不一致")
+    if status != "medley_result_pending":
+        raise ValueError(
+            "延迟结算报告状态不正确："
+            f"{status!r}"
+        )
+    current_offset = int(payload.get("current_timing_offset_ms", 0))
+    initial_offset = int(payload.get("initial_timing_offset_ms", current_offset))
+    engine_mode = str(payload.get("engine_mode", "legacy"))
+    suggestion = (
+        current_offset
+        if engine_mode == "native"
+        else adjusted_timing_offset(current_offset, result)
+    )
+    payload.update(result.to_dict())
+    payload.update({
+        "valid": True,
+        "result_status": "stable",
+        "eligible_for_profile_acceptance": True,
+        "suggested_timing_offset_ms": suggestion,
+        "initial_timing_offset_ms": initial_offset,
+    })
+    payload.pop("reason", None)
+    screenshot_error = None
+    if save_screenshot and result_image is not None:
+        screenshot_path = path.with_suffix(".png")
+        try:
+            if not imwrite_unicode(screenshot_path, result_image):
+                screenshot_error = f"无法保存结算截图: {screenshot_path}"
+        except Exception as exc:
+            screenshot_error = (
+                "保存结算截图异常: "
+                f"{type(exc).__name__}: {exc}"
+            )
+    if screenshot_error is not None:
+        payload["result_screenshot_error"] = screenshot_error
+    _write_json_atomic(path, payload)
+    profile_name = str(payload.get("profile") or "").strip()
+    if (
+        profile_name
+        and engine_mode != "native"
+        and suggestion != current_offset
+    ):
+        _persist_profile_timing_offset_by_name(profile_name, suggestion)
+    return payload
 
 
 def _result_counts(result: LiveResult) -> tuple[int, ...]:
@@ -1886,8 +1986,13 @@ class RealtimeProfilePlay(CustomAction):
                     if startup_cover_resolution is not None
                     else None
                 )
+                require_final_cover_title = bool(
+                    params.get("require_final_cover_title", False)
+                )
                 cover_selection = (
-                    None if live_run.mode == "cooperative" else selected_chart
+                    None
+                    if live_run.mode == "cooperative" or require_final_cover_title
+                    else selected_chart
                 )
                 cover_checkpoint_stages = set()
 
@@ -1938,6 +2043,7 @@ class RealtimeProfilePlay(CustomAction):
                         else (preflight_image if ordered_startup else None)
                     ),
                     initial_resolution=startup_cover_resolution,
+                    require_observed_title=require_final_cover_title,
                 )
                 if recorder is not None and cover_outcome.image is not None:
                     _recorder_checkpoint(
@@ -1959,17 +2065,27 @@ class RealtimeProfilePlay(CustomAction):
                         # 最终封面确认得到的 Special 谱面同样必须驱动 Legacy
                         # 方向语义，不能退回无方向的通用视觉 FLICK。
                         chart_prediction_enabled = True
-                    live_run = update_live_run(
-                        song_id=confirmation.song_id,
-                        song_id_method=confirmation.song_id_method,
-                        final_cover_confirmed=True,
-                        final_cover_song_id=confirmation.song_id,
-                        final_cover_status="confirmed",
-                        final_cover_reason=None,
-                        prepared_for_play=True,
-                        startup_final_cover_image=None,
-                        startup_final_cover_resolution=None,
-                    )
+                    cover_updates = {
+                        "song_id": confirmation.song_id,
+                        "song_id_method": confirmation.song_id_method,
+                        "final_cover_confirmed": True,
+                        "final_cover_song_id": confirmation.song_id,
+                        "final_cover_status": "confirmed",
+                        "final_cover_reason": None,
+                        "prepared_for_play": True,
+                        "startup_final_cover_image": None,
+                        "startup_final_cover_resolution": None,
+                    }
+                    if cover_outcome.resolution.observed_title:
+                        # 组曲准备页读不到标题时，必须把最终歌曲信息页实际
+                        # OCR 到的标题交还外层会话，不能只保存曲库标准标题。
+                        cover_updates.update({
+                            "song_title": cover_outcome.resolution.observed_title,
+                            "song_title_confidence": (
+                                cover_outcome.resolution.observed_title_confidence
+                            ),
+                        })
+                    live_run = update_live_run(**cover_updates)
                 else:
                     if special_requires_chart:
                         if native_requested:
@@ -2559,7 +2675,28 @@ class RealtimeProfilePlay(CustomAction):
             + f"-{live_run.run_id[:8]}"
         )
         save_result = bool(params.get("save_result_frame"))
-        result_report_path = result_output / f"realtime-result-{result_stamp}.json"
+        deferred_report_value = str(
+            params.get("deferred_result_report") or ""
+        ).strip()
+        if deferred_report_value:
+            requested_report = Path(deferred_report_value)
+            result_report_path = (
+                requested_report
+                if requested_report.is_absolute()
+                else PROJECT_ROOT / requested_report
+            )
+            try:
+                result_report_path.resolve().relative_to(
+                    result_output.resolve()
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "延迟结算报告必须位于 screencap 目录"
+                ) from exc
+        else:
+            result_report_path = (
+                result_output / f"realtime-result-{result_stamp}.json"
+            )
 
         def write_calibration_payload(payload: dict) -> None:
             calibration_report = params.get("calibration_report")
@@ -2696,6 +2833,35 @@ class RealtimeProfilePlay(CustomAction):
                     )
             _write_json_atomic(result_report_path, failed_payload)
             write_calibration_payload(failed_payload)
+
+        if (
+            save_result
+            and bool(params.get("defer_result_collection", False))
+            and stats.completed
+            and not stats.cleanup_failed
+            and not stats.stopped
+        ):
+            pending_payload = _result_report_payload(
+                None,
+                stats,
+                timing_offset_ms=timing_offset_ms,
+                suggested_timing_offset_ms=None,
+                run_context=live_run,
+                result_status="medley_result_pending",
+                reason="组曲判定详情将在第三曲后逐首读取",
+            )
+            pending_payload.update({
+                "completed": True,
+                "survived": not stats.life_depleted,
+            })
+            result_output.mkdir(parents=True, exist_ok=True)
+            _write_json_atomic(result_report_path, pending_payload)
+            print(
+                "RealtimeProfilePlay result_collection=deferred "
+                f"report={result_report_path.name}",
+                flush=True,
+            )
+            return True
 
         if stats.completed and not stats.cleanup_failed and save_result:
             result_output.mkdir(parents=True, exist_ok=True)

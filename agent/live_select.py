@@ -127,6 +127,45 @@ def _find_cooperative_live_card(image: Any) -> _Box | None:
     return max(candidates, key=lambda item: item[0])[1]
 
 
+def _find_tour_live_card(image: Any) -> _Box | None:
+    """定位选择演出页中央紫色“巡回演出”卡片。"""
+    if not isinstance(image, np.ndarray) or image.ndim != 3:
+        return None
+    height, width = image.shape[:2]
+    x_offset = int(width * 0.45)
+    y_offset = int(height * 0.18)
+    crop = image[y_offset:int(height * 0.72), x_offset:int(width * 0.82)]
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, (125, 70, 100), (160, 255, 255))
+    mask = cv2.morphologyEx(
+        mask,
+        cv2.MORPH_CLOSE,
+        np.ones((7, 7), dtype=np.uint8),
+    )
+    count, _, stats, _ = cv2.connectedComponentsWithStats(mask)
+    candidates: list[tuple[int, _Box]] = []
+    for x, y, box_width, box_height, area in stats[1:count]:
+        if not (
+            width * 0.12 <= box_width <= width * 0.24
+            and height * 0.14 <= box_height <= height * 0.32
+        ):
+            continue
+        if area < box_width * box_height * 0.35:
+            continue
+        candidates.append((
+            int(area),
+            _Box(
+                x=int(x + x_offset),
+                y=int(y + y_offset),
+                w=int(box_width),
+                h=int(box_height),
+            ),
+        ))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item[0])[1]
+
+
 def _params(raw: Any) -> dict[str, Any]:
     if isinstance(raw, dict):
         return raw
@@ -202,6 +241,11 @@ class LiveSelectFind(CustomAction):
 
                 if box is None and expected == "协力演出":
                     box = _find_cooperative_live_card(image)
+                    if box is not None:
+                        source = "颜色与形状"
+
+                if box is None and expected == "巡回演出":
+                    box = _find_tour_live_card(image)
                     if box is not None:
                         source = "颜色与形状"
 

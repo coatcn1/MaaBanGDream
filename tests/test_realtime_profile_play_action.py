@@ -18,6 +18,7 @@ from agent.realtime.profile_play_action import (
     _effective_native_chart_selection,
     _result_report_payload,
     _write_calibration_report,
+    finalize_deferred_result,
     _recording_kind,
     collect_result,
     resolve_life_monitor_enabled,
@@ -39,6 +40,7 @@ def test_recording_kind_distinguishes_play_types():
     assert _recording_kind("challenge") == "challenge"
     assert _recording_kind("calibration-rehearsal") == "calibration-rehearsal"
     assert _recording_kind("continuous") == "continuous"
+    assert _recording_kind("medley") == "medley"
     assert _recording_kind("unknown-mode") == "unknown-mode"
 
 
@@ -1580,6 +1582,7 @@ def _completed_play_harness(
     expected_success=True,
     startup_timed_out=False,
     run_mode="formal",
+    defer_result_collection=False,
 ):
     reset_live_run(
         mode="pending",
@@ -1734,6 +1737,11 @@ def _completed_play_harness(
     }
     if calibration_report:
         params["calibration_report"] = "screencap/calibration-round.json"
+    if defer_result_collection:
+        params.update({
+            "defer_result_collection": True,
+            "deferred_result_report": "screencap/medley-session-song1.json",
+        })
     argv = SimpleNamespace(custom_action_param=json.dumps(params))
     if collection_exception is not None:
         with pytest.raises(type(collection_exception), match=str(collection_exception)):
@@ -1741,6 +1749,84 @@ def _completed_play_harness(
     else:
         assert RealtimeProfilePlay()._run(context, argv) is expected_success
     return tmp_path, writes, recorder_holder.get("value")
+
+
+def test_completed_medley_play_defers_pggbm_collection(tmp_path, monkeypatch):
+    root, writes, _ = _completed_play_harness(
+        monkeypatch,
+        tmp_path,
+        debug_recording=False,
+        run_mode="medley",
+        defer_result_collection=True,
+    )
+
+    report = root / "screencap" / "medley-session-song1.json"
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["result_status"] == "medley_result_pending"
+    assert payload["valid"] is False
+    assert payload["completed"] is True
+    assert writes == []
+
+
+def test_finalize_deferred_result_marks_report_stable(tmp_path, monkeypatch):
+    monkeypatch.setattr(profile_play_action, "PROJECT_ROOT", tmp_path)
+    report = tmp_path / "screencap" / "medley-session-song1.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps({
+        "result_status": "medley_result_pending",
+        "valid": False,
+        "eligible_for_profile_acceptance": False,
+        "reason": "组曲判定详情将在第三曲后逐首读取",
+        "current_timing_offset_ms": 8,
+        "initial_timing_offset_ms": 5,
+        "engine_mode": "native",
+        "profile": "expert.json",
+    }), encoding="utf-8")
+
+    payload = finalize_deferred_result(
+        "screencap/medley-session-song1.json",
+        LiveResult(100, 2, 1, 0, 0, 3, 4),
+        save_screenshot=False,
+    )
+
+    assert payload["result_status"] == "stable"
+    assert payload["valid"] is True
+    assert payload["eligible_for_profile_acceptance"] is True
+    assert payload["suggested_timing_offset_ms"] == 8
+    assert payload["perfect"] == 100
+    assert "reason" not in payload
+
+    repeated = finalize_deferred_result(
+        "screencap/medley-session-song1.json",
+        LiveResult(100, 2, 1, 0, 0, 3, 4),
+        save_screenshot=False,
+    )
+    assert repeated == payload
+
+
+def test_finalize_deferred_result_rejects_wrong_state_and_external_path(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(profile_play_action, "PROJECT_ROOT", tmp_path)
+    report = tmp_path / "screencap" / "not-pending.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(
+        json.dumps({"result_status": "failed"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="状态不正确"):
+        finalize_deferred_result(
+            report,
+            LiveResult(1, 0, 0, 0, 0, 0, 0),
+            save_screenshot=False,
+        )
+    with pytest.raises(ValueError, match="screencap"):
+        finalize_deferred_result(
+            tmp_path / "outside.json",
+            LiveResult(1, 0, 0, 0, 0, 0, 0),
+            save_screenshot=False,
+        )
 
 
 def test_completed_without_video_writes_json_and_trace_only(tmp_path, monkeypatch):
