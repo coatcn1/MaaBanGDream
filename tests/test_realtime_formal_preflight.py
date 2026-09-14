@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from agent.realtime import formal_preflight, live_visual_gate
 
@@ -83,3 +84,23 @@ def test_3d_mode_is_disabled_before_cut_in_checkbox(monkeypatch):
         live_visual_gate.MODE_TOGGLE_POINT,
         (500, 650),
     ]
+
+
+def test_wait_does_not_pass_negative_duration_when_deadline_is_crossed(
+    monkeypatch,
+):
+    context = Context("com.bilibili.star.bili")
+    timestamps = iter((10.0, 10.09, 10.11))
+    sleeps = []
+
+    monkeypatch.setattr(formal_preflight.time, "monotonic", lambda: next(timestamps))
+
+    def strict_sleep(seconds):
+        if seconds < 0:
+            raise ValueError("sleep length must be non-negative")
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(formal_preflight.time, "sleep", strict_sleep)
+
+    assert formal_preflight._wait(context, 0.1)
+    assert sleeps == pytest.approx([0.01])

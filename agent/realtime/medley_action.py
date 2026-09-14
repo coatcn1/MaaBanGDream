@@ -165,6 +165,17 @@ REWARD_TEMPLATES = (
 )
 RESULT_NAVIGATION_MAX_CYCLES = 60
 
+
+class MedleyResultsLeftBeforeCollection(RuntimeError):
+    """旧会话的结算未读完，但页面已经回到主页或巡演入口。"""
+
+    def __init__(self, results_completed: int) -> None:
+        self.results_completed = int(results_completed)
+        super().__init__(
+            "组曲结算尚未完整保存就已离开结算页面："
+            f"仅保存 {self.results_completed}/3 张 PGGBM"
+        )
+
 DEFAULT_SETTINGS: dict[str, object] = {
     "tour_type": "free",
     "song_mode": "random",
@@ -766,10 +777,13 @@ class MedleyFlow:
 
     def wait(self, seconds: float) -> None:
         deadline = time.monotonic() + max(0.0, seconds)
-        while time.monotonic() < deadline:
+        while True:
             if self.context.tasker.stopping:
                 raise ScreenRefreshCancelled("task is stopping")
-            time.sleep(min(0.05, deadline - time.monotonic()))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(0.05, remaining))
 
     def capture(self) -> np.ndarray:
         return capture_image(self.context)
@@ -1544,10 +1558,7 @@ class MedleyFlow:
                 self.wait(0.5)
                 continue
             if self.home_or_tour_select(image):
-                raise RuntimeError(
-                    "组曲结算尚未完整保存就已离开结算页面："
-                    f"仅保存 {result_index}/3 张 PGGBM"
-                )
+                raise MedleyResultsLeftBeforeCollection(result_index)
             if judgement_details_visible(image):
                 unknown_back_attempts = 0
                 cadence_steps = 0
@@ -1792,15 +1803,35 @@ class MedleyFlow:
                     )
                     _same_speed(songs)
                     session = active
-                    completed_before = int(
-                        active.get("completed_before_round", 0)
-                    )
-                    self.ensure_progress(
-                        completed_before + 3,
-                        next_started=False,
-                    )
-                    session = self.collect_results(session, songs)
-                    return self.finish_round(session)
+                    try:
+                        session = self.collect_results(session, songs)
+                    except MedleyResultsLeftBeforeCollection as exc:
+                        log_task(
+                            "组曲演奏",
+                            "续跑",
+                            "WARNING",
+                            "当前页面不是可继续读取的旧组曲结算，"
+                            "已按安全节拍返回主页；"
+                            f"仅保存 {exc.results_completed}/3 张 PGGBM，"
+                            "从第一曲开始新一组",
+                        )
+                        self.sessions.update(
+                            active,
+                            status="superseded",
+                            terminal_reason="result_pages_left_before_collection",
+                        )
+                        active = None
+                        session = None
+                        self._home_ready = True
+                    else:
+                        completed_before = int(
+                            active.get("completed_before_round", 0)
+                        )
+                        self.ensure_progress(
+                            completed_before + 3,
+                            next_started=False,
+                        )
+                        return self.finish_round(session)
 
             if getattr(self, "_home_ready", False):
                 self._home_ready = False
