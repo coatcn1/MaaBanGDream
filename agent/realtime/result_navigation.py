@@ -8,16 +8,20 @@ from enum import Enum
 import numpy as np
 
 
-# The canonical game surface is 1280x720.  Use its literal bottom-right pixel
-# so the animation-skip tap cannot overlap the home-page Live button (whose
-# hit box reaches x=1265, y=710).  The previous inset point (1220, 690) sat
-# inside that button and could accidentally start another navigation flow.
+# 标准游戏画面是 1280x720。固定使用字面意义上的最右下角像素，避免动画
+# 加速点击落入主页“演出”按钮（其命中区域延伸到 x=1265, y=710）。旧坐标
+# (1220, 690) 位于按钮内部，可能意外启动新的导航流程。
 RESULT_ANIMATION_SKIP_POINT = (1279, 719)
 
 STORY_NODES = (
     "AutoLiveStorySkipConfirmLarge", "AutoLiveStorySkipConfirm",
     "AutoLiveStorySkip", "AutoLiveStoryMenu",
 )
+
+
+def _current_controller(controller):
+    """在每次输入前解析当前反向控制器，避免复用已释放的代理句柄。"""
+    return controller() if callable(controller) else controller
 
 
 def handle_story_page(image, *, recognise, click, stopping) -> bool:
@@ -80,13 +84,56 @@ def click_result_surface(
     log_prefix: str = "ResultNavigation",
 ) -> None:
     before_input()
-    controller.post_click(*RESULT_ANIMATION_SKIP_POINT).wait()
+    _current_controller(controller).post_click(
+        *RESULT_ANIMATION_SKIP_POINT
+    ).wait()
     print(
         f"{log_prefix} action=animation-skip phase={phase} "
         f"point={RESULT_ANIMATION_SKIP_POINT[0]},"
         f"{RESULT_ANIMATION_SKIP_POINT[1]}",
         flush=True,
     )
+
+
+def press_result_back(
+    controller,
+    *,
+    before_input: Callable[[], None] = lambda: None,
+    phase: str,
+    log_prefix: str = "ResultNavigation",
+) -> None:
+    before_input()
+    _current_controller(controller).post_click_key(4).wait()
+    print(
+        f"{log_prefix} action=back phase={phase} key=4",
+        flush=True,
+    )
+
+
+def advance_result_cadence(
+    controller,
+    *,
+    back_next: bool,
+    before_input: Callable[[], None] = lambda: None,
+    phase: str,
+    log_prefix: str = "ResultNavigation",
+) -> bool:
+    """推进一次共享结算节拍，并返回下一步是否应发送 BACK。"""
+    if back_next:
+        press_result_back(
+            controller,
+            before_input=before_input,
+            phase=phase,
+            log_prefix=log_prefix,
+        )
+    else:
+        click_result_surface(
+            controller,
+            before_input=before_input,
+            phase=phase,
+            log_prefix=log_prefix,
+        )
+    return not back_next
 
 
 def back_then_click(
@@ -96,11 +143,11 @@ def back_then_click(
     phase: str,
     log_prefix: str = "ResultNavigation",
 ) -> None:
-    before_input()
-    controller.post_click_key(4).wait()
-    print(
-        f"{log_prefix} action=back phase={phase} key=4",
-        flush=True,
+    press_result_back(
+        controller,
+        before_input=before_input,
+        phase=phase,
+        log_prefix=log_prefix,
     )
     click_result_surface(
         controller,
@@ -145,17 +192,12 @@ def navigate_result_pages(
     sleeper: Callable[[float], None] = time.sleep,
     log_prefix: str = "ResultNavigation",
 ) -> ResultNavigationOutcome:
-    """Run the shared result-page loop until a terminal identity is visible.
+    """用共享结算节拍循环，直到识别到所需终点。
 
-    The loop intentionally does not classify every intermediate reward, rank,
-    score, loading, or network frame.  Those pages all support Android Back,
-    so the robust transition is exactly:
-
-        safe click -> recognise -> Back -> safe click -> recognise -> ...
-
-    A Back sent while a page is still loading is harmless and the next cycle
-    retries.  The loop is bounded by elapsed time rather than a small page- or
-    Back-attempt limit.
+    中间的奖励、排名、分数、加载或网络画面一律不分类。输入序列持续为
+    “安全像素 → BACK → 安全像素”；识别只发生在输入之间，不会把任何中间页
+    的可见按钮当作推进目标。加载期间提前收到 BACK 也可由下一轮自然重试，
+    整体按时间有界而不是按少量页面或 BACK 次数退出。
     """
     started_at = clock()
     deadline = started_at + max(0.0, timeout_seconds)
@@ -191,7 +233,7 @@ def navigate_result_pages(
                 reason="user stopped during result navigation",
             )
 
-        image = controller.post_screencap().wait().get()
+        image = _current_controller(controller).post_screencap().wait().get()
         last_image = image
         page_state = identify(image)
         if page_state is not None:

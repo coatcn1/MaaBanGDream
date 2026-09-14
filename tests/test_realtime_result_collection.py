@@ -124,9 +124,9 @@ def test_result_collection_backs_through_recognised_rank_page_before_details():
 
     assert outcome.status is ResultCollectionStatus.STABLE
     assert outcome.result is not None
-    assert clicks == []
+    assert clicks == [profile_play_action.RESULT_ANIMATION_SKIP_POINT] * 2
     assert backs == [4]
-    assert foreground_checks == [1]
+    assert foreground_checks == [1, 1, 1]
 
 
 def test_result_collection_rank_navigation_never_uses_coordinates():
@@ -144,7 +144,8 @@ def test_result_collection_rank_navigation_never_uses_coordinates():
             return Job(frames.pop(0))
 
         def post_click(self, *_point):
-            raise AssertionError("result navigation must never click coordinates")
+            assert _point == profile_play_action.RESULT_ANIMATION_SKIP_POINT
+            return Job()
 
         def post_click_key(self, key):
             backs.append(key)
@@ -184,7 +185,8 @@ def test_judgement_details_identity_wins_over_false_rank_button_match():
             return Job(details.copy())
 
         def post_click(self, *_point):
-            raise AssertionError("result navigation must never click")
+            assert _point == profile_play_action.RESULT_ANIMATION_SKIP_POINT
+            return Job()
 
         def post_click_key(self, _key):
             raise AssertionError("stable judgement details must not be left")
@@ -326,7 +328,8 @@ def test_result_collection_retries_rank_back_when_first_input_is_ignored():
             return Job(frames.pop(0))
 
         def post_click(self, *_point):
-            raise AssertionError("result navigation must not click")
+            assert _point == profile_play_action.RESULT_ANIMATION_SKIP_POINT
+            return Job()
 
         def post_click_key(self, key):
             backs.append(key)
@@ -450,6 +453,10 @@ def test_unknown_post_result_page_uses_bounded_back_recovery():
 
         def post_screencap(self):
             return Job(np.zeros((720, 1280, 3), dtype=np.uint8))
+
+        def post_click(self, *point):
+            assert point == profile_play_action.RESULT_ANIMATION_SKIP_POINT
+            return Job()
 
         def post_click_key(self, key):
             assert key == 4
@@ -661,6 +668,7 @@ def test_cooperative_result_cycles_unknown_pages_until_pggbm():
         ("key", 4),
         ("click", skip_point),
         ("capture", None),
+        ("click", skip_point),
         ("key", 4),
         ("click", skip_point),
     ]
@@ -756,7 +764,8 @@ def test_reward_popup_that_does_not_disappear_is_technical_failure():
             return Job(reward.copy())
 
         def post_click(self, *_point):
-            raise AssertionError("result navigation must not click")
+            assert _point == profile_play_action.RESULT_ANIMATION_SKIP_POINT
+            return Job()
 
         def post_click_key(self, key):
             backs.append(key)
@@ -817,7 +826,8 @@ def test_consecutive_reward_popups_are_each_dismissed():
             return Job(image.copy())
 
         def post_click(self, *_point):
-            raise AssertionError("result navigation must not click")
+            assert _point == profile_play_action.RESULT_ANIMATION_SKIP_POINT
+            return Job()
 
         def post_click_key(self, key):
             backs.append(key)
@@ -872,7 +882,8 @@ def test_reward_like_button_outside_popup_region_is_never_clicked():
             return Job(frames.pop(0))
 
         def post_click(self, *_point):
-            raise AssertionError("result navigation must not click")
+            assert _point == profile_play_action.RESULT_ANIMATION_SKIP_POINT
+            return Job()
 
         def post_click_key(self, key):
             backs.append(key)
@@ -917,7 +928,8 @@ def test_accidentally_opened_achievement_list_is_closed_and_recovered():
             return Job(frames.pop(0))
 
         def post_click(self, *_point):
-            raise AssertionError("result navigation must not click")
+            assert _point == profile_play_action.RESULT_ANIMATION_SKIP_POINT
+            return Job()
 
         def post_click_key(self, key):
             backs.append(key)
@@ -966,7 +978,8 @@ def test_activity_points_page_is_advanced_before_collecting_judgement_details():
             return Job(frames.pop(0))
 
         def post_click(self, *_point):
-            raise AssertionError("result navigation must not click")
+            assert _point == profile_play_action.RESULT_ANIMATION_SKIP_POINT
+            return Job()
 
         def post_click_key(self, key):
             backs.append(key)
@@ -995,7 +1008,7 @@ def test_activity_points_page_is_advanced_before_collecting_judgement_details():
     assert outcome.result.total == 401
     assert outcome.elapsed_seconds == 0
     assert backs == [4]
-    assert foreground_checks == [1]
+    assert foreground_checks == [1, 1, 1]
 
 
 def test_activity_points_page_retries_a_recognised_button_once_if_first_click_is_ignored():
@@ -1023,7 +1036,8 @@ def test_activity_points_page_retries_a_recognised_button_once_if_first_click_is
             return Job(frames.pop(0))
 
         def post_click(self, *_point):
-            raise AssertionError("result navigation must not click")
+            assert _point == profile_play_action.RESULT_ANIMATION_SKIP_POINT
+            return Job()
 
         def post_click_key(self, key):
             backs.append(key)
@@ -1063,7 +1077,8 @@ def test_activity_points_page_that_does_not_disappear_is_technical_failure():
             return Job(page.copy())
 
         def post_click(self, *_point):
-            raise AssertionError("result navigation must not click")
+            assert _point == profile_play_action.RESULT_ANIMATION_SKIP_POINT
+            return Job()
 
         def post_click_key(self, key):
             backs.append(key)

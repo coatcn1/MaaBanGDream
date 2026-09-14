@@ -1317,6 +1317,10 @@ def test_stay_in_room_rechecks_repeat_popup_after_every_accelerated_back(monkeyp
         def __init__(self, actions):
             self.actions = actions
 
+        def post_click(self, x, y):
+            self.actions.append(("click", (x, y)))
+            return Job()
+
         def post_click_key(self, key):
             self.actions.append(("key", key))
             return Job()
@@ -1338,6 +1342,11 @@ def test_stay_in_room_rechecks_repeat_popup_after_every_accelerated_back(monkeyp
     flow.click = lambda point: actions.append(("click", point))
     flow.pipeline_box = lambda _image, _node: None
     monkeypatch.setattr(cooperative_action.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        cooperative_action,
+        "require_game_foreground",
+        lambda _controller: None,
+    )
 
     flow.stay_in_room()
 
@@ -1352,7 +1361,9 @@ def test_stay_in_room_rechecks_repeat_popup_after_every_accelerated_back(monkeyp
     ]
 
 
-def test_return_to_room_selection_accelerates_each_page_without_extra_match():
+def test_return_to_room_selection_accelerates_each_page_without_extra_match(
+    monkeypatch,
+):
     class Job:
         def wait(self):
             return self
@@ -1360,6 +1371,10 @@ def test_return_to_room_selection_accelerates_each_page_without_extra_match():
     actions = []
 
     class Controller:
+        def post_click(self, x, y):
+            actions.append(("click", (x, y)))
+            return Job()
+
         def post_click_key(self, key):
             actions.append(("key", key))
             return Job()
@@ -1375,6 +1390,11 @@ def test_return_to_room_selection_accelerates_each_page_without_extra_match():
     )
     flow.click = lambda point: actions.append(("click", point))
     flow.pipeline_box = lambda _image, _node: None
+    monkeypatch.setattr(
+        cooperative_action,
+        "require_game_foreground",
+        lambda _controller: None,
+    )
 
     flow.return_to_room_selection()
 
@@ -1401,6 +1421,51 @@ def test_post_score_wait_ignores_member_exit_template(monkeypatch):
         ("room_search", "live_entry"),
         timeout=0.01,
     ) is None
+
+
+def test_post_score_cycle_finishes_second_safe_click_before_recognition(
+    monkeypatch,
+):
+    actions = []
+
+    class Job:
+        def wait(self):
+            return self
+
+    class Controller:
+        def post_click(self, x, y):
+            actions.append(("click", (x, y)))
+            return Job()
+
+        def post_click_key(self, key):
+            actions.append(("key", key))
+            return Job()
+
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=Controller())
+    )
+    monkeypatch.setattr(
+        cooperative_action,
+        "require_game_foreground",
+        lambda _controller: None,
+    )
+
+    def recognise(_names, *, timeout):
+        actions.append(("recognise", timeout))
+        return "room_search"
+
+    flow.wait_for_post_score_destination = recognise
+
+    assert flow.advance_post_score_once(("room_search",), inspect_timeout=2.0) == (
+        "room_search"
+    )
+    assert actions == [
+        ("click", cooperative_action.RESULT_ANIMATION_SKIP_POINT),
+        ("key", 4),
+        ("click", cooperative_action.RESULT_ANIMATION_SKIP_POINT),
+        ("recognise", 2.0),
+    ]
 
 
 @pytest.mark.parametrize("stay", [False, True])
@@ -1451,7 +1516,9 @@ def test_post_score_exit_checks_one_frame_without_nested_timeout():
     assert flow._post_score_refresh is False
 
 
-def test_return_to_room_selection_recognizes_home_and_reenters_before_next_round():
+def test_return_to_room_selection_recognizes_home_and_reenters_before_next_round(
+    monkeypatch,
+):
     class Job:
         def wait(self):
             return self
@@ -1459,6 +1526,10 @@ def test_return_to_room_selection_recognizes_home_and_reenters_before_next_round
     actions = []
 
     class Controller:
+        def post_click(self, x, y):
+            actions.append(("click", (x, y)))
+            return Job()
+
         def post_click_key(self, key):
             actions.append(("key", key))
             return Job()
@@ -1479,6 +1550,11 @@ def test_return_to_room_selection_recognizes_home_and_reenters_before_next_round
     flow.click = lambda point: actions.append(("click", point))
     reentries = []
     flow.navigate_to_cooperative_room_selection = reentries.append
+    monkeypatch.setattr(
+        cooperative_action,
+        "require_game_foreground",
+        lambda _controller: None,
+    )
 
     flow.return_to_room_selection()
 

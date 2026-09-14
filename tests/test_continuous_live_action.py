@@ -299,6 +299,30 @@ def test_one_key_playback_continues_after_life_depletion():
     assert params["require_completion"] is True
     assert params["confirm_final_cover"] is True
     assert params["native_prearm_deferred"] is True
+    assert params["save_result_frame"] is True
+
+
+def test_one_key_result_recovery_uses_shared_safe_cadence(monkeypatch):
+    captured = []
+
+    def run(_context, argv):
+        captured.append(json.loads(argv.custom_action_param))
+        return True
+
+    monkeypatch.setattr(
+        continuous_live_action,
+        "CommonRecover",
+        lambda: SimpleNamespace(run=run),
+    )
+
+    continuous_live_action.recover_continuous_result_home(object())
+
+    assert captured[0]["back_only"] is True
+    assert captured[0]["click_nodes"] == []
+    assert captured[0]["back_only_click_nodes"] == list(
+        continuous_live_action.STORY_NODES
+    )
+    assert captured[0]["back_acceleration_click_point"] == [1279, 719]
 
 
 def test_opening_recognizer_requires_stable_cover_title_and_selected_difficulty():
@@ -497,6 +521,7 @@ def test_action_hands_opening_identity_to_profile_play(
         ),
     )
     played = []
+    recovered = []
 
     def fake_profile_play(_self, _context, argv):
         run = current_live_run()
@@ -517,6 +542,12 @@ def test_action_hands_opening_identity_to_profile_play(
         continuous_live_action,
         "run_continuous_listener",
         fake_listener,
+    )
+    monkeypatch.setattr(
+        continuous_live_action,
+        "recover_continuous_result_home",
+        lambda context: recovered.append(context),
+        raising=False,
     )
     context = SimpleNamespace(
         tasker=SimpleNamespace(stopping=False, controller=object())
@@ -539,3 +570,5 @@ def test_action_hands_opening_identity_to_profile_play(
     assert run.final_cover_confirmed is True
     assert params["confirm_final_cover"] is chart_available
     assert params["native_prearm_deferred"] is chart_available
+    assert params["save_result_frame"] is True
+    assert recovered == [context]
