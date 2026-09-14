@@ -32,6 +32,10 @@ REQUIRED_PATHS = (
     "BUILD-INFO.json",
     "LICENSE-MaaBanGDream.txt",
     "LICENSE-MFAAvalonia.txt",
+    "LICENSE-MaaFramework-LGPL-3.0.md",
+    "LICENSING-MaaBanGDream.md",
+    "TRADEMARKS-MaaBanGDream.md",
+    "THIRD-PARTY-NOTICES.md",
 )
 FORBIDDEN_TOP_LEVEL = (
     "config",
@@ -117,6 +121,20 @@ def validate(package_root: Path) -> list[str]:
         release_note = release_note_path.read_text(encoding="utf-8-sig")
         if not release_note.strip() or release_note.strip().casefold() == "placeholder":
             errors.append("packaged release notes are empty or placeholder")
+
+    project_license_path = package_root / "LICENSE-MaaBanGDream.txt"
+    if project_license_path.is_file():
+        project_license = project_license_path.read_text(encoding="utf-8-sig")
+        if "PolyForm Noncommercial License 1.0.0" not in project_license:
+            errors.append("packaged MaaBanGDream license is not PolyForm Noncommercial 1.0.0")
+        if not project_license.startswith("Required Notice:"):
+            errors.append("packaged MaaBanGDream license has no Required Notice")
+
+    maafw_license_path = package_root / "LICENSE-MaaFramework-LGPL-3.0.md"
+    if maafw_license_path.is_file():
+        maafw_license = maafw_license_path.read_text(encoding="utf-8-sig")
+        if "GNU Lesser General Public License" not in maafw_license:
+            errors.append("packaged MaaFramework LGPL text is invalid")
 
     runtime_archive = package_root / "runtime/maabangdream-python.zip"
     if runtime_archive.is_file():

@@ -46,7 +46,14 @@ MaaFramework 运行库、Python Agent、本地谱面和资源文件。
 
 - MaaBanGDream：<https://github.com/coatcn1/MaaBanGDream>
 - 定制 MFAAvalonia：
-  <https://github.com/coatcn1/MFAAvalonia/tree/fix/native-realtime-ui-toggle>
+  <https://github.com/coatcn1/MFAAvalonia/tree/fix/speed-only-settings>
 
-两个项目均按随包许可证文件所述以 GPL-3.0 发布。精确源码提交记录在
-`BUILD-INFO.json`。
+从 v1.4.0 起，MaaBanGDream 自有部分仅按随包
+`LICENSE-MaaBanGDream.txt` 所示的 PolyForm Noncommercial 1.0.0 许可用于非商业
+目的。收费软件、收费分发、收费部署或维护、商业服务及商业产品集成不在许可范围内。
+名称与 Logo 使用规则见 `TRADEMARKS-MaaBanGDream.md`，完整许可边界见
+`LICENSING-MaaBanGDream.md` 与 `THIRD-PARTY-NOTICES.md`。
+
+定制 MFAAvalonia 继续使用 GPL-3.0，MaaFramework 继续使用 LGPL-3.0；对应许可证
+均随包提供。其他第三方组件、游戏素材、谱面及模型继续适用各自权利条款。精确源码
+提交记录在 `BUILD-INFO.json`。

@@ -18,8 +18,8 @@
 基于 MaaFramework 的 BanG Dream! 自动化项目。通过 MFAAvalonia GUI 加载 Python Agent，控制 Android 模拟器完成自动演出、实时触控演奏、校准和挑战演出。
 
 - 仓库：`https://github.com/coatcn1/MaaBanGDream`
-- 当前版本：`v1.3.8`
-- 许可证：GPL-3.0-only
+- 当前版本：`v1.4.0`
+- 许可证：MaaBanGDream 自有部分为 PolyForm-Noncommercial-1.0.0；第三方内容按各自许可证
 
 ## MaaBanGDream 运行布局
 
@@ -63,7 +63,7 @@ main                                      ← 发布主线
 
 功能与修复一律从 `main` 最新提交拉取 `feature/*` / `fix/*` 分支，验收后合并回 `main` 并删除分支；不再维护跨版本累积的“统一开发分支”。
 
-定制 MFAAvalonia 独立开发分支为 `fix/native-realtime-ui-toggle`；两个仓库必须分别提交和推送。
+定制 MFAAvalonia 当前发布分支为 `fix/speed-only-settings`；两个仓库必须分别提交和推送。
 
 ## 仓库结构
 
@@ -276,7 +276,7 @@ pytest 临时目录固定在 `.local/pytest-<进程号>`（Git 忽略），不�
 | --- | --- |
 | `D:\Documents\workplace\MFAAvalonia` | 定制 MFAAvalonia 源码，包含“演出设置”、Profile 管理和 Mirror 启动检查保护 |
 
-- 定制分支：`fix/native-realtime-ui-toggle`
+- 定制分支：`fix/speed-only-settings`
 - 定制基线提交：`d7b381b2fa6a09e140d925fb1504bac19ca1f921`
 - `MFAAvalonia.Core.dll` 即使显示相同的 `2.12.0` 版本，也不能视为内容相同。
 
@@ -397,6 +397,8 @@ catch (MaaJobStatusException) when (token.IsCancellationRequested)
 38. **正式准备页必须先关闭 3D/MV，再检查 3D Cut-in**：2026-09-14 `EXPOSE ‘Burn out!!!’` Special 准备页中，3D 演出状态会在 `(480:520,630:670)` 显示粉色成员头像，而真正的“3D Cut in模式”复选框只有演出模式切到 OFF 后才出现在同一区域。旧 `RealtimeFormalPreflight` 先按颜色检查 Cut-in，因头像产生 208 个高饱和像素而连续八次点击 `(500,650)`，从未执行左下模式切换并最终失败。顺序必须固定为：先用 `(141,649)` 依次切换 `3D演出 → 动画MV → OFF`，每次刷新截图；确认 OFF 后再检查 Cut-in，未勾选样本为 0 个高饱和像素、勾选样本为 873 个。不得删除 Cut-in 处理，也不得在 3D/MV 尚未关闭时读取其固定区域。
 
 39. **组曲启动不能用旧结算会话替代当前页面证据，短等待不能二次读取截止差值**：2026-09-14 23:53 从普通单曲准备页启动课题组曲时，本地仍有 19:15 创建、`completed_songs=3/results_completed=0/stage=results` 的旧会话；旧逻辑只要当前页既非主页也非第 2/3 曲，就直接恢复进度 `3/3` 并把任意页面当结算发送安全像素/BACK，回到主页后以“仅保存 0/3 张 PGGBM”失败。只有身份一致的第 2/3 曲准备页可直接续跑；旧待结算会话从其他页面启动时，允许用统一安全节拍寻找 PGGBM，但若先到主页/巡演入口，必须把旧会话标为 `result_pages_left_before_collection` 并从第一曲开始新一组，且在真正确认旧结算前不得恢复 `3/3` 进度。同日 23:56 第一曲完成后，`wait(0.35)` 在循环条件和 `sleep()` 参数之间分别读取时钟，截止点恰好落在两次读取之间，产生负数并抛出 `ValueError: sleep length must be non-negative`；所有这类等待必须先单次计算 `remaining`，`remaining <= 0` 直接返回，否则再睡眠。2026-09-15 雷电真机从第 2 曲断点续跑后完成第二、三曲、保存三张 PGGBM 并以 `3/3` 成功回主页；随后从普通非主页页面启动时，`CommonRecover` 两次 ESC 后识别主页并从新一组 `1/3` 开始，两个分支均已验收。
+
+40. **v1.4.0 起必须区分项目许可、品牌与第三方许可证**：MaaBanGDream 自有部分自 v1.4.0 起使用 PolyForm Noncommercial 1.0.0，旧标签至 v1.3.9 继续按随版 GPL 授权；公开派生版本须遵守 `TRADEMARKS.md` 的不同名称和 Logo 要求。根 `LICENSE` 不能覆盖 MFAAvalonia、MaaFramework、minitouch、nlohmann/json、OCR 模型、游戏素材或谱面；发布包必须同时包含 `LICENSE-MaaBanGDream.txt`、`LICENSING-MaaBanGDream.md`、`TRADEMARKS-MaaBanGDream.md`、`THIRD-PARTY-NOTICES.md`、MFAAvalonia GPL 和 MaaFramework LGPL 正文。README、`interface.json`、发布说明与打包契约必须保持一致，不得再把项目称为 OSI 开源软件。
 
 ## 后续开发方向（已记录，暂缓或未开始）
 

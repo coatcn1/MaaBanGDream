@@ -20,3 +20,8 @@ Review the complete diff and stage only the intended files. Local emulator paths
 credentials, logs, screenshots, profiles, virtual environments, and UI runtimes
 must never be committed. Release tags are created only from a clean `main` after
 the device acceptance test has passed.
+
+By submitting a contribution, you represent that you have the right to provide
+it and agree to license it to MaaBanGDream users under the repository's current
+PolyForm Noncommercial License 1.0.0. Any different or additional relicensing
+requires separate written consent from the affected copyright holders.

@@ -97,6 +97,6 @@ D:\Documents\workplace\.tools\Miniconda3\envs\maabangdream\python.exe `
 
 ## 数据来源说明
 
-生成文件保留 Bestdori 来源 URL 和内容哈希，便于复核与更新。项目代码的
-GPL-3.0-only 许可证不自动改变游戏谱面数据及封面资源本身的权利状态；公开
-发布数据快照前仍需由维护者确认相关站点与游戏内容的分发要求。
+生成文件保留 Bestdori 来源 URL 和内容哈希，便于复核与更新。MaaBanGDream 的
+项目许可证不自动改变游戏谱面数据及封面资源本身的权利状态；公开发布数据快照前
+仍需由维护者确认相关站点与游戏内容的分发要求。
