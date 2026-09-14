@@ -33,11 +33,13 @@ def cut_in_is_checked(image) -> bool:
 
 def _wait(context: Context, seconds: float) -> bool:
     deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
+    while True:
         if context.tasker.stopping:
             return True
-        time.sleep(min(.1, deadline - time.monotonic()))
-    return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return True
+        time.sleep(min(.1, remaining))
 
 
 @AgentServer.custom_action("RealtimeFormalPreflight")

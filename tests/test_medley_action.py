@@ -1251,6 +1251,112 @@ def test_restart_after_manually_leaving_pending_results_starts_new_round(
     assert recovered == [{}]
 
 
+def test_restart_from_unrelated_page_does_not_assume_pending_results(
+    monkeypatch,
+):
+    """普通非主页页面应退回主页，不能仅凭旧会话冒充结算续跑。"""
+    old_songs = (song(1), song(2), song(3))
+    old_session = {
+        "tour_type": "task",
+        "song_mode": "random",
+        "requested_difficulty": "Expert",
+        "target_count": 3,
+        "completed_songs": 3,
+        "results_completed": 0,
+        "completed_before_round": 0,
+        "stage": "results",
+        "status": "paused",
+        "songs": [medley_action.asdict(item) for item in old_songs],
+    }
+    updates = []
+    starts = []
+
+    class Sessions:
+        def latest(self, _tour_type):
+            return old_session
+
+        def update(self, value, **changes):
+            updates.append(changes)
+            value.update(changes)
+            return value
+
+        def start(self, **kwargs):
+            starts.append(kwargs)
+            return {
+                "completed_before_round": 0,
+                "completed_songs": 0,
+                "results_completed": 0,
+            }
+
+    flow = object.__new__(MedleyFlow)
+    flow.settings = {
+        "tour_type": "task",
+        "song_mode": "random",
+        "difficulty": "Expert",
+        "count": 3,
+    }
+    flow.sessions = Sessions()
+    flow.repository = object()
+    flow.profile_store = SimpleNamespace(
+        runtime_options=lambda: {"note_speed_settings_enabled": False}
+    )
+    unrelated_image = object()
+    home_image = object()
+    flow.capture_after_reward_overlays = lambda: unrelated_image
+    flow.capture = lambda: home_image
+    flow.home_or_tour_select = lambda image: image is home_image
+    flow.dismiss_quit_confirm = lambda _image: False
+    flow.save_debug_image = lambda *_args: None
+    flow.result_cadence_step = lambda _phase: "BACK"
+    flow.wait = lambda _seconds: None
+    recovered = []
+    flow.recover_home = lambda **kwargs: recovered.append(kwargs)
+    flow.speed_gate = lambda _difficulty: None
+    flow.navigate_to_tour = lambda: object()
+    flow.choose_tour_type = lambda: object()
+    new_songs = (song(1), song(2), song(3))
+    monkeypatch.setattr(
+        medley_action,
+        "read_task_tour_songs",
+        lambda *_args, **_kwargs: new_songs,
+    )
+    flow.validate_home_speed = lambda *_args, **_kwargs: 5.0
+    flow.click = lambda _point: None
+    flow.confirm_preparation = lambda _song, _image: None
+    progress = []
+    flow.ensure_progress = lambda completed, **kwargs: progress.append(
+        (completed, kwargs)
+    )
+    flow.wait_for_stage = lambda _index: object()
+
+    def play(current_session, current_song, _image):
+        current_session["completed_songs"] = current_song.index
+        return current_session, current_song
+
+    flow.play_song = play
+    flow.progress = lambda _phase: True
+    collect_calls = []
+
+    def collect_results(current_session, songs):
+        collect_calls.append(current_session)
+        if len(collect_calls) == 1:
+            return MedleyFlow.collect_results(flow, current_session, songs)
+        return current_session
+
+    flow.collect_results = collect_results
+    flow.finish_round = lambda _session: "finished"
+    monkeypatch.setattr(medley_action, "detect_medley_stage", lambda _image: None)
+
+    assert flow.run() == "finished"
+    assert updates[0] == {
+        "status": "superseded",
+        "terminal_reason": "result_pages_left_before_collection",
+    }
+    assert len(starts) == 1
+    assert progress == [(0, {"next_started": True})]
+    assert recovered == []
+
+
 def test_restart_at_home_after_all_results_saved_finishes_existing_round(
     monkeypatch,
 ):
@@ -1395,3 +1501,25 @@ def test_user_stop_pauses_session_without_business_failure(monkeypatch):
         "status": "paused",
         "terminal_reason": "user_stopped",
     }
+
+
+def test_wait_does_not_pass_negative_duration_when_deadline_is_crossed(
+    monkeypatch,
+):
+    flow = object.__new__(MedleyFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    timestamps = iter((10.0, 10.34, 10.36))
+    sleeps = []
+
+    monkeypatch.setattr(medley_action.time, "monotonic", lambda: next(timestamps))
+
+    def strict_sleep(seconds):
+        if seconds < 0:
+            raise ValueError("sleep length must be non-negative")
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(medley_action.time, "sleep", strict_sleep)
+
+    flow.wait(0.35)
+
+    assert sleeps == pytest.approx([0.01])
