@@ -1,468 +1,288 @@
-# AI 上手指南
+# MaaBanGDream Agent 指南
 
-> 本文档为 AI 助手（Codex、Claude 等）提供项目上下文。人类读者请参阅 [README.md](README.md)。
+本文件只记录会长期影响开发、诊断、部署和验收的规则。历史故障经过、已经完成的修改、
+一次性测试数字、提交号和发布结果写入 `CHANGELOG.md`、交接文档或调试证据，不再追加到
+本文件。实现细节以源码和测试为准；用户说明以 `README.md` 和 `docs/` 为准。
 
-## 图像分析与工具路由
+## 项目与目录边界
 
-本项目不再强制所有图片都通过外部 `vision` skill，也不禁止模型使用原生图像能力。按任务性质选择最合适的入口：
+MaaBanGDream 基于 MaaFramework，通过定制 MFAAvalonia 加载 Python Agent，控制 Android
+设备完成自动演出、实时触控、校准、协力、挑战和组曲任务。
 
-- 用户已在对话中附图且当前模型能够直接理解时，直接分析该图片，不为满足流程重复调用工具。
-- 只需 OCR、提取文字、确认单个模板或批量初筛视频帧时，可以使用 `vision` skill：
-  `python C:\Users\Lenovo\.codex\skills\vision\vision.py <图片路径> "<分析问题>"`。
-- 页面结构复杂、需要判断控件间的空间关系或点击坐标、需要结合 Computer Use 当前界面操作，或者 `vision` 输出不完整、矛盾、连续尝试仍不能解决问题时，允许并优先使用模型原生的图片查看能力（包括 `view_image` 或 Computer Use 返回的屏幕上下文）。
-- 分析多张大图时先裁剪、缩放并限定到必要帧，逐张保留结论；不要手工读取图片字节或自行生成 base64 塞入对话。
-- 工具输出只是证据之一。涉及误识别、误点击或页面状态时，仍需把截图、坐标、模板命中和运行日志放在一起复核。
+| 路径 | 用途 | 写入规则 |
+| --- | --- | --- |
+| `D:\Documents\workplace\MaaBanGDream` | 唯一源码仓库 | 所有项目修改在这里完成 |
+| `D:\Documents\workplace\.tools\MFAAvalonia-profile-v3` | 开发 MFA 运行目录 | 只由部署脚本同步，不提交 |
+| `D:\Documents\workplace\MFAAvalonia` | 定制 MFAAvalonia 源码仓库 | 独立分支、提交和验证 |
+| 用户正式安装目录 | 已发布客户端 | 默认只读；未经明确授权不得部署候选或修改配置 |
 
-## 项目身份
-
-基于 MaaFramework 的 BanG Dream! 自动化项目。通过 MFAAvalonia GUI 加载 Python Agent，控制 Android 模拟器完成自动演出、实时触控演奏、校准和挑战演出。
-
-- 仓库：`https://github.com/coatcn1/MaaBanGDream`
-- 当前版本：`v1.4.0`
-- 许可证：MaaBanGDream 自有部分为 PolyForm-Noncommercial-1.0.0；第三方内容按各自许可证
-
-## MaaBanGDream 运行布局
-
-本项目日常开发和运行使用下面两个目录，不可混用。定制 MFAAvalonia 的独立源码仓库仅在需要修改或重建 MFA Core 时使用，见后文“MFA 定制运行时保护”。
-
-| 目录 | 用途 |
-| --- | --- |
-| `D:\Documents\workplace\MaaBanGDream` | Git 仓库，唯一源码目录 |
-| `D:\Documents\workplace\.tools\MFAAvalonia-profile-v3` | MFA 运行目录（Git 忽略），含 `interface.json` 和 `resource/` 部署副本 |
-| 用户正式安装目录（发布包） | 排查仅可读取证据，禁止部署候选、覆盖源码或修改 Profile/配置 |
-
-MFA 不会直接读仓库资源。修改代码后必须通过 `scripts/launch-mfa.ps1` 同步部署并重启 MFA。
+MFA 不直接读取源码目录。修改 `agent/`、`resource/` 或 `interface.json` 后，必须通过
+`scripts\launch-mfa.ps1` 同步并重启开发 MFA。
 
 ## 固定运行环境
 
-所有路径和版本都是硬约束，不可随意更改：
+- Python：`D:\Documents\workplace\.tools\Miniconda3\envs\maabangdream\python.exe`
+- Python 版本：3.12；MaaFw：5.10.2；MFAAvalonia：2.12.0；.NET Runtime：10
+- Conda 仅使用 `conda-forge`，配置以 `runtime-compatibility.json` 为准。
+- 不使用仓库 `.venv`，不临时更换 Python、MaaFw 或 MFA 版本规避问题。
+- pytest 临时目录使用 Git 忽略的 `.local/pytest-<进程号>`，不写系统 AppData。
 
-```
-Conda:    D:\Documents\workplace\.tools\Miniconda3
-环境名:   maabangdream
-Python:   D:\Documents\workplace\.tools\Miniconda3\envs\maabangdream\python.exe (3.12.13)
-```
+## 修改与 Git 规则
 
-| 组件 | 固定版本 |
+1. 修改前检查 `git status --short --branch`、当前分支、远端和现有差异；用户已有修改不得
+   覆盖、回退或混入无关重构。
+2. 功能和修复从 `main` 建立 `feature/*` 或 `fix/*` 分支，不直接在 `main` 开发。
+3. 提交保持单一目的，使用仓库既有提交格式；合并到 `main` 使用 `--no-ff`，不 squash。
+4. 代码注释使用简体中文，重点说明设计原因、边界和失败策略，不逐行翻译代码。
+5. 禁止提交日志、截图、Profile、设备序列号、账号凭据、本机绝对路径、缓存、运行目录和
+   构建产物。
+6. 行为或用户可见修改同步 `CHANGELOG.md`；只有长期规则变化才修改本文件。不要把调查日志
+   或已完成验收继续堆入 `AGENTS.md`。
+7. 提交、推送、PR、合并和 Release 是独立动作。未经用户明确要求，不推送、不合并、不发布。
+
+## 图像与证据工具
+
+- 当前模型能直接理解用户附图时直接分析。
+- 简单 OCR、文字提取、单模板确认或批量帧初筛可使用：
+  `python C:\Users\Lenovo\.codex\skills\vision\vision.py <图片路径> "<问题>"`。
+- 复杂页面结构、空间关系、点击坐标、Computer Use 操作，或外部 vision 结果矛盾时，使用
+  `view_image` 或 Computer Use 屏幕上下文。
+- 多图和视频先裁剪、缩放并限制必要帧；禁止手工读取图片字节或把 base64 塞入对话。
+- 页面故障必须把截图、模板得分、坐标、日志和实际行为一起核对，不能只凭单一模板推断。
+
+## Subagent 路由
+
+仅在任务边界清楚时委派；主 Agent 负责需求、证据链、作用域和最终结论。同一批文件只能由
+一个写入 Agent 修改。
+
+- `mbd_log_scanner`：只读扫描 MFA 日志、`summary.json`、结果 JSON。
+- `mbd_trace_scanner`：只读扫描 checkpoints、events、lifecycle、trace 的有限窗口。
+- `mbd_replay_runner`：离线 replay 和基线对比，只能在 `.local/` 生成临时产物。
+- `mbd_implementer`：在已有有界证据、最小假设和验收标准后实施代码与测试修改。
+
+Realtime 闭环固定为：证据提取 → 必要的独立审查 → 最小实现 → 定向测试 → 离线 replay →
+修改后复核 → 用户真机验收。离线结果不能替代真机验收。
+
+## 任务架构
+
+所有演出入口都先做进程互斥。普通任务由 `CommonRecover` 恢复主页；组曲必须先检查是否存在
+可信断点，不能先恢复主页破坏现场。单局实时演奏统一进入
+`agent/realtime/profile_play_action.py` 的 `RealtimeProfilePlay`。
+
+| 任务 | 核心边界 |
 | --- | --- |
-| Miniconda | 26.5.3-1 (SHA-256: `60ab6c...de57a`) |
-| Python | 3.12 |
-| MaaFw (PyPI) | 5.10.2 |
-| MFAAvalonia | 2.12.0 |
-| .NET Binding | 5.8.0 |
-| .NET Runtime | 10 |
-| Conda 源 | `conda-forge` only, `nodefaults` |
+| 单人实时 | 主页检查流速，选曲与准备页确认身份，正式/排练分路 |
+| 协力 | 入房、准备送达、成员退出、最终封面和协力结算均有独立门禁 |
+| 一键实时 | 被动等待开场身份；只演奏一首，完成后读取结果并恢复主页 |
+| 实时校准 | 固定为排练一首 + 正式验证一首；环境签名一致才允许续跑 |
+| 挑战 | 选择点数后复用正式演奏门禁 |
+| 自动演出 | 不使用实时触控引擎，只配置自动演出并等待结算 |
+| 组曲 | 每组三首、按歌曲计数；准备页补全身份，第三首后读取三张 PGGBM |
 
-精确组合记录：[runtime-compatibility.json](runtime-compatibility.json)
+`DailyFreeGacha` 和 `ManualFlowRecording` 不属于演出流程，按各自 Pipeline 处理。
 
-## 当前分支状态
+## 通用生命周期约束
 
-```
-main                                      ← 发布主线
-```
+### 停止、失败与重试
 
-功能与修复一律从 `main` 最新提交拉取 `feature/*` / `fix/*` 分支，验收后合并回 `main` 并删除分支；不再维护跨版本累积的“统一开发分支”。
+- `context.tasker.stopping` 表示用户停止：立即停止输入、释放触点并中性返回；不得继续截图、
+  点击、嵌套任务或记录业务失败。
+- 真实生命归零、身份冲突、Profile/流速不一致、超时和引擎完整性失败必须保留明确原因；
+  恢复到主页不等于任务成功。
+- MaaFramework 回调异常可能被绑定吞掉，所有回调必须显式 `try/except` 并返回失败状态。
+- 跨回调或跨进程预算只使用 `argv.task_detail.task_id`；RemoteTasker 包装对象和 `_handle`
+  都不是稳定任务身份。缺少有效 task ID 时 fail-closed。
+- `play_failure_retry_count=1` 表示首次尝试后最多重试一次。新一局入口负责显式重置预算。
+- 嵌套 `context.run_task()` 会复用 MaaFramework 的 `max_hit` 计数；嵌套流程使用无
+  `max_hit` 的专用 Action。
 
-定制 MFAAvalonia 当前发布分支为 `fix/speed-only-settings`；两个仓库必须分别提交和推送。
+### 主页流速与 Profile
 
-## 仓库结构
+- `note_speed_settings_enabled=false` 时任何任务都不得打开设置页，直接信任声明流速。
+- 开启时只在离开主页前由 `RealtimeGameSpeedSettingsGate` 读取、按需修正并复核；准备页的
+  `RealtimePerformanceSettingsGate` 只消费本任务结果，禁止打开设置页或复用跨任务凭据。
+- Profile 与分辨率、DPI、帧率、画质和流速精确绑定；`accepted=false` 的草稿不能驱动
+  正式演奏。同一 Profile 只对应一种流速。
+- Profile 当前选择属于界面正在配置的任务难度槽位；Expert 与 Special 属同一兼容等级，
+  但请求难度和本局实际难度必须分别记录。
+- Native 和 Legacy 正式局共享 `timing_offset_ms`。两种引擎同时整体变差时，先核对 Profile
+  历史值和备份，再调查时钟或调度器。
 
-```
-agent/                  # Python Agent（MFA 通过 server.py 调用）
-  server.py             # Agent 入口
-  realtime/             # 实时触控引擎核心
-  profile_manager.py    # Profile 管理器（stdin JSON 接口）
+### 歌曲身份与难度
 
-resource/               # MaaFramework 任务资源
-  pipeline/             # Pipeline JSON 定义
-  image/                # 模板图片
+- 封面 pHash 只能收窄候选，必须结合实际难度等级和实读标题；等级冲突硬拒绝。
+- 选曲页只负责选择时，不得用曲库标准标题冒充截图实读证据；身份在相应准备页或最终封面
+  门禁中确认。
+- 请求 Special 时，单人、挑战、协力和自动演出只有在 Special 确认不可选时才允许显式
+  回退 Expert；实时校准必须精确选择 Special。
+- `requested_difficulty` 与 `effective_difficulty` 必须贯穿 Profile、流速、谱面、预武装、
+  播放和结果。实际 Special 缺少可信本地谱面或方向语义时，触控前失败。
+- Custom Action 参数覆盖是整块替换；新增参数必须同步基础 Pipeline、所有 interface 选项
+  和校准 override，并用真实 MaaFramework 覆盖结果验证。
 
-scripts/                # 运维脚本
-  setup.ps1             # 创建/修复 Conda 环境
-  verify.ps1            # 运行 pytest + 运行时兼容检查
-  launch-mfa.ps1        # 同步资源 → 部署 → 启动 MFA
-  check_runtime.py      # 运行时兼容性检查
-  replay_realtime_trace.py  # 离线重放 trace.jsonl
+## Realtime 引擎约束
 
-tests/                  # pytest 测试
-  fixtures/             # 测试 fixture 数据
+### 开演与时间轴
 
-profiles/               # 实时演奏 Profile（Git 忽略）
-docs/                   # 额外文档
-```
+- 开演顺序必须由本局证据证明：准备页 → 黑场 → 最终封面 → 完整演奏场 → 可选协力等待
+  弹窗消失 → 首音。准备页静态生命条或判定线不得触发首拍。
+- 首音锚点和 Profile timing offset 在 Native 启动前冻结；本局内不得用 FAST/SLOW 重写
+  Native Profile 偏移。设备 jlog 漂移不是游戏 FAST/SLOW 判定相位。
+- Native 逐块命令延迟校准只允许修正尚未编译的未来切片。修改残差、等待成本或设备时钟
+  校正前，必须对真实 jlog 和 trace 做有符号分段对齐，不能只看绝对百分位。
+- MuMu Native 存在逐局变化的客户机时钟速率偏斜，速率校正实验不能稳定闭环；当前分工是
+  雷电使用 Native、MuMu 使用 Legacy。
 
-## 关键约定
+### 输入与触点
 
-- **分支命名**：`feature/*` 做功能，`fix/*` 做修复；完成验收并合并回 `main` 后删除分支
-- **合并方式**：Merge 到 `main`（`--no-ff`，创建合并提交，保留分支完整提交历史），不用 squash 压平历史
-- **PR 流程**：Draft PR → 检查通过 → Ready → Merge（创建合并提交）
-- **禁止提交**：ADB 路径、设备序列号、日志、截图、Profile、`.venv`、MFA 运行目录
-- **发布门禁**：`verify.ps1` 全部通过 + 工作树干净 + 真机门禁满足
-- **歌曲模式**：仅支持当前曲目和随机选曲，不支持按名称指定
-- **不在迁移范围**：旧 BDAS 的 Electron、PyWebIO、自建调度器
+- 实时截图、检测、跟踪和派发热路径禁止阻塞等待或同步 ADB 前台查询。
+- Native 停止只有在本轮 reset 请求之后的 jlog 明确执行 `r`，并完成本地与设备清理时，
+  才能标记 `release_confirmed=true`；历史 `r`、断开 socket 或 kill 进程不能替代回执。
+- Legacy HOLD/Slide 只能由连续轨迹和离散拓扑事件建立；长条头 DOWN 后要抑制同轨重复 TAP。
+- 普通音符紫色外圈不是 FLICK；只有成组、同向的粉色箭头/折线证据才能升级为 FLICK。
+- 密集同轨音符不能用固定宽度合并；阈值要随透视和音符头尺寸缩放。
+- Directional `width=1..7` 表示横跨轨道数和判定尺寸；没有谱面方向证据时不得由纯视觉
+  FLICK 冒充 Left/Right。
 
-## MaaBanGDream Subagent 路由
+### 文件与运行环境
 
-用户级自定义 Agent 只用于边界清晰的委派，主 Agent 始终负责需求、证据链、作用域和最终结论。
+- 便携包可能位于中文路径。图像读写使用 `agent/realtime/vision_io.py` 的字节级
+  `imdecode`/`imencode`；不要在 Agent 中直接使用 `cv2.imread/imwrite`。
+- Windows Native 谱面文件读取使用 UTF-16 路径和 `_wfopen`，不得依赖窄字符路径。
+- 调试证据写入 `debug/recordings/<run_id>` 和 `screencap/`，不得提交 Git。
 
-- `mbd_log_scanner`：扫描 MFA 日志、`summary.json` 和 `realtime-result-*.json`，只提取事实，不修改源码，不单独定根因。
-- `mbd_trace_scanner`：扫描 `checkpoints.jsonl`、`lifecycle.jsonl`、`events.jsonl` 和 `trace.jsonl` 的有限窗口，只提取事件链，不修改源码。
-- `mbd_replay_runner`：运行离线 replay、对照基线和候选行为；允许生成 `.local/` 下的临时产物，但不修改正式源码。
-- `mbd_implementer`（Terra High）：在主 Agent 已给出有界证据、最小假设和验收标准后，承担 Python/C++、测试、诊断、Legacy、replay、导航及 realtime 修改；核心 timing 任务也统一由该角色实现，不再额外转交第二个写入 Agent。
+## 各模式的关键规则
 
-日志与 trace 扫描可在输入互不依赖时并行；replay 与实现按证据依赖顺序串行。主 Agent 负责 timing、phase、drift、scheduler、minitouch、ChartPredictor 锁相、Profile timing 及 Native/Legacy 共用链路的根因审查、反例检查和修改后复核；存在两个及以上竞争根因时，必须先补足证据或最小可证伪实验，再交给 `mbd_implementer`。同一批文件只能由主 Agent 或 `mbd_implementer` 中的一方修改。
+### 单人、挑战与校准
 
-Realtime 修改的闭环固定为：证据提取 → 必要的独立审查 → 最小实现 → 定向测试 → 离线 replay → 必要的修改后复核 → 用户真机验收。离线结果不得替代真机验收，也不得据此宣称“已修复”。
+- 单人和挑战在准备页完成标题、等级、难度、Profile、正式演出选项和 Native 预武装检查。
+- 正式准备页先切换 `3D演出/动画MV → OFF`，确认 OFF 后再检测并关闭 3D Cut-in；顺序不能
+  颠倒。
+- `note_speed_settings_enabled=false` 只跳过设置页，不能跳过 Native 预武装。
+- 单人排练从 timing offset 0 开始逐帧自校准，不能拿排练开局的大量 SLOW/GREAT 与正式局
+  直接比较。
+- 校准会话仅在环境签名一致时续跑；正式验证生命归零直接拒绝，不能生成已接受 Profile。
 
-## 测试与验证
+### 协力
+
+- 点击“准备完毕”后必须确认按钮消失，最多重试三次；随后高频观察成员退出、黑场和本局
+  最终封面，不能固定盲等。
+- “其他成员正在准备中”弹窗只在开演前处理。弹窗存在时不建立首音颜色基线，消失帧重置
+  基线；首音只能由窄列局部变化触发，判定线附近的双 FLICK 不能当弹窗。
+- 成员退出弹窗只在房间/准备/黑场前窗口检测；演奏中和结算阶段禁止检测通用“错误”标题。
+- 开启协力 jitter 后，预武装副本与 canonical 谱面按歌曲身份比较，不能按路径判不一致。
+- 生命归零后的断网跳车只能在支持按游戏 UID 隔离网络的设备上执行；禁止使用会同时切断
+  ADB 的 `svc wifi` 或飞行模式。能力缺失时 fail-closed。
+- 结算后找不到房间页时先继续安全结算节拍，再 `CommonRecover` 回主页继续下一局；最后一局
+  stay 失败可按该局已完成处理。
+
+### 组曲
+
+- 次数按歌曲计数，输入必须为 3–99 且为 3 的倍数。只有完整三首结算后才增加三个完成数；
+  不报告任务开始前未要求演奏的累计量。
+- 只有会话阶段、歌曲身份、自由巡演选项和当前 `task_detail.task_id` 全部一致时，才允许从
+  第 2/3 曲准备页续跑。新任务、旧 schema、缺失或不一致 task ID 都将旧会话标记为
+  `superseded` 并从第 1 曲重新计数；若新任务已落在旧准备页则 fail-closed。
+- 自由巡演的第四张选曲图只选择难度，不读取身份，也不拒绝连续相同歌曲。每首到自己的
+  准备页再读取封面、等级、实际难度和实拍标题；必要时最终封面补全。
+- 三首 Profile 流速必须一致。课题巡演若启用流速检查，回主页检查后必须重新进入并确认
+  阵容没有变化；组曲中途禁止打开设置页。
+- 已启动单曲发生生命归零或可分类瞬时引擎失败时，先把进度恢复到本组开始前，再按
+  `play_failure_retry_count` 有界重试。重试必须丢弃预武装、退出失败演出、将当前组会话标记
+  为 `superseded`，并重演完整三首；失败曲和同组其余曲均不计数。
+- 非结算的失败退出必须使用 `MedleyLiveFailedContinue → MedleyLiveFailedExit →
+  MedleyQuitConfirmExit` 专用状态机：第一层点左侧灰色“退出”，第二层点右侧粉色“退出”；
+  若从第二层确认页开始，先安全退回第一层再按顺序处理；绝不点击星石“继续”。Profile、
+  身份、谱面、流速硬冲突及用户停止不重试。
+- 第三曲后按会话断点依次读取三张 PGGBM。少于三张不得补算成功；三张均已原子落盘时只
+  补记完成状态，不重演。
+
+### 一键实时与自动演出
+
+- 一键实时只接受连续稳定的开场封面和实际标题；无完整身份时继续等待，不从歌曲中途启动。
+- 有本地谱面才允许 Native；无谱面难度保留已确认身份并整局使用 Legacy。第一首完成、读取
+  PGGBM 并恢复主页后任务结束。
+- 自动演出不调用 Realtime 引擎；难度点击后必须复核，自动演出开关和配额耗尽使用各自
+  明确状态。每日免费抽卡是否还有次数，则以点击免费按钮后是否出现确认弹窗为准，不使用
+  容易互相误匹配的“剩余 N 次”模板。
+
+## 统一结算与恢复
+
+- 所有演出结算只循环：最右下角安全像素 `(1279,719)` → Android BACK → 同一安全像素。
+  像素点击只加速动画，BACK 是唯一页面推进输入。
+- 禁止点击奖励、排名、总分、确定、下一步等可见按钮或历史按钮坐标。每次输入后重新截图
+  检查必要终点；组曲还要检查下一张 PGGBM，不能整轮连发后才识别。
+- Controller 代理不能跨前台保护或嵌套任务长期保存；每次输入前重新取得当前代理。
+- 有界次数耗尽后保存现场并执行 `CommonRecover`，必要时只重启游戏一次，同时保持原失败
+  状态。
+- 未知界面恢复最多 60 秒；登录下载确认先于通用退出弹窗处理，下载中被动等待，不发送
+  BACK/ESC。
+
+## 定制 MFAAvalonia 保护
+
+开发运行目录使用的 `MFAAvalonia.Core.dll` 来自
+`D:\Documents\workplace\MFAAvalonia` 的定制分支 `fix/speed-only-settings`，不能用同版本官方
+DLL 覆盖。官方 DLL 会丢失“演出设置”、Profile 管理和 Mirror 更新源保护。
+
+- `scripts/patch-mfa-stop-status.ps1` 必须验证定制源码特征和基线祖先，替换前备份 DLL；定制
+  源码缺失时直接失败，不 clone 官方源码回退。
+- 部署指纹必须覆盖定制 MFA 的脏工作树，不能只比较 Git HEAD 或单个源码文件。
+- `interface.json`、Pipeline 和模板可以部署覆盖；`config/`、Profile、主题、窗口布局和模拟器
+  配置属于用户数据，禁止删除或重建来修 UI。
+- `ContinueRunningWhenError=false` 必须保留：真实失败保持失败，人工停止显示“已放弃本次任务”。
+- “演出设置”读取 Profile 失败时不得自动保存界面默认值；新增运行时选项必须同步 Python
+  默认值/校验、MFA ViewModel 属性/加载/Capture 和 AXAML 控件。
+- 同时运行两个 MFA 或频繁切换配置可能触发上游 Avalonia 渲染器崩溃；当前规避是单实例、
+  少切换配置。
+
+## 模拟器边界
+
+- MFA/MaaBanGDream 与 ALAS 等自动化工具不能同时控制同一设备。
+- MuMu 可能监听 `127.0.0.1:5555/7555` 并影子雷电 ADB；连接雷电前关闭 MuMu 或使用不冲突
+  端口。MuMu 主 ADB 为 `127.0.0.1:16384`。
+- 前台应用、设备指纹和物理模拟器必须同时核对，不能只相信 ADB 序列号。
+
+## 更新、打包与许可证
+
+- Release 仅在用户明确要求、`main` 干净、验证和所需真机验收完成后执行。流程见
+  `docs/release-package.md`、`docs/release-notes-template.md` 和技能中的 release runbook。
+- 完整包保留版本目录外壳；runtime-free 更新 ZIP 的 `interface.json` 必须位于归档根目录，
+  不包含 Python 运行库归档和 `resource/charts`。谱面通过“演出设置 → 谱面辅助 → 同步”。
+- 更新继续使用 `.part` 断点续传和 SHA-256；只有包完整应用成功后才写
+  `update-manifest.json`。保留 `config/profiles/logs/debug/screencap`。
+- 中文路径启动和目录改名使用 PowerShell/ShellExecute，不经 `cmd /c` 转换路径；生成的
+  PowerShell 脚本使用 UTF-8 BOM。
+- v1.4.0 起项目自有代码使用 PolyForm Noncommercial 1.0.0；第三方许可证和品牌规则分别以
+  `LICENSING-MaaBanGDream.md`、`THIRD-PARTY-NOTICES.md`、`TRADEMARKS-MaaBanGDream.md`
+  为准。发布包必须携带相应正文，不能用根许可证覆盖第三方组件。
+
+## 当前仍需真机覆盖的范围
+
+- MuMu Native 时钟偏斜没有稳定解法，继续使用 Legacy。
+- 双 MFA/快速切换配置的 Avalonia 崩溃尚未在本项目侧修复。
+- 组曲随机歌曲、课题巡演、跨组计数和中断续跑需要分别保留真机验收记录。
+- 协力 Special→Expert 回退和部分协力首音边界仍需真实房间证据，不能由单人结果外推。
+
+## 最低验证与交付
 
 ```powershell
-# 完整验证（pytest + 运行时兼容检查）
+# 完整验证
 .\scripts\verify.ps1
 
-# 仅运行时兼容检查
-D:\Documents\workplace\.tools\Miniconda3\envs\maabangdream\python.exe scripts\check_runtime.py --mfa-root D:\Documents\workplace\.tools\MFAAvalonia-profile-v3
+# 固定运行时检查
+D:\Documents\workplace\.tools\Miniconda3\envs\maabangdream\python.exe scripts\check_runtime.py `
+  --mfa-root D:\Documents\workplace\.tools\MFAAvalonia-profile-v3
 
-# 仅 pytest
+# pytest
 D:\Documents\workplace\.tools\Miniconda3\envs\maabangdream\python.exe -m pytest tests/ -v
 ```
 
-pytest 临时目录固定在 `.local/pytest-<进程号>`（Git 忽略），不使用系统 AppData。
-
-## 演出类型流程
-
-任务入口定义在 `interface.json` 的 `task`，每个入口对应 `resource/pipeline/*.json`。
-所有演出任务都先经过进程互斥检查。普通任务再用 `CommonRecover` 恢复主页/登录；组曲会先检查
-第 2/3 曲或延迟结算续跑现场，确认不是可续跑页面后才恢复主页。带次数的任务
-在每局结束回主页并由 `TaskProgress`/`TaskOutcome` 报告。单局演奏的统一核心是
-`RealtimeProfilePlay`（`agent/realtime/profile_play_action.py`）。
-
-### 0. RealtimeProfilePlay：单局演奏通用内部流程
-
-1. 解析运行时选项与 Profile，确认游戏前台，校验环境签名（分辨率/DPI/帧率/画质/流速）。
-2. 从准备页身份解析本地谱面（`resolve_confirmed_chart`）；Native 可用时消费预武装后端
-   （`consume_prearmed_backend`）。
-3. 建立 `debug/recordings/<run_id>` 证据包并保存 preflight 截图。
-4. 需要最终封面复核的模式执行 `wait_for_final_cover`：封面 pHash + 等级 + 标题；黑场转场
-   期间密集采样；失败时保留准备页谱面或降级 Legacy。
-5. Native 路径：`NativeStartPhotogate` 首音门控（生命条 + 六轨判定标记、稳定窗口、500ms
-   宽限、协力“其他成员正在准备中”弹窗拦截）→ `NativeMinitouchBackend` 启动 →
-   C++ PlaybackSession 滚动发布 → 约 5Hz 生命/终态监控。
-   Legacy 路径：`NoteDetector` + `RealtimePlanner` + `ControllerTouchDispatcher` 60FPS
-   视觉演奏，并保留生命归零与结算终态监控。
-6. 终态判定（结算/生命失败/用户停止/超时）→ 释放全部触点 → Native 完整性门禁 →
-   写 `screencap/realtime-result-*.json`。
-7. 结果处理：单人/挑战解析判定并回写 FAST/SLOW timing offset，协力只推进结算；失败按
-   `play_failure_retry_count` 重试。
-
-### 1. 单人实时演奏（RealtimeLive，入口 RealtimeMultiLive）
-
-1. 进程互斥 → `CommonRecover` 主页 → `RealtimeGameSpeedSettingsGate` 在主页只检查流速
-   （`note_speed_settings_enabled=false` 时永不进入设置页；开启时每次任务都真实读取、按需修正并复核流速）。
-2. 局循环：主页 → 演出选择（`LiveSelectFind`）→ 自由演出 → 歌曲选择标记 →
-   `RealtimeDifficultySelect`（点击目标难度并读等级/标题/封面身份，确认本地谱面）。
-3. 准备页按正式/排练分路：
-   - 正式：切到正式标记，检查必须有可用 Profile，执行 `RealtimeFormalPreflight`
-     （关闭自动演出、3D Cut-in、3D/MV 显示）和 `RealtimePerformanceSettingsGate`
-     （只复用主页检查结果并处理 Native 预武装，禁止在准备页打开设置），开始后进入 `RealtimeProfilePlay`。
-   - 排练：关闭 Demo 演出显示 → 同上门禁 → 开始 → `RealtimeProfilePlay`（rehearsal 参数）。
-4. 每局结束 `CommonRecover` 回主页 → `TaskProgress` 计数 → 循环或 `TaskOutcome`。
-
-### 2. 协力演出（CooperativeLive）
-
-1. `CooperativeLiveConfigure` 依次配置入房方式/档位/房号/难度/次数/结算动作/成员退出
-   策略/调试；仍在主页时执行与单人相同的流速检查。
-2. 主页 → 演出选择 → 协力入口；按配置进普通房、好友邀请或私房；`verify_room_entry`
-   确认已离开房间选择页。
-3. 房间准备：等准备页 → 点难度并复核 → 只复用主页设置结果并处理预武装/推迟，禁止打开设置 →
-   点“准备完毕”并确认按钮消失（最多 3 次）。
-4. `RealtimeProfilePlay`（cooperative 参数）：最终封面必确认（黑场与 5 封面准备页处理）；
-   Native deferred 预武装；首拍门控拦截“其他成员正在准备中”弹窗；
-   `cooperative_jitter_enabled` 时末尾漏 1~2 个单点。
-5. 结算：`cooperative_result=advanced`（最右下角安全像素 → ESC → 同一安全像素循环推进到 PGGBM 并返回）；之后
-   `return_to_room_selection` 回房间选择，好友/私房走 `stay_in_room`；成员退出按策略
-   确认结束或重连。
-6. 结算后识别不到房间页：先继续推进剩余结算页，仍失败走 `CommonRecover`（允许重启游戏）
-   恢复主页继续下一局，不终止任务；最后一局 stay 失败直接按完成返回。
-7. 次数循环 → `CooperativeLiveFinalize` 回主页 → `TaskOutcome`。
-
-### 3. 一键实时演奏（ContinuousRealtimeLive）
-
-1. 进程互斥；难度与诊断选项先由独立 `ContinuousRealtimeLiveConfigure` 节点合并，避免 Custom Action
-   参数整块替换导致难度回落；开关开启时要求最近 15 分钟内有流速读回复核
-   （`require_recent_speed_settings`），关闭时不检查。没有 `custom_action_param` 的 Custom Action 可能收到
-   JSON 字符串 `null`，读取后必须先规范为空字典再做参数展开。
-2. 被动监听：每 0.1s 截图识别开场最终封面和标题；封面连续两帧稳定、标题与本地曲库一致后，
-   使用任务所选难度进入 `RealtimeProfilePlay`（`ignore_note_speed`、`require_completion=true`）。
-   一键流程没有准备页等级，严格 8 bit 封面匹配失败时，只能先由标题独立收窄候选，再对这些候选
-   使用 14 bit 宽松阈值；确认歌曲后用曲库标准指纹解析谱面，不能让同一实拍封面在第二道门禁再次失败。
-   该难度有本地谱面时把同一帧作为 `confirm_final_cover` 证据并允许 Native 延迟预武装；Easy/Normal
-   等无本地谱面的难度保留已确认曲目身份并整局走视觉 Legacy。没有完整身份时继续等待，不在歌曲中途启动；
-   第一首演出确认完成后读取一张 PGGBM，再以统一的最右下角安全像素/BACK节拍恢复主页后进入成功终态，
-   不再继续监听下一首。
-3. 监听期间每两秒有界记录封面指纹、稳定帧、标题、拒绝原因与演奏场状态；用户停止或失败时把
-   最后一帧及最多八张稳定候选帧保存到 `debug/recordings/listener-*`，监听热路径不写盘。
-
-### 4. 实时校准（RealtimeCalibration）
-
-1. 进程互斥 → 主页完成流速检查（服从 `note_speed_settings_enabled`）→ 读难度/歌曲模式/续跑模式/调试选项。
-2. `CalibrationSessionStore` 新建或续跑会话（`auto`/`restart`）；环境签名一致才复用；
-   生成 `accepted=false` 的候选 Profile。
-3. 阶段固定为 `rehearsal-1`（一首排练）→ `formal-validation`（一首正式验证）。
-4. 每局用 `calibration_round_plan` 构造 override 跑 `RealtimeProfilePlay`；FAST/SLOW
-   收敛结果回写 timing offset；排练失败/技术故障可暂停续跑，正式局生命归零直接拒绝。
-5. 正式验证通过条件：结果有效、完成、存活且 miss<10；通过后候选 Profile 标记
-   `accepted=true` 并写校准会话报告。
-
-### 5. 挑战演出（ChallengeLive）
-
-1. 进程互斥 → 主页完成流速检查 → 局数门控 → `RealtimeProfileCheck`。
-2. 主页 → 演出选择 → 挑战入口 → 歌曲标记 → `RealtimeDifficultySelect` → 准备页。
-3. 挑战点数选择/确认 → 乐队标记 → `RealtimeFormalPreflight`（关闭自动演出、3D Cut-in、
-   3D/MV）→ `RealtimePerformanceSettingsGate` → 开始 → `RealtimeProfilePlay`。
-4. 结束回主页 → 计数循环 → `TaskOutcome`。
-
-### 6. 自动演出（AutoLive）
-
-1. 进程互斥 → 主页 → 演出选择 → 自由演出 → 选难度 → 准备页。
-2. 模板识别自动演出开关（开/关）与配额耗尽；点开始后被动等结算（`CommonRecover`），
-   回主页循环计数。此任务不使用实时触控引擎。
-
-### 7. 组曲演奏（MedleyLive）
-
-1. 演奏次数按歌曲计数，一首歌为 1 次；输入范围为 3–99 且必须是 3 的倍数。每组三首完整结算后回主页开始下一组，不支持在第 1/2 首后把未完成的一组计为成功。
-2. 进程互斥后先识别当前页面；第 2/3 曲准备页只有与 `profiles/medley-sessions/` 原子会话的
-   阶段、歌曲身份和自由巡演选项一致时才续跑，不能先执行 `CommonRecover` 破坏现场。
-3. 新组曲恢复主页后进入巡回演出：自由巡演逐个打开三个歌曲槽，第 4 张图只用
-   `RealtimeDifficultySelect(identity_read=false)` 选择并确认请求/实际难度，不读取标题、封面、等级或身份，
-   也不因当前曲目连续相同而拒绝；课题巡演只读三个预设槽，绝不点击难度。
-4. 三首 Profile 的流速必须一致。自由巡演离开主页前检查统一难度流速；课题巡演先读取阵容，
-   流速开关开启时回主页检查一次并重新进入确认阵容未变化，组曲中途禁止打开设置页。
-5. 自由巡演的会话先保存三个仅含序号、请求/实际难度、Profile 和流速的槽位；每首进入自己的准备页后，
-   再读取封面、等级、难度和去空白紧裁剪标题并原子填充身份。准备页没有可信标题或完整身份时，最终封面
-   必须同时确认封面和实际 OCR 标题并写回会话；仍失败则在发送演奏触控前停止，不能用曲库标准标题冒充实读证据。
-6. 每曲准备页还要复核封面、等级、难度和顶部阶段标记，再依次执行 `RealtimeProfileCheck`、
-   `RealtimeFormalPreflight`、`RealtimePerformanceSettingsGate` 和 `RealtimeProfilePlay`；每曲使用独立 run ID。
-7. 前两曲完成后不点“休息”。第三曲后按顺序读取三张 PGGBM，并用标题、等级和实际难度核对；
-   各曲待补全报告转为稳定结果后沿用正式演奏 timing offset 写回。
-8. 第一、二曲准备页出现“达成报酬一览”时也只执行完整的“最右下角安全像素 `(1279,719)` → Android BACK →
-   同一安全像素”节拍。第三曲后不识别组曲分数汇总、奖励、排名等中间页，只识别并读取三张 PGGBM；每张保存后
-   继续相同节拍。安全像素只加快动画，BACK 才负责推进页面；不得点击任何可见按钮或 `(1065,650)` 等按钮坐标。
-   有界次数耗尽后执行 `CommonRecover`（允许重启一次）恢复主页，同时保持任务失败事实，不把恢复成功冒充组曲成功。
-9. 第三曲结束后若用户停止任务并手动离开尚未收全的结算，PGGBM 已不可恢复；下次启动在主页或巡演选择页确认该事实后，
-   将旧会话标记为 `superseded` 并保留缺失数量，从第一曲开始新一组。不得让旧会话永久报错阻塞任务，也不得把缺失结果补算为完成；
-   若 `results_completed=3`，说明三张结果已原子落盘，只补记上一组完成状态，不得重打一组。
-
-### 非演出任务
-
-- `DailyFreeGacha`（每日免费抽卡）和 `ManualFlowRecording`（手动流程录制）不属于演出流程，
-  需要时再单独文档化。
-
-## 需要警惕的点
-
-1. **修改代码后必须重新部署**：MFA 不会自动读取仓库资源。改 `resource/` 或 `agent/` 后务必跑 `launch-mfa.ps1`。
-2. **MFA 与 ALAS 不能同时运行**：前台输入保护会阻止向同一模拟器发送输入，但不会阻止两个工具同时运行导致的竞争。可以提示让用户手动关闭。
-3. **Conda 环境是硬依赖**：不使用仓库 `.venv`。所有 Python 命令必须通过 Conda 环境的绝对路径执行。
-4. **MaaFramework `max_hit` 陷阱**：MaaFramework 在同一个外层任务中保留节点命中计数，嵌套 `context.run_task()` 会复用计数器。校准等嵌套场景必须使用无 `max_hit` 的专用 Action。
-5. **ctypes 回调异常**：MaaFw Python Binding 会吞掉回调中的 Python 异常。所有回调必须显式 try/except 并返回失败状态。
-6. **Profile 环境签名**：分辨率、DPI、帧率、画质、音符流速五项中任一项变化都会使 Profile 失效。草稿 `accepted=false` 不能驱动正式演奏。
-7. **离线重放优先**：触控逻辑修改先用 `trace.jsonl` 离线重放验证（`scripts/replay_realtime_trace.py`），再上真机。
-
-## MFA 定制运行时保护
-
-这台开发机使用的 MFAAvalonia **不是同版本的官方原版**。除 MaaBanGDream 仓库和 MFA 运行目录外，还有一个独立的定制 MFA 源码仓库：
-
-| 目录 | 用途 |
-| --- | --- |
-| `D:\Documents\workplace\MFAAvalonia` | 定制 MFAAvalonia 源码，包含“演出设置”、Profile 管理和 Mirror 启动检查保护 |
-
-- 定制分支：`fix/speed-only-settings`
-- 定制基线提交：`d7b381b2fa6a09e140d925fb1504bac19ca1f921`
-- `MFAAvalonia.Core.dll` 即使显示相同的 `2.12.0` 版本，也不能视为内容相同。
-
-### 禁止用官方 DLL 覆盖定制 DLL
-
-绝对不要从官方 `v2.12.0` tag、临时 clone 或 NuGet 发布物重新编译 `MFAAvalonia.Core.dll` 后直接覆盖运行目录。这样会同时删除：
-
-- 设置页中的“演出设置”入口；
-- Profile 表格、谱面辅助和调试目录等本地功能；
-- 启动时跳过“不支持 Mirror 更新源”检查的保护。
-
-如果启动后“演出设置”消失，或右下角出现“该资源操作暂不支持 Mirror酱”，优先检查是否部署了错误的官方 Core DLL，不要先清空用户配置。
-
-`scripts/patch-mfa-stop-status.ps1` 必须：
-
-1. 默认使用 `D:\Documents\workplace\MFAAvalonia` 定制源码；
-2. 检查源码包含 `PerformanceProfileSettingsUserControl`；
-3. 检查源码包含 `SupportsSelectedResourceUpdateSource`；
-4. 检查定制基线提交是当前源码的祖先；
-5. 替换 DLL 前保存到运行目录的 `.maabangdream-backup/`；
-6. 定制源码缺失时直接失败，禁止自动 clone 官方源码作为回退。
-
-### 三类配置不可混淆
-
-| 内容 | 文件/组件 | 部署时能否覆盖 |
-| --- | --- | --- |
-| 任务、任务选项、Pipeline override | 仓库 `interface.json` | 可以，由 `launch-mfa.ps1` 生成运行副本 |
-| Pipeline 和模板 | 仓库 `resource/` | 可以，由 `launch-mfa.ps1` 同步 |
-| 主题、背景、窗口布局、模拟器、任务选中值 | 运行目录 `config/` | 不可以，属于用户配置 |
-| “演出设置”等定制页面和 Mirror 保护 | 定制 `MFAAvalonia.Core.dll` | 只能由定制 MFA 源码编译 |
-
-不要用删除 `config/`、重建运行目录或恢复默认设置来解决 UI 入口缺失；先比较 DLL 哈希和定制源码。
-
-### MFA 停止状态修复
-
-人工停止时，Maa job 可能先抛出 `MaaJobStatusException`，随后 cancellation token 才被观察到。严格失败传播开启时，这会把用户停止误报为任务失败。
-
-修复必须加在定制 MFA 源码的 `MFAAvalonia/Helper/ValueType/MFATask.cs`：
-
-```csharp
-catch (MaaJobStatusException) when (token.IsCancellationRequested)
-{
-    return MFATaskStatus.STOPPED;
-}
-```
-
-不要为修这个问题换回官方 DLL。运行目录仍需设置 `ContinueRunningWhenError=false`，这样真实任务失败会保持失败，而用户停止会显示“已放弃本次任务”。
-
-## 最近交互与任务生命周期陷阱
-
-- **判断“演奏坏了”之前先确认 offset 路径**：单人排练（`require_profile=false`）从 timing offset 0 开始逐帧自校准，开局必然整段偏晚、几百个 SLOW/GREAT；正式与协力才从 Profile 的 timing offset 起步。排练的高 GREAT/SLOW 计数是固有标定行为，不能当作 Legacy 引擎回归的证据；同曲同 offset 起点的“排练对排练”才是引擎对照。
-
-- **两个引擎同时“变差”先查共享的 Profile timing_offset_ms**：该字段被 Native 与 Legacy 正式局共同读取。它被错误写入（例如原 60 被写成 71）时，两个引擎的正式局会同时整体偏移，表现为“一次修改把两个引擎一起改坏”。排查此类问题优先对比 Profile 的历史值/备份，而不是先怀疑引擎或漂移补偿代码。2026-09-06 的误诊教训：这个 Profile 问题曾多轮没被查出，原因是（1）单人排练 `require_profile=false` 从 offset 0 开始自校准，开局必然整段偏晚、几百个 SLOW/GREAT，表象与引擎时序损坏一致；（2）正式局两个引擎同时变差，把排查引向共享的时钟/漂移补偿代码，而不是共享的 Profile 数据文件；（3）FAST/SLOW 混合和有符号漂移序列呈现“抖动”，进一步把方向带向时钟问题。因此“两个引擎一起坏”的第一动作是对比 `timing_offset_ms` 的历史值或备份，先排除数据被写坏再谈引擎。
-
-- **MuMu Native 漂移是客户机时钟速率偏斜，且逐局可变**：2026-09-07 区分实验结论——同一份代码在雷电 Native `[FULL]FIRE BIRD` 2331 PERFECT/0 GREAT（漂移 p50 5.2ms），MuMu 同环境 Native 漂移按 20 秒分段斜率 1.09→1.47→4.89→5.64ms/s 加速增长、逐局 p50 在 146.8/108/54/88ms 间波动；MuMu 高性能模式（6核/12G）与关主机负载均无效。速率校正实验（`MAABANGDREAM_NATIVE_DRIFT_RATE_CORRECTION=1`）闭环在 MuMu 上会发散（估计值撞限幅、p50 回弹），保持默认关闭，不要把它当 MuMu 解法。真机分工：**雷电走 Native、MuMu 走 Legacy**（MuMu 新号 Legacy 实测 490P/17G/1M、hit 99.8%）。雷电开发实例与 MuMu 便携实例的 Profile 是两份独立副本，正式局会各自回写 offset，本就应按模拟器分开维护，不要互相拷贝。
-
-- **MuMu 12 占用 127.0.0.1 的 5555/7555 会影子住雷电的 adb**：MuMuVMMHeadless 额外监听 5555/7555，雷电 Ld9BoxHeadless 的 7555 被影子后 `emulator-7554` 实际连到 MuMu（指纹/设备名都对，但物理上控制的是 MuMu）。开发 MFA 连雷电前必须关掉 MuMu（或给雷电/多开换端口）；MuMu 开着时勿再对 `emulator-7554` 做任何设备操作。MuMu 主 adb 仍是 `127.0.0.1:16384`。
-
-- **便携包不能假设 ASCII 安装路径**：便携运行时自带的 cv2 对含中文等非 ASCII 字符的路径读写会失败（开演前证据截图报“无法保存实时演奏阶段证据截图”），Native `.pyd` 的窄字符 `std::ifstream` 也会把 UTF-8 谱面路径误解成 ANSI 乱码。图像读写必须走 `agent/realtime/vision_io.py` 的字节级 `imdecode`/`imencode`，新增谱面文件读取在 Windows 必须转 UTF-16 用 `_wfopen`；禁止在 Agent 里直接 `cv2.imread/imwrite`。
-
-- **单人准备页身份复核**：FULL FIRE BIRD 与普通版封面相同但 Expert 为 28/27、本地 ID 为 243/187。单人及其校准在选择乐队页读取左下角标题、难度和等级，必须在 Native 预武装和点击开始前完成；选曲列表不再读标题。准备页等级与选曲页冲突仍硬拒绝，不能用谱面等级填充识别结果。最终封面只复核，首音只定时；不把单人 FULL 规则套到协力或挑战。
-- **重试身份不能使用包装对象地址**：Maa Custom Action 回调会重建 Tasker 包装对象，使用底层句柄保持单局预算；耗尽不能清零，须由下一局入口显式 reset。
-- **Custom Action 参数覆盖是整块替换**：在基础 Pipeline 新增参数时，必须同步所有 interface 难度选项和校准 override；只检查部署的基础 JSON 不足以证明实际回调参数。用独立进程中的真实 MaaFramework 应用覆盖后读取节点验证，避免 AgentServer 绑定无法创建 Resource。
-- **Native 等待成本按实际命令计数**：亚毫秒理想等待可能舍入为零，长等待可能拆成多条 `w`；预估一条后必须按实际条数归还或补记成本，否则高密度谱面会累积提前。设备 jlog 必须与谱面逐段对齐，绝对漂移百分位不能代替有符号趋势。
-
-- **开演顺序必须由本局转场证明**：准备页 → 全黑开演转场 → 歌曲封面 → 完整演奏场 → 等待其他成员弹窗消失（如有）→ 首音 → 演奏结束。准备页可能同时误命中生命条与六轨白色标记，黑场前不得据此启动；首音前的黑场/演奏场消失也不得算结算。候选使用 `launch-mfa.ps1 -OrderedStartupTrial` 显式启用，普通启动默认关闭；启动证据缺失必须记录具体阶段并有界失败。普通协力漏检短黑场时，只允许按第 27 条使用连续两帧、且经难度/等级/标题约束确认的本局最终封面替代黑场证据；严格 Ordered Startup 候选仍要求真实黑场。封面身份无法解析时仍按可信准备谱面/整局 Legacy 的既有降级规则处理，不得绕过首音门控。
-
-1. **Pipeline override 坐标**：Custom Action 必须使用 MaaFramework 解析后的 `argv.box`。重新读取源 JSON 的 `target` 会丢弃用户选择的难度覆盖，例如 Expert 被点击成 Easy。
-2. **状态节点不能滥用 `DirectHit`**：带模板、ROI 或阈值的状态判断必须使用实际识别算法。`DirectHit` 会无条件命中，例如把“还剩 10 次”误报成自动演出次数耗尽。
-3. **主页模板阈值需要真图校验**：主页样本得分随活动轮播横幅和按钮角标变化，
-   2026-09-06 实测约 `0.8177`，旧阈值 `0.82` 会漏识别并在主页反复 ESC→退出确认
-   取消→ESC，最终重启游戏；非主页页面（准备页/选曲页/结算页/协力房间）最高仅
-   `0.36`。所有 `home_marker` 节点当前统一为 `0.75`，调整时必须同时更新所有
-   Pipeline 和契约测试。
-4. **停止不是业务失败**：Custom Action 观察到 `context.tasker.stopping` 时应立即停止输入并返回中性成功；不要继续截图、点击、嵌套任务或记录业务失败原因。
-5. **正式演奏时限**：旧的 300 秒上限会在长曲仍演奏时强制失败。正式演奏节点当前为 600 秒，并应在超时、生命归零、用户停止、结算识别等终态记录具体原因。
-6. **禁止含糊日志**：不要写“详情见上一条日志”。终态日志必须包含当前阶段和可执行的具体原因；运行时原因通过 `TaskOutcome` 的 latest failure reason 传递。
-7. **启动恢复必须有界**：未知界面最多按 ESC 恢复 60 秒；仍无法识别主页才重启游戏。登录画面应先识别“点击任意处/开始”，登录阶段不得过早发送 ESC。
-8. **部署必须从包含所有已合并功能的分支进行**：`launch-mfa.ps1` 用当前工作树的 `interface.json` 和 Agent 覆盖运行目录。功能合并回 `main` 后一律从 `main` 部署；多个未合并 feature 分支并存时，从缺少某功能的旧分支部署，会把该功能从 MFA 里“部署丢”。合并并部署完成后删除 feature/fix 分支，避免残留分支误导后续工作。
-9. **MFA 任务列表有“用户删除记忆”**：某次部署的 interface 缺少某个任务时，MFA 会把它记进 `config/instances/default.json` 的 `CurrentTasks`（`任务名<|||>Entry` 键）当作“用户已删除”，之后 interface 恢复该任务也不会加回。恢复方法：停止 MFA，从 `CurrentTasks` 删掉对应键再启动；不要在 MFA 运行时直接改该文件（内存会覆盖）。
-10. **演出设置自动保存会覆盖用户设置**：MFA 演出设置页在读取 Profile 失败时会把界面默认值整体写回 `profiles/selection.json`，清空用户运行时选项（Native、流速检查、重试次数、校准流速等）。MFA 侧已加“读取成功前禁止自动保存”的保护。新增运行时选项必须四处同步：`profile_store.py` 的 `DEFAULT_RUNTIME_OPTIONS` 与 `_validated_runtime_options`、MFA `PerformanceProfileSettingsUserControlModel.cs` 的属性/加载/Capture、AXAML 开关。
-11. **登录下载确认框会被退出确认的取消模板误命中**：下载框与退出确认框都有灰色“取消”按钮，`quit_confirm_cancel.png` 在下载框上得分 0.952（阈值 0.9）。下载确认必须先于通用模态取消处理；下载进行中用进度标记被动等待，不发送 BACK/ESC。
-12. **只自动检查流速**：`note_speed_settings_enabled=false` 时，开演前不打开设置页读/改流速，直接信任声明值；镜像、判定辅助、连击显示、FAST/SLOW、NOTE TYPE 与 TAP EFFECT 均由用户按 README 手动配置，运行时不检查、不修改。
-13. **协力准备完毕点击必须确认送达**：点“准备完毕”后要确认按钮消失，最多重试 3 次，防止触控未送达导致倒计时结束后空演奏/跳车。协力结算与演出后的弹窗统一使用“最右下角安全像素 `(1279,719)` → ESC → 同一安全像素”，不得点击可见的确定、下一步或奖励按钮。
-14. **抽卡任务的页面陷阱**：左侧卡池列表滑动找“每日3次免费演出招募”时，滑动起点避开列表底部的“生日纪念服装贩售”入口（否则被当成点击进商店）；9.4.3 免费单抽有“TOUCH TO CUT”剪票引导需要点一下；状态判断统一用“点免费按钮后是否出现确认弹窗”，不要用“剩余N回/尚未完成”状态模板（会互相误匹配）。协力漏键抖动只对 Native 路径生效，由 `cooperative_jitter_enabled` 开关控制。
-15. **协力“其他成员正在准备中”弹窗会误触发首拍门控**：弹窗在演奏场建立后出现/消失（含缩放动画），或弹窗出现时背景变暗，会让判定带整行颜色大幅变化，被当成第一颗音符，把谱面时钟提前启动。Native 协力首拍门控必须：弹窗主体（中下部白色圆角矩形 + 左侧粉色图标）存在时不建立颜色基线；弹窗消失的那一帧只重置基线；冻结基线后若判定带大面积同向变化，视为弹窗/变暗转场而不是首音。首音只能是窄列局部变化；单人/校准/挑战不得引入该弹窗门控。
-16. **协力漏键抖动的 jittered 副本会被误判为预武装谱面不一致**：开启 `cooperative_jitter_enabled` 后，Native 预武装解析会把同一首歌替换成 `debug/jittered-charts/<run_id>.json` 副本，而最终封面复核得到的仍是 canonical 路径；用路径判等会直接失败，导致本局零输入、生命归零。判等必须比较歌曲身份（`bestdori_song_id` + `difficulty` + `level`），身份一致时以预武装副本为准消费。
-17. **Legacy 演奏的长条头不能既 DOWN 又 TAP**：视觉回退局里，hold 起手后其头部碎片会在后续帧被 first-visible rescue 成同轨道 TAP，一颗长条被按两次。抑制器必须记录各轨最近 hold 起手时刻，在 `hold_start_suppress_seconds` 窗口内拦截同轨道 TAP/FLICK；Native 路径不受影响。
-18. **协力黑场转场不能被当成“没有封面”**：准备完成后游戏会先整屏黑一下，随后封面或演奏场淡入；final cover 等待在黑场时进入无 sleep 的密集采样窗口，并在该窗口结束前不因演奏场出现而放弃。标题 OCR 还会把省略号或右侧提示读成杂字（如“…”→“今の”），`title_similarity` 必须容忍首尾噪声，否则准备页谱面无法确认。
-19. **跳过流速设置页不能跳过 Native 预武装**：`note_speed_settings_enabled=false` 时 `RealtimePerformanceSettingsGate` 不要求主页流速结果，但单人非 deferred 流程的 Native 预武装仍在这个门禁里；跳过时仍必须调用 `prepare_native_for_settings_gate`（或按 `defer_native_prearm` 推迟），否则开演前消费会报“预武装不存在或已被消费”，整局零输入。
-20. **协力结算后识别不到房间页不能终止任务**：成员退出弹窗关闭后往往还在结算页，重连不能直接 `ensure_room_page`；应先继续推进结算回房间/主页，仍失败走 `CommonRecover` 重启游戏再进。非 stay 路径结算回不去时把本局计入完成并恢复主页继续下一局，最后一局 stay 失败直接按完成返回。演出结束后的结算导航不识别成员退出弹窗：`wait_for_post_score_destination` 必须传 `detect_member_exit=False`，成员退出检测只保留在房间/准备阶段。
-21. **成员退出弹窗只在进入演奏前出现**：该弹窗只会在进入演奏前（整屏黑场转场之前）的房间/准备阶段出现，演奏过程中和结算画面绝对不会出现。检测只应保留在房间/准备阶段（当前 `wait_for_post_score_destination` 已传 `detect_member_exit=False`）。当前版本弹窗标题是“错误”（正文“由于XX退出房间。将返回房间选择界面。”，底部居中“确定”），`member_exit_title.png` 已替换为完整的“错误”标题（56×27，1280×720 实拍提取），锚点 `(399,158)`、确定按钮点击 `(638,525)`；因“错误”是通用标题，模板检测必须继续限制在房间/准备阶段。2026-09-07 用户实测补充：点“准备完毕”之后、黑场转场之前的窗口里成员退出弹窗仍会出现（此时已离开房间等待页，常规检测不覆盖），会挡住转场导致整局卡死；已加 `watch_member_exit_before_black()`——准备完毕后高频轮询到黑场出现，看到弹窗点“确定”并按成员退出策略处理，看到黑场立即退出窗口。
-22. **协力生命归零的“断网跳车”流程（真实弹窗已提取，MuMu 断网机制受限）**：生命归零后按顺序执行：切断游戏网络 → 游戏退后台再切回 → 弹窗1“通信已中断。是否继续演出？※本次演出将变为单人演出※”点**左侧“中断”** `(508,447)` → 弹窗2“确认中断当前演出返回主页吗？※中断当前演出的话，将不会获得演出报酬。”点**右侧粉色“中断”** `(754,439)` → 恢复网络 → “连接失败。”弹窗有界点“重试”直到回主页。模板 `disconnect_continue_body.png`（锚点 488,313）与 `disconnect_confirm_body.png`（锚点 495,307）已从 2026-09-07 雷电录像提取。关键约束：**禁止用 `svc wifi` / 飞行模式开关网络**——实测（2026-09-06 与 2026-09-07 两次）`svc wifi disable` 和 `settings put global airplane_mode_on 1`+广播都会打断 MuMu 的 adb 通道（设备离线），因为 MuMu 客户机只有 `wlan0` 一张网卡，游戏流量和 adb 的 NAT 转发同路，任何真实断网都会连带杀掉引擎的截图/触控通道。**MuMu 按 UID 断网目前不可行**：Android 12 内核无 `xt_owner` 匹配模块、无 `nft`、无 `bpftool`，`cmd netpolicy` 也没有 `set uid-policy`。**iptables 门禁已在雷电实测可用**：`adb root` 后 shell uid 0，owner 模块存在，`GameNetworkGate` 对游戏 UID 的 REJECT/恢复端到端验证通过（2026-09-07）；MuMu 上会 fail-closed。MuMu root 已开（`root_permission=true`）。已实现：`cooperative_network.py` 按 UID 屏蔽/恢复、`connect_failed_body.png`、`dismiss_connect_failed`、`disconnect_jump_out()` 两段弹窗编排（全程 finally 恢复、模板缺失直接 fail-closed、带单元测试）、引擎生命归零钩子与 UI“断网跳车”选项。MuMu 上的可行路线待用户定：手动断网后自动化处理弹窗，或找 MuMu 主机侧网络开关；`mumu-cli control --vmindex 0 tool cmd -c "<guest cmd>"` 是独立于客户机网络的宿主机通道，adb 断掉时可用它执行 `settings put global airplane_mode_on 0` 恢复。
-23. **MFA 双进程/配置切换闪退是上游 Avalonia 崩溃**：2026-09-07 用户实测同时开两个 MFA（本机+便携）或快速来回切换配置时，`MFAAvalonia.exe` 以 `0xc0000005` 崩溃在已卸载的 `external_renderer_ipc.dll`（Windows Application 事件日志 11:00:30、11:03:20）。这不是 Agent 代码问题，修复需要改定制 MFAAvalonia 源码/上游；暂按“单实例 + 少切换配置”规避。“配置2连雷电但输入派发到 MuMu”是既有 `emulator-7554` 端口影子问题（MuMu 运行时占用 127.0.0.1:7555），关 MuMu 后恢复正常，与本条目无关。
-24. **协力最终封面能读到却不认识＝歌曲不在本地曲库**：trace 里若出现大量“final cover jacket does not match selected chart / song fingerprint is not confirmed”而 playfield 已可见，通常是游戏新增歌曲未同步进 `resource/charts` 目录（选曲页同样 song=unknown）。此时协力没有可信准备页谱面可回退，只能整局视觉演出；修复是重跑 `scripts/sync_bestdori_catalog.py` 同步曲库。注意区分第二种情形：日志先出现 `gate_mismatch ... selected_bestdori_id=<N>` 再出现 `resolve_failed` 的指纹变化，说明封面已按“14 bit + 等级”被仓库解析、却被 `FinalCoverGate` 的 8 bit 复核拒绝（实测 `Little Busters!` 稳定 10 bit）——封面门控必须与 `LocalChartRepository.resolve` 使用同一套“等级匹配才放宽到 14 bit”的阈值，不要改回 8 bit，否则 Native 拿不到谱面、整局降级视觉 Legacy。`CooperativePreparePopupDetector` 是像素启发式（白色圆角条+左侧粉色图标），不依赖模板，`live_prepare.png` 只用于单人/自动/挑战的演出准备节点，与协力等待弹窗无关。
-25. **协力谱面校准窗必须容纳“其他成员准备中”的等待时长**：协力演奏场出现后歌曲可能再等十几秒才开始（实测 2026-09-08 `FIRE BIRD` 等待约 16.4 秒），引擎锚点与歌曲开始的真实相位可超过单人局默认的 12 秒候选窗；窗口过窄会排除真实相位，让周期性段落里的假相位接管谱面时钟（实测锁到 -4522ms、比真实 -13530ms 早约 8.9 秒，开局几个视觉按键后整段盲压到生命归零）。`ChartPredictor` 的 `calibration_early_window_s` 在协力模式放宽到 60 秒，其余模式保持 12 秒；不要再缩回固定小窗口。此外锁定后相位校验窗口只有 ±350ms，整段相位锁错时既匹配不到同 lane 判定也不会产生可计入残差，旧逻辑完全看不见——现在按“滑动窗口 24 个可信投影中 ≥65% 在同 lane ±350ms 内找不到任何谱面判定”fail-closed，放弃 chart 输入回退纯视觉。改动谱面校准时先用 `scripts/replay_realtime_trace.py --chart-prelude-window` 对真实 trace 离线重放对比锁定相位。
-26. **Legacy 的 HOLD/Slide 开局锁相只能消费离散拓扑事件**：连续绿色像素和逐帧 HOLD 是同一条绿条的重复观测，绝不能当多个校准样本。只使用视觉管线已经确认并派发的 HOLD/Slide 头 DOWN（50ms 内聚合同一和弦）与同一 contact 的离散 lane transition；匹配已确认本地谱面的 hold path 后，至少 4 个节点、2 组事件、2 条路径共同确认，残差 MAD 与 confidence 达标且不存在等强相位候选才允许 `chart_calibrated`。单个绿条、技能绿色特效、重复 lane pattern 或错误候选必须继续纯视觉，既有 TAP/FLICK/SKILL 投影校准与 fail-closed 回退不得删除。HOLD 事件时间要先去掉 Profile press bias，避免锁相后谱面调度再次应用 timing offset；不得借此修改 Profile 或扩大 FAST/SLOW ±35ms feedback correction。
-27. **协力准备后短黑场不能作为唯一退出证据**：2026-09-09 `coop-20260909-114620-401553` 中，准备完毕后先固定睡眠 2 秒、黑场又被后续 100ms 轮询漏掉，旧 `watch_member_exit_before_black()` 只认黑场/成员退出而静默等满 12 秒；随后 preflight 已是中段演奏，Native 约 18 秒晚入场。入房后先独立等待“不指定歌曲”或准备页 180 秒，超时必须退到桌面再切回游戏并结束任务；点击“不指定歌曲”后重新开始独立 60 秒准备页窗口，不能继续共用前一阶段剩余时间。点击准备完毕后必须高频观察按钮送达、成员退出和黑场，不能有固定盲等。普通协力开演可消费本轮真实黑场，或连续两帧稳定且由本局难度、等级、标题共同确认的最终封面；后者必须把封面帧与解析结果一次性交给 `RealtimeProfilePlay`，不得重新等待黑场。任意高纹理加载画面不能作为封面放行。开演观察窗统一使用 `MEMBER_DOWNLOAD_TIMEOUT_SECONDS=60`，覆盖烧条倒计时和成员准备较慢的场景。漏黑场 fallback 的完整演奏场 + 连续局部音符运动只可证明“歌曲已开始”，必须记录后 fail-closed，绝不能在中段启动 Native/Legacy；此后仅运行独立数值生命监控，确认 alive 后连续 3 帧 `<20` 或监控超时时退到桌面再切回游戏并停止任务。大面积转场不得作为证据；准备页可能同时误中生命条和六轨白色标记，静态元素绝不放行。60 秒内仍无黑场、匹配封面或可靠动态证据时同样安全跳车并停止。数值生命监控未触发跳车时，不得直接改阈值，应在调试证据中先检查可见/不可见样本、最低值、`<20` 连续帧、alive/dead 确认和首个候选截图。
-28. **Native 触点释放必须由本轮设备 `r` 回执证明**：EvATive7 minitouch 的 `w` 会在设备 reader 内阻塞，reset 写入 socket、关闭连接或 kill 进程都不能单独证明排队的 `r` 已执行。只在本轮 reset 请求前记录的 jlog 游标之后，精确解析到 `command == "r"`，再完成本地句柄、设备进程和启动提交清理，才允许 `release_confirmed=true`；旧 `r` 不得复用。最大队列 750ms 时统一使用 1 秒停止预算（750ms 等执行 + 250ms 清理），超时仍强制关闭但必须 fail-closed。协力空血取消只有同时满足 jump_requested、life_depleted、双 cancelled、reset 执行确认及其余传输门禁时，才能进入断网跳车流程。
-
-29. **跨进程重试预算不能使用 RemoteTasker 指针**：MaaFramework 每次 Agent Action 回调都会创建临时 `RemoteContext`/`RemoteTasker`，Python `_handle` 是代理指针，不是稳定的远端任务身份。预算使用回调携带的 `argv.task_detail.task_id`，由下一局入口显式 reset；缺少有效任务 ID 时拒绝重试。回归必须覆盖真实 AgentClient/AgentServer 连续回调，不能只用固定 `_handle` 的 mock。
-30. **Native 等待补偿必须覆盖已知命令成本**：每条 `w` 的总补偿固定限于 1ms 时，已知等待额外成本大于 1ms 也无法被持续抵消。离线恒定 1.5/2ms 成本可复现 10 秒累计晚 100/200ms。2026-09-11 雷电真机验收后成本回收与一次性启动延迟补偿默认启用；开发回归可用 `launch-mfa.ps1 -DisableNativeTimingCompensation` 临时关闭。仍须验证跨切片残差和触点生命周期，设备相对计划漂移不等于游戏判定相位，不得据此直接改 Profile。
-
-31. **Profile 当前选择属于任务难度槽位**：表格单击只查看/编辑，双击才把文件设为当前。写入 `selection.json` 时使用界面正在配置的任务难度，不使用 Profile 自身难度；否则给 Easy/Hard 选择兼容的 Expert/Special Profile 会误写进高难度槽。Expert 与 Special 是同一兼容等级，二者互相兼容并都可供较低难度任务使用；当前项用主题 `SukiPrimaryColor` 标记，不能与 DataGrid 的普通选中状态混为一体。
-
-32. **Special 的实际难度与方向语义必须 fail-closed**：协力、单人实时、挑战和 AutoLive 请求 Special 时，只有在 Special 按钮不可选时才允许显式回退 Expert；实时校准仍要求精确选中 Special。单人实时、挑战和协力必须把 `requested_difficulty=Special`、`effective_difficulty=Expert` 贯穿准备页身份、Profile、流速门禁、谱面、Native 预武装、播放和结果证据，不能在已选 Expert 后又按 Special 查谱；AutoLive 至少必须在难度选择日志中记录请求与实际难度。实际选中 Special 时，Native 与 Legacy 都必须先确认可信本地谱面；Legacy 强制启用 ChartPredictor 恢复 Directional Left/Right，缺谱、身份冲突或最终封面未确认时在触控前失败。Bestdori Directional `width=1..7` 表示横跨轨道数/判定尺寸并影响最低滑动阈值；当前固定水平滑动距离已覆盖七档。2026-09-12 雷电 Native 单人真机五局全部 MISS 0，其中两张谱面覆盖 Left/Right 与 `width=1..3`；据此保持既有手势距离与 190ms 首音补偿。协力仍无本轮真实房间证据，不得由单人结果推断 broad-change 门禁已经验收。
-
-33. **协力开演前截图只能复用本轮未改动的准备页**：2026-09-12 的 28 次开发 MFA 协力记录中，从点击难度到点击“演出开始”平均约 3.57 秒，中位数 3.41 秒，主要成本是设置门禁关闭后仍串行执行两次完整刷新截图。流速门禁刚完成截图且没有在准备页打开或改动游戏设置页时，才可把独立的 `cooperative_prestart_image` 交给演出模式确认和“准备完毕”按钮检测；不要复用较早的身份取证截图。缓存帧看不到按钮时必须再采一张新图后才能按“已准备”处理，切换演出模式后同样必须刷新。点击后的按钮消失、成员退出和黑场观察属于触控送达与开演安全门禁，不得为缩短耗时而删除。优化后雷电 Native 两局实测约 0.76 秒和 0.43 秒，平均约 0.59 秒；两局均第一次点击送达、完整演奏并正常结算。
-
-34. **流速只允许在主页复核**：`note_speed_settings_enabled=false` 时所有任务永不检查设置页，直接信任用户声明值；开启时单人、协力、校准和挑战每次任务在离开主页前，由 `RealtimeGameSpeedSettingsGate` 只读取、按需修正并复核流速。准备页的 `RealtimePerformanceSettingsGate` 只复用本次任务的主页流速结果，目标不一致或缺少主页结果时 fail-closed，禁止再次打开设置页；不得保存或复用跨任务持久凭据。旧 Profile/校准 JSON 中的视觉字段只为读取兼容保留，不再参与匹配或续跑判定。
-
-35. **协力准备弹窗按固定缩放中心区分首批音符**：2026-09-12 外部 v1.3.7 的歌曲 538 Hard 证据中，真实“其他成员正在准备中”弹窗先持续 60 帧并消失，beat 7.75 的白底粉色双 FLICK 又让像素启发式产生一次仅 16ms 的 `prepare-popup-visible`；门控重置后在 1.066 秒后的下一颗附近才触发，而谱面前两组间隔 0.985 秒，造成整局晚一颗并快速空血。真实弹窗从画面约 66% 高度的固定中心等比例放大、缩小，可能完全不出现，也可能未放大到完整尺寸便缩小消失；检测必须按该中心位置区分判定线附近更靠下的白底粉色双 FLICK，不能要求弹窗一定出现、达到完整尺寸或持续多帧。任意一帧真实弹窗仍须拦截，消失帧仍须重置判定带，演奏场、500ms 前奏宽限和 broad-change 门禁继续保留。外部 trace 从 Native 启动后才开始低频记录，无法替代首音 60FPS 帧；修改检测器必须同时回归弹窗不出现、冻结后只闪一帧、正常完整出现、缩放中间态和首批双 FLICK，再做真机协力验收。
-
-36. **自由巡演身份必须延后到每曲准备页，当前曲目允许重复**：2026-09-14 雷电 Native 真实完成一组自由巡演（当前曲目、Expert、3 次），三个选曲槽都只确认实际难度，随后三曲分别在自己的准备页确认歌曲 125；三曲相同仍正常演奏、逐张保存 713P/0G/0M 的 PGGBM，处理活动故事弹窗并回到主页，MFA 成功终态用时 7 分 58 秒。最终原子会话为 `completed_total=3`、`results_completed=3`、`stage=completed`。不要恢复选曲页身份读取或重复歌曲拒绝；这次只验收了自由巡演“当前曲目”单组，随机歌曲、课题巡演、跨组计数和中断续跑仍需各自真机门禁。
-
-37. **所有演出结算只能复用安全像素/BACK节拍**：2026-09-14 外部 v1.3.8 的 3 次与 6 次组曲任务会卡在巡演总分与演出报酬页。根因不是缺少新的页面按钮，而是组曲没有复用协力已验证的结算节拍，并把 `(1065,650)` 可见按钮点击当作回退。统一规则固定为“最右下角像素 `(1279,719)` → Android BACK → 同一像素”：两次像素点击只加快动画，BACK 是唯一页面推进输入；不识别奖励、排名、总分等中间页。单人、挑战、校准、自动、协力、一键与组曲都必须沿用；组曲唯一差异是按会话断点读取总计三张 PGGBM，因此需要在每次安全像素或 BACK 后先截图检查，再继续下一步，不能把整轮三次输入连发后才识别。2026-09-14 真机证明连发会在约 31 秒内从总分页一路回到主页但保存 `0/3`，历史三张 PGGBM 真图对模板的分数均约 `0.9847`，不是模板失配。耗尽后保存现场并进入 `CommonRecover`，必要时重启游戏。Agent 的反向 Controller 代理不能跨前台保护或嵌套任务保留：同日真机还在三首演奏完成后的第一次安全像素输入复现 `MaaControllerPostClickV2` 访问冲突；共享结算 helper 必须接受 Controller provider，并在每次保护检查结束后重新获取当前代理再发送输入。
-
-38. **正式准备页必须先关闭 3D/MV，再检查 3D Cut-in**：2026-09-14 `EXPOSE ‘Burn out!!!’` Special 准备页中，3D 演出状态会在 `(480:520,630:670)` 显示粉色成员头像，而真正的“3D Cut in模式”复选框只有演出模式切到 OFF 后才出现在同一区域。旧 `RealtimeFormalPreflight` 先按颜色检查 Cut-in，因头像产生 208 个高饱和像素而连续八次点击 `(500,650)`，从未执行左下模式切换并最终失败。顺序必须固定为：先用 `(141,649)` 依次切换 `3D演出 → 动画MV → OFF`，每次刷新截图；确认 OFF 后再检查 Cut-in，未勾选样本为 0 个高饱和像素、勾选样本为 873 个。不得删除 Cut-in 处理，也不得在 3D/MV 尚未关闭时读取其固定区域。
-
-39. **组曲启动不能用旧结算会话替代当前页面证据，短等待不能二次读取截止差值**：2026-09-14 23:53 从普通单曲准备页启动课题组曲时，本地仍有 19:15 创建、`completed_songs=3/results_completed=0/stage=results` 的旧会话；旧逻辑只要当前页既非主页也非第 2/3 曲，就直接恢复进度 `3/3` 并把任意页面当结算发送安全像素/BACK，回到主页后以“仅保存 0/3 张 PGGBM”失败。只有身份一致的第 2/3 曲准备页可直接续跑；旧待结算会话从其他页面启动时，允许用统一安全节拍寻找 PGGBM，但若先到主页/巡演入口，必须把旧会话标为 `result_pages_left_before_collection` 并从第一曲开始新一组，且在真正确认旧结算前不得恢复 `3/3` 进度。同日 23:56 第一曲完成后，`wait(0.35)` 在循环条件和 `sleep()` 参数之间分别读取时钟，截止点恰好落在两次读取之间，产生负数并抛出 `ValueError: sleep length must be non-negative`；所有这类等待必须先单次计算 `remaining`，`remaining <= 0` 直接返回，否则再睡眠。2026-09-15 雷电真机从第 2 曲断点续跑后完成第二、三曲、保存三张 PGGBM 并以 `3/3` 成功回主页；随后从普通非主页页面启动时，`CommonRecover` 两次 ESC 后识别主页并从新一组 `1/3` 开始，两个分支均已验收。
-
-40. **v1.4.0 起必须区分项目许可、品牌与第三方许可证**：MaaBanGDream 自有部分自 v1.4.0 起使用 PolyForm Noncommercial 1.0.0，旧标签至 v1.3.9 继续按随版 GPL 授权；公开派生版本须遵守 `TRADEMARKS.md` 的不同名称和 Logo 要求。根 `LICENSE` 不能覆盖 MFAAvalonia、MaaFramework、minitouch、nlohmann/json、OCR 模型、游戏素材或谱面；发布包必须同时包含 `LICENSE-MaaBanGDream.txt`、`LICENSING-MaaBanGDream.md`、`TRADEMARKS-MaaBanGDream.md`、`THIRD-PARTY-NOTICES.md`、MFAAvalonia GPL 和 MaaFramework LGPL 正文。README、`interface.json`、发布说明与打包契约必须保持一致，不得再把项目称为 OSI 开源软件。
-
-## 后续开发方向（已记录，暂缓或未开始）
-
-- **关于页素材与 GitHub 限流**：关于页专用字段 `about_icon` 使用 `docs/assets/maabangdream-logo-v1.png`，`description` 使用 `docs/about.md`，`contact` 使用 `docs/contact.md`；部署与打包须同时携带三者。不要把 v1 填入通用 `icon`：该字段也会替换窗口/软件标志。软件继续使用默认内嵌 Logo，关于页通过渲染层居中缩放裁剪放大人物，不覆盖原图。Logo、联系方式、许可证等分区框须使用 MFA/Suki 原生 `GlassCard` 及其 `ControlGlassOpacity`，不能用普通 `Border + SukiCardBackground` 绕开框架玻璃透明度。`MaaInterface.Merge` 必须保留 `Icon/AboutIcon`，设置页延迟创建时须补载说明文件；Avalonia 缩放中心用 `50%,50%`，不是像素坐标 `0.5,0.5`。发布构建必须把 `docs/release-notes-v<version>.md` 复制为包内 `resource/Release.md`；“显示公告”和更新完成弹窗只读取本地文件，不得在点击时请求 GitHub，也不得在发现新版本时用远端正文覆盖当前版本说明。复用 `ChangelogView` 与原生下载提示；更新完成公告只能在包校验通过且核心整包最后写入匹配的 `update-manifest.json` 后展示。GitHub 标签带 `v`、安装版本不带 `v` 时须按语义比较版本，网络请求仍保留原始发布标签。GitHub REST 明确限流时，稳定版查询可回退 `releases/latest` 与 `releases/expanded_assets/<tag>`；继续执行同一套选包和 SHA-256 校验，不得将普通权限错误或预发布通道静默改成稳定版。
-
-- **MuMu Native 漂移**：定性为客户机时钟速率偏斜且逐局可变，速率校正实验闭环发散；暂不解决，MuMu 用 Legacy、雷电用 Native。见“最近交互”的 MuMu 时钟偏斜条目。
-- **调试文件定时清理**：暂不做应用内自动清理；已有 `.local/clean-recordings.ps1`（保留最新 5 个）。若做，建议按保留天数在任务启动时修剪 `debug/recordings/*`，并留足证据窗口。
-- **双 MFA 进程/配置切换闪退**：上游 Avalonia `external_renderer_ipc.dll` 0xc0000005；暂缓，规避方式为单实例、少切换配置。见第 23 条。
-- **纯 GitHub 整包更新（v1.3.3 起，已实现双端）**：早期“逐文件 Range 增量”
-  方案已废弃（354MB Python 运行库归档每次都进 diff、国内网络卡在 7%、中断后
-  无法续传）。现行为：整包下载到 `.part`（HTTP Range 断点续传）→ 与发布附带
-  `.zip.sha256` 校验 → 重启辅助脚本在进程退出后覆盖解压（保留
-  config/profiles/logs/debug/screencap）→ 直接 ShellExecute 启动器重启；
-  版本依据为 `update-manifest.json`（只在完整应用成功后写入）。更新包
-  `MaaBanGDream-vX-win-x64-update.zip` 不含 Python 运行库归档与
-  `resource/charts`（谱面走“演出设置 → 谱面辅助 → 同步”独立通道），约
-  148MB；本机 `runtime/python/python.exe` 缺失才回退完整包。首启解压后删除
-  `runtime/maabangdream-python.zip`。更新 ZIP 必须把 `interface.json` 直接放在归档根目录；
-  完整安装 ZIP 才保留版本目录外壳。发布校验必须分别检查这两种结构，不能只验证文件存在。
-  升级后安装目录名自动跟随版本（
-  `MaaBanGDream-v1.3.3-win-x64` → `MaaBanGDream-v1.3.4-win-x64`），由
-  `normalize-release-directory.ps1` 的脱离启动器辅助进程改名（启动器退出码 2 协议），自定义目录名
-  不改。关键坑：中文路径别经 `cmd /c` 转 ANSI 代码页（用 ShellExecute 直启
-  `.cmd`）；生成的 `.ps1` 必须写 UTF-8 BOM；`SHA256.HashData(Stream)` 不关闭
-  流，必须 `using`。
-- **复用 MFA 原生 GitHub 更新界面（v1.3.6 起）**：`interface.json` 顶层 `github`
-  指向本仓库，检查、下载进度、Toast、标题栏提示与自动更新统一由原生
-  `VersionChecker` 管理；未声明 Mirror RID 时更新源固定为 GitHub。归档筛选排除
-  `.sha256`，已有 runtime 时优先 `-update.zip`，缺失时选择完整包；下载使用
-  `.part` + HTTP Range，并在 SHA-256 通过后才完成。含核心文件的包由 self-contained
-  `MFAUpdater.exe` 等主进程正常退出后覆盖，保留用户目录、最后写版本清单。旧
-  `scripts/update.ps1` 仅保留在 v1.3.5 已发布客户端中用于桥接到 v1.3.6；新包不再
-  携带自建网络更新器。
-- **更多演出类型**：组曲演奏首版已实现；自由巡演“当前曲目”单组及完整结算已于 2026-09-14 真机验收，仍待随机歌曲、课题巡演、跨组计数和中断续跑真机验收。
-
-## 修改后的最低验收
-
-除 `scripts/verify.ps1` 和运行时兼容检查外，涉及任务生命周期或 MFA 部署时至少完成：
-
-1. 通过 `scripts/launch-mfa.ps1` 部署并启动；
-2. 打开 MFA 设置页，确认“演出设置”存在且 Profile/参数能加载；
-3. 确认最新启动日志包含“跳过启动资源版本检查”，且没有新的 Mirror 酱错误；
-4. 从主页实际启动一次任务，确认能进入相应演出流程；
-5. 运行中手动停止，确认显示“已放弃本次任务”，不是“任务运行失败”；
-6. 对实时演奏改动先重放已有 `trace.jsonl`，再决定是否需要完整真机长曲验收。
-
-MaaBanGDream 和定制 MFAAvalonia 是两个独立 Git 仓库。若一次修复同时修改两边，必须分别检查工作树、分别提交和推送，不能把一个仓库的源码复制进另一个仓库。
-
-## 高密度谱面与流速闭环约束
-
-1. **紫色外圈不是 FLICK**：普通音符的紫色外圈只能作为普通 TAP 的补充可见区域；只有检测到成组、同向的粉色箭头/折线后才能升级为 FLICK。修改颜色阈值时必须同时回归普通紫色音符与真实粉色箭头。
-2. **实时热路径禁止阻塞**：截图、检测、跟踪和触控派发路径不得使用 `sleep`、ADB 前台查询或同步等待手势完成。FLICK 必须按帧推进 DOWN/MOVE/UP；停止、异常和歌曲终态必须立即释放全部触点。
-3. **HOLD 必须有轨迹证据**：绿色技能特效、短圆环和判定线残影不能单独启动长按。HOLD 需要连续绿色轨迹、可信形状或跨帧一致运动；无绿条歌曲的离线重放必须保持 `hold_start=0`。
-4. **游戏流速只在流速开关开启时于主页读取后修正**：`interface.json` 的 `note_speed` 只是目标声明；`note_speed_settings_enabled=false` 时永不进入设置页并直接信任该声明，开启时每次任务都必须真实进入主页“选项”弹窗，用固定数字模板读取、按差值修正并再次读取。弹窗会记住上次使用的标签页，进入检查时必须先点击第一个“演出设定”标签 `(297,155)`；不要再点击 `(430,155)`（该坐标属于“演出效果·音量设定”）。流速范围为 `1.00–12.00` 且首尾循环，按钮从左到右为 `-0.50/-0.10/-0.01/+0.01/+0.10/+0.50`；连续减法不能归一到最小值。准备页不得补做，也不得用跨任务持久凭据跳过主页读回。
-5. **一个 Profile 固定一种流速**：Profile 环境签名继续精确记录流速。不同难度或同一难度可有不同流速 Profile，但一次四首歌校准过程中不得逐曲自适应修改流速；需要试验新流速时生成新的 Profile。
-6. **密集同轨音符不得固定宽合并**：跟踪与轮廓拆分阈值必须随透视和音符头尺寸缩放。修改后至少覆盖同轨间距 8–20 px 的回归用例。
-7. **日志必须可直接验收**：实时终态至少输出实际/期望流速、是否修正、TAP/FLICK/HOLD 动作数、帧间隔 P50/P95/最大值、有效 FPS 和明确终止原因。
-8. **定制 MFA 脏工作树也必须重新部署**：部署标记不能只比较 MFA 的 Git `HEAD` 和 `MFATask.cs`。设置页/ViewModel 等未提交源码变化也要计入指纹，否则 `launch-mfa.ps1` 会误判“已部署”并继续运行旧 DLL。
-9. **不要假定 Maa OCR 可用**：项目资源包当前不含 MaaFramework OCR 检测/识别模型；未显式部署并验证模型时，JOCR 会返回空结果且日志出现 `recer_ is null`。流速门禁使用仓库内纯黑白数字模板，不是 JOCR；模板读取失败或复核不一致时必须阻止开演，不能退回盲点按钮。
-10. **共享封面不能单独确认歌曲**：早期歌曲和 `[FULL]` 版本可能使用同一封面。封面 pHash 只做候选收窄，必须结合难度等级与本地标题 OCR；等级冲突是硬拒绝条件。`[FULL]` 仅作为本地标题别名参与匹配，不能吞掉等级约束。
-11. **难度数字模板必须覆盖 6/8**：难度等级读取曾因过严相似度门槛稳定拒绝含 6 或 8 的等级。改分类阈值后需用 5–40 的合成数字全集回归；共享封面仍歧义时可跨帧重试，但不得重复点击难度。
-12. **结算导航只使用 Android BACK**：奖励、排名、活动和达成报酬页面禁止点击任何可见按钮或按钮坐标。所有演出固定循环“最右下角安全像素 `(1279,719)` → Android BACK → 同一安全像素”；像素点击只加快动画，BACK 才推进页面。一轮完成后只识别 PGGBM 或最终剧情/主页等必要终点；组曲按会话断点识别总计三张 PGGBM。
-13. **临轨绿条只在严格证据下取中点**：只有至少三次相邻轨来回切换、轨道跨度恰为 1 的锯齿 Slide，才把触点锚在两轨中点；普通滑条仍跟随谱面连接点，不能泛化成宽判定。
-14. **谱面同步是显式维护操作**：MFA 的手动同步入口复用 `scripts/sync_bestdori_catalog.py`，只保存 Hard/Expert/Special，封面按 CN→JP→EN 回退。演奏热路径禁止联网；同步前应停止 Maa 任务，生成清单必须原子替换。
-15. **首音门控必须先证明演奏场成立**：Native 的 60 FPS 截图循环不得使用固定 200 帧冻结期，也不得用加载页、歌曲信息页、全黑转场或演奏场淡入建立颜色基线。单人、校准、挑战和协力都必须先同时确认生命条与至少六轨白色判定标记；随后才按各自进入阶段使用连续稳定窗口和 500 ms 前奏残留宽限。两类模式不得引入不同的歌曲时间偏移，演奏场证据丢失必须重置基线。检测带到判定时刻的补偿必须由当前流速的真机录像对齐，不能直接照搬上游 30 ms；当前 Expert 速度 5.0 基线为 190 ms。结果报告必须保存演奏场等待、补偿、稳定、忽略和触发证据。
-16. **最终封面复核谱面，首音只负责定时**：单人、校准、挑战和协力在完整演奏场前都必须观察最终歌曲信息页，使用居中封面复核本轮已解析的本地谱面；封面不得作为歌曲时钟起点。准备页难度、等级或共享封面标题发生真实冲突时仍硬拒绝；仅最终封面未识别时不得直接结束：已有可信准备页谱面则记录降级并继续原谱面，没有可信谱面则必须在发送任何触控前整局回退 Legacy 视觉演奏，禁止 Native/Legacy 中途混合。数值 `LifeDetector` 只负责演奏场确认、生命归零和结算终态，不得重新引入低血量提前暂停；协力不得先等到演奏场出现再启动会话。
-17. **调试证据必须覆盖完整演奏生命周期**：实时调试记录不能只从音符热路径开始；同一 run ID 的证据包至少要关联准备页身份、开演前检查、最终封面、演奏场门控、输入引擎、结算、清理，以及所有降级和重试决定。高频阶段继续使用非阻塞 Trace/录像，低频阶段保存有界关键截图和结构化原因；任何门控失败、超时、异常、用户停止和重试前都必须留下终态现场。技术失败重试必须有可配置上限，每次重试先释放全部触点和 Native 会话并恢复到已识别页面；用户停止、配置冲突和身份硬冲突不得盲目重试。
+提交前还要运行 `git diff --check` 并检查未跟踪文件。涉及任务生命周期、部署或实时输入时，
+交付状态必须分别写清：
+
+1. 自动化测试是否通过；
+2. 是否已部署到开发 MFA；
+3. 是否完成真实设备/游戏验收；
+4. 仍未验证的模式、风险和回退方式。
+
+“已构建”“测试通过”“已部署”和“真机验收通过”是四个不同状态，不能互相替代。
