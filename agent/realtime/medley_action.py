@@ -23,13 +23,23 @@ try:
     from ..foreground_guard import GAME_PACKAGE, require_game_foreground
     from ..live_select import LiveSelectFind, _find_tour_live_card
     from ..screen_refresh import ScreenRefreshCancelled, capture_image
-    from ..task_reporting import TaskProgress, log_task, record_failure_reason
+    from ..task_reporting import (
+        TaskProgress,
+        latest_failure_reason,
+        log_task,
+        record_failure_reason,
+    )
 except ImportError:
     from common_recover import CommonRecover
     from foreground_guard import GAME_PACKAGE, require_game_foreground
     from live_select import LiveSelectFind, _find_tour_live_card
     from screen_refresh import ScreenRefreshCancelled, capture_image
-    from task_reporting import TaskProgress, log_task, record_failure_reason
+    from task_reporting import (
+        TaskProgress,
+        latest_failure_reason,
+        log_task,
+        record_failure_reason,
+    )
 
 from .chart_repository import LocalChartRepository
 from .difficulty_action import (
@@ -39,7 +49,13 @@ from .difficulty_action import (
 )
 from .formal_preflight import RealtimeFormalPreflight
 from .game_effect_settings_action import RealtimeGameSpeedSettingsGate
-from .live_session import current_live_run, reset_live_run, update_live_run
+from .live_session import (
+    append_current_run_event,
+    current_live_run,
+    reset_live_run,
+    update_live_run,
+)
+from .native_prearm import discard_prearmed_backend
 from .performance_settings_action import (
     RealtimePerformanceSettingsGate,
     _speed_settings_target,
@@ -175,6 +191,118 @@ class MedleyResultsLeftBeforeCollection(RuntimeError):
             "组曲结算尚未完整保存就已离开结算页面："
             f"仅保存 {self.results_completed}/3 张 PGGBM"
         )
+
+
+class MedleyPlayFailure(RuntimeError):
+    """单曲演奏已启动后的结构化失败，供组曲决定是否整组重开。"""
+
+    def __init__(
+        self,
+        *,
+        song_index: int,
+        report_path: str,
+        reason: str,
+        result_status: str,
+        retryable: bool,
+    ) -> None:
+        self.song_index = int(song_index)
+        self.report_path = str(report_path)
+        self.reason = str(reason)
+        self.result_status = str(result_status)
+        self.retryable = bool(retryable)
+        super().__init__(
+            f"第{self.song_index}曲实时演奏未完成：{self.reason}"
+        )
+
+
+def _failure_text(payload: dict[str, Any], latest_reason: str) -> str:
+    """从延迟报告和运行时失败原因收集同一局的终态证据。"""
+    native = payload.get("native")
+    values: list[object] = [
+        (
+            native.get("game_terminal_reason")
+            if isinstance(native, dict)
+            else None
+        ),
+        payload.get("terminal_reason"),
+        payload.get("reason"),
+        latest_reason,
+    ]
+    return next(
+        (
+            str(value).strip()
+            for value in values
+            if isinstance(value, str) and value.strip()
+        ),
+        "RealtimeProfilePlay 返回失败，但未留下可解析的终态原因",
+    )
+
+
+def _retryable_play_failure(result_status: str, reason: str) -> bool:
+    """只重试已开演后的生命失败或瞬时引擎失败，保留硬冲突的 fail-closed。"""
+    status = str(result_status).strip().casefold()
+    text = str(reason).strip().casefold()
+    if status == "stopped" or any(
+        marker in text for marker in ("用户已停止", "task is stopping")
+    ):
+        return False
+    if status == "preflight_error" or any(
+        marker in text
+        for marker in (
+            "profile", "配置", "身份", "谱面", "难度", "流速",
+            "final cover", "开演前",
+        )
+    ):
+        return False
+    if any(marker in text for marker in ("生命值归零", "生命归零")):
+        return True
+    return status in {
+        "engine_error", "engine_incomplete", "playfield_start_timeout",
+    }
+
+
+def read_medley_play_failure(
+    report_path: str | Path,
+    latest_reason: str = "",
+    *,
+    run_id: str | None = None,
+) -> MedleyPlayFailure:
+    """读取失败报告；延迟报告缺失时仅按本局 run ID 查找即时报告。"""
+    requested = Path(report_path)
+    path = requested if requested.is_absolute() else PROJECT_ROOT / requested
+    payload: dict[str, Any] = {}
+    try:
+        candidate = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(candidate, dict):
+            payload = candidate
+    except (OSError, json.JSONDecodeError):
+        pass
+    if not payload and run_id:
+        output = PROJECT_ROOT / "screencap"
+        suffix = f"-{str(run_id)[:8]}.json"
+        candidates = sorted(
+            output.glob(f"realtime-result-*{suffix}"),
+            key=lambda value: value.stat().st_mtime,
+            reverse=True,
+        )
+        for candidate_path in candidates:
+            try:
+                candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(candidate, dict):
+                payload = candidate
+                path = candidate_path
+                break
+    result_status = str(payload.get("result_status", "unknown"))
+    reason = _failure_text(payload, latest_reason)
+    return MedleyPlayFailure(
+        song_index=0,
+        report_path=str(path),
+        reason=reason,
+        result_status=result_status,
+        retryable=_retryable_play_failure(result_status, reason),
+    )
 
 DEFAULT_SETTINGS: dict[str, object] = {
     "tour_type": "free",
@@ -645,6 +773,7 @@ class MedleySessionStore:
         *,
         settings: dict[str, object],
         songs: tuple[MedleySong, ...],
+        outer_task_id: int,
         speed_verified: bool = False,
         note_speed: float | None = None,
         completed_before_round: int = 0,
@@ -663,6 +792,7 @@ class MedleySessionStore:
             "updated_at": created_at,
             "status": "active",
             "terminal_reason": None,
+            "outer_task_id": int(outer_task_id),
             "tour_type": str(settings["tour_type"]),
             "song_mode": str(settings["song_mode"]),
             "requested_difficulty": str(settings["difficulty"]),
@@ -729,6 +859,32 @@ def session_matches_settings(
     )
 
 
+def outer_task_id_from_argv(argv: CustomAction.RunArg) -> int:
+    """只使用 Maa 回调携带的 task_id，禁止回退到临时 RemoteTasker 指针。"""
+    detail = getattr(argv, "task_detail", None)
+    value = getattr(detail, "task_id", None)
+    if value is None or isinstance(value, bool):
+        raise RuntimeError("组曲任务缺少稳定的 task_id，禁止复用旧会话")
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("组曲任务 task_id 无效，禁止复用旧会话") from exc
+
+
+def session_matches_outer_task(
+    session: dict[str, Any],
+    outer_task_id: int,
+) -> bool:
+    """旧 schema 没有任务身份时一律不续跑，避免新任务继承旧进度。"""
+    value = session.get("outer_task_id")
+    if value is None or isinstance(value, bool):
+        return False
+    try:
+        return int(value) == int(outer_task_id)
+    except (TypeError, ValueError):
+        return False
+
+
 def _template_score(image: np.ndarray, path: Path) -> tuple[float, tuple[int, int]]:
     template = imread_unicode(path)
     if template is None or any(
@@ -755,6 +911,7 @@ class MedleyFlow:
         self.context = context
         self.argv = argv
         self.settings = settings
+        self.outer_task_id = outer_task_id_from_argv(argv)
         self.repository = LocalChartRepository(PROJECT_ROOT / "resource" / "charts")
         self.profile_store = RealtimeProfileStore(PROJECT_ROOT / "profiles")
         self.sessions = MedleySessionStore(PROJECT_ROOT / "profiles" / "medley-sessions")
@@ -762,6 +919,8 @@ class MedleyFlow:
         self._progress_initialised = False
         self._next_round_completed = 0
         self._home_ready = False
+        self._play_failure_retries = 0
+        self._play_failure_retry_limit: int | None = None
 
     @property
     def controller(self):
@@ -814,6 +973,23 @@ class MedleyFlow:
             ),
         )
 
+    def restore_progress(self, completed: int) -> bool:
+        """重开失败组前精确回滚已报告的曲数，避免第 2/3 曲空血误计数。"""
+        return TaskProgress().run(
+            self.context,
+            self.action_argv(
+                {
+                    "task_name": "MedleyLive",
+                    "label": "组曲演奏",
+                    "total": int(self.settings["count"]),
+                    "phase": "restore",
+                    "completed": int(completed),
+                    "next_started": int(completed) < int(self.settings["count"]),
+                },
+                task_detail=getattr(self.argv, "task_detail", None),
+            ),
+        )
+
     def recover_home(self, *, result_navigation: bool = False) -> None:
         params = {
             "home_node": "MedleyHomeMarker",
@@ -835,6 +1011,14 @@ class MedleyFlow:
             "escape_after_login_start": True,
             "package": GAME_PACKAGE,
         }
+        if not result_navigation:
+            # 组曲普通主页恢复也可能从空血后的第二层确认页开始；两层
+            # 弹窗布局不同于单人通用节点，必须先左侧退出、后右侧确认。
+            params.update({
+                "live_failed_continue_node": "MedleyLiveFailedContinue",
+                "live_failed_exit_node": "MedleyLiveFailedExit",
+                "quit_confirm_exit_node": "MedleyQuitConfirmExit",
+            })
         if result_navigation:
             params.update({
                 "click_nodes": [],
@@ -1301,7 +1485,20 @@ class MedleyFlow:
             self.context,
             self.action_argv(play_params),
         ):
-            raise RuntimeError(f"第{song.index}曲实时演奏未完成")
+            if self.context.tasker.stopping:
+                raise ScreenRefreshCancelled("task is stopping")
+            failure = read_medley_play_failure(
+                report_path,
+                latest_failure_reason(),
+                run_id=run.run_id,
+            )
+            raise MedleyPlayFailure(
+                song_index=song.index,
+                report_path=failure.report_path,
+                reason=failure.reason,
+                result_status=failure.result_status,
+                retryable=failure.retryable,
+            )
         if self.context.tasker.stopping:
             raise ScreenRefreshCancelled("task is stopping")
         song = self.complete_final_cover_identity(song)
@@ -1705,6 +1902,8 @@ class MedleyFlow:
             completed_total=completed_total,
             terminal_reason=None,
         )
+        # 同一组的预算跨重开保留；只有三首均完成且结算已开始时才清零。
+        self._play_failure_retries = 0
         target = int(self.settings.get("count", 3))
         self.recover_home(result_navigation=True)
         if completed_total >= target:
@@ -1715,10 +1914,113 @@ class MedleyFlow:
             raise RuntimeError(f"第{completed_total + 1}曲进度报告失败")
         return self.run()
 
+    def retry_failed_round(
+        self,
+        session: dict[str, Any],
+        failure: MedleyPlayFailure,
+    ) -> bool:
+        """将失败曲所在整组作废后回主页；次数只在完整三曲结算后推进。"""
+        if self.context.tasker.stopping:
+            raise ScreenRefreshCancelled("task is stopping")
+        completed_before = int(session.get("completed_before_round", 0))
+        if not self.restore_progress(completed_before):
+            reason = (
+                "play_failure_retry_progress_restore_failed: "
+                f"completed_before_round={completed_before}"
+            )
+            self.sessions.update(
+                session,
+                status="paused",
+                terminal_reason=reason,
+            )
+            raise RuntimeError(reason)
+        if not failure.retryable:
+            raise RuntimeError(
+                f"第{failure.song_index}曲失败不可重试：{failure.reason}"
+            )
+        retry_limit = int(getattr(self, "_play_failure_retry_limit", 0) or 0)
+        retries = int(getattr(self, "_play_failure_retries", 0))
+        if retries >= retry_limit:
+            raise RuntimeError(
+                f"第{failure.song_index}曲失败且重试次数已耗尽"
+                f"（{retries}/{retry_limit}）：{failure.reason}"
+            )
+        self._play_failure_retries = retries + 1
+        discard_prearmed_backend("medley-play-failure-retry")
+        try:
+            append_current_run_event(
+                PROJECT_ROOT,
+                "medley-play-failure",
+                "retry",
+                details={
+                    "song_index": failure.song_index,
+                    "reason": failure.reason,
+                    "result_status": failure.result_status,
+                    "retry": self._play_failure_retries,
+                    "retry_limit": retry_limit,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 - 诊断写入不能阻断失败恢复
+            log_task(
+                "组曲演奏",
+                "重试",
+                "WARNING",
+                "无法写入失败重试生命周期事件："
+                f"{type(exc).__name__}: {exc}",
+            )
+        log_task(
+            "组曲演奏",
+            "重试",
+            "WARNING",
+            f"第{failure.song_index}曲失败：{failure.reason}；"
+            f"废弃本组三曲并从第{int(session.get('completed_before_round', 0)) + 1}曲"
+            f"重开（{self._play_failure_retries}/{retry_limit}）",
+        )
+        try:
+            # CommonRecover 的 LiveFailed 契约只点左侧“退出”，不点击星石继续。
+            self.recover_home()
+        except Exception as exc:
+            reason = (
+                "play_failure_retry_recovery_failed: "
+                f"{failure.reason}; {type(exc).__name__}: {exc}"
+            )
+            self.sessions.update(
+                session,
+                status="paused",
+                terminal_reason=reason,
+            )
+            raise RuntimeError(reason) from exc
+        self.sessions.update(
+            session,
+            status="superseded",
+            terminal_reason=f"play_failure_retry: {failure.reason}",
+        )
+        self._next_round_completed = completed_before
+        self._home_ready = True
+        # 不重复上报 start：TaskProgress 仍停留在失败曲（例如 7/9），
+        # 下一组首曲成功后才把已完成数推进到 7/9。
+        return self.run()
+
     def run(self) -> bool:
         tour_type = str(self.settings["tour_type"])
         active = self.sessions.latest(tour_type)
-        if active is not None and not session_matches_settings(
+        if active is not None and not session_matches_outer_task(
+            active,
+            self.outer_task_id,
+        ):
+            self.sessions.update(
+                active,
+                status="superseded",
+                terminal_reason="new_task_started",
+            )
+            log_task(
+                "组曲演奏",
+                "续跑",
+                "INFO",
+                "未完成会话属于上一次任务，已作废并从第一曲新建组曲",
+            )
+            active = None
+        elif active is not None and not session_matches_settings(
             active,
             self.settings,
         ):
@@ -1730,6 +2032,10 @@ class MedleyFlow:
             )
             active = None
         runtime_options = self.profile_store.runtime_options()
+        if getattr(self, "_play_failure_retry_limit", None) is None:
+            self._play_failure_retry_limit = int(
+                runtime_options.get("play_failure_retry_count", 1)
+            )
         session = None
         songs: tuple[MedleySong, ...]
         start_index = 1
@@ -1927,6 +2233,7 @@ class MedleyFlow:
                 session = self.sessions.start(
                     settings=self.settings,
                     songs=songs,
+                    outer_task_id=self.outer_task_id,
                     speed_verified=bool(
                         runtime_options["note_speed_settings_enabled"]
                     ),
@@ -1944,17 +2251,23 @@ class MedleyFlow:
             completed_before + int(session.get("completed_songs", 0)),
             next_started=True,
         )
-        for index in range(start_index, 4):
-            song = songs[index - 1]
-            if index != start_index:
-                image = self.wait_for_stage(index)
-                self.confirm_preparation(song, image)
-            session, song = self.play_song(session, song, image)
-            songs = tuple(song if item.index == song.index else item for item in songs)
-            if not self.progress("completed"):
-                raise RuntimeError(f"第{index}曲完成后进度报告失败")
-            if index < 3 and not self.progress("start"):
-                raise RuntimeError(f"第{index + 1}曲进度报告失败")
+        try:
+            for index in range(start_index, 4):
+                song = songs[index - 1]
+                if index != start_index:
+                    image = self.wait_for_stage(index)
+                    self.confirm_preparation(song, image)
+                session, song = self.play_song(session, song, image)
+                songs = tuple(
+                    song if item.index == song.index else item
+                    for item in songs
+                )
+                if not self.progress("completed"):
+                    raise RuntimeError(f"第{index}曲完成后进度报告失败")
+                if index < 3 and not self.progress("start"):
+                    raise RuntimeError(f"第{index + 1}曲进度报告失败")
+        except MedleyPlayFailure as failure:
+            return self.retry_failed_round(session, failure)
         session = self.collect_results(session, songs)
         return self.finish_round(session)
 

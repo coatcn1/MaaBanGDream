@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import cv2
@@ -17,7 +19,9 @@ from agent.realtime.medley_action import (
     configure_medley_settings,
     detect_medley_stage,
     lineup_matches,
+    outer_task_id_from_argv,
     session_matches_settings,
+    session_matches_outer_task,
     song_identity_matches,
 )
 
@@ -172,7 +176,11 @@ def test_session_store_is_atomic_and_preserves_old_profile_layout(tmp_path):
         "song_mode": "random",
         "difficulty": "Expert",
     }
-    session = store.start(settings=settings, songs=(song(1), song(2), song(3)))
+    session = store.start(
+        settings=settings,
+        songs=(song(1), song(2), song(3)),
+        outer_task_id=101,
+    )
     store.update(session, completed_songs=1, stage="ready-2")
 
     loaded = store.latest("free")
@@ -181,12 +189,14 @@ def test_session_store_is_atomic_and_preserves_old_profile_layout(tmp_path):
     assert loaded["stage"] == "ready-2"
     assert loaded["round_index"] == 1
     assert loaded["completed_before_round"] == 0
+    assert loaded["outer_task_id"] == 101
     assert not list(store.root.glob("*.tmp"))
     assert not (tmp_path / "profiles" / "calibration-sessions").exists()
 
 
 def test_session_resume_requires_matching_free_options():
     session = {
+        "outer_task_id": 101,
         "tour_type": "free",
         "song_mode": "random",
         "requested_difficulty": "Expert",
@@ -205,6 +215,20 @@ def test_session_resume_requires_matching_free_options():
         {"tour_type": "task"},
         {"tour_type": "task", "song_mode": "current", "difficulty": "Easy"},
     )
+
+
+def test_session_resume_requires_same_outer_task_id_and_rejects_legacy():
+    assert session_matches_outer_task({"outer_task_id": 88}, 88)
+    assert not session_matches_outer_task({"outer_task_id": 88}, 89)
+    assert not session_matches_outer_task({}, 88)
+
+
+def test_outer_task_id_requires_real_task_detail_id():
+    assert outer_task_id_from_argv(
+        SimpleNamespace(task_detail=SimpleNamespace(task_id=456))
+    ) == 456
+    with pytest.raises(RuntimeError, match="task_id"):
+        outer_task_id_from_argv(SimpleNamespace(task_detail=None))
 
 
 def test_song_identity_requires_difficulty_level_and_song_match():
@@ -489,6 +513,273 @@ def test_play_requires_final_cover_title_when_earlier_reads_failed(monkeypatch):
     assert session["completed_songs"] == 1
 
 
+def test_play_failure_reads_life_depletion_from_engine_error_report(
+    tmp_path,
+    monkeypatch,
+):
+    """Native 完整性门禁二次分类不能掩盖已经确认的生命归零。"""
+    monkeypatch.setattr(medley_action, "PROJECT_ROOT", tmp_path)
+    report = tmp_path / "screencap" / "medley-session-song1.json"
+    report.parent.mkdir()
+    report.write_text(
+        json.dumps({
+            "result_status": "engine_error",
+            "reason": "Native 演奏未通过完整性门禁",
+            "terminal_reason": "演出失败：生命值归零",
+            "native": {"game_terminal_reason": "演出失败：生命值归零"},
+        }, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    flow = object.__new__(MedleyFlow)
+    flow.outer_task_id = 101
+    flow.settings = {"debug_recording": False, "diagnostic_trace": False}
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    failed_song = song(1)
+    flow.run_preflight = lambda _song, _image: (failed_song, False)
+    flow.click = lambda _point: None
+    flow.handle_pre_live_confirm = lambda: None
+    flow.sessions = SimpleNamespace(
+        update_song=lambda session, _song: session,
+        update=lambda session, **changes: session | changes,
+    )
+    medley_action.reset_live_run(
+        mode="medley",
+        difficulty="Expert",
+        requested_difficulty="Expert",
+        prepared_for_play=True,
+    )
+
+    class ProfilePlay:
+        def run(self, _context, _argv):
+            return False
+
+    monkeypatch.setattr(medley_action, "RealtimeProfilePlay", ProfilePlay)
+
+    with pytest.raises(medley_action.MedleyPlayFailure) as raised:
+        flow.play_song(
+            {"session_id": "session", "songs": []},
+            failed_song,
+            np.zeros((720, 1280, 3), dtype=np.uint8),
+        )
+
+    assert raised.value.retryable is True
+    assert raised.value.reason == "演出失败：生命值归零"
+
+
+def test_retry_failed_round_discards_group_and_restarts_from_completed_count(
+    monkeypatch,
+):
+    """第 7 首空血后废弃本组三首，进度仍显示已完成 6 首。"""
+    flow = object.__new__(MedleyFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    flow._play_failure_retries = 0
+    flow._play_failure_retry_limit = 1
+    flow._next_round_completed = 0
+    flow._home_ready = False
+    updates = []
+    recovered = []
+    restored = []
+    clicks = []
+    flow.sessions = SimpleNamespace(
+        update=lambda session, **changes: updates.append(changes) or session | changes,
+    )
+    flow.recover_home = lambda **kwargs: recovered.append(kwargs)
+    flow.restore_progress = lambda completed: restored.append(completed) or True
+    flow.click = lambda point: clicks.append(point)
+    def restart_group():
+        assert flow._next_round_completed == 6
+        assert flow._home_ready is True
+        assert flow._play_failure_retries == 1
+        # 重新选出的完整三曲都成功后，任务才可从 6 推进到 9。
+        return 9
+
+    flow.run = restart_group
+    discarded = []
+    monkeypatch.setattr(
+        medley_action,
+        "discard_prearmed_backend",
+        lambda reason: discarded.append(reason) or True,
+    )
+    failure = medley_action.MedleyPlayFailure(
+        song_index=1,
+        report_path="screencap/medley-session-song1.json",
+        reason="演出失败：生命值归零",
+        result_status="engine_error",
+        retryable=True,
+    )
+
+    assert flow.retry_failed_round(
+        {"completed_before_round": 6, "completed_songs": 0},
+        failure,
+    ) == 9
+    assert recovered == [{}]
+    assert restored == [6]
+    assert discarded == ["medley-play-failure-retry"]
+    assert updates[-1] == {
+        "status": "superseded",
+        "terminal_reason": "play_failure_retry: 演出失败：生命值归零",
+    }
+    # 该分支只委托 CommonRecover 返回主页，绝不直接触碰星石“继续”。
+    assert clicks == []
+
+
+def test_retry_event_write_failure_does_not_block_home_recovery(monkeypatch):
+    flow = object.__new__(MedleyFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    flow._play_failure_retries = 0
+    flow._play_failure_retry_limit = 1
+    flow._next_round_completed = 0
+    flow._home_ready = False
+    flow.sessions = SimpleNamespace(update=lambda session, **_changes: session)
+    recovered = []
+    flow.recover_home = lambda **kwargs: recovered.append(kwargs)
+    flow.restore_progress = lambda _completed: True
+    flow.run = lambda: "restarted"
+    monkeypatch.setattr(
+        medley_action,
+        "append_current_run_event",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk busy")),
+    )
+    failure = medley_action.MedleyPlayFailure(
+        song_index=2,
+        report_path="screencap/medley-session-song2.json",
+        reason="演出失败：生命值归零",
+        result_status="engine_error",
+        retryable=True,
+    )
+
+    assert flow.retry_failed_round(
+        {"completed_before_round": 6, "completed_songs": 1},
+        failure,
+    ) == "restarted"
+    assert recovered == [{}]
+
+
+@pytest.mark.parametrize("retry_limit, attempts", [(0, 0), (1, 1)])
+def test_retry_failed_round_respects_configured_bound(retry_limit, attempts):
+    flow = object.__new__(MedleyFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    flow._play_failure_retries = attempts
+    flow._play_failure_retry_limit = retry_limit
+    flow.sessions = SimpleNamespace(update=lambda session, **_changes: session)
+    restored = []
+    flow.restore_progress = lambda completed: restored.append(completed) or True
+    flow.recover_home = lambda: (_ for _ in ()).throw(
+        AssertionError("重试耗尽时不能恢复后重开")
+    )
+    failure = medley_action.MedleyPlayFailure(
+        song_index=1,
+        report_path="screencap/medley-session-song1.json",
+        reason="演出失败：生命值归零",
+        result_status="engine_error",
+        retryable=True,
+    )
+
+    with pytest.raises(RuntimeError, match="重试次数已耗尽"):
+        flow.retry_failed_round({"completed_before_round": 6}, failure)
+
+    assert restored == [6]
+
+
+@pytest.mark.parametrize(("song_index", "completed_songs"), [(2, 1), (3, 2)])
+def test_later_song_failure_rewinds_group_progress_before_retry(
+    song_index,
+    completed_songs,
+):
+    flow = object.__new__(MedleyFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    flow._play_failure_retries = 0
+    flow._play_failure_retry_limit = 1
+    flow._next_round_completed = 0
+    flow._home_ready = False
+    flow.sessions = SimpleNamespace(update=lambda session, **_changes: session)
+    restored = []
+    flow.restore_progress = lambda completed: restored.append(completed) or True
+    flow.recover_home = lambda **_kwargs: None
+    flow.run = lambda: "restarted"
+    failure = medley_action.MedleyPlayFailure(
+        song_index=song_index,
+        report_path=f"screencap/medley-session-song{song_index}.json",
+        reason="演出失败：生命值归零",
+        result_status="engine_error",
+        retryable=True,
+    )
+
+    assert flow.retry_failed_round(
+        {"completed_before_round": 6, "completed_songs": completed_songs},
+        failure,
+    ) == "restarted"
+    assert restored == [6]
+
+
+def test_retry_failed_round_keeps_user_stop_neutral():
+    flow = object.__new__(MedleyFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=True))
+    flow.sessions = SimpleNamespace(update=lambda session, **_changes: session)
+    flow.recover_home = lambda: (_ for _ in ()).throw(
+        AssertionError("用户停止时不得继续恢复或重试")
+    )
+    failure = medley_action.MedleyPlayFailure(
+        song_index=1,
+        report_path="screencap/medley-session-song1.json",
+        reason="演出失败：生命值归零",
+        result_status="engine_error",
+        retryable=True,
+    )
+
+    with pytest.raises(medley_action.ScreenRefreshCancelled):
+        flow.retry_failed_round({"completed_before_round": 6}, failure)
+
+
+def test_retry_failed_round_keeps_paused_session_when_home_recovery_fails():
+    flow = object.__new__(MedleyFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    flow._play_failure_retries = 0
+    flow._play_failure_retry_limit = 1
+    updates = []
+    flow.sessions = SimpleNamespace(
+        update=lambda session, **changes: updates.append(changes) or session | changes,
+    )
+    flow.restore_progress = lambda _completed: True
+    flow.recover_home = lambda **_kwargs: (_ for _ in ()).throw(
+        RuntimeError("主页不可达")
+    )
+    failure = medley_action.MedleyPlayFailure(
+        song_index=1,
+        report_path="screencap/medley-session-song1.json",
+        reason="演出失败：生命值归零",
+        result_status="engine_error",
+        retryable=True,
+    )
+
+    with pytest.raises(RuntimeError, match="retry_recovery_failed"):
+        flow.retry_failed_round({"completed_before_round": 6}, failure)
+
+    assert updates[-1]["status"] == "paused"
+    assert "主页不可达" in updates[-1]["terminal_reason"]
+
+
+@pytest.mark.parametrize(
+    ("payload", "latest_reason"),
+    [
+        ({"result_status": "preflight_error", "reason": "Profile 不匹配"}, ""),
+        ({"result_status": "engine_error", "reason": "身份冲突"}, ""),
+        ({"result_status": "stopped", "reason": "用户已停止任务"}, "用户已停止任务"),
+    ],
+)
+def test_play_failure_hard_conflict_and_stop_are_not_retryable(
+    tmp_path,
+    payload,
+    latest_reason,
+):
+    report = tmp_path / "failure.json"
+    report.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    failure = medley_action.read_medley_play_failure(report, latest_reason)
+
+    assert failure.retryable is False
+
+
 def test_free_random_clicks_random_without_reading_identity(monkeypatch):
     flow = object.__new__(MedleyFlow)
     flow.settings = {
@@ -663,6 +954,68 @@ def test_medley_post_result_recovery_uses_back_only_shared_cadence(monkeypatch):
     assert captured[0]["click_nodes"] == []
     assert captured[0]["back_only_click_nodes"] == list(medley_action.STORY_NODES)
     assert captured[0]["back_acceleration_click_point"] == [1279, 719]
+    assert "live_failed_continue_node" not in captured[0]
+    assert "live_failed_exit_node" not in captured[0]
+    assert "quit_confirm_exit_node" not in captured[0]
+
+
+def test_medley_failed_live_recovery_uses_dedicated_two_stage_nodes(monkeypatch):
+    captured = []
+    flow = object.__new__(MedleyFlow)
+    flow.context = object()
+
+    def run(_context, argv):
+        captured.append(medley_action.json.loads(argv.custom_action_param))
+        return True
+
+    monkeypatch.setattr(
+        medley_action,
+        "CommonRecover",
+        lambda: SimpleNamespace(run=run),
+    )
+
+    flow.recover_home()
+
+    assert captured[0]["live_failed_continue_node"] == (
+        "MedleyLiveFailedContinue"
+    )
+    assert captured[0]["live_failed_exit_node"] == "MedleyLiveFailedExit"
+    assert captured[0]["quit_confirm_exit_node"] == "MedleyQuitConfirmExit"
+
+
+def test_medley_failed_live_pipeline_nodes_cover_full_button_templates():
+    common = json.loads(
+        (Path(__file__).parents[1] / "resource/pipeline/common.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    expected = {
+        "MedleyLiveFailedExit": ("live_failed_exit.png", (386, 408)),
+        "MedleyLiveFailedContinue": ("live_failed_continue.png", (653, 414)),
+        "MedleyQuitConfirmExit": ("quit_confirm_exit.png", (653, 491)),
+    }
+    for node_name, (template_name, (x, y)) in expected.items():
+        node = common[node_name]
+        assert node["template"] == template_name
+        assert node["threshold"] == 0.9
+        template = medley_action.imread_unicode(
+            Path(__file__).parents[1] / "resource/image" / template_name
+        )
+        assert template is not None
+        image = np.zeros((720, 1280, 3), dtype=np.uint8)
+        height, width = template.shape[:2]
+        image[y:y + height, x:x + width] = template
+        left, top, roi_width, roi_height = node["roi"]
+        roi = image[top:top + roi_height, left:left + roi_width]
+        assert cv2.matchTemplate(
+            roi,
+            template,
+            cv2.TM_CCOEFF_NORMED,
+        ).max() >= node["threshold"]
+    # 单人/共享节点保持旧 ROI，避免第一层“继续”误配为第二层“退出”。
+    assert common["LiveFailedExit"]["roi"] == [240, 390, 280, 130]
+    assert common["LiveFailedContinue"]["roi"] == [740, 390, 340, 130]
+    assert common["QuitConfirmExit"]["roi"] == [600, 390, 320, 130]
 
 
 def test_initial_stage_capture_dismisses_reward_overlay_before_resume():
@@ -1111,6 +1464,7 @@ def test_unknown_result_exhaustion_recovers_home_before_failure(
 def test_matching_second_stage_resumes_without_home_recovery():
     songs = (song(1), song(2), song(3))
     session = {
+        "outer_task_id": 101,
         "tour_type": "free",
         "song_mode": "random",
         "requested_difficulty": "Expert",
@@ -1128,6 +1482,7 @@ def test_matching_second_stage_resumes_without_home_recovery():
             return value
 
     flow = object.__new__(MedleyFlow)
+    flow.outer_task_id = 101
     flow.settings = {
         "tour_type": "free",
         "song_mode": "random",
@@ -1164,12 +1519,142 @@ def test_matching_second_stage_resumes_without_home_recovery():
     assert recovery_calls == [{"result_navigation": True}]
 
 
+def test_new_outer_task_supersedes_old_session_and_restarts_from_zero(
+    monkeypatch,
+):
+    """重新点击开始不是同一 Maa task，不能继承旧任务已经完成的 6 首。"""
+    old_session = {
+        "outer_task_id": 101,
+        "tour_type": "free",
+        "song_mode": "random",
+        "requested_difficulty": "Expert",
+        "target_count": 9,
+        "completed_before_round": 6,
+        "completed_songs": 0,
+        "results_completed": 0,
+        "stage": "ready-1",
+        "status": "paused",
+        "songs": [medley_action.asdict(song(index)) for index in range(1, 4)],
+    }
+    updates = []
+    starts = []
+
+    class Sessions:
+        def latest(self, _tour_type):
+            return old_session if old_session["status"] != "superseded" else None
+
+        def update(self, value, **changes):
+            updates.append(changes)
+            value.update(changes)
+            return value
+
+        def start(self, **kwargs):
+            starts.append(kwargs)
+            return {
+                "outer_task_id": kwargs["outer_task_id"],
+                "completed_before_round": kwargs["completed_before_round"],
+                "completed_songs": 0,
+                "results_completed": 0,
+            }
+
+    flow = object.__new__(MedleyFlow)
+    flow.outer_task_id = 202
+    flow.settings = {
+        "tour_type": "free",
+        "song_mode": "random",
+        "difficulty": "Expert",
+        "count": 9,
+    }
+    flow.sessions = Sessions()
+    flow.profile_store = SimpleNamespace(
+        runtime_options=lambda: {"note_speed_settings_enabled": False}
+    )
+    flow.capture_after_reward_overlays = lambda: object()
+    flow.recover_home = lambda **_kwargs: None
+    flow.speed_gate = lambda _difficulty: None
+    flow.navigate_to_tour = lambda: object()
+    flow.choose_tour_type = lambda: object()
+    fresh_songs = (song(1), song(2), song(3))
+    flow.select_free_songs = lambda: fresh_songs
+    flow.validate_home_speed = lambda *_args, **_kwargs: 5.0
+    flow.click = lambda _point: None
+    flow.wait = lambda _seconds: None
+    flow.capture = lambda: object()
+    flow.confirm_preparation = lambda _song, _image: None
+    flow.ensure_progress = lambda *_args, **_kwargs: None
+    flow.wait_for_stage = lambda _index: object()
+    flow.play_song = lambda session, current, _image: (
+        session | {"completed_songs": current.index},
+        current,
+    )
+    flow.progress = lambda _phase: True
+    flow.collect_results = lambda session, _songs: session
+    flow.finish_round = lambda _session: "finished"
+    monkeypatch.setattr(medley_action, "detect_medley_stage", lambda _image: None)
+
+    assert flow.run() == "finished"
+    assert updates[0] == {
+        "status": "superseded",
+        "terminal_reason": "new_task_started",
+    }
+    assert starts[0]["outer_task_id"] == 202
+    assert starts[0]["completed_before_round"] == 0
+
+
+def test_new_task_at_old_second_stage_fails_closed_without_counting_song():
+    old_session = {
+        "outer_task_id": 101,
+        "tour_type": "free",
+        "song_mode": "random",
+        "requested_difficulty": "Expert",
+        "target_count": 9,
+        "completed_before_round": 6,
+        "completed_songs": 1,
+        "stage": "ready-2",
+        "status": "paused",
+        "songs": [medley_action.asdict(song(index)) for index in range(1, 4)],
+    }
+    updates = []
+
+    class Sessions:
+        def latest(self, _tour_type):
+            return old_session if old_session["status"] != "superseded" else None
+
+        def update(self, value, **changes):
+            updates.append(changes)
+            value.update(changes)
+            return value
+
+    flow = object.__new__(MedleyFlow)
+    flow.outer_task_id = 202
+    flow.settings = {
+        "tour_type": "free",
+        "song_mode": "random",
+        "difficulty": "Expert",
+        "count": 9,
+    }
+    flow.sessions = Sessions()
+    flow.profile_store = SimpleNamespace(
+        runtime_options=lambda: {"note_speed_settings_enabled": False}
+    )
+    flow.capture_after_reward_overlays = lambda: stage_frame(2)
+
+    with pytest.raises(RuntimeError, match="没有匹配的组曲会话"):
+        flow.run()
+
+    assert updates == [{
+        "status": "superseded",
+        "terminal_reason": "new_task_started",
+    }]
+
+
 def test_restart_after_manually_leaving_pending_results_starts_new_round(
     monkeypatch,
 ):
     """结算已被人工退出时，旧会话不可恢复，但不应阻塞下一次任务。"""
     old_songs = (song(1), song(2), song(3))
     old_session = {
+        "outer_task_id": 101,
         "tour_type": "free",
         "song_mode": "random",
         "requested_difficulty": "Expert",
@@ -1201,6 +1686,7 @@ def test_restart_after_manually_leaving_pending_results_starts_new_round(
             }
 
     flow = object.__new__(MedleyFlow)
+    flow.outer_task_id = 101
     flow.settings = {
         "tour_type": "free",
         "song_mode": "random",
@@ -1257,6 +1743,7 @@ def test_restart_from_unrelated_page_does_not_assume_pending_results(
     """普通非主页页面应退回主页，不能仅凭旧会话冒充结算续跑。"""
     old_songs = (song(1), song(2), song(3))
     old_session = {
+        "outer_task_id": 101,
         "tour_type": "task",
         "song_mode": "random",
         "requested_difficulty": "Expert",
@@ -1289,6 +1776,7 @@ def test_restart_from_unrelated_page_does_not_assume_pending_results(
             }
 
     flow = object.__new__(MedleyFlow)
+    flow.outer_task_id = 101
     flow.settings = {
         "tour_type": "task",
         "song_mode": "random",
@@ -1362,6 +1850,7 @@ def test_restart_at_home_after_all_results_saved_finishes_existing_round(
 ):
     """三张结果已落盘时，即使完成标记前中断，也不能重打一组。"""
     saved_session = {
+        "outer_task_id": 101,
         "tour_type": "free",
         "song_mode": "random",
         "requested_difficulty": "Expert",
@@ -1374,6 +1863,7 @@ def test_restart_at_home_after_all_results_saved_finishes_existing_round(
     }
 
     flow = object.__new__(MedleyFlow)
+    flow.outer_task_id = 101
     flow.settings = {
         "tour_type": "free",
         "song_mode": "random",
