@@ -74,6 +74,67 @@ def test_progress_reports_exact_round_and_completion(capsys):
     assert all(item["display"] == ["log"] for item in context.visible)
 
 
+def test_progress_restore_rewinds_completed_count_before_retry(capsys):
+    context = Context(hit_count=1)
+    common = {
+        "task_name": "MedleyLive",
+        "label": "组曲演奏",
+        "total": 9,
+    }
+    progress = task_reporting.TaskProgress()
+    assert progress.run(
+        context,
+        argv(
+            102,
+            phase="restore",
+            completed=8,
+            next_started=True,
+            **common,
+        ),
+    )
+    assert progress.run(
+        context,
+        argv(
+            102,
+            phase="restore",
+            completed=6,
+            next_started=True,
+            **common,
+        ),
+    )
+    assert not task_reporting.TaskOutcome().run(
+        context,
+        argv(102, status="failure", reason="第 2 曲空血", **common),
+    )
+
+    output = capsys.readouterr().out
+    assert "进度已恢复：当前 7/9，已完成 6/9" in output
+    assert "任务失败，已完成 6/9：第 2 曲空血" in output
+
+
+def test_progress_after_restore_only_advances_when_restarted_song_succeeds(capsys):
+    context = Context(hit_count=1)
+    common = {
+        "task_name": "MedleyLive",
+        "label": "组曲演奏",
+        "total": 9,
+    }
+    progress = task_reporting.TaskProgress()
+    assert progress.run(
+        context,
+        argv(103, phase="restore", completed=6, next_started=True, **common),
+    )
+    assert progress.run(context, argv(103, phase="completed", **common))
+    assert not task_reporting.TaskOutcome().run(
+        context,
+        argv(103, status="failure", reason="重开后第二曲空血", **common),
+    )
+
+    output = capsys.readouterr().out
+    assert "演奏次数：已完成 7/9" in output
+    assert "任务失败，已完成 7/9：重开后第二曲空血" in output
+
+
 def test_failure_returns_false_without_post_stop_and_includes_progress(capsys):
     context = Context(hit_count=2)
     assert task_reporting.TaskProgress().run(

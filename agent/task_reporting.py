@@ -163,6 +163,40 @@ class TaskProgress(CustomAction):
                 _visible_log(context, message)
                 return True
 
+            if phase == "restore":
+                try:
+                    completed = int(params["completed"])
+                except (KeyError, TypeError, ValueError):
+                    log_task(
+                        state.label,
+                        "进度",
+                        "ERROR",
+                        "恢复进度缺少有效 completed",
+                    )
+                    return False
+                if not 0 <= completed <= state.total:
+                    log_task(
+                        state.label,
+                        "进度",
+                        "ERROR",
+                        f"恢复进度超出范围：{completed}/{state.total}",
+                    )
+                    return False
+                next_started = bool(params.get("next_started", True))
+                state.completed = completed
+                state.current = (
+                    min(state.total, completed + 1)
+                    if next_started and completed < state.total
+                    else completed
+                )
+                message = (
+                    f"{state.label}进度已恢复：当前 {state.current}/{state.total}，"
+                    f"已完成 {state.completed}/{state.total}"
+                )
+                log_task(state.label, "进度", "INFO", message)
+                _visible_log(context, message)
+                return True
+
             log_task(
                 state.label,
                 "进度",
