@@ -67,6 +67,49 @@ def test_catalog_keeps_only_target_difficulties_and_saves_cn_jacket(tmp_path):
     assert (tmp_path / song["jackets"][0]["path"]).read_bytes() == _png_bytes()
 
 
+def test_catalog_preserves_cn_level_and_records_new_global_source_level(
+    tmp_path,
+):
+    chart = [{"type": "BPM", "beat": 0, "bpm": 120}]
+    raw_chart = json.dumps(chart).encode()
+
+    def metadata(level):
+        return {
+            "musicTitle": ["JP", "EN", "TW", "CN"],
+            "jacketImage": ["581_sokyu_trail"],
+            "difficulty": {"3": {"playLevel": level}},
+            "notes": {"3": 1},
+        }
+
+    def first_fetch(url):
+        if url == SONGS_INDEX_URL:
+            return {"581": metadata(27)}, b"{}"
+        return chart, raw_chart
+
+    sync_catalog(tmp_path, first_fetch, lambda _url: _png_bytes(), workers=1)
+    manifest_path = tmp_path / "manifest.json"
+    existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+    existing["songs"][0]["difficulties"]["expert"].update({
+        "source_level": 27,
+        "regional_levels": {"cn": 27},
+    })
+    manifest_path.write_text(json.dumps(existing), encoding="utf-8")
+
+    def current_global_fetch(url):
+        if url == SONGS_INDEX_URL:
+            return {"581": metadata(26)}, b"{}"
+        raise AssertionError("existing chart must be reused")
+
+    manifest = sync_catalog(
+        tmp_path, current_global_fetch, lambda _url: _png_bytes(), workers=1,
+    )
+    entry = manifest["songs"][0]["difficulties"]["expert"]
+
+    assert entry["level"] == 27
+    assert entry["source_level"] == 26
+    assert entry["regional_levels"] == {"cn": 27}
+
+
 def test_catalog_records_missing_jacket_and_chart_without_stopping(tmp_path):
     valid_chart = [{"type": "BPM", "beat": 0, "bpm": 120}]
     metadata = {

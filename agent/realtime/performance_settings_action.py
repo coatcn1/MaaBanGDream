@@ -536,7 +536,30 @@ class RealtimePerformanceSettingsGate(CustomAction):
             confirm_preparation_identity(before, difficulty)
             if context.tasker.stopping:
                 return True
-        require_special_chart_for_settings_gate(difficulty)
+        run = current_live_run()
+        identity_pending_final_cover = bool(
+            run is not None
+            and (
+                run.preparation_title_pending_final_cover
+                or run.preparation_identity_pending_final_cover
+            )
+        )
+        if identity_pending_final_cover:
+            # 延迟身份只能由最终封面补全；设置门不能以选曲页遗留身份预武装。
+            effective_params["defer_native_prearm"] = True
+            print(
+                "RealtimePerformanceSettingsGate native_prearm=deferred "
+                "reason=preparation-identity-pending-final-cover",
+                flush=True,
+            )
+        if difficulty.casefold() == "special" and identity_pending_final_cover:
+            print(
+                "RealtimePerformanceSettingsGate special_chart=deferred "
+                "reason=preparation-identity-pending-final-cover",
+                flush=True,
+            )
+        else:
+            require_special_chart_for_settings_gate(difficulty)
         expected, profile = _expected_speed(
             context, effective_params, before
         )
@@ -563,14 +586,14 @@ class RealtimePerformanceSettingsGate(CustomAction):
                 f"profile={profile or 'calibration-setting'}",
                 flush=True,
             )
-            if bool(params.get("cache_preparation_image", False)):
+            if bool(effective_params.get("cache_preparation_image", False)):
                 update_live_run(cooperative_prestart_image=before.copy())
                 print(
                     "RealtimePerformanceSettingsGate preparation_image=cached "
                     f"reason={source}",
                     flush=True,
                 )
-            if bool(params.get("defer_native_prearm", False)):
+            if bool(effective_params.get("defer_native_prearm", False)):
                 discard_prearmed_backend("deferred-until-final-cover")
                 print(
                     "RealtimePerformanceSettingsGate native_prearm=deferred "
@@ -584,10 +607,10 @@ class RealtimePerformanceSettingsGate(CustomAction):
                     difficulty=difficulty,
                     project_root=PROJECT_ROOT,
                     ready_timeout_s=float(
-                        params.get("native_ready_timeout_seconds", 10.0)
+                        effective_params.get("native_ready_timeout_seconds", 10.0)
                     ),
                     ttl_s=float(
-                        params.get("native_prearm_ttl_seconds", 30.0)
+                        effective_params.get("native_prearm_ttl_seconds", 30.0)
                     ),
                 )
             if context.tasker.stopping:

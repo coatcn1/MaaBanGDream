@@ -318,6 +318,7 @@ def test_free_current_song_selects_only_difficulty_and_allows_duplicate_slots(
     flow.click = lambda _point: None
     flow.wait = lambda _seconds: None
     flow.capture = lambda: np.zeros((720, 1280, 3), dtype=np.uint8)
+    flow.open_free_song = lambda _index: flow.capture()
 
     class Difficulty:
         def run(self, _context, argv):
@@ -350,6 +351,85 @@ def test_free_current_song_selects_only_difficulty_and_allows_duplicate_slots(
     second = flow.snapshot_free_song(2, (first,))
     assert second.index == 2
     assert second.song_id == medley_action.UNKNOWN_SONG_ID
+
+
+@pytest.mark.parametrize("opens_on", [1, 2, 3])
+def test_open_free_song_retries_until_selection_page_is_confirmed(monkeypatch, opens_on):
+    overview = np.zeros((720, 1280, 3), dtype=np.uint8)
+    selection = np.ones_like(overview)
+    clicks = []
+    clock = [0.0]
+    flow = object.__new__(MedleyFlow)
+    flow.click = clicks.append
+    flow.capture = lambda: selection if len(clicks) >= opens_on else overview
+    flow.wait = lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+    monkeypatch.setattr(medley_action.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(medley_action, "song_selection_visible", lambda image: image is selection, raising=False)
+
+    assert flow.open_free_song(2) is selection
+    assert clicks == [medley_action.FREE_SLOT_POINTS[1]] * opens_on
+
+
+@pytest.mark.parametrize("delivery_time", [1.5, 3.0])
+def test_open_free_song_does_not_click_again_after_delayed_page_delivery(monkeypatch, delivery_time):
+    overview = np.zeros((720, 1280, 3), dtype=np.uint8)
+    selection = np.ones_like(overview)
+    clicks = []
+    clock = [0.0]
+    flow = object.__new__(MedleyFlow)
+    flow.click = clicks.append
+    flow.capture = lambda: selection if clock[0] >= delivery_time else overview
+    flow.wait = lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+    monkeypatch.setattr(medley_action.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(medley_action, "song_selection_visible", lambda image: image is selection, raising=False)
+
+    assert flow.open_free_song(1) is selection
+    assert clicks == [medley_action.FREE_SLOT_POINTS[0]]
+
+
+def test_unopened_free_song_never_sends_random_or_difficulty_input(monkeypatch):
+    image = np.zeros((720, 1280, 3), dtype=np.uint8)
+    clock = [0.0]
+    clicks = []
+    evidence = []
+    flow = object.__new__(MedleyFlow)
+    flow.settings = {"song_mode": "random", "difficulty": "Hard", "debug_recording": False}
+    flow.click = clicks.append
+    flow.capture = lambda: image
+    flow.wait = lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+    flow.save_debug_image = lambda name, _image: evidence.append(name)
+    monkeypatch.setattr(medley_action.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(medley_action, "song_selection_visible", lambda _image: False, raising=False)
+    monkeypatch.setattr(
+        medley_action, "RealtimeDifficultySelect",
+        lambda: (_ for _ in ()).throw(AssertionError("总览页不能执行难度点击")),
+    )
+
+    with pytest.raises(RuntimeError, match="歌曲选择页"):
+        flow.snapshot_free_song(1, ())
+
+    assert clicks == [medley_action.FREE_SLOT_POINTS[0]] * 3
+    assert len(evidence) == 1
+
+
+def test_open_free_song_stopping_never_retries_or_saves_business_failure(monkeypatch):
+    image = np.zeros((720, 1280, 3), dtype=np.uint8)
+    clicks = []
+    flow = object.__new__(MedleyFlow)
+    flow.capture = lambda: image
+    flow.click = clicks.append
+    flow.wait = lambda _seconds: (_ for _ in ()).throw(
+        medley_action.ScreenRefreshCancelled("task is stopping")
+    )
+    flow.save_debug_image = lambda *_args: (_ for _ in ()).throw(
+        AssertionError("用户停止不能记录业务失败")
+    )
+    monkeypatch.setattr(medley_action, "song_selection_visible", lambda _image: False)
+
+    with pytest.raises(medley_action.ScreenRefreshCancelled):
+        flow.open_free_song(1)
+
+    assert clicks == [medley_action.FREE_SLOT_POINTS[0]]
 
 
 def test_preparation_title_replaces_deferred_selection_title(monkeypatch):
@@ -435,6 +515,193 @@ def test_preparation_missing_identity_preserves_known_song_for_final_cover(
     assert confirmed.song_id == expected.song_id
     assert confirmed.bestdori_song_id == 125
     assert confirmed.title == expected.title
+
+
+def test_medley_preparation_missing_level_defers_to_final_cover(monkeypatch):
+    monkeypatch.setattr(
+        medley_action,
+        "_resolve_profile",
+        lambda *_args, **_kwargs: ("expert.json", 5.0),
+    )
+
+    class Repository:
+        def resolve(self, *_args, **_kwargs):
+            raise AssertionError("缺等级时不得用旧封面预解析谱面")
+
+    deferred = medley_action.build_medley_song(
+        index=1,
+        requested_difficulty="Expert",
+        difficulty="Expert",
+        identity=SimpleNamespace(
+            song_id="song-jacket-phash-v2-1111111111111111",
+            method="song-jacket-phash-v2",
+        ),
+        level=None,
+        title_reading=None,
+        image=np.zeros((720, 1280, 3), dtype=np.uint8),
+        repository=Repository(),
+        profile_store=object(),
+        allow_deferred_identity=True,
+        title_source="preparation",
+    )
+
+    assert deferred.preparation_identity_pending_final_cover is True
+    assert deferred.song_id == medley_action.UNKNOWN_SONG_ID
+    assert deferred.level == 0
+
+
+def test_medley_preparation_identity_resolution_error_defers_to_final_cover(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        medley_action,
+        "_resolve_profile",
+        lambda *_args, **_kwargs: ("expert.json", 5.0),
+    )
+
+    class Repository:
+        def resolve(self, *_args, **_kwargs):
+            return SimpleNamespace(selection=None, reason="cover conflicts")
+
+        def identify_by_cover_title(self, *_args, **_kwargs):
+            return SimpleNamespace(identity=None, reason="title conflicts")
+
+    deferred = medley_action.build_medley_song(
+        index=1,
+        requested_difficulty="Expert",
+        difficulty="Expert",
+        identity=SimpleNamespace(
+            song_id="song-jacket-phash-v2-1111111111111111",
+            method="song-jacket-phash-v2",
+        ),
+        level=27,
+        title_reading=SimpleNamespace(text="冲突标题", confidence=0.99),
+        image=np.zeros((720, 1280, 3), dtype=np.uint8),
+        repository=Repository(),
+        profile_store=object(),
+        allow_deferred_identity=True,
+        title_source="preparation",
+    )
+
+    assert deferred.preparation_identity_pending_final_cover is True
+    assert deferred.song_id == medley_action.UNKNOWN_SONG_ID
+    assert deferred.bestdori_song_id is None
+
+
+def test_medley_build_confirm_activate_keeps_pending_identity_isolated(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        medley_action,
+        "_resolve_profile",
+        lambda *_args, **_kwargs: ("expert.json", 5.0),
+    )
+
+    class Repository:
+        def resolve(self, *_args, **_kwargs):
+            return SimpleNamespace(selection=None, reason="cover conflicts")
+
+        def identify_by_cover_title(self, *_args, **_kwargs):
+            return SimpleNamespace(identity=None, reason="title conflicts")
+
+    observed = medley_action.build_medley_song(
+        index=1,
+        requested_difficulty="Expert",
+        difficulty="Expert",
+        identity=SimpleNamespace(
+            song_id="song-jacket-phash-v2-1111111111111111",
+            method="song-jacket-phash-v2",
+        ),
+        level=27,
+        title_reading=SimpleNamespace(text="高置信冲突标题", confidence=0.99),
+        image=np.zeros((720, 1280, 3), dtype=np.uint8),
+        repository=Repository(),
+        profile_store=object(),
+        allow_deferred_identity=True,
+        title_source="preparation",
+    )
+    flow = object.__new__(MedleyFlow)
+    flow.settings = {"debug_recording": False}
+    flow.read_preparation_song = lambda _index, _image, **_kwargs: observed
+    monkeypatch.setattr(medley_action, "detect_medley_stage", lambda _image: 1)
+
+    confirmed = flow.confirm_preparation(
+        song(1, bestdori_song_id=125),
+        np.zeros((720, 1280, 3), dtype=np.uint8),
+    )
+    flow.activate_song(confirmed)
+
+    run = medley_action.current_live_run()
+    assert confirmed.preparation_identity_pending_final_cover is True
+    assert confirmed.song_id == medley_action.UNKNOWN_SONG_ID
+    assert run is not None
+    assert run.preparation_identity_pending_final_cover is True
+    assert run.song_id == medley_action.UNKNOWN_SONG_ID
+
+
+def test_medley_preparation_identity_conflict_defers_to_final_cover(monkeypatch):
+    expected = song(1, digest="1111111111111111", bestdori_song_id=125)
+    observed = song(
+        1, digest="2222222222222222", bestdori_song_id=126, level=27,
+    )
+    flow = object.__new__(MedleyFlow)
+    flow.read_preparation_song = lambda _index, _image, **_kwargs: observed
+    monkeypatch.setattr(medley_action, "detect_medley_stage", lambda _image: 1)
+
+    deferred = flow.confirm_preparation(
+        expected, np.zeros((720, 1280, 3), dtype=np.uint8),
+    )
+
+    assert deferred.preparation_identity_pending_final_cover is True
+    assert deferred.song_id == medley_action.UNKNOWN_SONG_ID
+    assert deferred.bestdori_song_id is None
+    assert deferred.title_confidence == 0.0
+    assert deferred.level == 27
+
+
+def test_medley_final_identity_restores_verified_cn_level_without_rejecting_cover():
+    pending = replace(
+        song(1, bestdori_song_id=None, level=27),
+        song_id=medley_action.UNKNOWN_SONG_ID,
+        title="",
+        title_confidence=0.0,
+        preparation_identity_pending_final_cover=True,
+    )
+    medley_action.reset_live_run(
+        mode="medley", difficulty="Expert", prepared_for_play=True,
+    )
+    medley_action.update_live_run(
+        song_id="song-jacket-phash-v2-f479f8f8f4f05220",
+        song_id_method="song-jacket-phash-v2",
+        song_title="蒼穹へのトレイル",
+        song_title_confidence=0.96,
+        final_cover_confirmed=True,
+    )
+    global_selection = SimpleNamespace(
+        bestdori_song_id=581, title="蒼穹へのトレイル",
+        expected_notes=785, level=26,
+    )
+    cn_selection = SimpleNamespace(
+        bestdori_song_id=581, title="蒼穹へのトレイル",
+        expected_notes=785, level=27,
+    )
+
+    class Repository:
+        def resolve(self, *_args, **kwargs):
+            return SimpleNamespace(
+                selection=(
+                    global_selection if kwargs["level"] is None else cn_selection
+                ),
+                reason="confirmed",
+            )
+
+    flow = object.__new__(MedleyFlow)
+    flow.repository = Repository()
+    completed = flow.complete_final_cover_identity(pending)
+
+    assert completed.level == 27
+    assert completed.preparation_identity_pending_final_cover is False
+    assert medley_action.current_live_run().song_level == 27
 
 
 def test_play_requires_final_cover_title_when_earlier_reads_failed(monkeypatch):
@@ -794,6 +1061,7 @@ def test_free_random_clicks_random_without_reading_identity(monkeypatch):
     flow.click = clicks.append
     flow.wait = lambda _seconds: None
     flow.capture = lambda: np.zeros((720, 1280, 3), dtype=np.uint8)
+    flow.open_free_song = lambda _index: flow.capture()
     calls = {}
 
     class Difficulty:
@@ -1148,9 +1416,6 @@ def test_collect_results_only_identifies_three_pggbm_pages(
     flow.story_handled = lambda _image: False
     flow.dismiss_quit_confirm = lambda _image: False
     flow.home_or_tour_select = lambda image: int(image[0, 0, 0]) == 9
-    flow.result_header_matches = lambda expected, image: (
-        int(image[0, 0, 0]) == expected.index
-    )
     flow.parse_stable_result = lambda _song, image: (SimpleNamespace(), image)
     advances = []
     flow.advance_page = lambda image, **_kwargs: advances.append(
@@ -1194,6 +1459,147 @@ def test_collect_results_only_identifies_three_pggbm_pages(
         "back",
         medley_action.RESULT_ANIMATION_SKIP_POINT,
     ]
+
+
+@pytest.mark.parametrize("difficulty", ["Easy", "Normal", "Hard", "Expert", "Special"])
+def test_stable_medley_result_reads_counts_without_rechecking_song_header(
+    monkeypatch, difficulty,
+):
+    """开演前确认的身份不能被结算标题、等级或难度 OCR 再次否决。"""
+    image = np.zeros((720, 1280, 3), dtype=np.uint8)
+    expected = replace(song(2, difficulty=difficulty), expected_notes=101)
+    result = medley_action.LiveResult(100, 1, 0, 0, 0, 0, 1, .95)
+    clock = [0.0]
+    flow = object.__new__(MedleyFlow)
+    flow.wait = lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+    flow.capture = lambda: image
+    monkeypatch.setattr(medley_action.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(medley_action, "judgement_details_visible", lambda _image: True)
+    monkeypatch.setattr(
+        medley_action, "ResultParser",
+        lambda: SimpleNamespace(parse=lambda _image: result),
+    )
+
+    def unexpected_identity_read(*_args, **_kwargs):
+        raise AssertionError("PGGBM 不应重新识别歌曲标题、难度或等级")
+
+    monkeypatch.setattr(medley_action, "recognize_song_title", unexpected_identity_read)
+    monkeypatch.setattr(medley_action, "read_song_level", unexpected_identity_read)
+
+    parsed, stable_image = flow.parse_stable_result(expected, image, timeout_seconds=3)
+
+    assert parsed is result
+    assert stable_image is image
+    assert clock[0] == 1.0
+
+
+def test_medley_result_stability_timer_restarts_only_when_counts_change(monkeypatch):
+    image = np.zeros((720, 1280, 3), dtype=np.uint8)
+    before = medley_action.LiveResult(100, 1, 0, 0, 0, 0, 1, .95)
+    after = medley_action.LiveResult(99, 2, 0, 0, 0, 0, 2, .95)
+    clock = [0.0]
+    flow = object.__new__(MedleyFlow)
+    flow.wait = lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+    flow.capture = lambda: image
+    monkeypatch.setattr(medley_action.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(medley_action, "judgement_details_visible", lambda _image: True)
+    monkeypatch.setattr(
+        medley_action, "ResultParser",
+        lambda: SimpleNamespace(parse=lambda _image: before if clock[0] < .5 else after),
+    )
+
+    parsed, _image = flow.parse_stable_result(
+        replace(song(1), expected_notes=101), image, timeout_seconds=3,
+    )
+
+    assert parsed is after
+    assert clock[0] == 1.5
+
+
+@pytest.mark.parametrize("interruption", ["marker-missing", "invalid-digits"])
+def test_medley_result_stability_does_not_span_unreadable_frames(monkeypatch, interruption):
+    image = np.zeros((720, 1280, 3), dtype=np.uint8)
+    result = medley_action.LiveResult(100, 1, 0, 0, 0, 0, 1, .95)
+    clock = [0.0]
+    flow = object.__new__(MedleyFlow)
+    flow.wait = lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+    flow.capture = lambda: image
+    monkeypatch.setattr(medley_action.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        medley_action, "judgement_details_visible",
+        lambda _image: not (interruption == "marker-missing" and clock[0] == .5),
+    )
+
+    def parse(_image):
+        if interruption == "invalid-digits" and clock[0] == .5:
+            raise ValueError("判定数字正在变化")
+        return result
+
+    monkeypatch.setattr(medley_action, "ResultParser", lambda: SimpleNamespace(parse=parse))
+
+    parsed, _image = flow.parse_stable_result(
+        replace(song(1), expected_notes=101), image, timeout_seconds=3,
+    )
+
+    assert parsed is result
+    assert clock[0] == 2.0
+
+
+def test_medley_result_does_not_accept_unresolved_note_total(monkeypatch):
+    image = np.zeros((720, 1280, 3), dtype=np.uint8)
+    result = medley_action.LiveResult(100, 0, 0, 0, 0, 0, 0, .95)
+    clock = [0.0]
+    flow = object.__new__(MedleyFlow)
+    flow.wait = lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+    flow.capture = lambda: image
+    monkeypatch.setattr(medley_action.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(medley_action, "judgement_details_visible", lambda _image: True)
+    monkeypatch.setattr(
+        medley_action, "ResultParser",
+        lambda: SimpleNamespace(
+            parse=lambda _image: result,
+            resolve_expected_total=lambda _image, **_kwargs: result,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="判定数字未稳定"):
+        flow.parse_stable_result(replace(song(1), expected_notes=101), image, timeout_seconds=2)
+
+
+def test_remaining_medley_results_follow_session_order_without_header_ocr(monkeypatch):
+    image = np.zeros((720, 1280, 3), dtype=np.uint8)
+    flow = object.__new__(MedleyFlow)
+    flow.capture = lambda: image
+    flow.wait = lambda _seconds: None
+    flow.dismiss_quit_confirm = lambda _image: False
+    flow.home_or_tour_select = lambda _image: False
+    flow.result_header_matches = lambda *_args: (_ for _ in ()).throw(
+        AssertionError("已确认离开上一成绩页后不应再 OCR 标题")
+    )
+    parsed = []
+    flow.parse_stable_result = lambda expected, image: (
+        parsed.append(expected.index) or SimpleNamespace(), image,
+    )
+    advances = []
+    flow.advance_page = lambda _image: advances.append(1) or True
+    flow.sessions = SimpleNamespace(update=lambda session, **changes: session | changes)
+    monkeypatch.setattr(medley_action, "judgement_details_visible", lambda _image: True)
+    saved = []
+    monkeypatch.setattr(
+        medley_action, "finalize_deferred_result",
+        lambda path, *_args, **_kwargs: saved.append(path),
+    )
+    songs = tuple(
+        replace(song(index, bestdori_song_id=index), report_path=f"song{index}.json")
+        for index in (1, 2, 3)
+    )
+
+    session = flow.collect_results({"session_id": "test", "results_completed": 1}, songs)
+
+    assert session["results_completed"] == 3
+    assert parsed == [2, 3]
+    assert saved == ["song2.json", "song3.json"]
+    assert advances == [1]
 
 
 def test_collect_results_fails_immediately_if_home_arrives_before_third_result(
@@ -1300,9 +1706,6 @@ def test_collect_results_uses_complete_cycle_on_unidentified_page(
     flow.story_handled = lambda _image: False
     flow.dismiss_quit_confirm = lambda _image: False
     flow.home_or_tour_select = lambda image: int(image[0, 0, 0]) == 9
-    flow.result_header_matches = lambda expected, image: (
-        int(image[0, 0, 0]) == expected.index
-    )
     flow.parse_stable_result = lambda _song, image: (SimpleNamespace(), image)
     flow.advance_page = lambda _image, **_kwargs: None
     flow.sessions = SimpleNamespace(
@@ -1368,7 +1771,6 @@ def test_collect_results_observes_pggbm_after_back_before_next_click(
     flow.story_handled = lambda _image: False
     flow.dismiss_quit_confirm = lambda _image: False
     flow.home_or_tour_select = lambda image: int(image[0, 0, 0]) == 9
-    flow.result_header_matches = lambda _expected, _image: True
     flow.parse_stable_result = lambda *_args, **_kwargs: (_ for _ in ()).throw(
         PggbmObserved("PGGBM observed before the next click")
     )

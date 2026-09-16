@@ -17,7 +17,7 @@ def test_v140_uses_polyform_noncommercial_for_project_owned_material():
     licensing = read("LICENSING.md")
     readme = read("README.md")
 
-    assert interface["version"] == "1.4.1"
+    assert interface["version"] == "1.4.2"
     assert interface["license"] == "PolyForm-Noncommercial-1.0.0"
     assert license_text.startswith("Required Notice: Copyright (c) 2026")
     assert "# PolyForm Noncommercial License 1.0.0" in license_text

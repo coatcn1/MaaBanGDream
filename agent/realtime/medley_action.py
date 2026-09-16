@@ -46,6 +46,7 @@ from .difficulty_action import (
     RealtimeDifficultySelect,
     read_song_level,
     selected_difficulty,
+    song_selection_visible,
 )
 from .formal_preflight import RealtimeFormalPreflight
 from .game_effect_settings_action import RealtimeGameSpeedSettingsGate
@@ -168,9 +169,6 @@ PREPARATION_TITLE_ROI = (105, 530, 650, 55)
 PREPARATION_LEVEL_ROI = (125, 575, 70, 40)
 STAGE_POINTS = ((176, 128), (590, 128), (1000, 128))
 
-RESULT_TITLE_ROI = (245, 15, 760, 55)
-RESULT_DIFFICULTY_ROI = (140, 15, 110, 50)
-RESULT_LEVEL_ROI = (1000, 15, 70, 40)
 RESULT_TEMPLATE = PROJECT_ROOT / "resource" / "image" / "result_judgement_details.png"
 ESC_ONLY_REWARD_TEMPLATES = (
     PROJECT_ROOT / "resource" / "image" / "medley_achievement_reward_overview.png",
@@ -378,6 +376,7 @@ class MedleySong:
     note_speed: float
     observed_title: str | None = None
     title_source: str = "unknown"
+    preparation_identity_pending_final_cover: bool = False
     report_path: str | None = None
 
     @classmethod
@@ -409,6 +408,9 @@ class MedleySong:
                 else str(value["observed_title"])
             ),
             title_source=str(value.get("title_source", "unknown")),
+            preparation_identity_pending_final_cover=bool(
+                value.get("preparation_identity_pending_final_cover", False)
+            ),
             report_path=(
                 None
                 if value.get("report_path") is None
@@ -569,17 +571,31 @@ def build_medley_song(
 ) -> MedleySong:
     if identity.song_id == UNKNOWN_SONG_ID and not allow_deferred_identity:
         raise RuntimeError(f"第{index}首封面无法识别")
-    if level is None:
+    if level is None and not allow_deferred_identity:
         raise RuntimeError(f"第{index}首等级无法识别")
-    song_id, method, bestdori_id, title, expected_notes = (
-        _canonical_song_identity(
-            identity,
-            difficulty,
-            level,
-            title_reading,
-            repository=repository,
+    if level is None:
+        song_id, method, bestdori_id, title, expected_notes = (
+            UNKNOWN_SONG_ID, "unknown", None, "", None,
         )
-    )
+    else:
+        try:
+            song_id, method, bestdori_id, title, expected_notes = (
+                _canonical_song_identity(
+                    identity,
+                    difficulty,
+                    level,
+                    title_reading,
+                    repository=repository,
+                )
+            )
+        except RuntimeError:
+            if not allow_deferred_identity:
+                raise
+            # 准备页封面或标题冲突时不使用候选谱面；最终封面实际标题会
+            # 重新建立本曲身份，Profile 与实际难度错误不在此吞掉。
+            song_id, method, bestdori_id, title, expected_notes = (
+                UNKNOWN_SONG_ID, "unknown", None, "", None,
+            )
     profile, note_speed = _resolve_profile(
         difficulty,
         image,
@@ -596,7 +612,7 @@ def build_medley_song(
         title_confidence=(
             title_reading.confidence if title_reading is not None else 0.0
         ),
-        level=level,
+        level=(0 if level is None else level),
         expected_notes=expected_notes,
         profile=profile,
         note_speed=note_speed,
@@ -604,7 +620,14 @@ def build_medley_song(
             title_reading.text if title_reading is not None else None
         ),
         title_source=(
-            title_source if title_reading is not None else "deferred-to-final-cover"
+            (
+                title_source
+                if title_reading is not None and level is not None
+                else "deferred-to-final-cover"
+            )
+        ),
+        preparation_identity_pending_final_cover=(
+            level is None or bestdori_id is None
         ),
     )
 
@@ -1150,13 +1173,49 @@ class MedleyFlow:
         self.wait(1.2)
         return self.capture()
 
+    def save_debug_image(self, name: str, image: np.ndarray) -> None:
+        if self.context.tasker.stopping:
+            raise ScreenRefreshCancelled("task is stopping")
+        path = PROJECT_ROOT / "screencap" / (
+            f"medley-{name}-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.png"
+        )
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not imwrite_unicode(path, image):
+                raise OSError("图像写入返回失败")
+        except (OSError, ValueError, cv2.error) as exc:
+            # 取证失败不能覆盖真正的页面送达失败原因。
+            log_task("组曲演奏", "取证", "WARNING", f"保存选曲现场失败：{exc}")
+
+    def open_free_song(self, index: int) -> np.ndarray:
+        """确认进入选曲页后才允许随机或选难度，点击回执不等于页面送达。"""
+        for attempt in range(1, 4):
+            # 重试前重新取图，避免选曲页恰在上一轮截止时送达，
+            # 却用旧总览截图在已打开的歌曲列表上重复点击槽位坐标。
+            image = self.capture()
+            if not song_selection_visible(image):
+                self.click(FREE_SLOT_POINTS[index - 1])
+            deadline = time.monotonic() + 3.0
+            stable_frames = 0
+            while time.monotonic() < deadline:
+                image = self.capture()
+                stable_frames = stable_frames + 1 if song_selection_visible(image) else 0
+                if stable_frames >= 2:
+                    log_task("组曲演奏", "选曲", "INFO",
+                             f"第{index}首歌曲选择页已确认，进入尝试 {attempt}/3")
+                    return image
+                self.wait(min(0.25, max(0.0, deadline - time.monotonic())))
+            log_task("组曲演奏", "选曲", "WARNING",
+                     f"第{index}首歌曲选择页未送达，进入尝试 {attempt}/3；未发送随机或难度输入")
+        self.save_debug_image(f"selection-not-delivered-song{index}", image)
+        raise RuntimeError(f"第{index}首歌曲选择页连续三次未打开，未执行难度选择")
+
     def snapshot_free_song(
         self,
         index: int,
         _existing: tuple[MedleySong, ...],
     ) -> MedleySong:
-        self.click(FREE_SLOT_POINTS[index - 1])
-        self.wait(1.0)
+        self.open_free_song(index)
         if self.settings["song_mode"] == "random":
             # 最新约定禁止在第 4 张图读取任何歌曲身份；随机模式只发送
             # 随机按钮，是否为哪首歌同样留到对应准备页确认。
@@ -1259,14 +1318,57 @@ class MedleyFlow:
             image,
             expected=expected,
         )
-        if (
+        identity_conflict = (
             song_identity_confirmed(expected)
             and song_identity_confirmed(observed)
             and not song_identity_matches(expected, observed)
-        ):
-            raise RuntimeError(
-                f"第{expected.index}曲准备页歌曲身份与选曲记录不一致"
+        )
+        if identity_conflict:
+            # 组曲准备页冲突不能保留选曲页旧谱面；本曲进入最终封面实际
+            # 标题复核，成功后才把新身份写回会话。
+            confirmed = replace(
+                expected,
+                song_id=UNKNOWN_SONG_ID,
+                song_id_method="unknown",
+                bestdori_song_id=None,
+                title="",
+                title_confidence=0.0,
+                observed_title=None,
+                title_source="deferred-to-final-cover",
+                level=observed.level,
+                expected_notes=None,
+                preparation_identity_pending_final_cover=True,
             )
+            print(
+                "MedleyIdentity pending_final_cover=true "
+                f"song_index={expected.index} reason=preparation-identity-conflict "
+                f"level={observed.level}",
+                flush=True,
+            )
+            return confirmed
+        if observed.preparation_identity_pending_final_cover:
+            # build 阶段已经证明准备页等级或身份不可用，即使标题 OCR
+            # 置信度很高也不能继承选曲页旧身份预武装。
+            confirmed = replace(
+                expected,
+                song_id=UNKNOWN_SONG_ID,
+                song_id_method="unknown",
+                bestdori_song_id=None,
+                title="",
+                title_confidence=0.0,
+                observed_title=None,
+                title_source="deferred-to-final-cover",
+                level=observed.level,
+                expected_notes=None,
+                preparation_identity_pending_final_cover=True,
+            )
+            print(
+                "MedleyIdentity pending_final_cover=true "
+                f"song_index={expected.index} reason=preparation-identity-pending "
+                f"level={observed.level}",
+                flush=True,
+            )
+            return confirmed
         if observed.title_confidence >= TRUSTED_TITLE_CONFIDENCE:
             title = observed.title
             title_confidence = observed.title_confidence
@@ -1307,6 +1409,10 @@ class MedleyFlow:
                 if observed.expected_notes is not None
                 else expected.expected_notes
             ),
+            preparation_identity_pending_final_cover=(
+                observed.preparation_identity_pending_final_cover
+                or observed.title_confidence < TRUSTED_TITLE_CONFIDENCE
+            ),
         )
         print(
             "MedleyIdentity "
@@ -1338,15 +1444,37 @@ class MedleyFlow:
         resolution = self.repository.resolve(
             run.song_id,
             song.difficulty,
-            level=song.level,
+            level=(
+                None if song.preparation_identity_pending_final_cover
+                else song.level
+            ),
             title=(title or song.observed_title or song.title or None),
-            bestdori_song_id=song.bestdori_song_id,
+            bestdori_song_id=(
+                None if song.preparation_identity_pending_final_cover
+                else song.bestdori_song_id
+            ),
         )
         if resolution.selection is None:
             raise RuntimeError(
                 f"第{song.index}曲最终封面身份无法写回：{resolution.reason}"
             )
         selection = resolution.selection
+        if song.preparation_identity_pending_final_cover and song.level > 0:
+            # 最终封面已独立确认歌曲后，准备页实读等级只用于恢复本地
+            # 区服语义；若其本身错误，不能反过来否决已确认的最终身份。
+            level_resolution = self.repository.resolve(
+                run.song_id,
+                song.difficulty,
+                level=song.level,
+                title=(title or None),
+            )
+            if (
+                level_resolution.selection is not None
+                and level_resolution.selection.bestdori_song_id
+                == selection.bestdori_song_id
+            ):
+                selection = level_resolution.selection
+        update_live_run(song_level=getattr(selection, "level", song.level))
         return replace(
             song,
             song_id=run.song_id,
@@ -1356,7 +1484,13 @@ class MedleyFlow:
             title_confidence=(confidence if title else song.title_confidence),
             observed_title=(title or song.observed_title),
             title_source=("final-cover" if title else song.title_source),
+            level=(
+                selection.level
+                if getattr(selection, "level", None) is not None
+                else song.level
+            ),
             expected_notes=selection.expected_notes,
+            preparation_identity_pending_final_cover=False,
         )
 
     def activate_song(self, song: MedleySong) -> None:
@@ -1375,6 +1509,16 @@ class MedleyFlow:
             song_level=song.level,
             song_title=song.title,
             song_title_confidence=song.title_confidence,
+            preparation_identity_pending_final_cover=(
+                song.preparation_identity_pending_final_cover
+            ),
+            preparation_title_pending_final_cover=(
+                song.preparation_identity_pending_final_cover
+            ),
+            preparation_identity_pending_reason=(
+                "medley preparation identity requires final cover"
+                if song.preparation_identity_pending_final_cover else None
+            ),
         )
 
     def run_preflight(
@@ -1478,7 +1622,8 @@ class MedleyFlow:
             "confirm_final_cover": True,
             "native_prearm_deferred": native_prearm_deferred,
             "require_final_cover_title": (
-                song.title_confidence < TRUSTED_TITLE_CONFIDENCE
+                song.preparation_identity_pending_final_cover
+                or song.title_confidence < TRUSTED_TITLE_CONFIDENCE
             ),
         }
         if not RealtimeProfilePlay().run(
@@ -1554,18 +1699,6 @@ class MedleyFlow:
             self.wait(0.35)
         raise RuntimeError(f"第{index}曲完成后未出现下一曲准备页")
 
-    def result_header_matches(self, song: MedleySong, image: np.ndarray) -> bool:
-        title = recognize_song_title(image, RESULT_TITLE_ROI)
-        badge = recognize_song_title(image, RESULT_DIFFICULTY_ROI)
-        level = read_song_level(image, RESULT_LEVEL_ROI)
-        return bool(
-            title is not None
-            and badge is not None
-            and level == song.level
-            and badge.text.strip().casefold() == song.difficulty.casefold()
-            and title_similarity(title.text, song.title) >= 0.65
-        )
-
     def parse_stable_result(
         self,
         song: MedleySong,
@@ -1576,20 +1709,16 @@ class MedleyFlow:
         parser = ResultParser()
         candidate: LiveResult | None = None
         candidate_at = 0.0
-        header_mismatches = 0
         image = first_image
         deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline:
-            if not self.result_header_matches(song, image):
-                header_mismatches += 1
-                if header_mismatches >= 3:
-                    raise RuntimeError(
-                        f"第{song.index}张 PGGBM 的标题、难度或等级与选曲不一致"
-                    )
-                self.wait(0.35)
+            # 歌曲身份已在触控前确认；结算只消费判定数字，不能让
+            # 结果页标题、难度或等级的二次 OCR 否决已完成的演奏。
+            if not judgement_details_visible(image):
+                candidate = None
+                self.wait(0.5)
                 image = self.capture()
                 continue
-            header_mismatches = 0
             try:
                 result = parser.parse(image)
                 if song.expected_notes is not None and result.total != song.expected_notes:
@@ -1598,6 +1727,10 @@ class MedleyFlow:
                         expected_notes=song.expected_notes,
                         fallback=result,
                     )
+                    if result.total != song.expected_notes:
+                        # 修复候选不足时解析器会返回原读数；它不能被当作
+                        # 已通过总数校验的成绩，只能继续等待下一帧数字。
+                        result = None
             except ValueError:
                 result = None
             now = time.monotonic()
@@ -1606,18 +1739,20 @@ class MedleyFlow:
                     result.perfect, result.great, result.good, result.bad,
                     result.miss, result.fast, result.slow,
                 )
-                if (
-                    candidate is not None
-                    and now - candidate_at >= 1.0
-                    and counts == (
-                        candidate.perfect, candidate.great, candidate.good,
-                        candidate.bad, candidate.miss, candidate.fast,
-                        candidate.slow,
-                    )
-                ):
+                candidate_counts = None if candidate is None else (
+                    candidate.perfect, candidate.great, candidate.good,
+                    candidate.bad, candidate.miss, candidate.fast,
+                    candidate.slow,
+                )
+                if counts == candidate_counts and now - candidate_at >= 1.0:
                     return result, image
-                candidate = result
-                candidate_at = now
+                # 相同数字继续累计稳定时长，不能在每个 0.5 秒采样处
+                # 重置计时，否则去掉耗时 OCR 后永远无法达到一秒。
+                if counts != candidate_counts:
+                    candidate = result
+                    candidate_at = now
+            else:
+                candidate = None
             self.wait(0.5)
             image = self.capture()
         raise RuntimeError(f"第{song.index}张 PGGBM 判定数字未稳定")
@@ -1759,31 +1894,8 @@ class MedleyFlow:
             if judgement_details_visible(image):
                 unknown_back_attempts = 0
                 cadence_steps = 0
-                if (
-                    result_index > 0
-                    and not song_identity_matches(
-                        songs[result_index - 1],
-                        songs[result_index],
-                    )
-                    and self.result_header_matches(
-                        songs[result_index - 1],
-                        image,
-                    )
-                ):
-                    log_task(
-                        "组曲演奏",
-                        "结算",
-                        "INFO",
-                        f"第{result_index}首 PGGBM 已保存，继续推进当前页面",
-                    )
-                    if self.advance_page(image) is False:
-                        failure_reason = (
-                            f"第{result_index}张 PGGBM 页面连续 "
-                            f"{RESULT_NAVIGATION_MAX_CYCLES} 轮 "
-                            "最右下角/BACK加速推进后仍未离开"
-                        )
-                        break
-                    continue
+                # 三张成绩按会话顺序关联；上一页必须经 advance_page
+                # 观察到 PGGBM 标记消失，不能靠标题 OCR 推测是否翻页。
                 song = songs[result_index]
                 result, stable_image = self.parse_stable_result(song, image)
                 if not song.report_path:

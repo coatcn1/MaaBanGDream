@@ -22,6 +22,13 @@ class LiveRunContext:
     song_level: int | None = None
     song_title: str | None = None
     song_title_confidence: float | None = None
+    # 准备页身份缺失或冲突时必须在最终封面重新实读；期间不得复用旧谱面
+    # 或提前预武装 Native。实际难度按钮仍由独立门禁确认。
+    preparation_title_pending_final_cover: bool = False
+    # 准备页缺少可确认的封面候选，需要由最终封面独立解析；与标题缺失
+    # 分开记录，以便保留已可信的实际标题作为最终解析约束。
+    preparation_identity_pending_final_cover: bool = False
+    preparation_identity_pending_reason: str | None = None
     expected_note_speed: float | None = None
     actual_note_speed: float | None = None
     debug_recording: bool = False
@@ -62,6 +69,15 @@ class LiveRunContext:
             "song_level": self.song_level,
             "song_title": self.song_title,
             "song_title_confidence": self.song_title_confidence,
+            "preparation_title_pending_final_cover": (
+                self.preparation_title_pending_final_cover
+            ),
+            "preparation_identity_pending_final_cover": (
+                self.preparation_identity_pending_final_cover
+            ),
+            "preparation_identity_pending_reason": (
+                self.preparation_identity_pending_reason
+            ),
             "settings": {
                 "expected_note_speed": self.expected_note_speed,
                 "actual_note_speed": self.actual_note_speed,

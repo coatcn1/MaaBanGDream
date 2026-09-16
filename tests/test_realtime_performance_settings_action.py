@@ -428,6 +428,47 @@ def test_skipped_gate_still_defers_native_prearm_when_requested(monkeypatch):
     assert discarded == ["deferred-until-final-cover"]
 
 
+def test_gate_pending_preparation_identity_forces_native_prearm_defer(
+    monkeypatch,
+):
+    clear_verified_settings()
+    reset_live_run(
+        mode="formal", difficulty="Expert", prepared_for_play=True,
+    )
+    update_live_run(preparation_identity_pending_final_cover=True)
+    discarded = []
+    monkeypatch.setattr(
+        performance_settings_action,
+        "_expected_speed",
+        lambda context, params, image: (5.0, "expert.json"),
+    )
+    monkeypatch.setattr(
+        performance_settings_action.RealtimeProfileStore,
+        "runtime_options",
+        lambda _store: {"note_speed_settings_enabled": False},
+    )
+    monkeypatch.setattr(
+        performance_settings_action,
+        "discard_prearmed_backend",
+        discarded.append,
+    )
+    monkeypatch.setattr(
+        performance_settings_action,
+        "prepare_native_for_settings_gate",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("延迟身份路径不得在设置门预武装")
+        ),
+    )
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=_Controller()),
+    )
+
+    assert RealtimePerformanceSettingsGate()._run(context, {
+        "difficulty": "Expert", "require_profile": True,
+    })
+    assert discarded == ["deferred-until-final-cover"]
+
+
 def test_skipped_gate_caches_fresh_cooperative_preparation_image(monkeypatch):
     clear_verified_settings()
     frame = np.full((720, 1280, 3), 37, dtype=np.uint8)

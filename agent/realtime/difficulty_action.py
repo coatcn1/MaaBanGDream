@@ -207,11 +207,34 @@ def _should_retry_song_identity(resolution: ChartResolution) -> bool:
     )
 
 
+def song_selection_visible(image: np.ndarray) -> bool:
+    """用标准选曲页的大圆按钮布局确认页面，不读取歌曲身份。"""
+    if image.shape[:2] != (720, 1280):
+        return False
+    gray = cv2.cvtColor(image[490:595, 650:1250], cv2.COLOR_BGR2GRAY)
+    circles = cv2.HoughCircles(
+        gray, cv2.HOUGH_GRADIENT, 1, 80,
+        param1=100, param2=24, minRadius=35, maxRadius=49,
+    )
+    if circles is None:
+        return False
+    # Special 不可用时允许缺一枚；总览页的小圆按钮与综合力文字
+    # 不满足这里的尺寸、行位置和间距，不能冒充标准难度选择页。
+    matched = sum(
+        any(abs(cx + 650 - x) <= 12 and abs(cy + 490 - y) <= 15
+            for cx, cy, _radius in circles[0])
+        for x, y in DIFFICULTY_TARGETS.values()
+    )
+    return matched >= 4
+
+
 def selected_difficulty(
     image,
     targets: dict[str, tuple[int, int]] = DIFFICULTY_TARGETS,
 ) -> str | None:
     """Return the coloured difficulty button on the 1280x720 song screen."""
+    if targets == DIFFICULTY_TARGETS and not song_selection_visible(image):
+        return None
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     scores = {}
     for name, (x, y) in targets.items():
@@ -279,6 +302,12 @@ class RealtimeDifficultySelect(CustomAction):
                 for attempt in range(1, attempts + 1):
                     if context.tasker.stopping:
                         return True
+                    if params.get("mode") == "medley":
+                        # 组曲随机选曲后再次核对页面，防止中途退回总览时
+                        # 仍向成员卡或综合力区域发送标准难度坐标。
+                        before = controller.post_screencap().wait().get()
+                        if not song_selection_visible(before):
+                            raise RuntimeError("当前不是歌曲选择页，停止组曲难度输入")
                     require_game_foreground(controller)
                     controller.post_click(*target).wait()
                     time.sleep(float(params.get("verify_delay_seconds", 0.35)))

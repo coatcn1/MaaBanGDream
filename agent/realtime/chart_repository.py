@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .chart_timeline import ChartTimeline
+from .regional_difficulty import verified_level_variants
 from .song_identity import (
     LOOSE_SAME_SONG_DISTANCE,
     UNKNOWN_SONG_ID,
@@ -174,6 +175,7 @@ class LocalChartRepository:
                 for confirmed in song["fingerprints"]
             )
         ]
+        matched_exact_fingerprint = bool(fingerprint_matches)
         if not fingerprint_matches and level is not None:
             # 选曲页封面裁切/边框会让个别谱面稳定多翻转几 bit；只有同时
             # 读到等级时才用更宽阈值重试，随后仍由等级硬约束唯一化。
@@ -195,15 +197,20 @@ class LocalChartRepository:
             expected_level = int(level)
             level_scope = [
                 song for song in songs
-                if _difficulty_level(song, normalized_difficulty)
-                == expected_level
+                if _difficulty_level_matches(
+                    song, normalized_difficulty, expected_level,
+                )
             ]
-            if not level_scope:
+            level_matches = [song for song in matches if song in level_scope]
+            if (
+                matched_exact_fingerprint
+                and matches
+                and not level_matches
+            ):
                 return ChartResolution(
                     None,
                     "selected song level does not match local chart metadata",
                 )
-            level_matches = [song for song in matches if song in level_scope]
             matched_by_level = (
                 len(level_matches) == 1 and len(matches) != 1
             )
@@ -238,7 +245,9 @@ class LocalChartRepository:
         song = matches[0]
         if (
             level is not None
-            and _difficulty_level(song, normalized_difficulty) != int(level)
+            and not _difficulty_level_matches(
+                song, normalized_difficulty, int(level),
+            )
         ):
             return ChartResolution(
                 None,
@@ -269,12 +278,18 @@ class LocalChartRepository:
             "expected_notes",
             payload.get("difficulty", {}).get("expected_notes"),
         )
-        selected_level = _difficulty_level(song, normalized_difficulty)
+        selected_level = int(level) if level is not None else _difficulty_level(
+            song, normalized_difficulty,
+        )
         same_level_shared = sum(
             1
             for candidate in fingerprint_matches
-            if _difficulty_level(candidate, normalized_difficulty)
-            == selected_level
+            if (
+                selected_level is not None
+                and _difficulty_level_matches(
+                    candidate, normalized_difficulty, selected_level,
+                )
+            )
         )
         return ChartResolution(
             ChartSelection(
@@ -361,6 +376,22 @@ def _difficulty_level(song: dict[str, Any], difficulty: str) -> int | None:
         return int(entry["level"])
     except (TypeError, ValueError):
         return None
+
+
+def _difficulty_level_matches(
+    song: dict[str, Any], difficulty: str, observed_level: int,
+) -> bool:
+    entry = song.get("difficulties", {}).get(difficulty)
+    if not isinstance(entry, dict):
+        return False
+    expected_level = _difficulty_level(song, difficulty)
+    if expected_level == int(observed_level):
+        return True
+    return int(observed_level) in verified_level_variants(
+        int(song["bestdori_song_id"]),
+        difficulty,
+        entry.get("chart_sha256"),
+    )
 
 
 def _unique_title_matches(
