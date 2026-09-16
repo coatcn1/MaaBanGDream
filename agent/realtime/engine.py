@@ -704,6 +704,16 @@ class RealtimeEngine:
                         reading = self.life_detector.detect(image)
                         status = self.life_guard.update(reading)
                         life_status = status.value
+                        if native_exclusive and native_started:
+                            record_native_life = getattr(
+                                self.debug_recorder, "record_native_life", None
+                            )
+                            if callable(record_native_life):
+                                record_native_life(
+                                    image, now, reading.value,
+                                    visible=reading.visible,
+                                    alive_confirmed=self.life_guard.alive_confirmed,
+                                )
                         if life_monitor_diagnostics is not None:
                             candidate = life_monitor_diagnostics.observe(
                                 reading,

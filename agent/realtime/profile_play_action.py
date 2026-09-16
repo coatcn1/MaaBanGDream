@@ -312,17 +312,25 @@ def wait_for_final_cover(
     initial_image=None,
     initial_resolution: FinalCoverResolution | None = None,
     require_observed_title: bool = False,
+    ignore_preparation_level: bool = False,
 ) -> FinalCoverWaitOutcome:
     """确认最终封面；识别缺失时保留准备页谱面或降级到视觉演奏。"""
     if not 1 <= float(timeout_seconds) <= 180:
         raise ValueError("final_cover_timeout_seconds 必须在 1..180 之间")
     resolver = FinalCoverResolver(
         difficulty=difficulty,
-        observed_level=live_run.song_level,
-        observed_title=live_run.song_title,
+        observed_level=(
+            None if ignore_preparation_level else live_run.song_level
+        ),
+        observed_title=(
+            None if ignore_preparation_level else live_run.song_title
+        ),
         observed_title_confidence=(
             float(getattr(live_run, "song_title_confidence", None))
-            if getattr(live_run, "song_title_confidence", None) is not None
+            if (
+                not ignore_preparation_level
+                and getattr(live_run, "song_title_confidence", None) is not None
+            )
             else 0.0
         ),
         selection=selection,
@@ -331,6 +339,7 @@ def wait_for_final_cover(
             if selection is None else None
         ),
         require_observed_title=require_observed_title,
+        allow_missing_level=ignore_preparation_level,
     )
     evidence_reason = resolver.evidence_reason()
     if evidence_reason is not None:
@@ -1074,6 +1083,8 @@ def collect_result(
     The older page-specific path remains available only for focused parser and
     compatibility tests.
     """
+    # 所有共用入口的身份已在开演前确认；结算只检查 PGGBM 页面和
+    # 判定数字，不再识别歌曲标题、等级或难度来反判本局身份。
     parser = parser or ResultParser()
     started_at = clock()
     deadline = started_at + timeout_seconds
@@ -1750,18 +1761,39 @@ class RealtimeProfilePlay(CustomAction):
             native_requested = bool(
                 runtime_options.get("native_realtime_enabled", False)
             )
+            preparation_title_pending_final_cover = bool(
+                getattr(
+                    current_live_run(),
+                    "preparation_title_pending_final_cover",
+                    False,
+                )
+            )
+            preparation_identity_pending_final_cover = bool(
+                getattr(
+                    current_live_run(),
+                    "preparation_identity_pending_final_cover",
+                    False,
+                )
+            )
+            preparation_final_cover_required = (
+                preparation_title_pending_final_cover
+                or preparation_identity_pending_final_cover
+            )
             final_cover_required = bool(
                 params.get(
                     "confirm_final_cover",
                     params.get("settings_gate_required", False),
                 )
-            )
+            ) or preparation_final_cover_required
             ordered_startup = os.environ.get("MAABANGDREAM_ORDERED_STARTUP", "0") == "1"
             preflight_image = None
             native_prearm_deferred = bool(
                 native_requested
                 and final_cover_required
-                and params.get("native_prearm_deferred", False)
+                and (
+                    params.get("native_prearm_deferred", False)
+                    or preparation_final_cover_required
+                )
             )
             chart_timeline = None
             selected_chart = None
@@ -1998,10 +2030,16 @@ class RealtimeProfilePlay(CustomAction):
                 )
                 require_final_cover_title = bool(
                     params.get("require_final_cover_title", False)
+                    or preparation_title_pending_final_cover
+                    or preparation_identity_pending_final_cover
                 )
                 cover_selection = (
                     None
-                    if live_run.mode == "cooperative" or require_final_cover_title
+                    if (
+                        live_run.mode == "cooperative"
+                        or require_final_cover_title
+                        or preparation_identity_pending_final_cover
+                    )
                     else selected_chart
                 )
                 cover_checkpoint_stages = set()
@@ -2054,6 +2092,7 @@ class RealtimeProfilePlay(CustomAction):
                     ),
                     initial_resolution=startup_cover_resolution,
                     require_observed_title=require_final_cover_title,
+                    ignore_preparation_level=preparation_identity_pending_final_cover,
                 )
                 if recorder is not None and cover_outcome.image is not None:
                     _recorder_checkpoint(
@@ -2083,6 +2122,10 @@ class RealtimeProfilePlay(CustomAction):
                         "final_cover_status": "confirmed",
                         "final_cover_reason": None,
                         "prepared_for_play": True,
+                        "song_level": selected_chart.level,
+                        "preparation_title_pending_final_cover": False,
+                        "preparation_identity_pending_final_cover": False,
+                        "preparation_identity_pending_reason": None,
                         "startup_final_cover_image": None,
                         "startup_final_cover_resolution": None,
                     }
@@ -2097,6 +2140,16 @@ class RealtimeProfilePlay(CustomAction):
                         })
                     live_run = update_live_run(**cover_updates)
                 else:
+                    if preparation_final_cover_required:
+                        if native_requested:
+                            discard_prearmed_backend(
+                                "required-final-cover-identity-unconfirmed"
+                            )
+                        raise RuntimeError(
+                            "最终封面未确认准备页延迟的歌曲身份，"
+                            "已在发送演奏触控前停止："
+                            f"{cover_outcome.reason}"
+                        )
                     if special_requires_chart:
                         if native_requested:
                             discard_prearmed_backend(

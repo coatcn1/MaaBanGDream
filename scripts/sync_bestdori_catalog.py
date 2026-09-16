@@ -28,6 +28,7 @@ if str(PROJECT_ROOT := Path(__file__).resolve().parents[1]) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from agent.realtime.song_identity import fingerprint_jacket
+from agent.realtime.regional_difficulty import catalog_level_metadata
 from scripts.sync_bestdori_charts import (
     CHART_URL,
     SONGS_INDEX_URL,
@@ -128,6 +129,7 @@ def sync_catalog(
                 fetch_json,
                 fetch_bytes,
                 jacket_servers,
+                server,
                 reuse_existing,
                 old_songs.get(song_id),
             ): song_id
@@ -195,6 +197,7 @@ def _sync_song(
     fetch_json: FetchJson,
     fetch_bytes: FetchBytes,
     jacket_servers: tuple[str, ...],
+    default_jacket_server: str,
     reuse_existing: bool,
     old_song: dict[str, Any] | None,
 ) -> dict[str, Any]:
@@ -329,6 +332,17 @@ def _sync_song(
                     "chart_sha256": chart_sha256,
                 }
             difficulties[difficulty] = entry
+            old_entry = (
+                (old_song or {}).get("difficulties", {}).get(difficulty)
+            )
+            entry.update(catalog_level_metadata(
+                bestdori_song_id=song_id,
+                difficulty=difficulty,
+                chart_sha256=entry.get("chart_sha256"),
+                source_level=int(details["playLevel"]),
+                jacket_server=default_jacket_server,
+                old_entry=old_entry,
+            ))
         except Exception as exc:
             errors.append({
                 "kind": "chart",

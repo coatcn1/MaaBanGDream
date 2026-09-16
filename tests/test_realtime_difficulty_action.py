@@ -31,7 +31,10 @@ def difficulty_frame(selected: str | None):
     if selected:
         x, y = DIFFICULTY_TARGETS[selected]
         hsv[y - 30:y + 20, x - 25:x + 25] = (20, 180, 255)
-    return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+    image = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+    for x, y in DIFFICULTY_TARGETS.values():
+        cv2.circle(image, (x, y), 43, (125, 125, 125), 2, cv2.LINE_AA)
+    return image
 
 
 def difficulty_frame_with_level(selected: str, level: int):
@@ -62,6 +65,16 @@ def test_hard_never_confirms_when_easy_is_selected():
 
 def test_no_coloured_selection_is_not_confirmed():
     assert selected_difficulty(difficulty_frame(None)) is None
+
+
+def test_default_difficulty_rejects_colour_on_a_non_selection_page():
+    hsv = np.zeros((720, 1280, 3), dtype=np.uint8)
+    hsv[:, :, 2] = 220
+    x, y = DIFFICULTY_TARGETS["Easy"]
+    hsv[y - 30:y + 20, x - 25:x + 25] = (170, 180, 255)
+    image = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+
+    assert selected_difficulty(image) is None
 
 
 def test_song_level_reader_recognizes_high_contrast_two_digit_level():
@@ -187,7 +200,19 @@ def test_difficulty_only_mode_records_effective_choice_without_reading_identity(
     assert current.song_id == UNKNOWN_SONG_ID
     assert current.song_level is None
     assert current.prepared_for_play is False
-    assert controller.screencaps == 2
+    assert controller.screencaps == 4
+
+
+def test_medley_difficulty_sends_no_click_outside_selection_page(monkeypatch):
+    controller = DifficultyController(np.zeros((720, 1280, 3), dtype=np.uint8))
+    context = SimpleNamespace(tasker=SimpleNamespace(stopping=False, controller=controller))
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Hard", "mode": "medley", "identity_read": False,
+    }))
+
+    assert RealtimeDifficultySelect().run(context, argv) is False
+    assert controller.clicks == []
+    assert controller.screencaps == 1
 
 
 def test_formal_round_can_continue_with_unknown_song_without_stale_identity(monkeypatch):

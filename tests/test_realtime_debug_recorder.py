@@ -16,6 +16,55 @@ from agent.realtime.note_detector import NoteKind, ObservedNote
 from agent.realtime.touch_planner import ActionKind, TouchAction
 
 
+def test_native_life_drop_keeps_bounded_before_and_after_evidence(tmp_path):
+    recorder = RealtimeDebugRecorder(tmp_path, video_enabled=False)
+    frame = np.zeros((72, 128, 3), dtype=np.uint8)
+    # 低频监控保留掉血前画面，不能等到归零弹窗才开始取证。
+    for index, value in enumerate([1000] * 12 + [967, 769, 575, 476, 132, 0] + [0] * 15):
+        recorder.record_native_life(frame, index * 0.2, value, visible=True, alive_confirmed=True)
+        # 测试中等待单项消费，避免用人工瞬间灌满队列冒充真实的 5Hz 输入。
+        deadline = time.monotonic() + 2
+        while not recorder._record_queue.empty() and time.monotonic() < deadline:
+            time.sleep(0.001)
+    recorder.close()
+    events = [json.loads(line) for line in (recorder.output_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert 11 <= len(events) <= 21
+    assert events[0]["timestamp"] < 2.4
+    assert events[-1]["timestamp"] <= 4.6 + 1e-9
+    assert len({event["screenshot"] for event in events}) == len(events)
+    assert all((recorder.output_dir / event["screenshot"]).is_file() for event in events)
+    assert any("life=967" in event["reason"] for event in events)
+    assert any("life=0" in event["reason"] for event in events)
+    assert not (recorder.output_dir / "trace.jsonl").read_text(encoding="utf-8")
+
+
+def test_native_life_evidence_ignores_unconfirmed_and_stale_life(tmp_path):
+    recorder = RealtimeDebugRecorder(tmp_path, video_enabled=False)
+    frame = np.zeros((72, 128, 3), dtype=np.uint8)
+    for timestamp, value, visible, alive in [(0, 1000, True, False), (1, 0, True, False),
+            (2, 1000, True, True), (3, None, False, True), (4, 0, True, True),
+            (5, 1000, True, True), (8, 0, True, True)]:
+        recorder.record_native_life(frame, timestamp, value, visible=visible, alive_confirmed=alive)
+    recorder.close()
+    assert not (recorder.output_dir / "events.jsonl").read_text(encoding="utf-8")
+
+
+def test_native_life_evidence_queue_saturation_never_blocks(tmp_path):
+    recorder = RealtimeDebugRecorder(tmp_path, video_enabled=False)
+    recorder.close()
+    recorder._closed = False
+    recorder._record_queue = queue.Queue(maxsize=1)
+    frame = np.zeros((72, 128, 3), dtype=np.uint8)
+    recorder.record_native_life(frame, 1, 1000, visible=True, alive_confirmed=True)
+    recorder.record_native_life(frame, 2, 0, visible=True, alive_confirmed=True)
+    assert recorder._dropped_native_life_frames == 1
+    assert recorder._dropped_trace_frames == 0
+    recorder._discard_pending_records()
+    assert recorder._dropped_native_life_frames == 2
+    assert recorder._dropped_trace_frames == 0
+    recorder._closed = True
+
+
 def test_debug_recorder_directory_prefix_reflects_session_kind(tmp_path):
     recorder = RealtimeDebugRecorder(
         tmp_path, video_enabled=False, session_kind="single-rehearsal"

@@ -486,6 +486,19 @@ def test_native_backend_owns_input_from_first_note_and_reports_session(
         def detect(self, image):
             return LifeReading(True, 1000)
 
+    class LifeRecorder:
+        frames = []
+
+        def record_native_life(self, image, timestamp, value, **kwargs):
+            assert backend.active
+            self.frames.append((timestamp, value, kwargs))
+
+        def record(self, *args, **kwargs):
+            pass
+
+        def close(self):
+            pass
+
     class ForbiddenFeedback:
         sightings = 0
         reports = 0
@@ -510,6 +523,7 @@ def test_native_backend_owns_input_from_first_note_and_reports_session(
         lambda seconds: setattr(clock, "value", clock.value + seconds),
     )
     backend = NativeBackend()
+    recorder = LifeRecorder()
     engine = RealtimeEngine(
         ForbiddenDetector(),
         ForbiddenPlanner(),
@@ -520,6 +534,7 @@ def test_native_backend_owns_input_from_first_note_and_reports_session(
         timing_feedback_detector=ForbiddenFeedback(),
         timing_controller=ForbiddenTimingController(),
         native_backend=backend,
+        debug_recorder=recorder,
     )
 
     def capture() -> np.ndarray:
@@ -544,6 +559,9 @@ def test_native_backend_owns_input_from_first_note_and_reports_session(
     assert stats.native_report["executed"] == 632
     assert stats.native_report["underflows"] == 0
     assert stats.initial_timing_offset_ms == stats.final_timing_offset_ms == 17
+    assert recorder.frames
+    assert all(value == 1000 and flags["visible"] and flags["alive_confirmed"]
+               for _, value, flags in recorder.frames)
 
 
 def test_native_start_photogate_maps_first_note_to_delayed_anchor():

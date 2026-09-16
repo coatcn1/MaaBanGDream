@@ -515,6 +515,85 @@ def test_final_cover_resolver_can_require_title_after_early_ocr_failed():
     assert resolution.confirmation.bestdori_song_id == 50
 
 
+def test_final_cover_resolver_can_reconfirm_pending_identity_without_old_level():
+    cover, song_id = final_cover_frame()
+    selected = SimpleNamespace(
+        difficulty="expert",
+        level=28,
+        shared_jacket=False,
+        fingerprints=(song_id,),
+        bestdori_song_id=50,
+        title="FIRE BIRD",
+        titles=("FIRE BIRD",),
+    )
+
+    class Repository:
+        def resolve(self, _song_id, _difficulty, *, level, title):
+            assert level is None
+            return ChartResolution(
+                selected if title == "FIRE BIRD" else None,
+                "confirmed" if title == "FIRE BIRD" else "title missing",
+            )
+
+    resolver = FinalCoverResolver(
+        difficulty="Expert",
+        observed_level=None,
+        observed_title=None,
+        repository=Repository(),
+        require_observed_title=True,
+        allow_missing_level=True,
+    )
+
+    assert resolver.evidence_reason() is None
+    assert resolver.refresh_observed_title("FIRE BIRD", 0.93) is True
+    assert resolver.observe(cover) is None
+    assert resolver.observe(cover) is not None
+
+
+def test_pending_final_cover_does_not_reuse_a_trusted_preparation_title():
+    cover, _song_id = final_cover_frame()
+
+    class Job:
+        def wait(self):
+            return self
+
+        def get(self):
+            return cover
+
+    class Controller:
+        def post_screencap(self):
+            return Job()
+
+    class Repository:
+        def resolve(self, *_args, **_kwargs):
+            raise AssertionError("最终标题缺失时不得复用旧标题解析")
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(
+            profile_play_action, "recognize_song_title", lambda *_args, **_kwargs: None,
+        )
+        monkeypatch.setattr(
+            profile_play_action, "PlayfieldDetector", lambda: (lambda _image: True),
+        )
+        with pytest.raises(RuntimeError, match="最终封面页标题未确认"):
+            wait_for_final_cover(
+                Controller(),
+                SimpleNamespace(
+                    song_level=27,
+                    song_title="旧准备页标题",
+                    song_title_confidence=0.99,
+                ),
+                None,
+                "Expert",
+                lambda: False,
+                repository=Repository(),
+                timeout_seconds=1,
+                poll_interval_seconds=0,
+                require_observed_title=True,
+                ignore_preparation_level=True,
+            )
+
+
 def test_required_final_cover_title_does_not_degrade_at_playfield(monkeypatch):
     cover, _song_id = final_cover_frame()
 

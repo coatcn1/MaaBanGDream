@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
+import pytest
 from agent.realtime import profile_play_action
 from agent.realtime.profile_play_action import (
     ResultCollectionStatus,
@@ -76,6 +77,58 @@ def test_result_collection_checks_each_frame_without_blind_back_input():
     assert outcome.result.slow == 9
     assert outcome.image.any()
     assert controller.backs == 0
+
+
+@pytest.mark.parametrize("cooperative_mode", [False, True])
+def test_shared_result_collection_never_rechecks_completed_song_title(
+    monkeypatch, cooperative_mode,
+):
+    """单人、挑战、校准、一键实时和协力共用的结算器只消费成绩页。"""
+    image = np.zeros((720, 1280, 3), dtype=np.uint8)
+    clock = Clock()
+    events = []
+
+    class CompletedController:
+        def post_screencap(self):
+            return Job(image)
+
+        def post_click(self, x, y):
+            assert (x, y) == profile_play_action.RESULT_ANIMATION_SKIP_POINT
+            events.append("skip")
+            return Job()
+
+        def post_click_key(self, key):
+            assert key == 4
+            events.append("back")
+            return Job()
+
+    monkeypatch.setattr(
+        profile_play_action, "_template_click_point",
+        lambda _image, templates, *_args, **_kwargs: (
+            (800, 300) if profile_play_action.JUDGEMENT_DETAILS_TEMPLATE in templates else None
+        ),
+    )
+    monkeypatch.setattr(
+        profile_play_action, "recognize_song_title",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("演奏完成后不应重新 OCR 歌曲标题")
+        ),
+    )
+    result = LiveResult(100, 1, 0, 0, 0, 0, 1, .95)
+    outcome = collect_result(
+        CompletedController(), lambda: False,
+        parser=type("CountsParser", (), {"parse": lambda _self, _image: result})(),
+        expected_notes=101, robust_navigation=True,
+        cooperative_mode=cooperative_mode,
+        clock=clock.monotonic, sleeper=clock.sleep,
+    )
+
+    assert outcome.status is (
+        ResultCollectionStatus.ADVANCED if cooperative_mode else ResultCollectionStatus.STABLE
+    )
+    if not cooperative_mode:
+        assert outcome.result is result
+    assert events[-3:] == ["skip", "back", "skip"]
 
 
 def test_result_collection_backs_through_recognised_rank_page_before_details():

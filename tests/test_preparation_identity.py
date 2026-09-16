@@ -13,13 +13,22 @@ from agent.realtime.live_session import reset_live_run, update_live_run, current
 def ready(monkeypatch):
     reset_live_run(mode="formal", difficulty="Expert")
     update_live_run(song_id="shared-cover", song_level=28, song_title="ERER")
-    state = SimpleNamespace(title="[FULL]FIRE BIRD", level=28, difficulty="EXPERT", resolved=True)
+    state = SimpleNamespace(
+        title="[FULL]FIRE BIRD", level=28, difficulty="EXPERT",
+        resolved=True, reason="ambiguous",
+    )
     monkeypatch.setattr(identity, "read_preparation_title", lambda image: SimpleNamespace(text=state.title, confidence=.98))
     monkeypatch.setattr(identity, "read_song_level", lambda image, **kwargs: state.level)
     monkeypatch.setattr(identity, "recognize_song_title", lambda image, **kwargs: SimpleNamespace(text=state.difficulty, confidence=.99))
     def resolve(song_id, difficulty, level, title):
         assert (song_id, difficulty, level, title) == ("shared-cover", "Expert", 28, "[FULL]FIRE BIRD")
-        return SimpleNamespace(selection=SimpleNamespace(bestdori_song_id=243) if state.resolved else None, reason="ambiguous")
+        return SimpleNamespace(
+            selection=(
+                SimpleNamespace(bestdori_song_id=243)
+                if state.resolved else None
+            ),
+            reason=state.reason,
+        )
     monkeypatch.setattr(identity, "resolve_chart_for_selected_song", resolve)
     return state
 
@@ -33,12 +42,59 @@ def test_preparation_replaces_list_title_and_keeps_evidence(ready):
     assert "preparation_identity_image" not in run.to_mapping()
 
 
-@pytest.mark.parametrize("field,value,reason", [("level", None, "读取失败"), ("level", 27, "等级冲突"), ("difficulty", "HARD", "难度冲突"), ("resolved", False, "未确认")])
+def test_preparation_missing_title_defers_identity_to_final_cover(ready):
+    ready.title = ""
+    image = np.zeros((720, 1280, 3), dtype=np.uint8)
+
+    run = identity.confirm_preparation_identity(image, "Expert")
+
+    assert run.preparation_title_pending_final_cover is True
+    assert run.song_title is None
+    assert run.song_title_confidence is None
+    assert run.song_level == 28
+    assert run.preparation_identity_image is not image
+
+
+def test_preparation_unconfirmed_fingerprint_defers_to_final_cover(ready):
+    ready.resolved = False
+    ready.reason = "song fingerprint is not confirmed"
+
+    run = identity.confirm_preparation_identity(
+        np.zeros((720, 1280, 3), dtype=np.uint8), "Expert"
+    )
+
+    assert run.preparation_identity_pending_final_cover is True
+    assert run.preparation_title_pending_final_cover is True
+    assert run.song_title is None
+    assert run.song_level == 28
+
+
+@pytest.mark.parametrize("field,value,reason", [("difficulty", "HARD", "难度冲突")])
 def test_preparation_conflicts_do_not_publish_identity(ready, field, value, reason):
     setattr(ready, field, value)
     with pytest.raises(RuntimeError, match=reason):
         identity.confirm_preparation_identity(np.zeros((720, 1280, 3), dtype=np.uint8), "Expert")
     assert current_live_run().song_title == "ERER"
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("level", None), ("level", 27), ("resolved", False)],
+)
+def test_preparation_identity_conflicts_defer_to_final_cover(
+    ready, field, value,
+):
+    setattr(ready, field, value)
+
+    run = identity.confirm_preparation_identity(
+        np.zeros((720, 1280, 3), dtype=np.uint8), "Expert"
+    )
+
+    assert run.preparation_identity_pending_final_cover is True
+    assert run.preparation_title_pending_final_cover is True
+    assert run.song_id == identity.UNKNOWN_SONG_ID
+    assert run.song_title is None
+    assert run.song_level == ready.level
 
 
 def test_solo_pipeline_and_calibration_require_preparation_identity():

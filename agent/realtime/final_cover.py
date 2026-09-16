@@ -54,6 +54,7 @@ class FinalCoverGate:
         difficulty: str,
         observed_level: int | None,
         observed_title: str | None,
+        allow_missing_level: bool = False,
     ) -> None:
         self.selection = selection
         self.difficulty = str(difficulty).strip().lower()
@@ -63,6 +64,7 @@ class FinalCoverGate:
         self.observed_title = (
             None if observed_title is None else str(observed_title).strip()
         )
+        self.allow_missing_level = bool(allow_missing_level)
         self.confirmed = False
         self.frames = 0
         self.last_reason = "final cover has not been observed"
@@ -76,8 +78,12 @@ class FinalCoverGate:
             return "difficulty conflicts with selected chart"
         expected_level = getattr(self.selection, "level", None)
         if self.observed_level is None:
-            return "preparation song level is missing"
-        if expected_level is None or int(expected_level) != self.observed_level:
+            if not self.allow_missing_level:
+                return "preparation song level is missing"
+        elif (
+            expected_level is None
+            or int(expected_level) != self.observed_level
+        ):
             return "preparation song level conflicts with selected chart"
         if bool(getattr(self.selection, "shared_jacket", False)):
             level_unique = bool(
@@ -174,6 +180,7 @@ class FinalCoverResolver:
         selection: Any | None = None,
         repository: LocalChartRepository | None = None,
         require_observed_title: bool = False,
+        allow_missing_level: bool = False,
     ) -> None:
         if selection is None and repository is None:
             raise ValueError("缺少最终封面谱面解析器")
@@ -182,6 +189,7 @@ class FinalCoverResolver:
             None if observed_level is None else int(observed_level)
         )
         self.require_observed_title = bool(require_observed_title)
+        self.allow_missing_level = bool(allow_missing_level)
         trusted_initial_title = (
             observed_title is not None
             and float(observed_title_confidence or 0.0) >= 0.7
@@ -202,6 +210,7 @@ class FinalCoverResolver:
                 difficulty=self.difficulty,
                 observed_level=self.observed_level,
                 observed_title=self.observed_title,
+                allow_missing_level=self.allow_missing_level,
             )
             if selection is not None else None
         )
@@ -252,7 +261,7 @@ class FinalCoverResolver:
     def evidence_reason(self) -> str | None:
         if not self.difficulty:
             return "preparation difficulty is missing"
-        if self.observed_level is None:
+        if self.observed_level is None and not self.allow_missing_level:
             return "preparation song level is missing"
         if self.gate is not None:
             return self.gate.evidence_reason()
@@ -319,6 +328,7 @@ class FinalCoverResolver:
             difficulty=self.difficulty,
             observed_level=self.observed_level,
             observed_title=self.observed_title,
+            allow_missing_level=self.allow_missing_level,
         )
         confirmation = gate.observe(image)
         self.last_reason = gate.last_reason

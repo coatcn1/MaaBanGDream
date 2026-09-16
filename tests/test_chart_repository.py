@@ -3,11 +3,85 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import shutil
 
 import pytest
 
 from agent.realtime.chart_repository import LocalChartRepository
 from agent.realtime.song_identity import UNKNOWN_SONG_ID
+
+
+PROJECT_CHART_ROOT = Path(__file__).resolve().parents[1] / "resource/charts"
+CN_EXPERT_LEVEL_CASES = (
+    # CN 实拍：蒼穹 Expert 27、黒のバースデイ Expert 26；当前全局
+    # Bestdori 元数据分别为 26/27，但谱面内容 SHA 没有变化。
+    (581, 27, 26, "1f265d0a59a144d9534468391b43ebfd10838ff354c0851d48be68ed452fcbff"),
+    (705, 26, 27, "fa39d04f14a90a9f838dd5caa36db9d87e3f15fda3ccf800a4a471330b299cc5"),
+)
+
+
+def _repository_with_current_global_expert_levels(root: Path) -> LocalChartRepository:
+    manifest = json.loads(
+        (PROJECT_CHART_ROOT / "manifest.json").read_text(encoding="utf-8")
+    )
+    songs = []
+    for song_id, _cn_level, global_level, digest in CN_EXPERT_LEVEL_CASES:
+        song = next(
+            item for item in manifest["songs"]
+            if item["bestdori_song_id"] == song_id
+        )
+        song = json.loads(json.dumps(song))
+        entry = song["difficulties"]["expert"]
+        assert entry["chart_sha256"] == digest
+        entry["level"] = global_level
+        source = PROJECT_CHART_ROOT / entry["path"]
+        target = root / entry["path"]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        songs.append(song)
+    (root / "manifest.json").write_text(json.dumps({
+        "schema_version": 1,
+        "songs": songs,
+    }), encoding="utf-8")
+    return LocalChartRepository(root)
+
+
+@pytest.mark.parametrize("song_id,cn_level,global_level,_digest", CN_EXPERT_LEVEL_CASES)
+def test_repository_accepts_verified_cn_expert_level_after_global_metadata_changes(
+    tmp_path, song_id, cn_level, global_level, _digest,
+):
+    repository = _repository_with_current_global_expert_levels(tmp_path)
+    manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    song = next(item for item in manifest["songs"] if item["bestdori_song_id"] == song_id)
+
+    resolution = repository.resolve(
+        song["fingerprints"][0], "Expert", level=cn_level,
+    )
+
+    assert resolution.selection is not None
+    assert resolution.selection.bestdori_song_id == song_id
+    assert resolution.selection.level == cn_level
+    global_resolution = repository.resolve(
+        song["fingerprints"][0], "Expert", level=global_level,
+    )
+    assert global_resolution.selection is not None
+    assert global_resolution.selection.level == global_level
+
+
+@pytest.mark.parametrize("song_id,cn_level,_global_level,_digest", CN_EXPERT_LEVEL_CASES)
+def test_repository_reports_level_mismatch_for_wrong_known_cover_level(
+    tmp_path, song_id, cn_level, _global_level, _digest,
+):
+    repository = _repository_with_current_global_expert_levels(tmp_path)
+    manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    song = next(item for item in manifest["songs"] if item["bestdori_song_id"] == song_id)
+
+    resolution = repository.resolve(
+        song["fingerprints"][0], "Expert", level=cn_level + 5,
+    )
+
+    assert resolution.selection is None
+    assert resolution.reason == "selected song level does not match local chart metadata"
 
 
 def test_explicit_full_title_disambiguates_shared_fire_bird_jacket():

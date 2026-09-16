@@ -761,6 +761,69 @@ def test_profile_falls_back_to_legacy_without_reliable_native_chart(
     assert engine_backends == [None]
 
 
+def test_pending_preparation_identity_requires_independent_final_cover(
+    monkeypatch, tmp_path,
+):
+    reset_live_run(
+        mode="formal", difficulty="Expert", prepared_for_play=True,
+    )
+    update_live_run(
+        song_id="selected-jacket",
+        song_level=27,
+        song_title="可信准备页标题",
+        song_title_confidence=0.95,
+        preparation_identity_pending_final_cover=True,
+    )
+    monkeypatch.setattr(profile_play_action, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(
+        profile_play_action.RealtimeProfileStore,
+        "runtime_options",
+        lambda *args, **kwargs: {
+            "chart_prediction_enabled": False,
+            "chart_predict_presses": False,
+            "native_realtime_enabled": False,
+        },
+    )
+    selected = _chart_selection("resource/charts/bestdori/55/expert.json")
+    monkeypatch.setattr(
+        profile_play_action,
+        "resolve_local_chart_for_run",
+        lambda *args, **kwargs: SimpleNamespace(
+            selection=selected, reason="selected chart",
+        ),
+    )
+    captured = {}
+
+    def final_cover_failed(*args, **kwargs):
+        captured["selection"] = args[2]
+        captured["repository"] = kwargs["repository"]
+        captured["require_title"] = kwargs["require_observed_title"]
+        captured["ignore_level"] = kwargs["ignore_preparation_level"]
+        return profile_play_action.FinalCoverWaitOutcome(
+            status="timeout", resolution=None, reason="cover missing",
+            frames=1, playfield_seen=True,
+        )
+
+    monkeypatch.setattr(
+        profile_play_action, "wait_for_final_cover", final_cover_failed,
+    )
+    context = SimpleNamespace(
+        tasker=SimpleNamespace(stopping=False, controller=Controller()),
+    )
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Expert", "require_profile": False,
+        "confirm_final_cover": False,
+    }))
+
+    with pytest.raises(RuntimeError, match="最终封面未确认准备页延迟的歌曲身份"):
+        RealtimeProfilePlay()._run(context, argv)
+
+    assert captured["selection"] is None
+    assert captured["repository"] is not None
+    assert captured["require_title"] is True
+    assert captured["ignore_level"] is True
+
+
 def test_explicit_native_requires_controller_adb_endpoint():
     with pytest.raises(RuntimeError, match="adb_path.*adb_serial"):
         profile_play_action._native_adb_endpoint(Controller())
