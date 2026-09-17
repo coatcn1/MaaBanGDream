@@ -1646,6 +1646,8 @@ def _completed_play_harness(
     startup_timed_out=False,
     run_mode="formal",
     defer_result_collection=False,
+    skip_result_check=False,
+    life_failed=False,
 ):
     reset_live_run(
         mode="pending",
@@ -1674,7 +1676,11 @@ def _completed_play_harness(
     monkeypatch.setattr("agent.realtime.profile_play_action.PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(
         "agent.realtime.profile_play_action.RealtimeProfileStore.runtime_options",
-        lambda *args, **kwargs: {},
+        lambda *args, **kwargs: {"skip_result_check": skip_result_check},
+    )
+    monkeypatch.setattr(
+        "agent.realtime.profile_play_action._recover_completed_result",
+        lambda context: True,
     )
     monkeypatch.setattr(
         "agent.realtime.profile_play_action.require_game_foreground",
@@ -1729,7 +1735,9 @@ def _completed_play_harness(
                 120,
                 42,
                 engine_stopped,
-                completed=not engine_stopped and not startup_timed_out,
+                completed=not engine_stopped and not startup_timed_out and not life_failed,
+                life_failed=life_failed,
+                life_depleted=life_failed,
                 action_counts={"tap": 31, "flick": 4, "down": 7},
                 frame_interval_p50_ms=16.4,
                 frame_interval_p95_ms=18.2,
@@ -1806,11 +1814,7 @@ def _completed_play_harness(
             "deferred_result_report": "screencap/medley-session-song1.json",
         })
     argv = SimpleNamespace(custom_action_param=json.dumps(params))
-    if collection_exception is not None:
-        with pytest.raises(type(collection_exception), match=str(collection_exception)):
-            RealtimeProfilePlay()._run(context, argv)
-    else:
-        assert RealtimeProfilePlay()._run(context, argv) is expected_success
+    assert RealtimeProfilePlay()._run(context, argv) is expected_success
     return tmp_path, writes, recorder_holder.get("value")
 
 
@@ -2008,7 +2012,7 @@ def test_result_collection_timeout_writes_invalid_correlated_json(
         tmp_path,
         debug_recording=False,
         collection_status=ResultCollectionStatus.TIMED_OUT,
-        expected_success=False,
+        expected_success=True,
     )
 
     reports = list((root / "screencap").glob("realtime-result-*.json"))
@@ -2087,6 +2091,57 @@ def test_result_collection_exception_writes_invalid_correlated_json(
     assert payload["reason"] == "结算读取异常: RuntimeError: capture failed"
     assert payload["processed_frames"] == 120
     assert payload["run_id"] == payload["session"]["run_id"]
+
+
+@pytest.mark.parametrize("run_mode", ["formal", "cooperative", "challenge", "continuous", "calibration-formal"])
+def test_completed_modes_continue_after_result_exception(tmp_path, monkeypatch, run_mode):
+    _completed_play_harness(
+        monkeypatch, tmp_path, debug_recording=False,
+        run_mode=run_mode, collection_exception=RuntimeError("result OCR failed"),
+    )
+
+
+@pytest.mark.parametrize("status", [ResultCollectionStatus.TIMED_OUT, ResultCollectionStatus.BLOCKED])
+def test_completed_modes_continue_after_unreadable_result(tmp_path, monkeypatch, status):
+    _completed_play_harness(
+        monkeypatch, tmp_path, debug_recording=False, collection_status=status,
+    )
+
+
+def test_skip_result_check_never_calls_numeric_collection(tmp_path, monkeypatch):
+    root, writes, _ = _completed_play_harness(
+        monkeypatch, tmp_path, debug_recording=False, skip_result_check=True,
+        collection_exception=AssertionError("must not collect result"),
+    )
+    assert writes == []
+    assert not list((root / "screencap").glob("realtime-result-*.json"))
+
+
+def test_skip_result_check_keeps_calibration_evidence(tmp_path, monkeypatch):
+    root, _, _ = _completed_play_harness(
+        monkeypatch, tmp_path, debug_recording=False, skip_result_check=True,
+        calibration_report=True, run_mode="calibration-formal",
+    )
+    payload = json.loads((root / "screencap/calibration-round.json").read_text(encoding="utf-8"))
+    assert payload["valid"] is True
+
+
+def test_completed_report_write_failure_is_nonfatal(tmp_path, monkeypatch):
+    def fail_write(*_args, **_kwargs):
+        raise OSError("result disk unavailable")
+    monkeypatch.setattr("agent.realtime.profile_play_action._write_json_atomic", fail_write)
+    _completed_play_harness(monkeypatch, tmp_path, debug_recording=False)
+
+
+def test_skip_result_check_does_not_hide_life_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr("agent.realtime.profile_play_action.exit_failed_live", lambda context: True)
+    root, _, _ = _completed_play_harness(
+        monkeypatch, tmp_path, debug_recording=False, skip_result_check=True,
+        life_failed=True, expected_success=False,
+    )
+    payload = json.loads(next((root / "screencap").glob("realtime-result-*.json")).read_text(encoding="utf-8"))
+    assert payload["result_status"] == "life_failed"
+    assert payload["completed"] is False
 
 
 def test_debug_screenshot_failure_keeps_stable_json_result(

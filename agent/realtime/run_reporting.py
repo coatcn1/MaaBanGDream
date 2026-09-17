@@ -118,6 +118,8 @@ def result_report_payload(
         ),
         "effective_fps": stats.effective_fps,
         "terminal_reason": stats.terminal_reason,
+        "completed": bool(stats.completed),
+        "survived": not stats.life_depleted,
     }
     if result is not None:
         payload.update(result.to_dict())

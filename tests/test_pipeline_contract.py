@@ -14,6 +14,19 @@ def load(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def test_all_count_inputs_accept_zero_and_reject_out_of_range():
+    import re
+
+    options = load(ROOT / "interface.json")["option"]
+    for name in ("AutoLiveCount", "RealtimeLiveCount", "ChallengeCount", "CooperativeCount", "MedleyCount"):
+        pattern = options[name]["inputs"][0]["verify"]
+        for count in range(1001):
+            expected = count <= 999 and (name != "MedleyCount" or count % 3 == 0)
+            assert bool(re.fullmatch(pattern, str(count))) == expected, (name, count)
+        for invalid in ("-1", "01", "1.5", "", "10000"):
+            assert re.fullmatch(pattern, invalid) is None
+
+
 def test_all_pipeline_clicks_use_the_foreground_guard():
     for path in (ROOT / "resource/pipeline").glob("*.json"):
         for name, node in load(path).items():
@@ -23,7 +36,7 @@ def test_all_pipeline_clicks_use_the_foreground_guard():
 def test_interface_references_existing_entry_and_resource():
     interface = load(ROOT / "interface.json")
     assert interface["interface_version"] == 2
-    assert interface["version"] == "1.4.2"
+    assert interface["version"] == "1.4.3"
     assert interface["license"] == "PolyForm-Noncommercial-1.0.0"
     assert interface["github"] == "https://github.com/coatcn1/MaaBanGDream"
     assert "mirrorchyan_rid" not in interface
@@ -196,6 +209,12 @@ def test_recovery_is_bounded_and_shared():
         "recognition": "DirectHit",
         "action": "DoNothing",
     }
+    assert common["MedleyResultRefreshScreen"] == {
+        "recognition": "DirectHit",
+        "action": "DoNothing",
+        "pre_delay": 0,
+        "post_delay": 0,
+    }
     report = common["TaskReportVisible"]
     assert report == {
         "recognition": "DirectHit",
@@ -269,7 +288,7 @@ def test_auto_live_safety_and_timeout_contract():
     assert nodes["AutoLiveStart"]["timeout"] == 600000
     assert nodes["AutoLiveStart"]["target"] is True
     assert nodes["AutoLiveStart"]["next"] == ["AutoLiveResult"]
-    assert nodes["AutoLiveResult"]["custom_action"] == "CommonRecover"
+    assert nodes["AutoLiveResult"]["custom_action"] == "CompletedLiveRecover"
     assert nodes["AutoLiveResult"]["custom_action_param"]["home_node"] == (
         "AutoLiveHomeMarker"
     )
@@ -387,11 +406,12 @@ def test_multi_live_options_and_loop_contract():
     song_mode = interface["option"]["AutoLiveSongMode"]
     assert [case["name"] for case in song_mode["cases"]] == ["Current", "Random"]
     count = interface["option"]["AutoLiveCount"]
-    assert count["inputs"][0]["verify"] == "^(?:[1-9]|[1-9][0-9])$"
-    assert count["pipeline_override"]["AutoLiveRoundGate"]["max_hit"] == "{Count}"
+    assert count["inputs"][0]["verify"] == "^(?:0|[1-9][0-9]{0,2})$"
+    assert count["pipeline_override"]["AutoLiveRoundGate"]["custom_recognition_param"] == {"total": "{Count}"}
 
     nodes = load(ROOT / "resource/pipeline/auto_live.json")
-    assert nodes["AutoLiveRoundGate"]["max_hit"] == 1
+    assert "max_hit" not in nodes["AutoLiveRoundGate"]
+    assert nodes["AutoLiveRoundGate"]["custom_recognition"] == "TaskRoundAvailable"
     assert nodes["AutoLiveRandomSong"]["target"] == [687, 642]
     assert nodes["AutoLiveRandomSong"]["custom_action"] == "RandomSongSelect"
     assert nodes["AutoLiveDifficulty"]["custom_action"] == (
@@ -583,7 +603,8 @@ def test_realtime_multi_live_contract_and_options():
     assert nodes["RealtimeLiveSpeedSettingsGate"]["next"] == [
         "RealtimeLiveRoundGate"
     ]
-    assert nodes["RealtimeLiveRoundGate"]["max_hit"] == 1
+    assert "max_hit" not in nodes["RealtimeLiveRoundGate"]
+    assert nodes["RealtimeLiveRoundGate"]["custom_recognition"] == "TaskRoundAvailable"
     assert nodes["RealtimeLiveRoundGate"]["next"] == [
         "RealtimeLiveRetryReset"
     ]
@@ -735,8 +756,8 @@ def test_realtime_multi_live_contract_and_options():
     assert nodes["RealtimeLiveRandomSong"]["custom_action"] == "RandomSongSelect"
     assert nodes["RealtimeLiveRandomSong"]["custom_action_param"]["max_attempts"] == 3
     count = interface["option"]["RealtimeLiveCount"]
-    assert count["inputs"][0]["verify"] == "^(?:[1-9]|[1-9][0-9])$"
-    assert count["pipeline_override"]["RealtimeLiveRoundGate"]["max_hit"] == "{Count}"
+    assert count["inputs"][0]["verify"] == "^(?:0|[1-9][0-9]{0,2})$"
+    assert count["pipeline_override"]["RealtimeLiveRoundGate"]["custom_recognition_param"] == {"total": "{Count}"}
     assert nodes["RealtimeLivePrepare"]["next"] == ["RealtimeLiveFormalModeGate"]
     assert nodes["RealtimeLiveDifficulty"]["custom_action"] == "RealtimeDifficultySelect"
     assert nodes["RealtimeLiveFormalModeGate"]["next"] == [

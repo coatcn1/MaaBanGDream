@@ -5,6 +5,7 @@ import math
 import os
 import time
 import traceback
+from functools import wraps
 from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import Enum
@@ -1683,6 +1684,63 @@ class RealtimeProfileCheck(CustomAction):
             return False
 
 
+def _recover_completed_result(context):
+    try:
+        from ..common_recover import CompletedLiveRecover
+    except ImportError:
+        from common_recover import CompletedLiveRecover
+    from types import SimpleNamespace
+
+    return CompletedLiveRecover().run(context, SimpleNamespace(custom_action_param=json.dumps({
+        "home_node": "AutoLiveHomeMarker",
+        "back_only": True,
+        "back_acceleration_click_point": [1279, 719],
+        "modal_cancel_nodes": ["QuitConfirmCancel"],
+        "back_only_click_nodes": list((
+            "AutoLiveStorySkipConfirmLarge", "AutoLiveStorySkipConfirm",
+            "AutoLiveStorySkip", "AutoLiveStoryMenu",
+        )),
+        "escape_interval_ms": 500,
+        "escape_timeout_ms": 60000,
+        "restart_limit": 1,
+    })))
+
+
+def _continue_after_completed_play(method):
+    """本局完成凭据只存在于当前调用，避免跨局或并发复用成功状态。"""
+    @wraps(method)
+    def guarded(self, context, argv):
+        completed = False
+
+        def confirm_completed():
+            nonlocal completed
+            completed = True
+            update_live_run(play_completed=True)
+
+        try:
+            return method(self, context, argv, confirm_completed=confirm_completed)
+        except Exception as exc:
+            if context.tasker.stopping:
+                return True
+            if not completed:
+                raise
+            # 数字、截图、报告及 Profile 回写都不能否决已经完成的演出。
+            traceback.print_exc()
+            print(
+                "[任务][实时演奏][结算][WARNING] 已确认演出结束，"
+                f"后处理异常不终止任务：{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            params = json.loads(argv.custom_action_param or "{}")
+            if params.get("run_mode") != "cooperative" and not params.get("defer_result_collection"):
+                try:
+                    _recover_completed_result(context)
+                except Exception as recovery_error:
+                    print(f"RealtimeProfilePlay recovery_warning={recovery_error}", flush=True)
+            return True
+    return guarded
+
+
 @AgentServer.custom_action("RealtimeProfilePlay")
 class RealtimeProfilePlay(CustomAction):
     """Run a bounded rehearsal using only a matching accepted local profile."""
@@ -1696,10 +1754,13 @@ class RealtimeProfilePlay(CustomAction):
             print(f"RealtimeProfilePlay failed={type(exc).__name__}: {exc}", flush=True)
             return False
 
-    def _run(self, context: Context, argv: CustomAction.RunArg) -> bool:
+    @_continue_after_completed_play
+    def _run(self, context: Context, argv: CustomAction.RunArg, *, confirm_completed) -> bool:
         params = json.loads(argv.custom_action_param or "{}")
         if context.tasker.stopping:
             return True
+        if current_live_run() is not None:
+            update_live_run(play_completed=False)
         verified = None
         settings = None
         recorder = None
@@ -2563,6 +2624,12 @@ class RealtimeProfilePlay(CustomAction):
                 ),
                 startup_timeout_seconds=startup_timeout_seconds,
             )
+            if (
+                stats.completed and not stats.cleanup_failed
+                and not stats.aborted_for_life and not stats.life_failed
+                and not stats.stopped
+            ):
+                confirm_completed()
             if recorder is not None and stall_safe_capture.last_image is not None:
                 _recorder_checkpoint(
                     recorder,
@@ -2618,7 +2685,10 @@ class RealtimeProfilePlay(CustomAction):
                         + "; ".join(native_failures)
                     )
                     native_error.realtime_stats = stats
-                    raise native_error
+                    if stats.completed and not stats.cleanup_failed and not stats.life_failed:
+                        print(f"RealtimeProfilePlay post_play_warning={native_error}", flush=True)
+                    else:
+                        raise native_error
         except Exception as exc:
             if (
                 recorder is not None
@@ -2738,6 +2808,17 @@ class RealtimeProfilePlay(CustomAction):
             + f"-{live_run.run_id[:8]}"
         )
         save_result = bool(params.get("save_result_frame"))
+        skip_result_check = bool(runtime_options.get("skip_result_check", False)) and not params.get("calibration_report")
+        if (
+            skip_result_check and not params.get("defer_result_collection")
+            and stats.completed and not stats.life_failed and not stats.aborted_for_life
+            and not stats.cleanup_failed and not stats.stopped
+        ):
+            # 跳过数字检查不推进未知页面，由各模式外层继续必要的结算导航。
+            save_result = False
+            print("RealtimeProfilePlay result_check=skipped", flush=True)
+            if run_mode != "cooperative" and stats.completed and not stats.cleanup_failed:
+                _recover_completed_result(context)
         deferred_report_value = str(
             params.get("deferred_result_report") or ""
         ).strip()
@@ -2797,7 +2878,8 @@ class RealtimeProfilePlay(CustomAction):
                 )
             return True
 
-        if save_result and stats.life_failed and not stats.stopped:
+        if stats.life_failed and not stats.stopped:
+            result_output.mkdir(parents=True, exist_ok=True)
             # 生命归零：先把失败现场落盘，再有界退出到主页。退出导航失败时
             # 不掩盖“演出失败”这一真实原因，后续 CommonRecover 仍可兜底。
             reason = "演出失败：生命值归零"
@@ -3063,21 +3145,16 @@ class RealtimeProfilePlay(CustomAction):
                     f"reason={reason}",
                     flush=True,
                 )
-                # A calibration round must return control to its outer state
-                # machine so the invalid report can be persisted/resumed.
-                # Ordinary play has no such consumer: treating this technical
-                # failure as success hid repeated broken result flows from MFA.
-                if params.get("calibration_report"):
-                    return True
                 failure_reason = (
                     f"结算读取失败（{outcome.page_state}）：{reason}"
                 )
-                record_failure_reason(failure_reason)
                 print(
-                    f"[任务][实时演奏][结算][ERROR] {failure_reason}",
+                    f"[任务][实时演奏][结算][WARNING] {failure_reason}；演出已结束，继续后续步骤",
                     flush=True,
                 )
-                return False
+                if not params.get("calibration_report") and run_mode != "cooperative":
+                    _recover_completed_result(context)
+                return True
             result_data = outcome.result
             result = outcome.image
             if result_data is None or result is None:
@@ -3174,7 +3251,7 @@ class RealtimeProfilePlay(CustomAction):
         if stats.stopped:
             print("[任务][实时演奏][结束][INFO] 用户已停止任务", flush=True)
             return True
-        success = not stats.aborted_for_life and not stats.cleanup_failed
+        success = not stats.aborted_for_life and not stats.life_failed and not stats.cleanup_failed
         if params.get("require_completion"):
             success = success and stats.completed
         if not success:

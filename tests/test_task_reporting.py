@@ -285,3 +285,128 @@ def test_failure_uses_recorded_runtime_reason_in_terminal_log(capsys):
     output = capsys.readouterr().out
     assert "演奏超过安全时限 600 秒，仍未识别到结算画面" in output
     assert "实时演奏流程未完成" not in output
+
+
+@pytest.mark.parametrize("total", [0, 1, 999])
+def test_round_gate_obeys_finite_limit_and_zero_is_unlimited(total):
+    context = Context()
+    recognition_argv = SimpleNamespace(
+        node_name="RoundGate", custom_recognition_param=json.dumps({"total": total})
+    )
+    gate = task_reporting.TaskRoundAvailable()
+    for hits in (0, 1, 998, 999, 10000):
+        context.hit_count = hits
+        assert bool(gate.analyze(context, recognition_argv)) == (total == 0 or hits < total)
+    context.tasker.stopping = True
+    assert gate.analyze(context, recognition_argv) is None
+
+
+def test_unlimited_progress_restore_and_failure_keep_actual_count(capsys):
+    context = Context(hit_count=1)
+    progress = task_reporting.TaskProgress()
+    assert progress.run(context, argv(601, total=0, phase="restore", completed=1200))
+    assert progress.run(context, argv(601, total=0, phase="completed"))
+    assert progress.run(context, argv(601, total=0, phase="start"))
+    assert not task_reporting.TaskOutcome().run(
+        context, argv(601, total=0, status="failure", reason="真实失败")
+    )
+    output = capsys.readouterr().out
+    assert "当前 1202/无限" in output
+    assert "已完成 1201/无限" in output
+    assert "/0" not in output
+
+
+def test_progress_does_no_nested_reporting_when_stopped():
+    context = Context()
+    context.tasker.stopping = True
+    assert task_reporting.TaskProgress().run(context, argv(602, total=0))
+    assert context.visible == []
+
+
+@pytest.mark.parametrize("total", [-1, 1000, True, 1.5, "bad"])
+def test_invalid_gate_count_fails_action_instead_of_reporting_success(total):
+    context = Context()
+    assert task_reporting.TaskRoundAvailable().analyze(
+        context, SimpleNamespace(node_name="RoundGate", custom_recognition_param=json.dumps({"total": total}))
+    )
+    assert not task_reporting.TaskProgress().run(context, argv(603, total=total))
+
+
+@pytest.mark.parametrize("total", [0, 3])
+def test_real_maafw_round_gate_loops_and_manual_stop(tmp_path, total):
+    import subprocess
+    import sys
+
+    code = """
+import json, sys
+from pathlib import Path
+import numpy as np
+from maa.controller import CustomController
+from maa.resource import Resource
+from maa.tasker import Tasker
+from maa.toolkit import Toolkit
+from maa.custom_action import CustomAction
+from maa.agent.agent_server import AgentServer
+AgentServer.custom_action = lambda _name: lambda cls: cls
+AgentServer.custom_recognition = lambda _name: lambda cls: cls
+from agent.task_reporting import TaskRoundAvailable, TaskProgress
+from maa.library import Library
+import maa
+Library.open(Path(maa.__file__).parent / 'bin', agent_server=False)
+
+data = json.load(sys.stdin)
+root = Path(data['root'])
+Toolkit.init_option(root / 'logs')
+bundle = root / 'bundle'
+(bundle / 'pipeline').mkdir(parents=True)
+pipeline = {
+    'Gate': {'recognition': 'Custom', 'custom_recognition': 'TaskRoundAvailable',
+             'custom_recognition_param': {'total': data['total']},
+             'action': 'Custom', 'custom_action': 'TaskProgress',
+             'custom_action_param': {'total': data['total'], 'phase': 'start'},
+             'next': ['Round']},
+    'Round': {'action': 'Custom', 'custom_action': 'Round', 'next': ['Gate', 'Done']},
+    'Done': {'action': 'Custom', 'custom_action': 'Done'},
+    'TaskReportVisible': {'action': 'DoNothing'},
+}
+(bundle / 'pipeline' / 'test.json').write_text(json.dumps(pipeline), encoding='utf-8')
+class BlankController(CustomController):
+    connect = start_app = stop_app = click = swipe = touch_down = touch_move = touch_up = click_key = input_text = key_down = key_up = lambda self, *_args: True
+    request_uuid = lambda self: 'offline-loop-test'
+    screencap = lambda self: np.zeros((720, 1280, 3), dtype=np.uint8)
+controller = BlankController()
+assert controller.post_connection().wait().succeeded
+resource = Resource()
+assert resource.post_bundle(bundle).wait().succeeded
+assert resource.register_custom_recognition('TaskRoundAvailable', TaskRoundAvailable())
+assert resource.register_custom_action('TaskProgress', TaskProgress())
+tasker = Tasker()
+assert tasker.bind(resource, controller)
+rounds = []
+done = []
+class Round(CustomAction):
+    def run(self, context, argv):
+        rounds.append(context.get_hit_count('Gate'))
+        if data['total'] == 0 and len(rounds) == 5:
+            context.tasker.post_stop()
+        return True
+class Done(CustomAction):
+    def run(self, context, argv):
+        done.append(True)
+        return True
+assert resource.register_custom_action('Round', Round())
+assert resource.register_custom_action('Done', Done())
+job = tasker.post_task('Gate').wait()
+assert len(rounds) == (5 if data['total'] == 0 else 3), rounds
+assert bool(done) == (data['total'] != 0), done
+if data['total']:
+    assert job.succeeded
+print('real-loop-ok')
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        input=json.dumps({"root": str(tmp_path), "total": total}),
+        text=True, capture_output=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "real-loop-ok" in result.stdout

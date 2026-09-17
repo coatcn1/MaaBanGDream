@@ -79,9 +79,10 @@ from .rehearsal_action import frame_resolution
 from .result_navigation import (
     RESULT_ANIMATION_SKIP_POINT,
     STORY_NODES,
-    advance_result_cadence,
     accelerated_back,
+    click_result_surface,
     handle_story_page,
+    press_result_back,
 )
 from .result_parser import LiveResult, ResultParser
 from .song_identity import (
@@ -343,9 +344,9 @@ def configure_medley_settings(params: dict[str, object]) -> dict[str, object]:
         try:
             count = int(candidate["count"])
         except (TypeError, ValueError) as exc:
-            raise ValueError("组曲次数必须是 3 到 99 的整数且为 3 的倍数") from exc
-        if not 3 <= count <= 99 or count % 3 != 0:
-            raise ValueError("组曲次数必须是 3 到 99 的整数且为 3 的倍数")
+            raise ValueError("组曲次数必须是 3 到 999 的整数且为 3 的倍数，0 表示无限") from exc
+        if count != 0 and (not 3 <= count <= 999 or count % 3 != 0):
+            raise ValueError("组曲次数必须是 3 到 999 的整数且为 3 的倍数，0 表示无限")
         candidate["count"] = count
         for key in ("debug_recording", "diagnostic_trace"):
             if not isinstance(candidate[key], bool):
@@ -968,6 +969,8 @@ class MedleyFlow:
             time.sleep(min(0.05, remaining))
 
     def capture(self) -> np.ndarray:
+        if getattr(self, "_result_refresh", False):
+            return capture_image(self.context, node="MedleyResultRefreshScreen")
         return capture_image(self.context)
 
     def click(self, point: tuple[int, int]) -> None:
@@ -1007,13 +1010,17 @@ class MedleyFlow:
                     "total": int(self.settings["count"]),
                     "phase": "restore",
                     "completed": int(completed),
-                    "next_started": int(completed) < int(self.settings["count"]),
+                    "next_started": int(self.settings["count"]) == 0
+                    or int(completed) < int(self.settings["count"]),
                 },
                 task_detail=getattr(self.argv, "task_detail", None),
             ),
         )
 
-    def recover_home(self, *, result_navigation: bool = False) -> None:
+    def recover_home(
+        self, *, result_navigation: bool = False,
+        home_confirmation_pending: bool = False,
+    ) -> None:
         params = {
             "home_node": "MedleyHomeMarker",
             "modal_cancel_nodes": ["QuitConfirmCancel"],
@@ -1050,9 +1057,15 @@ class MedleyFlow:
                 "back_acceleration_click_point": list(
                     RESULT_ANIMATION_SKIP_POINT
                 ),
-                "escape_interval_ms": 500,
+                "escape_interval_ms": 0,
+                "screen_refresh_node": "MedleyResultRefreshScreen",
+                "home_stable_ms": 350,
+                "home_confirmation_pending": home_confirmation_pending,
             })
-        if not CommonRecover().run(self.context, self.action_argv(params)):
+        recovered = CommonRecover().run(self.context, self.action_argv(params))
+        if self.context.tasker.stopping:
+            raise ScreenRefreshCancelled("task is stopping")
+        if not recovered:
             raise RuntimeError("组曲流程无法恢复主页")
 
     def accelerated_result_back(self, phase: str) -> None:
@@ -1069,22 +1082,95 @@ class MedleyFlow:
         )
 
     def result_cadence_step(self, phase: str) -> str:
-        """单步推进结算节拍，让组曲能在每次输入后检查 PGGBM。"""
+        """执行组曲专用三相结算节拍，并在每步后由调用方重新截图。"""
 
         def before_input() -> None:
             if self.context.tasker.stopping:
                 raise ScreenRefreshCancelled("task is stopping")
             require_game_foreground(self.controller)
 
-        back_next = bool(getattr(self, "_result_back_next", False))
-        self._result_back_next = advance_result_cadence(
-            lambda: self.controller,
-            back_next=back_next,
-            before_input=before_input,
-            phase=phase,
-            log_prefix="MedleyResult",
+        cadence_phase = int(getattr(self, "_result_cadence_phase", 0)) % 3
+        if cadence_phase == 1:
+            press_result_back(
+                lambda: self.controller,
+                before_input=before_input,
+                phase=phase,
+                log_prefix="MedleyResult",
+            )
+            action = "BACK"
+        else:
+            click_result_surface(
+                lambda: self.controller,
+                before_input=before_input,
+                phase=(phase if cadence_phase == 0 else f"{phase}-after-back"),
+                log_prefix="MedleyResult",
+            )
+            action = (
+                "最右下角"
+                if cadence_phase == 0 else "最右下角（BACK后）"
+            )
+        self._result_cadence_phase = (cadence_phase + 1) % 3
+        return action
+
+    @staticmethod
+    def round_playback_completed(session: dict[str, Any]) -> bool:
+        """只有三首都已由实时演奏回调确认完成，才允许忽略结算读数故障。"""
+        return int(session.get("completed_songs", 0)) == 3
+
+    def update_post_play_session(
+        self,
+        session: dict[str, Any],
+        **changes: Any,
+    ) -> dict[str, Any]:
+        """已确认演出结束后的会话落盘失败不能作废已完成歌曲。"""
+        try:
+            return self.sessions.update(session, **changes)
+        except ScreenRefreshCancelled:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 完成后诊断不可阻断后续组曲
+            session.update(changes)
+            log_task(
+                "组曲演奏",
+                "结算",
+                "WARNING",
+                "演出已确认完成，但结算会话写入失败："
+                f"{type(exc).__name__}: {exc}",
+            )
+            return session
+
+    def continue_after_result_error(
+        self,
+        session: dict[str, Any],
+        *,
+        results_completed: int,
+        reason: str,
+    ) -> dict[str, Any]:
+        """结果页异常只在三首均完成后降级，并继续安全返回流程。"""
+        if not self.round_playback_completed(session):
+            raise RuntimeError(reason)
+        warning = (
+            f"三首演奏已确认完成；已读取 {results_completed}/3 张 PGGBM，"
+            f"结果检查降级：{reason}"
         )
-        return "BACK" if back_next else "最右下角"
+        session = self.update_post_play_session(
+            session,
+            stage="post-results",
+            result_collection_warning=warning,
+        )
+        log_task("组曲演奏", "结算", "WARNING", warning)
+        try:
+            self.recover_home(result_navigation=True)
+        except ScreenRefreshCancelled:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 已完成组曲仍需继续外层步骤
+            log_task(
+                "组曲演奏",
+                "结算",
+                "WARNING",
+                "三首演奏已确认完成，但结果页恢复主页失败，"
+                f"将继续后续步骤：{type(exc).__name__}: {exc}",
+            )
+        return session
 
     def speed_gate(self, difficulty: str) -> None:
         params = {
@@ -1153,6 +1239,13 @@ class MedleyFlow:
         )
 
     def navigate_to_tour(self) -> np.ndarray:
+        # 结算后才开始出现的退出弹窗不能挡住下一组的主页入口点击。
+        previous_refresh = bool(getattr(self, "_result_refresh", False))
+        self._result_refresh = True
+        try:
+            self.dismiss_quit_confirm(self.capture())
+        finally:
+            self._result_refresh = previous_refresh
         self.click(HOME_LIVE_POINT)
         self.wait(1.0)
         params = {
@@ -1646,9 +1739,35 @@ class MedleyFlow:
             )
         if self.context.tasker.stopping:
             raise ScreenRefreshCancelled("task is stopping")
-        song = self.complete_final_cover_identity(song)
-        session = self.sessions.update_song(session, song)
-        session = self.sessions.update(
+        try:
+            song = self.complete_final_cover_identity(song)
+        except ScreenRefreshCancelled:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 演奏已结束，封面补读不能停任务
+            log_task(
+                "组曲演奏",
+                "结算",
+                "WARNING",
+                f"第{song.index}曲演奏已确认完成，但最终封面补读失败："
+                f"{type(exc).__name__}: {exc}",
+            )
+        try:
+            session = self.sessions.update_song(session, song)
+        except ScreenRefreshCancelled:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 保留内存会话以继续当前组曲
+            songs = list(session.get("songs", ()))
+            if len(songs) >= song.index:
+                songs[song.index - 1] = asdict(song)
+                session["songs"] = songs
+            log_task(
+                "组曲演奏",
+                "结算",
+                "WARNING",
+                f"第{song.index}曲演奏已确认完成，但会话歌曲写入失败："
+                f"{type(exc).__name__}: {exc}",
+            )
+        session = self.update_post_play_session(
             session,
             completed_songs=song.index,
             completed_total=(
@@ -1775,11 +1894,16 @@ class MedleyFlow:
             return False
         box = result.box
         self.click((int(box.x + box.w // 2), int(box.y + box.h // 2)))
+        self.recover_home(
+            result_navigation=True, home_confirmation_pending=True,
+        )
+        if self.context.tasker.stopping:
+            raise ScreenRefreshCancelled("task is stopping")
         log_task(
             "组曲演奏",
             "结算",
             "INFO",
-            "检测到主页退出确认框，已取消并停止发送返回键",
+            "已取消主页退出确认框，并被动确认无弹窗主页稳定，未继续发送返回键",
         )
         return True
 
@@ -1787,13 +1911,23 @@ class MedleyFlow:
         page_name = "PGGBM"
         back_attempts = 0
         step_index = 0
-        while back_attempts < RESULT_NAVIGATION_MAX_CYCLES:
+        # 每一张已读取的 PGGBM 都从完整三相节拍重新开始，避免沿用前页
+        # 的半轮状态而漏掉 BACK 后的安全像素。
+        self._result_cadence_phase = 0
+        needs_terminal_click = False
+        while back_attempts < RESULT_NAVIGATION_MAX_CYCLES or needs_terminal_click:
             step_index += 1
             action = self.result_cadence_step(
                 f"{page_name}-step-{step_index}"
             )
             if action == "BACK":
                 back_attempts += 1
+                if back_attempts >= RESULT_NAVIGATION_MAX_CYCLES:
+                    # 达到上限的 BACK 后仍要补足安全像素，保证最后一轮也是
+                    # “最右下角 → BACK → 最右下角”，而不是半轮退出。
+                    needs_terminal_click = True
+            elif action == "最右下角（BACK后）" and needs_terminal_click:
+                needs_terminal_click = False
             log_task(
                 "组曲演奏",
                 "结算兜底",
@@ -1801,8 +1935,16 @@ class MedleyFlow:
                 f"{page_name}页按统一节拍执行{action}，"
                 f"BACK {back_attempts}/{RESULT_NAVIGATION_MAX_CYCLES}",
             )
-            self.wait(0.15 if action == "BACK" else 0.85)
-            if not judgement_details_visible(self.capture()):
+            # 输入回执后立即刷新检查；固定等待会让三相节拍额外耗时 1.85 秒。
+            image = self.capture()
+            if hasattr(self, "context") and self.home_or_tour_select(image):
+                return True
+            # PGGBM 在 BACK 后短暂缺失也不能省掉本轮最后的安全像素；只有
+            # 三相完整后才把页面变化交给外层重新识别。
+            if (
+                action == "最右下角（BACK后）"
+                and not judgement_details_visible(image)
+            ):
                 return True
 
         log_task(
@@ -1872,11 +2014,43 @@ class MedleyFlow:
         session: dict[str, Any],
         songs: tuple[MedleySong, ...],
     ) -> dict[str, Any]:
+        """读取组曲结果；三首已确认完成后的结算异常不再终止任务。"""
+        previous_refresh = bool(getattr(self, "_result_refresh", False))
+        # 只在结算阶段跳过通用刷新节点的默认延迟，选曲与准备页不受影响。
+        self._result_refresh = True
+        try:
+            return self._collect_results(session, songs)
+        except ScreenRefreshCancelled:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 结果识别/保存不得推翻已完成演奏
+            if not self.round_playback_completed(session):
+                raise
+            return self.continue_after_result_error(
+                session,
+                results_completed=int(session.get("results_completed", 0)),
+                reason=f"{type(exc).__name__}: {exc}",
+            )
+        finally:
+            self._result_refresh = previous_refresh
+
+    def _collect_results(
+        self,
+        session: dict[str, Any],
+        songs: tuple[MedleySong, ...],
+    ) -> dict[str, Any]:
         deadline = time.monotonic() + 240.0
         result_index = int(session.get("results_completed", 0))
         if result_index >= 3:
             return session
-        self._result_back_next = False
+        self._result_cadence_phase = 0
+        skip_result_check = bool(getattr(self, "_skip_result_check", False))
+        if skip_result_check:
+            log_task(
+                "组曲演奏",
+                "结算",
+                "INFO",
+                "已启用不检查结果：跳过 PGGBM 数字读取，继续安全返回",
+            )
         last_image: np.ndarray | None = None
         unknown_back_attempts = 0
         cadence_steps = 0
@@ -1890,8 +2064,10 @@ class MedleyFlow:
                 self.wait(0.5)
                 continue
             if self.home_or_tour_select(image):
+                if self.round_playback_completed(session):
+                    return session
                 raise MedleyResultsLeftBeforeCollection(result_index)
-            if judgement_details_visible(image):
+            if not skip_result_check and judgement_details_visible(image):
                 unknown_back_attempts = 0
                 cadence_steps = 0
                 # 三张成绩按会话顺序关联；上一页必须经 advance_page
@@ -1952,8 +2128,27 @@ class MedleyFlow:
                 f"BACK {unknown_back_attempts}/"
                 f"{RESULT_NAVIGATION_MAX_CYCLES}",
             )
-            self.wait(0.15 if action == "BACK" else 0.85)
             if unknown_back_attempts >= RESULT_NAVIGATION_MAX_CYCLES:
+                # 尝试耗尽后补足最后一个安全像素；下一帧仍须重新检查终点。
+                cadence_steps += 1
+                terminal_action = self.result_cadence_step(
+                    "awaiting-pggbm-"
+                    f"{result_index + 1}-terminal-step-{cadence_steps}"
+                )
+                if terminal_action != "最右下角（BACK后）":
+                    raise RuntimeError("组曲结算节拍在末轮未返回安全像素")
+                log_task(
+                    "组曲演奏",
+                    "结算兜底",
+                    "INFO",
+                    "未识别下一张 PGGBM，已补足本轮 BACK 后的最右下角安全像素",
+                )
+                terminal_image = self.capture()
+                last_image = terminal_image
+                if self.home_or_tour_select(terminal_image):
+                    if self.round_playback_completed(session):
+                        return session
+                    raise MedleyResultsLeftBeforeCollection(result_index)
                 failure_reason = (
                     "组曲结算连续 "
                     f"{unknown_back_attempts} 次 BACK 加速推进后"
@@ -1972,13 +2167,14 @@ class MedleyFlow:
                 "组曲结算在限定时间内未完成，"
                 f"已读取 {result_index}/3 张 PGGBM"
             )
-        try:
-            # 读取失败后仍用相同结算节拍有界恢复；无法到达主页时再重启。
-            self.recover_home(result_navigation=True)
-        except ScreenRefreshCancelled:
-            raise
-        except RuntimeError as exc:
-            failure_reason = f"{failure_reason}；主页恢复失败：{exc}"
+        if not self.round_playback_completed(session):
+            try:
+                # 未完成三首时仍保留原有 fail-closed：先有界恢复，再报告失败。
+                self.recover_home(result_navigation=True)
+            except ScreenRefreshCancelled:
+                raise
+            except Exception as exc:  # noqa: BLE001 - 保留原始结算失败原因
+                failure_reason = f"{failure_reason}；主页恢复失败：{exc}"
         raise RuntimeError(failure_reason)
 
     def initialise_progress(
@@ -1995,7 +2191,7 @@ class MedleyFlow:
                 raise RuntimeError("组曲续跑进度恢复失败")
             if index + 1 < completed and not self.progress("start"):
                 raise RuntimeError("组曲续跑进度恢复失败")
-        if next_started and completed < target and not self.progress("start"):
+        if next_started and (target == 0 or completed < target) and not self.progress("start"):
             raise RuntimeError("组曲当前歌曲进度恢复失败")
 
     def ensure_progress(self, completed: int, *, next_started: bool) -> None:
@@ -2004,9 +2200,24 @@ class MedleyFlow:
         self.initialise_progress(completed, next_started=next_started)
         self._progress_initialised = True
 
+    def ensure_completed_round_progress(self, completed: int) -> None:
+        """补记已完成整组的进度失败时，不能让结算期异常终止任务。"""
+        try:
+            self.ensure_progress(completed, next_started=False)
+        except ScreenRefreshCancelled:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 三首已完成，不回退计数
+            log_task(
+                "组曲演奏",
+                "结算",
+                "WARNING",
+                "三首演奏已确认完成，但补记组曲进度失败，"
+                f"将继续任务：{type(exc).__name__}: {exc}",
+            )
+
     def finish_round(self, session: dict[str, Any]) -> bool:
         completed_total = int(session.get("completed_before_round", 0)) + 3
-        session = self.sessions.update(
+        session = self.update_post_play_session(
             session,
             status="completed",
             stage="completed",
@@ -2017,14 +2228,46 @@ class MedleyFlow:
         # 同一组的预算跨重开保留；只有三首均完成且结算已开始时才清零。
         self._play_failure_retries = 0
         target = int(self.settings.get("count", 3))
-        self.recover_home(result_navigation=True)
-        if completed_total >= target:
+        recovered_home = True
+        try:
+            self.recover_home(result_navigation=True)
+        except ScreenRefreshCancelled:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 完成组曲不能因恢复异常终止
+            recovered_home = False
+            log_task(
+                "组曲演奏",
+                "结算",
+                "WARNING",
+                "三首演奏已确认完成，但最终恢复主页失败，"
+                f"将继续任务：{type(exc).__name__}: {exc}",
+            )
+        if target > 0 and completed_total >= target:
             return True
         self._next_round_completed = completed_total
-        self._home_ready = True
-        if not self.progress("start"):
-            raise RuntimeError(f"第{completed_total + 1}曲进度报告失败")
-        return self.run()
+        # 恢复失败时不能伪装已在主页；下一组必须重新执行主页恢复门禁。
+        self._home_ready = recovered_home
+        try:
+            next_started = self.progress("start")
+        except ScreenRefreshCancelled:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 已完成组曲后的进度通知不可阻断
+            next_started = False
+            log_task(
+                "组曲演奏",
+                "结算",
+                "WARNING",
+                f"下一组进度报告异常，将继续任务：{type(exc).__name__}: {exc}",
+            )
+        if not next_started:
+            log_task(
+                "组曲演奏",
+                "结算",
+                "WARNING",
+                f"第{completed_total + 1}曲进度报告失败，将继续下一组",
+            )
+        self._continue_round = True
+        return True
 
     def retry_failed_round(
         self,
@@ -2111,9 +2354,19 @@ class MedleyFlow:
         self._home_ready = True
         # 不重复上报 start：TaskProgress 仍停留在失败曲（例如 7/9），
         # 下一组首曲成功后才把已完成数推进到 7/9。
-        return self.run()
+        self._continue_round = True
+        return True
 
     def run(self) -> bool:
+        # 跨组和失败重开均由外层循环处理，长期挂机不能累积 Python 调用栈。
+        while not self.context.tasker.stopping:
+            self._continue_round = False
+            result = self.run_round()
+            if not self._continue_round:
+                return result
+        return True
+
+    def run_round(self) -> bool:
         tour_type = str(self.settings["tour_type"])
         active = self.sessions.latest(tour_type)
         if active is not None and not session_matches_outer_task(
@@ -2144,6 +2397,9 @@ class MedleyFlow:
             )
             active = None
         runtime_options = self.profile_store.runtime_options()
+        self._skip_result_check = bool(
+            runtime_options.get("skip_result_check", False)
+        )
         if getattr(self, "_play_failure_retry_limit", None) is None:
             self._play_failure_retry_limit = int(
                 runtime_options.get("play_failure_retry_count", 1)
@@ -2185,36 +2441,22 @@ class MedleyFlow:
             ):
                 if self.home_or_tour_select(image):
                     results_completed = int(active.get("results_completed", 0))
-                    if results_completed >= 3:
-                        completed_before = int(
-                            active.get("completed_before_round", 0)
-                        )
-                        log_task(
-                            "组曲演奏",
-                            "续跑",
-                            "INFO",
-                            "三张 PGGBM 已全部保存，"
-                            "正在补记上一组完成状态",
-                        )
-                        self.ensure_progress(
-                            completed_before + 3,
-                            next_started=False,
-                        )
-                        return self.finish_round(active)
                     log_task(
                         "组曲演奏",
                         "续跑",
-                        "WARNING",
-                        "上一组结算已被人工退出，"
-                        f"仅保存 {results_completed}/3 张 PGGBM；"
-                        "保留旧会话记录并从第一曲开始新一组",
+                        "INFO" if results_completed >= 3 else "WARNING",
+                        (
+                            "三张 PGGBM 已全部保存，正在补记上一组完成状态"
+                            if results_completed >= 3
+                            else "三首演奏已确认完成，但 PGGBM 未完整保存；"
+                            "不重打该组，正在补记上一组完成状态"
+                        ),
                     )
-                    self.sessions.update(
-                        active,
-                        status="superseded",
-                        terminal_reason="result_pages_left_before_collection",
+                    completed_before = int(
+                        active.get("completed_before_round", 0)
                     )
-                    active = None
+                    self.ensure_completed_round_progress(completed_before + 3)
+                    return self.finish_round(active)
                 else:
                     songs = tuple(
                         MedleySong.from_mapping(value) for value in active["songs"]
@@ -2245,10 +2487,7 @@ class MedleyFlow:
                         completed_before = int(
                             active.get("completed_before_round", 0)
                         )
-                        self.ensure_progress(
-                            completed_before + 3,
-                            next_started=False,
-                        )
+                        self.ensure_completed_round_progress(completed_before + 3)
                         return self.finish_round(session)
 
             if getattr(self, "_home_ready", False):
@@ -2374,10 +2613,47 @@ class MedleyFlow:
                     song if item.index == song.index else item
                     for item in songs
                 )
-                if not self.progress("completed"):
-                    raise RuntimeError(f"第{index}曲完成后进度报告失败")
-                if index < 3 and not self.progress("start"):
-                    raise RuntimeError(f"第{index + 1}曲进度报告失败")
+                try:
+                    reported_completed = self.progress("completed")
+                except ScreenRefreshCancelled:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - 已完成歌曲不因通知失败作废
+                    reported_completed = False
+                    log_task(
+                        "组曲演奏",
+                        "结算",
+                        "WARNING",
+                        f"第{index}曲已完成，但完成进度报告异常："
+                        f"{type(exc).__name__}: {exc}",
+                    )
+                if not reported_completed:
+                    log_task(
+                        "组曲演奏",
+                        "结算",
+                        "WARNING",
+                        f"第{index}曲已完成，但完成进度报告失败，将继续任务",
+                    )
+                if index < 3:
+                    try:
+                        reported_started = self.progress("start")
+                    except ScreenRefreshCancelled:
+                        raise
+                    except Exception as exc:  # noqa: BLE001 - 已完成歌曲不因通知失败作废
+                        reported_started = False
+                        log_task(
+                            "组曲演奏",
+                            "结算",
+                            "WARNING",
+                            f"第{index + 1}曲进度报告异常，将继续任务："
+                            f"{type(exc).__name__}: {exc}",
+                        )
+                    if not reported_started:
+                        log_task(
+                            "组曲演奏",
+                            "结算",
+                            "WARNING",
+                            f"第{index + 1}曲进度报告失败，将继续任务",
+                        )
         except MedleyPlayFailure as failure:
             return self.retry_failed_round(session, failure)
         session = self.collect_results(session, songs)
@@ -2407,28 +2683,55 @@ class MedleyLiveFlow(CustomAction):
             return flow.run()
         except ScreenRefreshCancelled:
             if flow is not None:
-                session = flow.sessions.latest(
-                    str(flow.settings["tour_type"])
-                )
-                if session is not None:
-                    flow.sessions.update(
-                        session,
-                        status="paused",
-                        terminal_reason="user_stopped",
+                try:
+                    session = flow.sessions.latest(
+                        str(flow.settings["tour_type"])
+                    )
+                    if session is not None:
+                        flow.sessions.update(
+                            session,
+                            status="paused",
+                            terminal_reason="user_stopped",
+                        )
+                except Exception as exc:  # noqa: BLE001 - 用户停止必须保持中性返回
+                    log_task(
+                        "组曲演奏",
+                        "流程",
+                        "WARNING",
+                        "用户已停止，但无法写入暂停会话："
+                        f"{type(exc).__name__}: {exc}",
                     )
             return True
         except Exception as exc:
             reason = f"组曲流程失败：{type(exc).__name__}: {exc}"
-            record_failure_reason(reason)
-            if flow is not None:
-                session = flow.sessions.latest(
-                    str(flow.settings["tour_type"])
+            try:
+                record_failure_reason(reason)
+            except Exception as record_exc:  # noqa: BLE001 - 不以记录错误覆盖首个流程错误
+                log_task(
+                    "组曲演奏",
+                    "流程",
+                    "WARNING",
+                    "无法记录原始流程错误："
+                    f"{type(record_exc).__name__}: {record_exc}",
                 )
-                if session is not None:
-                    flow.sessions.update(
-                        session,
-                        status="paused",
-                        terminal_reason=reason,
+            if flow is not None:
+                try:
+                    session = flow.sessions.latest(
+                        str(flow.settings["tour_type"])
+                    )
+                    if session is not None:
+                        flow.sessions.update(
+                            session,
+                            status="paused",
+                            terminal_reason=reason,
+                        )
+                except Exception as session_exc:  # noqa: BLE001 - 保留首个失败原因
+                    log_task(
+                        "组曲演奏",
+                        "流程",
+                        "WARNING",
+                        "无法写入失败会话，保留原始流程错误："
+                        f"{type(session_exc).__name__}: {session_exc}",
                     )
             traceback.print_exc()
             log_task("组曲演奏", "流程", "ERROR", reason)

@@ -124,6 +124,7 @@ class RealtimeProfileStore:
     SELECTION_FILE = "selection.json"
     DEFAULT_RUNTIME_OPTIONS = {
         "skip_process_conflict_cleanup": False,
+        "skip_result_check": False,
         "note_speed_settings_enabled": True,
         "chart_prediction_enabled": True,
         "chart_predict_presses": True,
@@ -232,6 +233,9 @@ class RealtimeProfileStore:
         skip_conflict_cleanup = options.get("skip_process_conflict_cleanup", False)
         if not isinstance(skip_conflict_cleanup, bool):
             raise ValueError("skip_process_conflict_cleanup must be boolean")
+        skip_result_check = options.get("skip_result_check", False)
+        if not isinstance(skip_result_check, bool):
+            raise ValueError("skip_result_check 必须是布尔值")
         speed_settings_enabled = options.get(
             "note_speed_settings_enabled",
             options.get("game_effect_settings_enabled", True),
@@ -256,18 +260,18 @@ class RealtimeProfileStore:
             raise ValueError("cooperative_jitter_enabled 必须是布尔值")
         retry_count_raw = options.get("play_failure_retry_count", 1)
         if isinstance(retry_count_raw, bool):
-            raise ValueError("play_failure_retry_count 必须是 0..3 的整数")
+            raise ValueError("play_failure_retry_count 必须是 0..99 的整数")
         try:
             play_failure_retry_count = int(retry_count_raw)
         except (TypeError, ValueError) as exc:
             raise ValueError(
-                "play_failure_retry_count 必须是 0..3 的整数"
+                "play_failure_retry_count 必须是 0..99 的整数"
             ) from exc
         if (
             retry_count_raw != play_failure_retry_count
-            or not 0 <= play_failure_retry_count <= 3
+            or not 0 <= play_failure_retry_count <= 99
         ):
-            raise ValueError("play_failure_retry_count 必须是 0..3 的整数")
+            raise ValueError("play_failure_retry_count 必须是 0..99 的整数")
         configured_speeds = options.get(
             "calibration_note_speeds",
             cls.DEFAULT_RUNTIME_OPTIONS["calibration_note_speeds"],
@@ -289,6 +293,7 @@ class RealtimeProfileStore:
             speeds[difficulty] = speed
         return {
             "skip_process_conflict_cleanup": skip_conflict_cleanup,
+            "skip_result_check": skip_result_check,
             "note_speed_settings_enabled": speed_settings_enabled,
             "chart_prediction_enabled": chart_prediction_enabled,
             "chart_predict_presses": chart_predict_presses,

@@ -180,6 +180,7 @@ def test_runtime_options_default_to_speed_only_settings(tmp_path):
     assert "judgement_assist_effect" not in options
     assert "tap_effect" not in options
     assert options["skip_process_conflict_cleanup"] is False
+    assert options["skip_result_check"] is False
 
 
 def test_runtime_options_persist_process_conflict_cleanup_switch(tmp_path):
@@ -191,6 +192,17 @@ def test_runtime_options_persist_process_conflict_cleanup_switch(tmp_path):
 
     assert updated["skip_process_conflict_cleanup"] is True
     assert store.runtime_options()["skip_process_conflict_cleanup"] is True
+
+
+def test_runtime_options_persist_result_check_switch(tmp_path):
+    store = RealtimeProfileStore(tmp_path)
+    options = store.runtime_options()
+    options["skip_result_check"] = True
+
+    updated = store.update_runtime_options(options)
+
+    assert updated["skip_result_check"] is True
+    assert store.runtime_options()["skip_result_check"] is True
 
 
 def test_legacy_runtime_visual_options_are_migrated_to_speed_only(tmp_path):

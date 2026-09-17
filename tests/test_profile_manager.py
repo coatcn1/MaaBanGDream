@@ -133,6 +133,7 @@ def test_selection_state_is_written_atomically(tmp_path):
         "pinned": {"Easy": path.name},
         "runtime_options": {
             "skip_process_conflict_cleanup": False,
+            "skip_result_check": False,
             "note_speed_settings_enabled": True,
             "chart_prediction_enabled": True,
             "chart_predict_presses": True,
@@ -161,6 +162,7 @@ def test_runtime_options_default_and_atomic_update_do_not_invalidate_profile(tmp
     )
     assert listed["runtime_options"] == {
         "skip_process_conflict_cleanup": False,
+        "skip_result_check": False,
         "note_speed_settings_enabled": True,
         "chart_prediction_enabled": True,
             "chart_predict_presses": True,
@@ -238,6 +240,21 @@ def test_legacy_life_protection_options_are_dropped_on_write(tmp_path):
     assert "rehearsal_ignore_life_safety" not in result["runtime_options"]
 
 
+@pytest.mark.parametrize("skip_result_check", [0, 1, "false", None])
+def test_runtime_options_reject_non_boolean_skip_result_check(
+    tmp_path,
+    skip_result_check,
+):
+    with pytest.raises(ValueError, match="skip_result_check"):
+        handle_request(
+            {
+                "operation": "update-runtime-options",
+                "runtime_options": {"skip_result_check": skip_result_check},
+            },
+            root=tmp_path,
+        )
+
+
 @pytest.mark.parametrize(
     ("difficulty", "expected"),
     [
@@ -285,7 +302,15 @@ def test_special_auto_selection_prefers_exact_difficulty_before_expert(tmp_path)
     assert result["selection"]["profile"] != expert.name
 
 
-@pytest.mark.parametrize("retry_count", [-1, 4, True, 1.5, "two"])
+@pytest.mark.parametrize("retry_count", [0, 1, 4, 99])
+def test_runtime_options_accept_new_retry_limit(tmp_path, retry_count):
+    handle_request({"operation": "update-runtime-options", "runtime_options": {
+        "play_failure_retry_count": retry_count,
+    }}, root=tmp_path)
+    assert RealtimeProfileStore(tmp_path).runtime_options()["play_failure_retry_count"] == retry_count
+
+
+@pytest.mark.parametrize("retry_count", [-1, 100, True, 1.5, "two"])
 def test_runtime_options_reject_invalid_play_failure_retry_count(
     tmp_path,
     retry_count,

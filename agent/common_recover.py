@@ -146,6 +146,23 @@ def _prepare_game(
         controller.post_start_app(package).wait()
         return True, True
 
+@AgentServer.custom_action("CompletedLiveRecover")
+class CompletedLiveRecover(CustomAction):
+    """仅供已确认完成的演出使用；恢复失败不撤销演出，也不结束任务。"""
+
+    def run(self, context: Context, argv: CustomAction.RunArg) -> bool:
+        if context.tasker.stopping:
+            return True
+        try:
+            recovered = CommonRecover().run(context, argv)
+        except Exception as exc:
+            recovered = False
+            print(f"CompletedLiveRecover warning={type(exc).__name__}: {exc}", flush=True)
+        if not recovered and not context.tasker.stopping:
+            log_task("演出结算", "恢复", "WARNING", "演出已完成，主页恢复失败不终止任务；下一局入口重新确认页面")
+        return True
+
+
 @AgentServer.custom_action("CommonRecover")
 class CommonRecover(CustomAction):
     """Recover an unknown page with BACK, then bounded app restarts."""
@@ -154,7 +171,7 @@ class CommonRecover(CustomAction):
         try:
             return self._run(context, argv)
         except ScreenRefreshCancelled:
-            return False
+            return bool(context.tasker.stopping)
         except Exception as exc:
             log_task(
                 "游戏启动",
@@ -169,6 +186,7 @@ class CommonRecover(CustomAction):
         params = _params(argv.custom_action_param)
         home_node = str(params.get("home_node", "HomeMarker"))
         interval = int(params.get("escape_interval_ms", 1500)) / 1000
+        home_stable_seconds = max(0, int(params.get("home_stable_ms", 0))) / 1000
         timeout = int(params.get("escape_timeout_ms", 60000)) / 1000
         package = str(params.get("package", "com.bilibili.star.bili"))
         restart_limit = int(params.get("restart_limit", 2))
@@ -293,10 +311,20 @@ class CommonRecover(CustomAction):
             grace_deadline = time.monotonic() + iteration_grace
             deadline = time.monotonic() + timeout
             escape_count = 0
+            home_candidate_since: float | None = None
+            home_confirmation_pending = (
+                home_stable_seconds > 0
+                and bool(params.get("home_confirmation_pending", False))
+            )
             while time.monotonic() < deadline:
                 if context.tasker.stopping:
                     return True
-                image = capture_image(context)
+                # 快速结算节点只在未重启游戏的 back-only 阶段使用；登录恢复仍用通用节拍。
+                refresh_node = (
+                    str(params.get("screen_refresh_node") or "CommonRefreshScreen")
+                    if back_only and restart_round == 0 else "CommonRefreshScreen"
+                )
+                image = capture_image(context, node=refresh_node)
                 # run_task() may replace/invalidate the remote Controller proxy.
                 controller = context.tasker.controller
                 if context.tasker.stopping:
@@ -396,11 +424,25 @@ class CommonRecover(CustomAction):
                         )
                         break
                 if modal_dismissed:
+                    if home_stable_seconds > 0:
+                        home_confirmation_pending = True
+                        home_candidate_since = None
                     if not _wait_unless_stopping(context, interval):
                         return True
                     continue
                 result = context.run_recognition(home_node, image)
                 if result and result.hit:
+                    if home_stable_seconds > 0:
+                        # 主页可能只是 BACK 后弹窗出现前的一帧；确认期间只采样，
+                        # 不能再用 BACK 打开退出框，也不能拿取消动画帧当已送达。
+                        home_confirmation_pending = True
+                        now = time.monotonic()
+                        if home_candidate_since is None:
+                            home_candidate_since = now
+                        if now - home_candidate_since < home_stable_seconds:
+                            if not _wait_unless_stopping(context, 0.05):
+                                return True
+                            continue
                     login_status = "登录完成" if login_seen else "已登录"
                     log_task(
                         "游戏启动",
@@ -409,6 +451,15 @@ class CommonRecover(CustomAction):
                         f"已识别主页，状态：{login_status}",
                     )
                     return True
+                home_candidate_since = None
+                if home_confirmation_pending and not download_confirm_present:
+                    # 已点取消后，模板低分通常属于关闭动画。保持无输入等待，
+                    # 直到弹窗消失且主页连续稳定；整体仍受恢复超时预算约束。
+                    if not _wait_unless_stopping(context, 0.05):
+                        return True
+                    continue
+                if download_confirm_present:
+                    home_confirmation_pending = False
 
                 # Resource updates are a recognised login phase, not an
                 # unknown page. Click Download once, then keep the recovery
