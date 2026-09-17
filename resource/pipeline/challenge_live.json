@@ -130,7 +130,9 @@
     ]
   },
   "ChallengeRoundGate": {
-    "recognition": "DirectHit",
+    "recognition": "Custom",
+    "custom_recognition": "TaskRoundAvailable",
+    "custom_recognition_param": {"total": 1},
     "action": "Custom",
     "custom_action": "TaskProgress",
     "custom_action_param": {
@@ -139,7 +141,7 @@
       "total": 1,
       "phase": "start"
     },
-    "max_hit": 1,
+    "on_error": ["ChallengeFailure"],
     "next": [
       "ChallengeDebugGate"
     ]
@@ -722,7 +724,7 @@
   "ChallengeReturnHome": {
     "recognition": "DirectHit",
     "action": "Custom",
-    "custom_action": "CommonRecover",
+    "custom_action": "CompletedLiveRecover",
     "custom_action_param": {
       "home_node": "ChallengeHomeMarker",
       "modal_cancel_nodes": [

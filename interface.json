@@ -3,7 +3,7 @@
   "interface_version": 2,
   "name": "MaaBanGDream",
   "label": "BanG Dream! 自动化（MaaFramework）",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "docs/about.md",
   "about_icon": "docs/assets/maabangdream-logo-v1.png",
   "contact": "docs/contact.md",
@@ -211,8 +211,8 @@
           "label": "次数（3 的倍数）",
           "default": "3",
           "pipeline_type": "int",
-          "verify": "^(?:3|6|9|1[258]|2[147]|3[0369]|4[258]|5[147]|6[0369]|7[258]|8[147]|9[0369])$",
-          "pattern_msg": "请输入 3 到 99 之间且为 3 的倍数的整数。"
+          "verify": "^(?:0|[369]|[369][0369]|[147][258]|[258][147]|[369](?:[0369][0369]|[147][258]|[258][147])|[147](?:[0369][258]|[147][147]|[258][0369])|[258](?:[0369][147]|[147][0369]|[258][258]))$",
+          "pattern_msg": "请输入 3 到 999 之间且为 3 的倍数的整数；0 表示无限演出。"
         }
       ],
       "pipeline_override": {
@@ -445,8 +445,8 @@
           "label": "演出次数",
           "default": "1",
           "pipeline_type": "int",
-          "verify": "^(?:[1-9]|[1-9][0-9])$",
-          "pattern_msg": "请输入 1 到 99 的整数。"
+          "verify": "^(?:0|[1-9][0-9]{0,2})$",
+          "pattern_msg": "请输入 0 到 999 的整数；0 表示无限演出。"
         }
       ],
       "pipeline_override": {
@@ -860,13 +860,13 @@
           "label": "次数",
           "default": "1",
           "pipeline_type": "int",
-          "verify": "^(?:[1-9]|[1-9][0-9])$",
-          "pattern_msg": "请输入 1 到 99 的整数。"
+          "verify": "^(?:0|[1-9][0-9]{0,2})$",
+          "pattern_msg": "请输入 0 到 999 的整数；0 表示无限演出。"
         }
       ],
       "pipeline_override": {
         "AutoLiveRoundGate": {
-          "max_hit": "{Count}",
+          "custom_recognition_param": {"total": "{Count}"},
           "custom_action_param": {
             "task_name": "AutoLive",
             "label": "自动演出",
@@ -1371,13 +1371,13 @@
           "label": "次数",
           "default": "1",
           "pipeline_type": "int",
-          "verify": "^(?:[1-9]|[1-9][0-9])$",
-          "pattern_msg": "请输入 1 到 99 的整数。"
+          "verify": "^(?:0|[1-9][0-9]{0,2})$",
+          "pattern_msg": "请输入 0 到 999 的整数；0 表示无限演出。"
         }
       ],
       "pipeline_override": {
         "RealtimeLiveRoundGate": {
-          "max_hit": "{Count}",
+          "custom_recognition_param": {"total": "{Count}"},
           "custom_action_param": {
             "task_name": "RealtimeLive",
             "label": "单人实时演奏",
@@ -2058,13 +2058,13 @@
           "label": "次数",
           "default": "1",
           "pipeline_type": "int",
-          "verify": "^(?:[1-9]|[1-9][0-9])$",
-          "pattern_msg": "请输入 1 到 99 的整数。"
+          "verify": "^(?:0|[1-9][0-9]{0,2})$",
+          "pattern_msg": "请输入 0 到 999 的整数；0 表示无限演出。"
         }
       ],
       "pipeline_override": {
         "ChallengeRoundGate": {
-          "max_hit": "{Count}",
+          "custom_recognition_param": {"total": "{Count}"},
           "custom_action_param": {
             "task_name": "ChallengeLive",
             "label": "挑战演出",

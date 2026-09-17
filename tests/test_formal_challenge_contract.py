@@ -142,9 +142,9 @@ def test_calibration_rounds_bypass_the_shared_multi_live_hit_counter():
     assert entry["custom_action"] == "CommonRecover"
     assert entry["next"] == ["RealtimeLiveDebugGate"]
     assert "max_hit" not in entry
-    # This shared gate is intentionally stateful for normal 1-99 round tasks,
-    # so a calibration Custom Action must never reuse it across nested calls.
-    assert multi_live["RealtimeLiveRoundGate"]["max_hit"] == 1
+    # 普通演出按入口命中数限制次数；校准嵌套调用仍必须绕过这道次数门禁。
+    assert multi_live["RealtimeLiveRoundGate"]["custom_recognition"] == "TaskRoundAvailable"
+    assert "max_hit" not in multi_live["RealtimeLiveRoundGate"]
 
 
 def test_challenge_points_and_profile_contract():

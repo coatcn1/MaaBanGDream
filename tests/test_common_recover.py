@@ -6,6 +6,28 @@ from types import SimpleNamespace
 from agent import common_recover
 
 
+def test_completed_live_recovery_failure_does_not_stop(monkeypatch):
+    monkeypatch.setattr(common_recover.CommonRecover, "run", lambda *args: False)
+    context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    assert common_recover.CompletedLiveRecover().run(context, SimpleNamespace()) is True
+
+
+def test_completed_live_recovery_exception_does_not_stop(monkeypatch):
+    def fail(*args):
+        raise RuntimeError("recovery recognition failed")
+    monkeypatch.setattr(common_recover.CommonRecover, "run", fail)
+    context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    assert common_recover.CompletedLiveRecover().run(context, SimpleNamespace()) is True
+
+
+def test_completed_live_recovery_stopping_never_runs_recovery(monkeypatch):
+    def forbidden(*args):
+        raise AssertionError("must not recover after stop")
+    monkeypatch.setattr(common_recover.CommonRecover, "run", forbidden)
+    context = SimpleNamespace(tasker=SimpleNamespace(stopping=True))
+    assert common_recover.CompletedLiveRecover().run(context, SimpleNamespace()) is True
+
+
 class Job:
     def __init__(self, result=None):
         self.result = result
@@ -119,6 +141,31 @@ def test_callback_exception_is_converted_to_failure(monkeypatch):
     )
 
 
+def test_fast_result_refresh_is_limited_to_back_only_recovery(monkeypatch):
+    for back_only, expected in (
+        (True, "MedleyResultRefreshScreen"),
+        (False, "CommonRefreshScreen"),
+    ):
+        context = Context({"HomeMarker": [True]})
+        nodes = []
+        original_refresh = context.run_task
+
+        def refresh(node):
+            nodes.append(node)
+            return original_refresh("CommonRefreshScreen")
+
+        monkeypatch.setattr(context, "run_task", refresh)
+        assert common_recover.CommonRecover().run(
+            context,
+            argv(
+                back_only=back_only,
+                screen_refresh_node="MedleyResultRefreshScreen",
+                escape_interval_ms=0,
+            ),
+        )
+        assert nodes == [expected]
+
+
 def test_reacquires_controller_after_nested_refresh(monkeypatch):
     context = Context({"HomeMarker": [True]})
     original_run_task = context.run_task
@@ -200,6 +247,76 @@ def test_stopping_exits_before_any_controller_operation():
     assert context.tasker.controller.keys == []
     assert context.tasker.controller.stops == []
     assert context.tasker.controller.starts == []
+
+
+def test_fast_recovery_waits_for_modal_close_without_reopening_it(monkeypatch):
+    context = Context({
+        "QuitConfirmCancel": [True] + [False] * 8,
+        "HomeMarker": [False, True, False, True, True, True],
+    })
+    clock = [0.0]
+    refresh = context.run_task
+
+    def advance_frame(node):
+        clock[0] += 0.2
+        return refresh(node)
+
+    monkeypatch.setattr(context, "run_task", advance_frame)
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(common_recover.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+
+    assert common_recover.CommonRecover().run(context, argv(
+        back_only=True, modal_cancel_nodes=["QuitConfirmCancel"],
+        escape_interval_ms=0, home_stable_ms=350, escape_timeout_ms=3000,
+    ))
+    assert context.tasker.controller.clicks == [(25, 40)]
+    assert context.tasker.controller.keys == []
+    assert context.refreshes >= 7
+
+
+def test_fast_recovery_rechecks_home_when_exit_popup_appears_late(monkeypatch):
+    context = Context({
+        "QuitConfirmCancel": [False, True] + [False] * 8,
+        "HomeMarker": [True, False, True, True, True],
+    })
+    clock = [0.0]
+    refresh = context.run_task
+
+    def advance_frame(node):
+        clock[0] += 0.2
+        return refresh(node)
+
+    monkeypatch.setattr(context, "run_task", advance_frame)
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(common_recover.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+
+    assert common_recover.CommonRecover().run(context, argv(
+        back_only=True, modal_cancel_nodes=["QuitConfirmCancel"],
+        escape_interval_ms=0, home_stable_ms=350, escape_timeout_ms=3000,
+    ))
+    assert context.tasker.controller.clicks == [(25, 40)]
+    assert context.tasker.controller.keys == []
+    assert context.refreshes >= 6
+
+
+def test_fast_modal_confirmation_stops_without_more_inputs(monkeypatch):
+    context = Context({"QuitConfirmCancel": [True, False], "HomeMarker": [False]})
+    refresh = context.run_task
+
+    def stop_on_second_frame(node):
+        detail = refresh(node)
+        if context.refreshes == 2:
+            context.tasker.stopping = True
+        return detail
+
+    monkeypatch.setattr(context, "run_task", stop_on_second_frame)
+    assert common_recover.CommonRecover().run(context, argv(
+        back_only=True, modal_cancel_nodes=["QuitConfirmCancel"],
+        escape_interval_ms=0, home_stable_ms=350,
+    ))
+    assert context.refreshes == 2
+    assert context.tasker.controller.clicks == [(25, 40)]
+    assert context.tasker.controller.keys == []
 
 
 def test_foreign_foreground_is_focused_without_sending_input(monkeypatch):

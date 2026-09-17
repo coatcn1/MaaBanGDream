@@ -275,7 +275,7 @@ def recover_continuous_result_home(context: Context) -> None:
         custom_action_param=json.dumps(params, ensure_ascii=False)
     )
     if not CommonRecover().run(context, argv):
-        raise RuntimeError("一键实时演奏结算后无法恢复主页")
+        print("ContinuousRealtimeLive post_result_warning=演出已完成，结算后无法恢复主页", flush=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -618,10 +618,13 @@ class ContinuousRealtimeLive(CustomAction):
             diagnostics.save("stopped")
             print("ContinuousRealtimeLive stopped by user", flush=True)
             return True
-        recover_continuous_result_home(context)
+        try:
+            recover_continuous_result_home(context)
+        except Exception as exc:
+            print(f"ContinuousRealtimeLive post_result_warning={type(exc).__name__}: {exc}", flush=True)
         print(
             "[任务][一键实时演奏][结束][SUCCESS] "
-            "已读取 PGGBM 并用统一结算节拍返回主页",
+            "已确认演奏结束，结算返回流程已执行（异常见警告）",
             flush=True,
         )
         return True

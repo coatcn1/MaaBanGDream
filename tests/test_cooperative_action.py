@@ -35,6 +35,52 @@ from agent.realtime.live_session import reset_live_run, update_live_run
 ROOT = Path(__file__).parents[1]
 
 
+def _bare_flow():
+    flow = object.__new__(CooperativeLiveFlow)
+    flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    return flow
+
+
+@pytest.mark.parametrize("count", [0, 1, 100, 999])
+def test_cooperative_accepts_infinite_and_new_count_limit(count):
+    assert configure_cooperative_settings({"reset": True, "count": count})["count"] == count
+
+
+def test_cooperative_unlimited_continues_until_stop_without_final_round():
+    flow = _bare_flow()
+    flow.settings = {"count": 0, "entry_method": "normal"}
+    completed = []
+    navigation = []
+    flow.run_attempt = lambda **_kwargs: True
+    flow.return_to_room_selection = lambda: navigation.append(True)
+
+    def progress(current, total):
+        assert total == 0
+        completed.append(current)
+        if current == 5:
+            flow.context.tasker.stopping = True
+
+    flow.progress_callback = progress
+    assert flow.run() is True
+    assert completed == [1, 2, 3, 4, 5]
+    assert len(navigation) == 4
+
+
+def test_cooperative_retry_budget_is_not_clamped_to_three():
+    flow = _bare_flow()
+    flow.settings = {"count": 1, "play_failure_retry_count": 99, "entry_method": "normal"}
+    attempts = []
+    flow.recover_after_play_failure = lambda _reason: None
+
+    def attempt(**_kwargs):
+        attempts.append(True)
+        return len(attempts) == 100
+
+    flow.run_attempt = attempt
+    assert flow.run() is True
+    assert len(attempts) == 100
+
+
 def load(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -82,7 +128,7 @@ def _fake_jump_flow(
             return Job(None)
 
     controller = Controller()
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.context = SimpleNamespace(
         tasker=SimpleNamespace(stopping=False, controller=controller)
     )
@@ -224,7 +270,7 @@ def _make_play_flow(monkeypatch, *, jump_requested):
         "current_live_run",
         lambda: SimpleNamespace(disconnect_jump_requested=jump_requested),
     )
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.settings = dict(DEFAULT_SETTINGS)
     flow.action_argv = lambda params: params
     keys = []
@@ -282,7 +328,7 @@ def test_startup_failure_jump_homes_reopens_and_records_reason(monkeypatch):
 
 
 def test_run_attempt_propagates_startup_jump_without_failure_capture():
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.enter_room = lambda: None
     flow.wait_for_preparation = lambda: None
     flow.prepare = lambda: (_ for _ in ()).throw(
@@ -297,7 +343,7 @@ def test_run_attempt_propagates_startup_jump_without_failure_capture():
 
 
 def _fake_member_exit_watch_flow(frame, timeout):
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
     dismissed = []
     flow.capture = lambda: frame.copy()
@@ -312,7 +358,7 @@ def _fake_member_exit_watch_flow(frame, timeout):
 
 def test_member_exit_watch_dismisses_popup_before_black():
     frame = np.full((720, 1280, 3), 255, dtype=np.uint8)
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
     dismissed = []
     flow.capture = lambda: frame.copy()
@@ -336,7 +382,7 @@ def test_member_exit_watch_fails_closed_when_playfield_motion_proves_missed_tran
     capsys,
 ):
     frame = np.full((720, 1280, 3), 128, dtype=np.uint8)
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
     flow.capture = lambda: frame.copy()
     flow.visible = lambda image, name, threshold=0.9: False
@@ -364,7 +410,7 @@ def test_member_exit_watch_default_covers_slow_ready_countdown(monkeypatch):
     waiting = np.full((720, 1280, 3), 128, dtype=np.uint8)
     black = np.zeros((720, 1280, 3), dtype=np.uint8)
     clock = [0.0]
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
     flow.capture = lambda: (black if clock[0] >= 20.0 else waiting).copy()
     flow.visible = lambda image, name, threshold=0.9: False
@@ -390,7 +436,7 @@ def test_member_exit_watch_accepts_matching_final_cover_without_black(monkeypatc
     observations = [None, resolution]
     changes = []
     clock = [0.0]
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
     flow.capture = lambda: cover.copy()
     flow.visible = lambda image, name, threshold=0.9: False
@@ -433,7 +479,7 @@ def test_missed_transition_monitor_jumps_after_confirmed_zero(monkeypatch):
         ]
     )
     clock = [0.0]
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
     flow.detector = SimpleNamespace(detect=lambda image: next(readings))
     flow.capture = lambda: frame.copy()
@@ -460,7 +506,7 @@ def test_member_exit_watch_does_not_accept_static_prepare_page_as_playfield(
     monkeypatch,
 ):
     frame = np.full((720, 1280, 3), 128, dtype=np.uint8)
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
     flow.capture = lambda: frame.copy()
     flow.visible = lambda image, name, threshold=0.9: False
@@ -513,7 +559,7 @@ def test_member_exit_watch_resets_motion_evidence_between_rounds(monkeypatch):
     narrow[500:540, 600:640] = 255
     black = np.zeros((720, 1280, 3), dtype=np.uint8)
     frames = iter([static, narrow, black, static, narrow])
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
     flow.capture = lambda: next(frames).copy()
     flow.visible = lambda image, name, threshold=0.9: False
@@ -539,7 +585,7 @@ def test_ready_up_observes_black_during_post_click_delivery_window():
     ready = np.full((720, 1280, 3), 128, dtype=np.uint8)
     black = np.zeros((720, 1280, 3), dtype=np.uint8)
     frames = iter([ready, black])
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
     flow.capture = lambda: next(frames).copy()
     flow.template_box = lambda image, name, threshold: (100, 200, 80, 40)
@@ -553,7 +599,7 @@ def test_ready_up_observes_black_during_post_click_delivery_window():
 
 def test_ready_up_reuses_verified_preparation_image_without_refresh():
     cached = np.full((720, 1280, 3), 128, dtype=np.uint8)
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
     flow.capture = lambda: (_ for _ in ()).throw(
         AssertionError("可信准备页帧包含按钮时不应重复刷新")
@@ -573,7 +619,7 @@ def test_ready_up_refreshes_when_cached_image_does_not_contain_button():
     cached = np.zeros((720, 1280, 3), dtype=np.uint8)
     fresh = np.full((720, 1280, 3), 128, dtype=np.uint8)
     captures = []
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
     flow.capture = lambda: (captures.append(True), fresh)[1]
     flow.template_box = lambda image, name, threshold: (
@@ -590,7 +636,7 @@ def test_ready_up_refreshes_when_cached_image_does_not_contain_button():
 
 def test_performance_mode_check_returns_reusable_confirmed_image():
     cached = np.zeros((720, 1280, 3), dtype=np.uint8)
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
     flow.capture = lambda: (_ for _ in ()).throw(
         AssertionError("已有可信准备页帧时不应重复刷新")
@@ -610,7 +656,7 @@ def test_performance_mode_check_returns_reusable_confirmed_image():
 def test_endpoint_room_selection_swipes_directly_without_resetting_carousel(
     monkeypatch, target, initial_hue, target_hue, start, end,
 ):
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.context = object()
     flow.settings = {"room_tier": target}
     flow.ensure_room_page = lambda: room_frame(initial_hue)
@@ -643,7 +689,7 @@ def test_room_entry_accepts_stable_departure_from_room_selection_without_narrow_
     selection = np.ones((2, 2, 3), dtype=np.uint8)
     transition = np.zeros((2, 2, 3), dtype=np.uint8)
     frames = iter([selection, transition, transition, transition])
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.capture = lambda: next(frames)
 
     def visible(image, name, threshold=0.9):
@@ -675,7 +721,7 @@ def test_normal_entry_ignores_stale_room_code_and_stay_setting():
 
 def test_wait_for_preparation_jumps_after_song_choice_entry_timeout(monkeypatch):
     clock = [0.0]
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
     flow.wait_for = lambda names, timeout: (
         clock.__setitem__(0, clock[0] + timeout) or (None, np.zeros((1, 1, 3)))
@@ -701,7 +747,7 @@ def test_wait_for_preparation_gives_ready_page_independent_60_seconds(monkeypatc
     clock = [0.0]
     song_selected = [False]
     clicks = []
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
     flow.click = clicks.append
 
@@ -742,8 +788,8 @@ def test_private_entry_requires_explicit_entry_selection():
 
 def test_invalid_cooperative_count_is_rejected_without_corrupting_settings():
     configure_cooperative_settings({"reset": True, "count": 3})
-    with pytest.raises(ValueError, match="1到99"):
-        configure_cooperative_settings({"count": 0})
+    with pytest.raises(ValueError, match="0到999"):
+        configure_cooperative_settings({"count": 1000})
     assert current_cooperative_settings()["count"] == 3
 
 
@@ -811,7 +857,7 @@ def test_cooperative_prepare_falls_back_special_to_effective_expert(monkeypatch)
     monkeypatch.setattr(
         cooperative_action, "RealtimePerformanceSettingsGate", PerformanceGate
     )
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
     flow.settings = {
         "difficulty": "Special",
@@ -916,7 +962,7 @@ def test_cooperative_interface_exposes_requested_modes_and_five_difficulties():
     assert room_code["inputs"][0]["label"] == "输入房间号（六位）"
     assert room_code["inputs"][0]["verify"] == r"^(?:|[0-9]{6})$"
     count = options["CooperativeCount"]
-    assert count["inputs"][0]["verify"] == r"^(?:[1-9]|[1-9][0-9])$"
+    assert count["inputs"][0]["verify"] == r"^(?:0|[1-9][0-9]{0,2})$"
     assert count["pipeline_override"]["CooperativeCountConfigure"][
         "custom_action_param"
     ] == {"count": "{Count}"}
@@ -1008,7 +1054,7 @@ def test_cooperative_templates_are_deployed_and_nonempty():
 
 
 def test_member_exit_default_confirms_and_fails_without_reconnect():
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.settings = {"member_exit_policy": "fail", "max_reconnects": 3}
     calls = []
     flow.run_attempt = lambda reuse_room=False: (
@@ -1021,7 +1067,7 @@ def test_member_exit_default_confirms_and_fails_without_reconnect():
 
 
 def test_member_exit_reconnect_is_bounded_and_reuses_original_route():
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.settings = {"member_exit_policy": "reconnect", "max_reconnects": 3}
     attempts = iter([MemberExited(), MemberExited(), True])
     calls = []
@@ -1040,7 +1086,7 @@ def test_member_exit_reconnect_is_bounded_and_reuses_original_route():
 
 
 def test_member_exit_reconnect_recovers_via_home_when_result_pages_stuck():
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.settings = {"member_exit_policy": "reconnect", "max_reconnects": 3}
     attempts = iter([MemberExited(), True])
     recoveries = []
@@ -1064,7 +1110,7 @@ def test_member_exit_reconnect_recovers_via_home_when_result_pages_stuck():
 
 
 def test_post_score_navigation_failure_recovers_and_continues_next_round():
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.settings = {
         "entry_method": "normal",
         "post_live_action": "exit",
@@ -1091,7 +1137,7 @@ def test_post_score_navigation_failure_recovers_and_continues_next_round():
 
 
 def test_stay_in_room_failure_finishes_last_round_instead_of_stopping():
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.settings = {
         "entry_method": "friend",
         "post_live_action": "stay",
@@ -1110,8 +1156,26 @@ def test_stay_in_room_failure_finishes_last_round_instead_of_stopping():
     assert recoveries == []
 
 
+def test_completed_last_round_member_exit_dismiss_failure_is_nonfatal():
+    flow = _bare_flow()
+    flow.settings = {
+        "entry_method": "friend",
+        "post_live_action": "stay",
+        "count": 1,
+        "member_exit_policy": "reconnect",
+        "max_reconnects": 3,
+    }
+    flow.run_attempt = lambda reuse_room=False: True
+    flow.stay_in_room = lambda: (_ for _ in ()).throw(MemberExited())
+    flow.dismiss_member_exit = lambda: (_ for _ in ()).throw(
+        RuntimeError("成员退出提示识别失败")
+    )
+
+    assert flow.run() is True
+
+
 def test_transient_play_failure_retries_the_whole_cooperative_round():
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.settings = {
         "entry_method": "normal",
         "post_live_action": "exit",
@@ -1135,7 +1199,7 @@ def test_transient_play_failure_retries_the_whole_cooperative_round():
 
 
 def test_transient_play_exception_stops_after_retry_budget():
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.settings = {
         "entry_method": "normal",
         "post_live_action": "exit",
@@ -1162,7 +1226,7 @@ def test_transient_play_exception_stops_after_retry_budget():
 
 
 def test_download_timeout_invokes_jump_instead_of_starting_engine():
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.wait_for = lambda names, timeout, interval: (None, np.zeros((1, 1, 3)))
     jumped = []
 
@@ -1204,7 +1268,7 @@ def test_capture_uses_shared_safe_refresh_instead_of_cached_reverse_controller(
         safe_refresh,
         raising=False,
     )
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.context = context
 
     assert flow.capture() is expected
@@ -1212,7 +1276,7 @@ def test_capture_uses_shared_safe_refresh_instead_of_cached_reverse_controller(
 
 
 def test_access_violation_is_not_masked_by_a_second_screenshot_attempt():
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     captures = []
     flow.enter_room = lambda: (_ for _ in ()).throw(
         OSError("exception: access violation reading 0xFFFFFFFFFFFFFFFF")
@@ -1239,7 +1303,7 @@ def test_private_room_accepts_six_digit_code_and_types_it(monkeypatch):
             return Job()
 
     controller = Controller()
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.context = SimpleNamespace(
         tasker=SimpleNamespace(stopping=False, controller=controller)
     )
@@ -1262,7 +1326,7 @@ def test_private_room_accepts_six_digit_code_and_types_it(monkeypatch):
 
 
 def test_stay_in_room_confirms_repeat_popup_and_verifies_lobby(monkeypatch):
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.settings = {"entry_method": "friend"}
     states = iter(["repeat_room_title", "room_wait"])
     flow.wait_for = lambda names, timeout, **kwargs: (
@@ -1287,7 +1351,7 @@ def test_play_uses_realtime_result_navigator_without_a_second_pggbm_wait(monkeyp
             return True
 
     monkeypatch.setattr(cooperative_action, "RealtimeProfilePlay", Play)
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
     flow.settings = cooperative_action.DEFAULT_SETTINGS.copy()
 
@@ -1296,7 +1360,7 @@ def test_play_uses_realtime_result_navigator_without_a_second_pggbm_wait(monkeyp
 
 
 def test_run_attempt_starts_cover_observer_before_waiting_for_playfield():
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     calls = []
     flow.enter_room = lambda: calls.append("enter")
     flow.wait_for_preparation = lambda: calls.append("prepare-wait")
@@ -1327,7 +1391,7 @@ def test_stay_in_room_rechecks_repeat_popup_after_every_accelerated_back(monkeyp
 
     actions = []
     controller = Controller(actions)
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.context = SimpleNamespace(
         tasker=SimpleNamespace(stopping=False, controller=controller)
     )
@@ -1379,7 +1443,7 @@ def test_return_to_room_selection_accelerates_each_page_without_extra_match(
             actions.append(("key", key))
             return Job()
 
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.context = SimpleNamespace(
         tasker=SimpleNamespace(stopping=False, controller=Controller())
     )
@@ -1406,7 +1470,7 @@ def test_return_to_room_selection_accelerates_each_page_without_extra_match(
 
 
 def test_post_score_wait_ignores_member_exit_template(monkeypatch):
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
     flow.capture = lambda: np.zeros((720, 1280, 3), dtype=np.uint8)
 
@@ -1441,7 +1505,7 @@ def test_post_score_cycle_finishes_second_safe_click_before_recognition(
             actions.append(("key", key))
             return Job()
 
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.context = SimpleNamespace(
         tasker=SimpleNamespace(stopping=False, controller=Controller())
     )
@@ -1470,7 +1534,7 @@ def test_post_score_cycle_finishes_second_safe_click_before_recognition(
 
 @pytest.mark.parametrize("stay", [False, True])
 def test_post_score_story_chain_does_not_cancel_confirm_or_wait_for_exit(stay):
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     actions = []
     class Job:
         def wait(self):
@@ -1505,7 +1569,7 @@ def test_post_score_story_chain_does_not_cancel_confirm_or_wait_for_exit(stay):
 
 
 def test_post_score_exit_checks_one_frame_without_nested_timeout():
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     seen = []
     def wait_for(names, *, timeout, detect_member_exit):
         seen.append((timeout, detect_member_exit, flow._post_score_refresh))
@@ -1534,7 +1598,7 @@ def test_return_to_room_selection_recognizes_home_and_reenters_before_next_round
             actions.append(("key", key))
             return Job()
 
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.context = SimpleNamespace(
         tasker=SimpleNamespace(stopping=False, controller=Controller())
     )
@@ -1571,7 +1635,7 @@ def test_home_reentry_explicitly_opens_live_and_cooperative_room_selection(
 ):
     frames = iter(["home", "live-select", "room-selection"])
     clicks = []
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.capture = lambda: next(frames)
     flow.click = clicks.append
     flow.visible = lambda image, name, threshold=0.9: (
@@ -1596,7 +1660,7 @@ def test_home_reentry_explicitly_opens_live_and_cooperative_room_selection(
 
 
 def test_normal_matching_count_stops_without_extra_match_or_stay():
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.settings = {
         "entry_method": "normal",
         "room_code": "941093",
@@ -1622,7 +1686,7 @@ def test_normal_matching_count_stops_without_extra_match_or_stay():
 
 
 def test_private_stay_reuses_room_until_requested_count_is_complete():
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     flow.settings = {
         "entry_method": "private",
         "room_code": "941093",
@@ -1778,7 +1842,7 @@ def test_live_action_fails_immediately_on_preflight_error(monkeypatch):
 
 
 def test_performance_mode_evidence_uses_unicode_safe_writer(monkeypatch, tmp_path):
-    flow = object.__new__(CooperativeLiveFlow)
+    flow = _bare_flow()
     frame = np.zeros((720, 1280, 3), dtype=np.uint8)
     monkeypatch.setattr(cooperative_action, "PROJECT_ROOT", tmp_path)
 

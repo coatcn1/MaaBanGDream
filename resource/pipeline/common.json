@@ -262,6 +262,12 @@
     "pre_delay": 0,
     "post_delay": 150
   },
+  "MedleyResultRefreshScreen": {
+    "recognition": "DirectHit",
+    "action": "DoNothing",
+    "pre_delay": 0,
+    "post_delay": 0
+  },
   "TaskReportVisible": {
     "recognition": "DirectHit",
     "action": "DoNothing"

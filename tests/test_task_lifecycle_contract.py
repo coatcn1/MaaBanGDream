@@ -11,7 +11,7 @@ def load(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def test_count_overrides_update_max_hit_and_progress_total_together():
+def test_count_overrides_update_recognition_gate_and_progress_total_together():
     interface = load(ROOT / "interface.json")
     expected = {
         "AutoLiveCount": ("AutoLiveRoundGate", "AutoLive", "自动演出"),
@@ -28,7 +28,8 @@ def test_count_overrides_update_max_hit_and_progress_total_together():
     }
     for option_name, (gate, task_name, label) in expected.items():
         override = interface["option"][option_name]["pipeline_override"][gate]
-        assert override["max_hit"] == "{Count}"
+        assert "max_hit" not in override
+        assert override["custom_recognition_param"] == {"total": "{Count}"}
         assert override["custom_action_param"] == {
             "task_name": task_name,
             "label": label,

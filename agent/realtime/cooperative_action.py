@@ -243,8 +243,8 @@ def configure_cooperative_settings(params: dict[str, object]) -> dict[str, objec
             if key in params:
                 candidate[key] = params[key]
         count = int(candidate.get("count", 1))
-        if not 1 <= count <= 99:
-            raise ValueError("协力演出次数必须是1到99的整数")
+        if not 0 <= count <= 999:
+            raise ValueError("协力演出次数必须是0到999的整数，0表示无限")
         candidate["count"] = count
         _SETTINGS.clear()
         _SETTINGS.update(candidate)
@@ -1535,11 +1535,21 @@ class CooperativeLiveFlow:
         play_failures = 0
         retry_count = max(
             0,
-            min(3, int(self.settings.get("play_failure_retry_count", 0))),
+            min(99, int(self.settings.get("play_failure_retry_count", 0))),
         )
-        while completed < total:
+        def recover_completed_round(reason):
+            try:
+                self.recover_after_play_failure(reason)
+            except InterruptedError:
+                raise
+            except Exception as exc:
+                print(f"CooperativeLive post_result_warning={type(exc).__name__}: {exc}", flush=True)
+
+        while total == 0 or completed < total:
+            if self.context.tasker.stopping:
+                return True
             print(
-                f"CooperativeLive round={completed + 1}/{total} "
+                f"CooperativeLive round={completed + 1}/{total or '无限'} "
                 f"reuse_room={str(reuse_room).lower()}",
                 flush=True,
             )
@@ -1560,6 +1570,8 @@ class CooperativeLiveFlow:
                     flush=True,
                 )
                 return False
+            except InterruptedError:
+                raise
             except Exception as exc:
                 if play_failures >= retry_count:
                     raise
@@ -1592,6 +1604,8 @@ class CooperativeLiveFlow:
                 self.recover_after_play_failure(reason)
                 reuse_room = False
                 continue
+            if self.context.tasker.stopping:
+                return True
             if not success:
                 if play_failures >= retry_count:
                     return False
@@ -1629,8 +1643,13 @@ class CooperativeLiveFlow:
             play_failures = 0
             callback = getattr(self, "progress_callback", None)
             if callback is not None:
-                callback(completed, total)
-            is_last = completed >= total
+                try:
+                    callback(completed, total)
+                except Exception as exc:
+                    print(f"CooperativeLive progress_warning={type(exc).__name__}: {exc}", flush=True)
+            if self.context.tasker.stopping:
+                return True
+            is_last = total > 0 and completed >= total
 
             if should_stay_in_room(self.settings):
                 try:
@@ -1640,17 +1659,23 @@ class CooperativeLiveFlow:
                         is_last
                         and str(self.settings["member_exit_policy"]) == "reconnect"
                     ):
-                        self.dismiss_member_exit()
+                        try:
+                            self.dismiss_member_exit()
+                        except InterruptedError:
+                            raise
+                        except Exception as exc:
+                            print(
+                                "CooperativeLive post_score_warning="
+                                f"{type(exc).__name__}: {exc}",
+                                flush=True,
+                            )
                         print(
                             "CooperativeLive requested_count=complete "
                             "member_exit=no_reentry",
                             flush=True,
                         )
                         return True
-                    next_reconnects = self.handle_member_exit(reconnects)
-                    if next_reconnects is None:
-                        return False
-                    reconnects = next_reconnects
+                    recover_completed_round("已完成演出后成员退出")
                     reuse_room = False
                     continue
                 except InterruptedError:
@@ -1668,7 +1693,7 @@ class CooperativeLiveFlow:
                         f"reason={type(exc).__name__}: {exc}",
                         flush=True,
                     )
-                    self.recover_after_play_failure(
+                    recover_completed_round(
                         f"结算后未返回房间：{type(exc).__name__}: {exc}"
                     )
                     reuse_room = False
@@ -1678,10 +1703,7 @@ class CooperativeLiveFlow:
                 try:
                     self.return_to_room_selection()
                 except MemberExited:
-                    next_reconnects = self.handle_member_exit(reconnects)
-                    if next_reconnects is None:
-                        return False
-                    reconnects = next_reconnects
+                    recover_completed_round("已完成演出后成员退出")
                 except InterruptedError:
                     raise
                 except Exception as exc:
@@ -1692,7 +1714,7 @@ class CooperativeLiveFlow:
                         f"reason={type(exc).__name__}: {exc}",
                         flush=True,
                     )
-                    self.recover_after_play_failure(
+                    recover_completed_round(
                         f"结算后未返回房间：{type(exc).__name__}: {exc}"
                     )
                 reuse_room = False
@@ -1794,11 +1816,13 @@ class CooperativeLiveFinalize(CustomAction):
                     flush=True,
                 )
                 return True
-            return CommonRecover().run(context, argv)
+            if not CommonRecover().run(context, argv):
+                print("CooperativeLive finalize_warning=演出已完成，主页恢复失败不终止任务", flush=True)
+            return True
         except Exception as exc:
             if context.tasker.stopping:
                 return True
             reason = f"协力演出结束导航失败：{type(exc).__name__}: {exc}"
-            record_failure_reason(reason)
             traceback.print_exc()
-            return False
+            print(f"CooperativeLive finalize_warning={reason}", flush=True)
+            return True
