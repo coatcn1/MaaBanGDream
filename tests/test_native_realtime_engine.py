@@ -852,6 +852,48 @@ def test_fes_transition_tail_rejected_by_settle():
     assert report["photogate_settle_pending"] is False
 
 
+def test_fes_settle_accepts_travelling_slide_without_reject():
+    # 真机 773 实锤：双滑条首音在判定带上平移上百帧才离场，8 帧“回不去”
+    # 会把真滑条当转场构件拒满 60 次、photogate 拖 27s 锚点错位。滞留区域
+    # 质心位移 ≥ 阈值即行进音符，当场锚定候选帧、不等离场也不拒。
+    gate = NativeStartPhotogate(
+        stable_duration_ms=250.0,
+        grace_ms=0.0,
+        change_threshold=3.0,
+        latency_ms=190.0,
+        mode="fes-playfield-intro",
+        block_broad_change=True,
+        playfield_detector=lambda _image: True,
+    )
+    stable = np.full((720, 1280, 3), 30, dtype=np.uint8)
+
+    for index in range(17):
+        assert gate.observe(stable, index / 60.0) is None
+    assert gate.frozen is True
+
+    def slide(offset: int) -> np.ndarray:
+        frame = stable.copy()
+        frame[510:536, 600 + offset: 760 + offset, :] = 75
+        return frame
+
+    # 首音（滑条头）入带：prev 已武装 → 结构候选挂起退场验证。
+    assert gate.observe(slide(0), 20 / 60.0) is None
+    assert gate.report()["photogate_settle_pending"] is True
+
+    # 滑条随后逐帧平移：滞留区域质心位移，不等离场即锚定候选帧。
+    anchor = None
+    for step in range(1, 6):
+        anchor = gate.observe(slide(step * 5), (20 + step) / 60.0)
+        if anchor is not None:
+            break
+    assert anchor is not None, "行进滑条必须被接受而非等离场超时拒"
+    assert gate.triggered is True
+    assert gate.settle_rejected_events == 0
+    last = gate.report()["photogate_events"][-1]
+    assert last["event"] == "trigger"
+    assert last["settle_via"] == "travelling"
+
+
 def test_fes_photogate_direct_suppression_bails_out_at_cap():
     gate = NativeStartPhotogate(
         stable_duration_ms=250.0,

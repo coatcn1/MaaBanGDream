@@ -226,11 +226,22 @@ class NativeStartPhotogate:
     # 后 score=49.66 假触发，比真首音早 0.85s，全部按键落空清血）。
     # 音符是“出现又退场”的瞬态：候选帧先挂起，连续
     # _SETTLE_SETTLE_FRAMES 帧“帧间安静 且 判定带回到候选前外观”才提交
-    # 锚点；_SETTLE_TIMEOUT_FRAMES 帧内回不去说明是转场构件赖着不走，
-    # 计数后重基线继续等。提交最迟约 5 帧（约 83ms），仍早于首拍 due
+    # 锚点；连续 _SETTLE_TIMEOUT_FRAMES 个静置帧仍回不去说明是转场构件赖着
+    # 不走，计数后重基线继续等。提交最迟约 5 帧（约 83ms），仍早于首拍 due
     # （trigger+190ms−offset），不挤压输入调度。
+    # 行进音符例外（真机 773 实锤）：滑条/密集首音要在判定带上平移上百帧才
+    # 离场，“回不去”≠构件。均值 change_score 是带均值 f2f、位置无关测不出
+    # 平移，故改用滞留区域质心位移判定：位移 ≥ _SETTLE_SHIFT_PX 即行进音符，
+    # 当场锚定候选帧（等离场才锚会让锚点落后行进时长、把行进段当过期键冲进
+    # native）；质心静置满窗才是构件拒。773 此前 8 帧总超时把双滑条首音拒满
+    # 60 次撞保险丝、photogate 拖 27s 锚点错位 → 不读谱+胡乱打+归零不跳同源。
     _SETTLE_SETTLE_FRAMES = 2
     _SETTLE_TIMEOUT_FRAMES = 8
+    # 质心位移阈值（px）：静置构件滞留区域逐帧完全相同、质心位移 0（45 列
+    # 阈值把噪声挡在区域外），滑条约 1.2px/帧、8 帧累计 ~9.6px，阈值 4px 在
+    # 两者间留足余量。总帧背带防任何病态候选挂死（宁可早锚不许挂死）。
+    _SETTLE_SHIFT_PX = 4.0
+    _SETTLE_MAX_FRAMES = 60
     # “回到候选前外观”：逐列 L1 变化 ≥ 列阈值的残留列数 ≤ 容差才算
     # 回去（音符残留/转场构件占几十到上百列，静态噪声只有零星几列）。
     _SETTLE_LINGER_COLUMNS = 8
@@ -313,6 +324,8 @@ class NativeStartPhotogate:
         self._pre_candidate_columns: np.ndarray | None = None
         self._settle_frames_seen = 0
         self._settle_pass_streak = 0
+        self._settle_still_frames = 0
+        self._settle_shift_start: float | None = None
         self.settle_rejected_events = 0
         self.shape_rejected_events = 0
         self._last_columns: np.ndarray | None = None
@@ -348,7 +361,7 @@ class NativeStartPhotogate:
         self._prepare_popup_active = False
         self.prepare_popup_frames = 0
         self.prepare_popup_blocked_events = 0
-        self._significant_events: deque[dict[str, object]] = deque(maxlen=32)
+        self._significant_events: deque[dict[str, object]] = deque(maxlen=128)
 
     def _reset_band_state(self) -> None:
         """演奏场尚未成立或短暂消失时，丢弃此前加载页颜色基线。"""
@@ -372,6 +385,8 @@ class NativeStartPhotogate:
         self._pre_candidate_columns = None
         self._settle_frames_seen = 0
         self._settle_pass_streak = 0
+        self._settle_still_frames = 0
+        self._settle_shift_start = None
 
     def _fuse_exhausted(self) -> bool:
         """任一保险丝熔断即放弃验证直接提交：宁可早锚，不许挂死。"""
@@ -595,33 +610,53 @@ class NativeStartPhotogate:
             assert self._pending_trigger_source is not None
             assert self._pending_trigger_score is not None
             self._settle_frames_seen += 1
-            lingering_columns = int(
-                (
-                    np.abs(
-                        current_columns - self._pre_candidate_columns
-                    ).sum(axis=1)
-                    >= self._BROAD_COLUMN_MIN
-                ).sum()
+            lingering_mask = (
+                np.abs(
+                    current_columns - self._pre_candidate_columns
+                ).sum(axis=1)
+                >= self._BROAD_COLUMN_MIN
             )
-            if (
+            lingering_columns = int(lingering_mask.sum())
+            returned = (
                 change_score < self._change_threshold
                 and lingering_columns <= self._SETTLE_LINGER_COLUMNS
-            ):
+            )
+            travelling = False
+            if returned:
+                # 音符已离场、判定带回候选前外观：确认真音符（单音等瞬态）。
                 self._settle_pass_streak += 1
             else:
                 self._settle_pass_streak = 0
+                if lingering_columns > 0:
+                    centroid = float(np.nonzero(lingering_mask)[0].mean())
+                    if self._settle_shift_start is None:
+                        self._settle_shift_start = centroid
+                        net_shift = 0.0
+                    else:
+                        net_shift = abs(centroid - self._settle_shift_start)
+                    if net_shift >= self._SETTLE_SHIFT_PX:
+                        # 滞留区域质心已位移 = 行进音符（滑条平移/密集接续）。
+                        # 均值 change_score 位置无关测不出平移，故用质心位移；
+                        # 当场锚定候选帧、不等离场。真机 773 双滑条首音此前被
+                        # 8 帧总超时拒满 60 次、photogate 拖 27s 锚点错位。
+                        travelling = True
+                    else:
+                        self._settle_still_frames += 1
+                else:
+                    self._settle_still_frames += 1
             settled = self._settle_pass_streak >= self._SETTLE_SETTLE_FRAMES
             timed_out = (
-                self._settle_frames_seen >= self._SETTLE_TIMEOUT_FRAMES
+                self._settle_still_frames >= self._SETTLE_TIMEOUT_FRAMES
+                or self._settle_frames_seen >= self._SETTLE_MAX_FRAMES
             )
-            if settled or timed_out:
+            if settled or travelling or timed_out:
                 pending_s = self._pending_trigger_s
                 pending_source = self._pending_trigger_source
                 pending_score = self._pending_trigger_score
                 pending_frame_s = self._pending_candidate_frame_s
                 settle_frames_seen = self._settle_frames_seen
                 self._clear_pending_candidate()
-                if settled:
+                if settled or travelling:
                     self.triggered = True
                     self.triggered_at_s = pending_frame_s
                     self.trigger_score = pending_score
@@ -631,13 +666,14 @@ class NativeStartPhotogate:
                         frame_s,
                         pending_score,
                         settle_frames=settle_frames_seen,
+                        settle_via=("departed" if settled else "travelling"),
                     )
                     self._previous_change = change_score
                     self._previous_frame_s = frame_s
                     self._last_color = current
                     self._last_columns = current_columns
                     return pending_s + self._latency_s
-                # 超时未退回候选前外观：判为转场构件假候选，吸收当前
+                # 静置满窗未回候选前外观（转场构件）或总帧背带：吸收当前
                 # 外观为新基线后继续等待，真首音会在新外观上正常通过。
                 self.settle_rejected_events += 1
                 self._record_event(
@@ -877,6 +913,8 @@ class NativeStartPhotogate:
                     self._pre_candidate_columns = self._last_columns
                     self._settle_frames_seen = 0
                     self._settle_pass_streak = 0
+                    self._settle_still_frames = 0
+                    self._settle_shift_start = None
                     self._record_event(
                         "candidate-settle",
                         frame_s,
