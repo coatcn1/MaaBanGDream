@@ -51,6 +51,8 @@ class EngineStats:
     life_depleted: bool = False
     life_failed: bool = False
     jump_requested: bool = False
+    # 并发封面（fes）：首拍锚点帧上产出的最终封面裁决结果；非并发路径为 None。
+    final_cover_outcome: object = None
     timing_feedback_fast: int = 0
     timing_feedback_slow: int = 0
     initial_timing_offset_ms: int = 0
@@ -239,6 +241,8 @@ class RealtimeEngine:
         touch_reset_drop_threshold: int = 180,
         touch_reset_drop_window_seconds: float = 2.0,
         startup_timeout_seconds: float = 20.0,
+        final_cover_observer: Callable[[object], None] | None = None,
+        final_cover_decider: Callable[[object, float], object] | None = None,
     ) -> EngineStats:
         if duration_seconds is not None and not 1 <= duration_seconds <= 600:
             raise ValueError("duration_seconds 必须在 1..600 之间")
@@ -267,6 +271,7 @@ class RealtimeEngine:
         life_depleted = False
         life_failed = False
         jump_requested = False
+        final_cover_outcome = None
         startup_timed_out = False
         touch_resets = 0
         last_touch_reset_at = float("-inf")
@@ -443,6 +448,7 @@ class RealtimeEngine:
                 life_depleted=life_depleted,
                 life_failed=life_failed,
                 jump_requested=jump_requested,
+                final_cover_outcome=final_cover_outcome,
                 timing_feedback_fast=(
                     self.timing_controller.fast_samples
                     if self.timing_controller is not None else 0
@@ -608,6 +614,11 @@ class RealtimeEngine:
                         )
                     first_action_anchor = observe_start(image, now)
                     if first_action_anchor is None:
+                        if final_cover_observer is not None and frames % 4 == 0:
+                            # 并发封面：photogate 等待段按约 15Hz 把帧交给
+                            # 最终封面观察者，卡片展示窗口被高帧率等待段
+                            # 完整覆盖，谱面预加载不再被阻塞等待卡住。
+                            final_cover_observer(image)
                         frames += 1
                         if now - started_at >= startup_timeout_seconds:
                             startup_timed_out = True
@@ -620,6 +631,10 @@ class RealtimeEngine:
                         # 触发前保持目标高帧率，只做截图和 photogate；不得
                         # 启动 Legacy detector/planner/touch 或生命监控。
                         continue
+                    if final_cover_decider is not None:
+                        # 并发封面裁决：必须在 start()（首拍可派发）之前
+                        # 完成，绝不带未裁决的封面身份开火。
+                        final_cover_outcome = final_cover_decider(image, now)
                     start_native = getattr(self.native_backend, "start", None)
                     if start_native is None:
                         raise RuntimeError("Native 后端缺少 start() 会话接口")
@@ -733,8 +748,8 @@ class RealtimeEngine:
                         if status is LifeStatus.DEAD:
                             life_depleted = True
                             if on_life_depleted is not None:
-                                # 协力“断网跳车”：生命归零立即请求跳出演奏
-                                # 循环，由外层执行跳车流程。回调只触发一次，
+                                # “断网跳车”（协力/Fes）：生命归零立即请求
+                                # 跳出演奏循环，由外层执行跳车收尾。回调只触发一次，
                                 # 随后终止本局，绝不继续向判定线发送按压。
                                 if not jump_requested:
                                     jump_requested = True

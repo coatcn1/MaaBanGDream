@@ -104,6 +104,34 @@ def engine_from_native_flag(native_realtime_enabled: object) -> str:
     return "native" if bool(native_realtime_enabled) else "legacy"
 
 
+def song_timing_offset_ms(
+    base_ms: int,
+    runtime_options: dict[str, Any],
+    chart_path: str | Path | None,
+) -> int:
+    """按 bestdori 曲目 id 覆盖 timing offset（逐曲时基/首音类型差）。
+
+    光门把谱面第一动作锚到首音视觉时刻，后续按键全用相对间隔，因此
+    谱面整体平移会被首音锚吸收成空操作；逐曲常数差只能靠逐曲 offset
+    吸收。键为谱面路径父目录名（bestdori 曲目 id），未命中时返回基值。
+    """
+    if chart_path is None:
+        return int(base_ms)
+    overrides = runtime_options.get("song_timing_overrides")
+    if not isinstance(overrides, dict) or not overrides:
+        return int(base_ms)
+    try:
+        song_id = Path(chart_path).parent.name
+    except (TypeError, ValueError, AttributeError):
+        return int(base_ms)
+    if not song_id.isdigit():
+        return int(base_ms)
+    override = overrides.get(song_id)
+    if override is None:
+        return int(base_ms)
+    return int(override)
+
+
 @dataclass(frozen=True)
 class RuntimeSettings:
     target_fps: int
@@ -131,6 +159,10 @@ class RealtimeProfileStore:
         "native_realtime_enabled": False,
         "cooperative_jitter_enabled": True,
         "play_failure_retry_count": 1,
+        # 逐曲 timing offset 覆盖（键=bestdori 曲目 id）。光门把谱面第一
+        # 动作锚到首音视觉时刻，逐曲常数时基差只能靠逐曲 offset 吸收；
+        # 平移谱面会被首音锚吸收成空操作，因此覆盖只放在这里。
+        "song_timing_overrides": {},
         "calibration_note_speeds": {
             "Easy": 2.0,
             "Normal": 2.0,
@@ -258,6 +290,30 @@ class RealtimeProfileStore:
         )
         if not isinstance(cooperative_jitter_enabled, bool):
             raise ValueError("cooperative_jitter_enabled 必须是布尔值")
+        song_overrides_raw = options.get("song_timing_overrides", {})
+        if not isinstance(song_overrides_raw, dict):
+            raise ValueError("song_timing_overrides 必须是 JSON 对象")
+        song_timing_overrides: dict[str, int] = {}
+        for song_id, offset_raw in song_overrides_raw.items():
+            if not str(song_id).isdigit():
+                raise ValueError(
+                    f"song_timing_overrides 键必须是 bestdori 曲目 id: {song_id!r}"
+                )
+            if isinstance(offset_raw, bool):
+                raise ValueError(
+                    f"song_timing_overrides.{song_id} 必须是 -250..250 的整数"
+                )
+            try:
+                override_ms = int(offset_raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"song_timing_overrides.{song_id} 必须是 -250..250 的整数"
+                ) from exc
+            if offset_raw != override_ms or not -250 <= override_ms <= 250:
+                raise ValueError(
+                    f"song_timing_overrides.{song_id} 必须是 -250..250 的整数"
+                )
+            song_timing_overrides[str(song_id)] = override_ms
         retry_count_raw = options.get("play_failure_retry_count", 1)
         if isinstance(retry_count_raw, bool):
             raise ValueError("play_failure_retry_count 必须是 0..99 的整数")
@@ -300,6 +356,7 @@ class RealtimeProfileStore:
             "native_realtime_enabled": native_realtime_enabled,
             "cooperative_jitter_enabled": cooperative_jitter_enabled,
             "play_failure_retry_count": play_failure_retry_count,
+            "song_timing_overrides": song_timing_overrides,
             "calibration_note_speeds": speeds,
         }
 
@@ -307,7 +364,15 @@ class RealtimeProfileStore:
         return dict(self._read_state()["runtime_options"])
 
     def update_runtime_options(self, options: dict[str, Any]) -> dict[str, Any]:
-        validated = self._validated_runtime_options(options)
+        incoming = dict(options)
+        if "song_timing_overrides" not in incoming:
+            # 逐曲覆盖是手工维护数据，UI 只回传已知开关；缺键时保留现值。
+            incoming["song_timing_overrides"] = (
+                self._read_state()["runtime_options"].get(
+                    "song_timing_overrides", {}
+                )
+            )
+        validated = self._validated_runtime_options(incoming)
         state = self._read_state()
         state["runtime_options"] = validated
         self._write_state(state)

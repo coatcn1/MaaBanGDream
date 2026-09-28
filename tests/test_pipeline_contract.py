@@ -18,7 +18,7 @@ def test_all_count_inputs_accept_zero_and_reject_out_of_range():
     import re
 
     options = load(ROOT / "interface.json")["option"]
-    for name in ("AutoLiveCount", "RealtimeLiveCount", "ChallengeCount", "CooperativeCount", "MedleyCount"):
+    for name in ("AutoLiveCount", "RealtimeLiveCount", "ChallengeCount", "CooperativeCount", "MedleyCount", "FesCount"):
         pattern = options[name]["inputs"][0]["verify"]
         for count in range(1001):
             expected = count <= 999 and (name != "MedleyCount" or count % 3 == 0)
@@ -43,7 +43,7 @@ def test_interface_references_existing_entry_and_resource():
     assert [task["name"] for task in interface["task"]] == [
         "AutoLive", "RealtimeLive", "CooperativeLive", "ContinuousRealtimeLive",
         "RealtimeCalibration", "DailyFreeGacha", "ChallengeLive",
-        "MedleyLive", "ManualFlowRecording",
+        "MedleyLive", "FesLive", "ManualFlowRecording",
     ]
     assert {
         task["name"]: task["label"] for task in interface["task"]
@@ -56,6 +56,7 @@ def test_interface_references_existing_entry_and_resource():
         "DailyFreeGacha": "🎁 每日免费抽卡",
         "ChallengeLive": "🏆 挑战演出",
         "MedleyLive": "🎼 组曲演奏",
+        "FesLive": "🎪 团队演出 Fes",
         "ManualFlowRecording": "📹 手动流程录像",
     }
     assert interface["resource"][0]["path"] == ["./resource"]
@@ -164,6 +165,7 @@ def test_all_home_live_click_markers_use_the_validated_threshold():
         "realtime_multi_live.json",
         "cooperative_live.json",
         "challenge_live.json",
+        "fes_live.json",
     )):
         nodes = json.loads(path.read_text(encoding="utf-8"))
         markers = [
@@ -1001,6 +1003,13 @@ def test_task_entries_bootstrap_before_round_execution():
             "ChallengeProcessConflictGuard",
             "ChallengeRecover",
             "ChallengeSpeedSettingsGate",
+        ),
+        (
+            "fes_live.json",
+            "FesLive",
+            "FesProcessConflictGuard",
+            "FesRecover",
+            "FesEntryConfigure",
         ),
     )
     for filename, entry_name, guard_name, recover_name, gate_name in entries:

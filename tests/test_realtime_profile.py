@@ -65,6 +65,60 @@ def test_every_environment_field_invalidates_profile(tmp_path, field, value):
         )
 
 
+def test_runtime_options_song_timing_overrides_roundtrip(tmp_path):
+    store = RealtimeProfileStore(tmp_path)
+    default = store.runtime_options()
+    assert default["song_timing_overrides"] == {}
+
+    store.update_runtime_options({
+        **default,
+        "song_timing_overrides": {"773": 88},
+    })
+    assert store.runtime_options()["song_timing_overrides"] == {"773": 88}
+
+    # UI/调用方未携带该键时不得清空手工维护的逐曲覆盖。
+    options = store.runtime_options()
+    options.pop("song_timing_overrides")
+    store.update_runtime_options(options)
+    assert store.runtime_options()["song_timing_overrides"] == {"773": 88}
+
+
+def test_runtime_options_song_timing_overrides_validation(tmp_path):
+    store = RealtimeProfileStore(tmp_path)
+    base = store.runtime_options()
+
+    with pytest.raises(ValueError, match="JSON 对象"):
+        store.update_runtime_options(
+            {**base, "song_timing_overrides": []}
+        )
+    with pytest.raises(ValueError, match="曲目 id"):
+        store.update_runtime_options(
+            {**base, "song_timing_overrides": {"expert": 88}}
+        )
+    with pytest.raises(ValueError, match="-250..250"):
+        store.update_runtime_options(
+            {**base, "song_timing_overrides": {"773": 300}}
+        )
+    with pytest.raises(ValueError, match="-250..250"):
+        store.update_runtime_options(
+            {**base, "song_timing_overrides": {"773": "88"}}
+        )
+
+
+def test_song_timing_offset_ms_applies_per_chart_override(tmp_path):
+    from agent.realtime.profile_store import song_timing_offset_ms
+
+    options = {"song_timing_overrides": {"773": 88}}
+    chart = tmp_path / "charts" / "bestdori" / "773" / "expert.json"
+    other = tmp_path / "charts" / "bestdori" / "508" / "expert.json"
+
+    assert song_timing_offset_ms(56, options, str(chart)) == 88
+    assert song_timing_offset_ms(56, options, chart) == 88
+    assert song_timing_offset_ms(56, options, other) == 56
+    assert song_timing_offset_ms(56, options, None) == 56
+    assert song_timing_offset_ms(56, {}, chart) == 56
+
+
 def test_resolve_returns_bounded_authoritative_settings(tmp_path):
     store = RealtimeProfileStore(tmp_path)
     path = store.write(payload())

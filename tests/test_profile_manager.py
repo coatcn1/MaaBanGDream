@@ -132,6 +132,7 @@ def test_selection_state_is_written_atomically(tmp_path):
         "version": 1,
         "pinned": {"Easy": path.name},
         "runtime_options": {
+            "song_timing_overrides": {},
             "skip_process_conflict_cleanup": False,
             "skip_result_check": False,
             "note_speed_settings_enabled": True,
@@ -161,6 +162,7 @@ def test_runtime_options_default_and_atomic_update_do_not_invalidate_profile(tmp
         root=tmp_path,
     )
     assert listed["runtime_options"] == {
+        "song_timing_overrides": {},
         "skip_process_conflict_cleanup": False,
         "skip_result_check": False,
         "note_speed_settings_enabled": True,

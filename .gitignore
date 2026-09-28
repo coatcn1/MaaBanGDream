@@ -16,3 +16,5 @@ __pycache__/
 /agent/realtime/native/*.lib
 /agent/realtime/native/*.pdb
 /native/realtime/build/
+# OCR 三件套按官方约定本地获取（MaaCommonAssets），不入库。
+/resource/model/ocr/

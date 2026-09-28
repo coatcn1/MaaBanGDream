@@ -57,6 +57,45 @@ def test_ordered_startup_ignores_ready_page_until_black(monkeypatch, supply_pref
                         ["waiting-black", "waiting-black", "black-transition", "confirmed"])
 
 
+def test_final_cover_updates_helper_builds_confirmed_live_run_patch():
+    # 阻塞与并发两条路径共用的确认更新：字段必须与原内联字典逐项一致。
+    resolution = FinalCoverResolution(
+        confirmation=FinalCoverConfirmation(
+            song_id="song-jacket-phash-v2-0000000000000042",
+            song_id_method="song-jacket-phash-v2",
+            bestdori_song_id=706,
+        ),
+        selection=SimpleNamespace(level=25, path="bestdori/706/expert.json"),
+        observed_title=None,
+        observed_title_confidence=0.0,
+    )
+    updates = profile_play_action._final_cover_updates(resolution)
+    assert updates["song_id"] == "song-jacket-phash-v2-0000000000000042"
+    assert updates["song_id_method"] == "song-jacket-phash-v2"
+    assert updates["final_cover_confirmed"] is True
+    assert updates["final_cover_song_id"] == "song-jacket-phash-v2-0000000000000042"
+    assert updates["final_cover_status"] == "confirmed"
+    assert updates["final_cover_reason"] is None
+    assert updates["prepared_for_play"] is True
+    assert updates["song_level"] == 25
+    assert updates["preparation_title_pending_final_cover"] is False
+    assert updates["preparation_identity_pending_final_cover"] is False
+    assert updates["preparation_identity_pending_reason"] is None
+    assert updates["startup_final_cover_image"] is None
+    assert updates["startup_final_cover_resolution"] is None
+    assert "song_title" not in updates
+
+    with_title = FinalCoverResolution(
+        confirmation=resolution.confirmation,
+        selection=resolution.selection,
+        observed_title="FIVE as ONE",
+        observed_title_confidence=0.93,
+    )
+    titled = profile_play_action._final_cover_updates(with_title)
+    assert titled["song_title"] == "FIVE as ONE"
+    assert titled["song_title_confidence"] == 0.93
+
+
 def test_ordered_startup_never_degrades_or_completes_without_black(monkeypatch):
     ready, song_id = final_cover_frame()
     clock = [0.0]

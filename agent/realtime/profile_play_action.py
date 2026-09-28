@@ -48,6 +48,7 @@ from .profile_store import (
     RealtimeProfileStore,
     RuntimeSettings,
     engine_from_native_flag,
+    song_timing_offset_ms,
 )
 from .rehearsal_action import frame_resolution
 from .result_navigation import (
@@ -284,6 +285,34 @@ class FinalCoverWaitOutcome:
     frames: int
     playfield_seen: bool
     image: object | None = None
+
+
+def _final_cover_updates(resolution: FinalCoverResolution) -> dict:
+    """最终封面确认后的 live_run 原子更新（阻塞与并发两条路径共用）。"""
+    confirmation = resolution.confirmation
+    updates = {
+        "song_id": confirmation.song_id,
+        "song_id_method": confirmation.song_id_method,
+        "final_cover_confirmed": True,
+        "final_cover_song_id": confirmation.song_id,
+        "final_cover_status": "confirmed",
+        "final_cover_reason": None,
+        "prepared_for_play": True,
+        "song_level": resolution.selection.level,
+        "preparation_title_pending_final_cover": False,
+        "preparation_identity_pending_final_cover": False,
+        "preparation_identity_pending_reason": None,
+        "startup_final_cover_image": None,
+        "startup_final_cover_resolution": None,
+    }
+    if resolution.observed_title:
+        # 组曲准备页读不到标题时，必须把最终歌曲信息页实际 OCR 到的标题
+        # 交还外层会话，不能只保存曲库标准标题。
+        updates.update({
+            "song_title": resolution.observed_title,
+            "song_title_confidence": resolution.observed_title_confidence,
+        })
+    return updates
 
 
 BLACK_BURST_SECONDS = 0.6
@@ -616,6 +645,7 @@ _RECORDING_KIND_BY_RUN_MODE = {
     "calibration-formal": "calibration-formal",
     "continuous": "continuous",
     "medley": "medley",
+    "fes": "fes",
 }
 
 
@@ -2073,6 +2103,11 @@ class RealtimeProfilePlay(CustomAction):
                     f"mode={'video' if debug_recording else 'trace-only'}",
                     flush=True,
                 )
+            # 并发最终封面的引擎钩子：非 fes / 非并发路径保持 None，
+            # engine.run 的观察者与裁决器退化为无操作。
+            racing_cover = False
+            cover_observer = None
+            cover_decider = None
             if final_cover_required:
                 # 协力准备页的歌曲身份可能受随机选曲和网络阶段影响，最终封面
                 # 必须独立解析谱面，不能被早先的候选结果锁死。
@@ -2126,36 +2161,187 @@ class RealtimeProfilePlay(CustomAction):
                         )
                         cover_checkpoint_stages.add(stage)
 
-                cover_outcome = wait_for_final_cover(
-                    controller,
-                    live_run,
-                    cover_selection,
-                    difficulty,
-                    lambda: context.tasker.stopping,
-                    repository=(
-                        LocalChartRepository(
-                            PROJECT_ROOT / "resource" / "charts"
+                # 并发最终封面（fes）：photogate 等待段按约 15Hz 观察封面，
+                # 首拍锚点帧一次性裁决，谱面预加载与 Native 预武装不再被
+                # 封面阻塞等待卡住（实测约 5.7 秒）。仅在准备页已解出谱面、
+                # 无 pending 证据、Native 请求可用且没有启动期已确认封面时
+                # 启用；其余场景维持原阻塞语义。
+                racing_cover = bool(params.get("final_cover_concurrent", False))
+                racing_cover = racing_cover and native_requested
+                racing_cover = racing_cover and not ordered_startup
+                racing_cover = racing_cover and not preparation_final_cover_required
+                racing_cover = racing_cover and not preparation_title_pending_final_cover
+                racing_cover = racing_cover and not preparation_identity_pending_final_cover
+                racing_cover = racing_cover and selected_chart is not None
+                racing_cover = racing_cover and cover_selection is not None
+                racing_cover = racing_cover and startup_cover_image is None
+                racing_cover = racing_cover and startup_cover_resolution is None
+                cover_resolver = None
+                cover_outcome = None
+                if racing_cover:
+                    # 与 wait_for_final_cover 构造同参；前置条件保证
+                    # selection 非空（门控路径）且无 pending 证据。
+                    cover_resolver = FinalCoverResolver(
+                        difficulty=difficulty,
+                        observed_level=live_run.song_level,
+                        observed_title=live_run.song_title,
+                        observed_title_confidence=(
+                            float(getattr(live_run, "song_title_confidence", None))
+                            if getattr(
+                                live_run, "song_title_confidence", None
+                            ) is not None
+                            else 0.0
+                        ),
+                        selection=cover_selection,
+                        repository=None,
+                        require_observed_title=require_final_cover_title,
+                        allow_missing_level=False,
+                    )
+                    evidence_reason = cover_resolver.evidence_reason()
+                    if evidence_reason is not None:
+                        raise RuntimeError(
+                            f"最终封面确认缺少准备页证据：{evidence_reason}"
                         )
-                        if cover_selection is None else None
-                    ),
-                    timeout_seconds=float(
-                        params.get("final_cover_timeout_seconds", 60.0)
-                    ),
-                    observer=(
-                        observe_final_cover if recorder is not None else None
-                    ),
-                    fallback_selection_available=selected_chart is not None,
-                    require_black_transition=ordered_startup,
-                    initial_image=(
-                        startup_cover_image
-                        if startup_cover_image is not None
-                        else (preflight_image if ordered_startup else None)
-                    ),
-                    initial_resolution=startup_cover_resolution,
-                    require_observed_title=require_final_cover_title,
-                    ignore_preparation_level=preparation_identity_pending_final_cover,
-                )
-                if recorder is not None and cover_outcome.image is not None:
+                    require_black = bool(ordered_startup)
+                    cover_state = {
+                        "resolution": None,
+                        "playfield_streak": 0,
+                        "black_seen": False,
+                        "confirm_image": None,
+                        "confirm_frames": 0,
+                    }
+                    playfield_detector = PlayfieldDetector()
+
+                    def _cover_report(image, now_mono, status, reason) -> None:
+                        if recorder is None:
+                            return
+                        observe_final_cover(
+                            image,
+                            now_mono,
+                            {
+                                "event": "final_cover_observation",
+                                "status": status,
+                                "frames": cover_resolver.frames,
+                                "playfield_streak": cover_state["playfield_streak"],
+                                "reason": reason,
+                            },
+                        )
+
+                    def _cover_observe(image, now_mono):
+                        if cover_state["resolution"] is not None:
+                            # 确认是粘性的：首拍锚点时封面已切走，不能把
+                            # 已确认结果覆盖回未确认。
+                            return cover_state["resolution"]
+                        if _frame_is_black(image):
+                            cover_state["black_seen"] = True
+                            if require_black:
+                                _cover_report(
+                                    image, now_mono,
+                                    "black-transition",
+                                    "等待全黑后的歌曲封面",
+                                )
+                                return None
+                        if require_black and not cover_state["black_seen"]:
+                            _cover_report(
+                                image, now_mono,
+                                "waiting-black",
+                                "尚未观察到全黑开演转场",
+                            )
+                            return None
+                        resolution = cover_resolver.observe(image)
+                        cover_state["resolution"] = resolution
+                        cover_state["playfield_streak"] = (
+                            cover_state["playfield_streak"] + 1
+                            if playfield_detector(image) else 0
+                        )
+                        _cover_report(
+                            image,
+                            now_mono,
+                            "confirmed" if resolution is not None else "observing",
+                            cover_resolver.last_reason,
+                        )
+                        if resolution is not None:
+                            cover_state["confirm_image"] = image
+                            cover_state["confirm_frames"] = cover_resolver.frames
+                            print(
+                                "RealtimeFinalCover confirmed=true "
+                                "bestdori_song_id="
+                                f"{resolution.confirmation.bestdori_song_id} "
+                                f"frames={cover_resolver.frames} source=concurrent",
+                                flush=True,
+                            )
+                        return resolution
+
+                    def cover_observer(image) -> None:
+                        # 引擎 photogate 等待段每 4 帧调用一次（约 15Hz）。
+                        _cover_observe(image, time.monotonic())
+
+                    def cover_decider(image, now_mono):
+                        resolution = _cover_observe(image, now_mono)
+                        if resolution is not None:
+                            return FinalCoverWaitOutcome(
+                                status="confirmed",
+                                resolution=resolution,
+                                reason="confirmed",
+                                frames=cover_state["confirm_frames"],
+                                playfield_seen=cover_state["playfield_streak"] > 0,
+                                image=cover_state["confirm_image"],
+                            )
+                        if require_final_cover_title:
+                            raise RuntimeError(
+                                "最终封面页标题未确认，已在发送演奏触控前停止："
+                                f"{cover_resolver.last_reason}"
+                            )
+                        status = (
+                            "degraded-selected-chart"
+                            if cover_selection is not None
+                            else "degraded-visual-legacy"
+                        )
+                        print(
+                            "RealtimeFinalCover confirmed=false fallback="
+                            f"{status} frames={cover_resolver.frames} "
+                            f"reason={cover_resolver.last_reason} source=concurrent",
+                            flush=True,
+                        )
+                        return FinalCoverWaitOutcome(
+                            status=status,
+                            resolution=None,
+                            reason=cover_resolver.last_reason,
+                            frames=cover_resolver.frames,
+                            playfield_seen=cover_state["playfield_streak"] > 0,
+                            image=image,
+                        )
+                if not racing_cover:
+                    cover_outcome = wait_for_final_cover(
+                        controller,
+                        live_run,
+                        cover_selection,
+                        difficulty,
+                        lambda: context.tasker.stopping,
+                        repository=(
+                            LocalChartRepository(
+                                PROJECT_ROOT / "resource" / "charts"
+                            )
+                            if cover_selection is None else None
+                        ),
+                        timeout_seconds=float(
+                            params.get("final_cover_timeout_seconds", 60.0)
+                        ),
+                        observer=(
+                            observe_final_cover if recorder is not None else None
+                        ),
+                        fallback_selection_available=selected_chart is not None,
+                        require_black_transition=ordered_startup,
+                        initial_image=(
+                            startup_cover_image
+                            if startup_cover_image is not None
+                            else (preflight_image if ordered_startup else None)
+                        ),
+                        initial_resolution=startup_cover_resolution,
+                        require_observed_title=require_final_cover_title,
+                        ignore_preparation_level=preparation_identity_pending_final_cover,
+                    )
+                if cover_outcome is not None and recorder is not None and cover_outcome.image is not None:
                     _recorder_checkpoint(
                         recorder,
                         cover_outcome.image,
@@ -2167,40 +2353,17 @@ class RealtimeProfilePlay(CustomAction):
                             "playfield_seen": cover_outcome.playfield_seen,
                         },
                     )
-                if cover_outcome.resolution is not None:
-                    confirmation = cover_outcome.resolution.confirmation
+                if cover_outcome is not None and cover_outcome.resolution is not None:
                     selected_chart = cover_outcome.resolution.selection
                     chart_timeline = selected_chart.timeline
                     if special_requires_chart:
                         # 最终封面确认得到的 Special 谱面同样必须驱动 Legacy
                         # 方向语义，不能退回无方向的通用视觉 FLICK。
                         chart_prediction_enabled = True
-                    cover_updates = {
-                        "song_id": confirmation.song_id,
-                        "song_id_method": confirmation.song_id_method,
-                        "final_cover_confirmed": True,
-                        "final_cover_song_id": confirmation.song_id,
-                        "final_cover_status": "confirmed",
-                        "final_cover_reason": None,
-                        "prepared_for_play": True,
-                        "song_level": selected_chart.level,
-                        "preparation_title_pending_final_cover": False,
-                        "preparation_identity_pending_final_cover": False,
-                        "preparation_identity_pending_reason": None,
-                        "startup_final_cover_image": None,
-                        "startup_final_cover_resolution": None,
-                    }
-                    if cover_outcome.resolution.observed_title:
-                        # 组曲准备页读不到标题时，必须把最终歌曲信息页实际
-                        # OCR 到的标题交还外层会话，不能只保存曲库标准标题。
-                        cover_updates.update({
-                            "song_title": cover_outcome.resolution.observed_title,
-                            "song_title_confidence": (
-                                cover_outcome.resolution.observed_title_confidence
-                            ),
-                        })
-                    live_run = update_live_run(**cover_updates)
-                else:
+                    live_run = update_live_run(
+                        **_final_cover_updates(cover_outcome.resolution)
+                    )
+                elif cover_outcome is not None:
                     if preparation_final_cover_required:
                         if native_requested:
                             discard_prearmed_backend(
@@ -2404,6 +2567,22 @@ class RealtimeProfilePlay(CustomAction):
         touch = None
         native_backend = None
         try:
+            base_timing_offset_ms = int(timing_offset_ms)
+            timing_offset_ms = song_timing_offset_ms(
+                timing_offset_ms,
+                runtime_options,
+                None if selected_chart is None else selected_chart.path,
+            )
+            if timing_offset_ms != base_timing_offset_ms:
+                # 逐曲覆盖必须在 native configure 与 planner 之前生效；
+                # 下方两处共用本变量，改这一处即全线生效。
+                print(
+                    "RealtimeProfilePlay song_timing_offset "
+                    f"base={base_timing_offset_ms} "
+                    f"applied={timing_offset_ms} "
+                    f"chart={selected_chart.path}",
+                    flush=True,
+                )
             if native_requested:
                 if selected_chart is None:
                     discard_prearmed_backend("profile-native-chart-missing")
@@ -2457,6 +2636,7 @@ class RealtimeProfilePlay(CustomAction):
                         mode=policy.mode,
                         stable_duration_ms=policy.stable_duration_ms,
                         grace_ms=policy.grace_ms,
+                        block_broad_change=policy.block_broad_change,
                     )
                 playfield_monitor = PlayfieldLifecycleMonitor(
                     start_gate=start_gate,
@@ -2623,7 +2803,67 @@ class RealtimeProfilePlay(CustomAction):
                     if disconnect_jump_request else None
                 ),
                 startup_timeout_seconds=startup_timeout_seconds,
+                final_cover_observer=cover_observer,
+                final_cover_decider=cover_decider,
             )
+            if racing_cover:
+                # 并发封面已在首拍派发前完成裁决；这里把与阻塞版同构的
+                # outcome 落回 live_run / 谱面状态。引擎在锚点前结束
+                # （用户停止/启动超时）时按未确认降级记录，不补确认、
+                # 不改写退出原因。
+                cover_outcome = getattr(stats, "final_cover_outcome", None)
+                if cover_outcome is None:
+                    cover_outcome = FinalCoverWaitOutcome(
+                        status="degraded-selected-chart",
+                        resolution=None,
+                        reason="引擎在首拍锚点前结束，未裁决最终封面",
+                        frames=0,
+                        playfield_seen=False,
+                        image=None,
+                    )
+                if recorder is not None and cover_outcome.image is not None:
+                    _recorder_checkpoint(
+                        recorder,
+                        cover_outcome.image,
+                        "final-cover",
+                        cover_outcome.status,
+                        details={
+                            "reason": cover_outcome.reason,
+                            "frames": cover_outcome.frames,
+                            "playfield_seen": cover_outcome.playfield_seen,
+                        },
+                    )
+                if cover_outcome.resolution is not None:
+                    selected_chart = cover_outcome.resolution.selection
+                    chart_timeline = selected_chart.timeline
+                    if special_requires_chart:
+                        # 最终封面确认得到的 Special 谱面同样必须驱动
+                        # Legacy 方向语义，不能退回无方向的通用视觉 FLICK。
+                        chart_prediction_enabled = True
+                    live_run = update_live_run(
+                        **_final_cover_updates(cover_outcome.resolution)
+                    )
+                else:
+                    # 并发前置条件保证 selected_chart 非空且无 pending：
+                    # 按保留准备页谱面的降级记录，不触发原生关闭分支。
+                    live_run = update_live_run(
+                        final_cover_confirmed=False,
+                        final_cover_song_id=None,
+                        final_cover_status=cover_outcome.status,
+                        final_cover_reason=cover_outcome.reason,
+                        prepared_for_play=selected_chart is not None,
+                        startup_final_cover_image=None,
+                        startup_final_cover_resolution=None,
+                    )
+                    print(
+                        "RealtimeProfilePlay cover_confirmation=degraded "
+                        f"fallback={cover_outcome.status} "
+                        f"reason={cover_outcome.reason}",
+                        flush=True,
+                    )
+                # 与阻塞版 2278 位点一致：进演奏后 prepared_for_play 保持
+                # 已消费状态，结果元数据不因并发路径而分叉。
+                live_run = update_live_run(prepared_for_play=False)
             if (
                 stats.completed and not stats.cleanup_failed
                 and not stats.aborted_for_life and not stats.life_failed
@@ -2856,8 +3096,8 @@ class RealtimeProfilePlay(CustomAction):
             })
 
         if stats.jump_requested:
-            # 协力“断网跳车”：本局以“请求跳车”结束，不做结算解析与退出
-            # 导航；跳车流程由外层协力流程读取 live run 信号后执行。
+            # “断网跳车”（协力/Fes）：本局以“请求跳车”结束，不做结算解析
+            # 与退出导航；外层流程读取 live run 信号后执行切桌面收尾。
             print(
                 "RealtimeProfilePlay disconnect_jump_requested=true "
                 "round_ended_early=true",

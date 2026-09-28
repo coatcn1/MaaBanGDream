@@ -29,6 +29,7 @@ import realtime.random_song_action  # noqa: F401 - registration happens at impor
 import realtime.cooperative_action  # noqa: F401 - registration happens at import time
 import realtime.medley_action  # noqa: F401 - registration happens at import time
 import realtime.daily_free_gacha  # noqa: F401 - registration happens at import time
+import realtime.fes_action  # noqa: F401 - registration happens at import time
 
 
 def main() -> None:
