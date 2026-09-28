@@ -2,7 +2,14 @@
 
 ## Unreleased
 
-- 新增「团队演出 Fes」任务骨架：interface.json 注册任务与难度/次数/诊断选项，`resource/pipeline/fes_live.json` 复用进程冲突守卫、主页恢复、流速门禁和结算上报链路；新增 `agent/realtime/fes_action.py`，演奏委托 `RealtimeProfilePlay`（`run_mode=fes`，录像前缀 `fes`）。次数 0–999、0 为无限；只有 Easy/Normal/Hard/Expert 四档难度，没有 Special。v1 只支持自动匹配入房（不创建/加入私人房间）：匹配中等待房间满员后自动进入最终确认页，OCR 点「准备完」后等全员准备或 30 秒倒计时自动开演；活动入口与多轮回主页后的重导航均按 OCR 文本「团队演出」识别。PGGBM 判定页与结算页复用既有 `collect_result` 推进。难度按钮与门禁坐标待真机 1280×720 校准，未经真机验收不得发布。
+- 新增「团队演出 Fes」任务：interface.json 注册任务与难度/次数/诊断选项，`resource/pipeline/fes_live.json` 复用进程冲突守卫、主页恢复、流速门禁和结算上报链路；新增 `agent/realtime/fes_action.py`，演奏委托 `RealtimeProfilePlay`（`run_mode=fes`，录像前缀 `fes`）。次数 0–999、0 为无限；只有 Easy/Normal/Hard/Expert 四档难度，没有 Special。v1 只支持自动匹配入房（不创建/加入私人房间）：匹配中等待房间满员后自动进入最终确认页，OCR 点「准备完」后等全员准备或 30 秒倒计时自动开演；活动入口与多轮回主页后的重导航均按 OCR 文本「团队演出」识别。PGGBM 判定页与结算页复用既有 `collect_result` 推进。难度行、准备完、中继页 OK 与设定齿轮坐标按雷电 1280×720 真机录像实测校准。
+- Fes 首音 photogate 按真机逐局证据收紧，单人/协力既有触发路径公式级不变：进场画面转场做宽列结构拦截并逐帧重基线，附 600 帧保险丝；转场尾只接受阈值下方 interpolated 上穿，压制累计 600 帧退化为直接触发；上穿需此前连续 8 帧（约 133ms）安静武装；恒噪判定带改结构主触发（40–240 列、中心距轨 ≤60px、列深 ≥45）加 prev 双态门，高变化放行、安静需武装满、抑制首帧与不足 8 帧继续压制；候选退场验证三态：离场回到候选前外观即提交（单音）、滞留区域质心位移 ≥4px 判行进音符当场锚定、静置满 8 帧判转场构件拒，shape 与 settle 拒绝累计 60 次背带提交——修复 773 双滑条首音被 8 帧总超时拒满 60 次、photogate 等待 27.1s（正常局 9.9s）的锚点错位连锁；`photogate_events` 上限 32→128 并输出 `settle_via`。
+- Fes 并发最终封面确认：photogate 等待段约 15Hz 送入增量 FinalCoverResolver，首拍锚点帧一次性裁决并严格先于 `start()` 首拍派发，确认结果粘性缓存，谱面预加载较阻塞等待提前约 5.7 秒。
+- Fes ready 等待兜底：除 OCR NOW LOADING 外增加 PlayfieldDetector 连续 2 帧演奏场确认交棒（signal=loading/field），轮询 1.0→0.5 秒并加 10 秒心跳日志，修复漏检 loading 挂死 90 秒导致引擎不接手、不读谱与归零不跳桌面。
+- Fes 生命归零自动切桌面：复用协力断网跳车引擎管线（LifeGuard 确认归零、停手、置跳车信号、跳过结算导航），只发 KEYCODE_HOME 绝不重启游戏；异常直接结束、跳车信号后禁重试与恢复、Finalize 跳过 CommonRecover 三层防护，后台现场交棒玩家手动断网，标记逐任务复位。
+- 新增逐曲 timing offset 覆盖 `song_timing_overrides`（runtime_options，键=bestdori 曲 id，范围 -250..250ms）：光门把谱面首动作锚到首音视觉时刻，逐曲常数时基差无法由全局 profile offset 吸收；真机两点标定 773 得 K=87.5。缺省为空，不改变现有行为。
+- 忽略本地 OCR 模型目录 `resource/model/ocr`（按 MaaCommonAssets 约定本地获取，不入库）；AGENTS.md 补充 Fes 模式边界。
+- 验证：`scripts/verify.ps1` 1301 passed / 11 skipped；雷电真机完成坐标校准与各轮修复验收（photogate_wait 27.1→11.8s、`settle_via=travelling`、ready `signal=field` 兜底、归零自动切桌面后任务自动停）。横跨多轨长滑条开局首音的 shape 候选识别待 debug 真帧标定，连续满额验收待补测后方可发布。
 
 ## 2026-09-17（v1.4.3）
 
