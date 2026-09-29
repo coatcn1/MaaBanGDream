@@ -16,7 +16,7 @@ from .song_identity import (
     UNKNOWN_SONG_ID,
     same_song,
 )
-from .song_title_ocr import title_similarity
+from .song_title_ocr import normalize_song_title, title_similarity
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +78,7 @@ class LocalChartRepository:
         if not str(title).strip():
             return CatalogSongResolution(None, "song title is not confirmed")
         songs = self._load_manifest()["songs"]
+        songs = _coalesce_equivalent_songs(songs)
         cover_matches = [
             song for song in songs
             if any(
@@ -162,6 +163,7 @@ class LocalChartRepository:
                     None,
                     "confirmed song id is not present in local catalog",
                 )
+        songs = _coalesce_equivalent_songs(songs)
         if title and _FULL_TITLE_PREFIX.match(re.sub(r"['\"‘’]", "", str(title))):
             # 明确读到 FULL 就是版本证据，不能被首尾噪声裁剪抹成普通版。
             songs = [song for song in songs if any(
@@ -356,6 +358,47 @@ class LocalChartRepository:
             return json.loads(path.read_text(encoding="utf-8-sig"))
         except (OSError, json.JSONDecodeError) as exc:
             raise ValueError(f"cannot read local chart data {path}: {exc}") from exc
+
+
+def _coalesce_equivalent_songs(songs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # 同名、同封面不能证明谱面相同。只接受有完整难度超集且每个重叠难度
+    # 的等级、判定数和内容 SHA 均相同的条目；保留最完整条目的真实 ID/文件。
+    groups: dict[tuple, list[dict[str, Any]]] = {}
+    for song in songs:
+        titles = tuple(sorted({
+            normalize_song_title(value) for value in song.get("titles", ())
+        }))
+        fingerprints = tuple(sorted(set(song["fingerprints"])))
+        key = (
+            (titles, fingerprints)
+            if titles and all(titles) and fingerprints
+            else (song["bestdori_song_id"],)
+        )
+        groups.setdefault(key, []).append(song)
+    result = []
+    for group in groups.values():
+        canonical = min(group, key=lambda song: (
+            -len(song["difficulties"]), song["bestdori_song_id"],
+        ))
+        entries = canonical["difficulties"]
+        compatible = bool(entries) and all(
+            bool(song["difficulties"])
+            and all(
+                difficulty in entries
+                and re.fullmatch(
+                    r"[0-9a-f]{64}", str(entry.get("chart_sha256", "")),
+                ) is not None
+                and entry.get("level") is not None
+                and all(
+                    entry.get(field) == entries[difficulty].get(field)
+                    for field in ("chart_sha256", "level", "expected_notes")
+                )
+                for difficulty, entry in song["difficulties"].items()
+            )
+            for song in group
+        )
+        result.extend([canonical] if compatible else group)
+    return result
 
 
 def _chart_sha256(chart: list[dict[str, Any]]) -> str:

@@ -12,6 +12,59 @@ from agent.realtime.song_identity import UNKNOWN_SONG_ID
 
 
 PROJECT_CHART_ROOT = Path(__file__).resolve().parents[1] / "resource/charts"
+
+
+def test_marina_identical_chart_aliases_resolve_for_all_realtime_entry_points():
+    repository = LocalChartRepository(PROJECT_CHART_ROOT)
+    fingerprint = "song-jacket-phash-v2-ee919d62942bf20f"
+    title = "ときめきエクスペリエンス！ (月岛麻里奈ver.)"
+
+    # 准备页、协力和最终封面使用同一解析器；一键演奏先走曲库身份解析。
+    for difficulty, level in (("Hard", 20), ("Expert", 25), ("Special", 26)):
+        resolution = repository.resolve(fingerprint, difficulty, level=level, title=title)
+        assert resolution.selection is not None
+        assert resolution.selection.bestdori_song_id == 786
+        assert resolution.selection.shared_jacket is False
+    identity = repository.identify_by_cover_title(fingerprint, title)
+    assert identity.identity is not None
+    assert identity.identity.bestdori_song_id == 786
+    explicit = repository.resolve(fingerprint, "Expert", level=25, bestdori_song_id=790)
+    assert explicit.selection.bestdori_song_id == 790
+
+
+@pytest.mark.parametrize("song_id", (76, 762))
+def test_determination_parallel_version_keeps_its_own_cover_identity(song_id):
+    repository = LocalChartRepository(PROJECT_CHART_ROOT)
+    songs = json.loads(repository.manifest_path.read_text(encoding="utf-8"))["songs"]
+    song = next(item for item in songs if item["bestdori_song_id"] == song_id)
+    for difficulty, entry in song["difficulties"].items():
+        resolution = repository.resolve(song["fingerprints"][0], difficulty,
+                                        level=entry["level"], title=song["display_title"])
+        assert resolution.selection.bestdori_song_id == song_id
+    identity = repository.identify_by_cover_title(song["fingerprints"][0], song["display_title"])
+    assert identity.identity.bestdori_song_id == song_id
+
+
+@pytest.mark.parametrize("changed", ("chart_sha256", "level", "expected_notes", "titles", "fingerprints"))
+def test_equivalent_aliases_keep_conflicting_metadata_ambiguous(tmp_path, changed):
+    build_repository(tmp_path)
+    path = tmp_path / "manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    duplicate = json.loads(json.dumps(manifest["songs"][0]))
+    duplicate["bestdori_song_id"] = 100
+    if changed == "titles":
+        duplicate[changed] = ["Different"]
+    elif changed == "fingerprints":
+        duplicate[changed] = ["song-jacket-phash-v2-0123456789abcdee"]
+    else:
+        duplicate["difficulties"]["hard"][changed] = {
+            "chart_sha256": "a" * 64, "level": 21, "expected_notes": 999,
+        }[changed]
+    manifest["songs"].append(duplicate)
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    resolution = LocalChartRepository(tmp_path).resolve(FINGERPRINT, "Hard")
+    assert resolution.selection is None
+    assert "ambiguous" in resolution.reason
 CN_EXPERT_LEVEL_CASES = (
     # CN 实拍：蒼穹 Expert 27、黒のバースデイ Expert 26；当前全局
     # Bestdori 元数据分别为 26/27，但谱面内容 SHA 没有变化。
