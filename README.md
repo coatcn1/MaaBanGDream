@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.4.3-ff6f9f" alt="Version"></a>
+  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.4.4-ff6f9f" alt="Version"></a>
   <img src="https://img.shields.io/badge/MaaFramework-5.10.2-4c8bf5" alt="MaaFramework">
   <img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?logo=windows11&logoColor=white" alt="Windows">
@@ -38,9 +38,9 @@
 
 ## 🚀 快速开始
 
-开发候选会自动消除同名、同封面且谱面内容完全一致的重复曲库条目歧义，不新增开关。月岛麻里奈版已在两次单人及一次协力实测中通过最终封面身份确认；不同歌曲版本仍分别识别，其他任务模式尚未新增真机覆盖。
+v1.4.4 自动消除同名、同封面且谱面内容完全一致的重复曲库条目歧义，不新增开关。月岛麻里奈版已在两次单人及一次协力实测中通过最终封面身份确认；不同歌曲版本仍分别识别，其他任务模式尚未新增真机覆盖。
 
-候选程序入口为 `MaaBanGDream.exe`。“设置 → 性能设置 → 运行时阻止息屏”开启后在 MFA 运行期间保持显示器和系统唤醒，关闭或退出即释放请求，偏好在下次启动时恢复；持续闲置的息屏行为仍待实测。
+程序入口为 `MaaBanGDream.exe`。“设置 → 性能设置 → 运行时阻止息屏”开启后在 MFA 运行期间保持显示器和系统唤醒，关闭或退出即释放请求，偏好在下次启动时恢复；持续闲置的息屏行为仍待实测。
 
 ### 普通用户
 
@@ -169,7 +169,7 @@ Native 等待成本与启动延迟补偿已通过雷电真机验收，开发环�
 & '..\.tools\Miniconda3\envs\maabangdream\python.exe' `
   -m pip install -r .\requirements-release.txt
 
-.\scripts\build-windows-release.ps1 -Version 1.4.3
+.\scripts\build-windows-release.ps1 -Version 1.4.4
 ```
 
 发布包必须保持：
