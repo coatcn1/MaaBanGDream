@@ -10,7 +10,7 @@ $runtimeArchive = Join-Path $runtimeDirectory 'maabangdream-python.zip'
 $pythonRoot = Join-Path $runtimeDirectory 'python'
 $python = Join-Path $pythonRoot 'python.exe'
 $runtimeReady = Join-Path $pythonRoot '.maabangdream-ready'
-$mfa = Join-Path $packageRoot 'MFAAvalonia.exe'
+$mfa = Join-Path $packageRoot 'MaaBanGDream.exe'
 $interfaceTemplate = Join-Path $packageRoot 'interface.template.json'
 $interfacePath = Join-Path $packageRoot 'interface.json'
 $profileManagerPath = Join-Path $packageRoot 'profile-manager.json'
@@ -197,6 +197,14 @@ if ($NoLaunch) {
     exit 0
 }
 
+# 新宿主通过运行时检查后再清理旧入口，避免覆盖式更新留下两个程序。
+foreach ($legacyHostFile in @('MFAAvalonia.exe', 'MFAAvalonia.dll', 'MFAAvalonia.deps.json', 'MFAAvalonia.runtimeconfig.json')) {
+    $legacyHostPath = Join-Path $packageRoot $legacyHostFile
+    if (Test-Path -LiteralPath $legacyHostPath -PathType Leaf) {
+        Remove-Item -LiteralPath $legacyHostPath -Force
+    }
+}
+
 $env:MAABANGDREAM_MFA_SESSION_ID = [Guid]::NewGuid().ToString('N')
 $env:MAABANGDREAM_MFA_ROOT = $packageRoot
 if ($OrderedStartupTrial) {
@@ -204,7 +212,7 @@ if ($OrderedStartupTrial) {
     $env:MAABANGDREAM_ORDERED_STARTUP = '1'
 }
 try {
-    # 浏览器下载的压缩包会给 MFAAvalonia.exe 打上 Zone.Identifier
+    # 浏览器下载的压缩包会给 MaaBanGDream.exe 打上 Zone.Identifier
     # 标记，ShellExecute 启动会弹 SmartScreen 并被取消；先解除该标记。
     Unblock-File -LiteralPath $mfa -ErrorAction SilentlyContinue
     Start-Process -FilePath $mfa -WorkingDirectory $packageRoot

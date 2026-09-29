@@ -103,6 +103,9 @@ def test_release_builder_uses_clean_sources_and_excludes_private_state():
     assert "status --porcelain" in builder
     assert "[switch]$AllowDirty" in builder
     assert "PerformanceProfileSettingsUserControl" in builder
+    assert "-p:MaaBanGDreamPackageBuild=true" in builder
+    assert '"MaaBanGDream.exe"' in validator
+    assert '"MaaBanGDream.deps.json"' in validator
     assert "SupportsSelectedResourceUpdateSource" in builder
     assert "build_native_realtime.ps1" in builder
     assert "create_release_zip.py" in builder
@@ -164,6 +167,18 @@ def test_release_readme_documents_sources_and_first_run():
     assert "Releases" in project_readme
     assert "fix/speed-only-settings" in project_readme
     assert "resource/Release.md" in release_readme
+
+
+def test_branded_host_launch_and_upgrade_cleanup():
+    launcher = read("scripts/start-release.ps1")
+    patcher = read("scripts/patch-mfa-stop-status.ps1")
+    developer_launcher = read("scripts/launch-mfa.ps1")
+    assert "$mfa = Join-Path $packageRoot 'MaaBanGDream.exe'" in launcher
+    assert "-p:MaaBanGDreamPackageBuild=true" in patcher
+    assert "'MaaBanGDream.dll'" in patcher
+    assert "'MaaBanGDream.runtimeconfig.json'" in patcher
+    assert "'MFAAvalonia.runtimeconfig.json'" in launcher
+    assert "OR Name = 'MaaBanGDream.exe'" in developer_launcher
 
 
 def test_v136_launcher_uses_native_mfa_update_flow():
