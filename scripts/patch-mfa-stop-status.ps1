@@ -12,6 +12,9 @@ $customizationCommit = 'd7b381b2fa6a09e140d925fb1504bac19ca1f921'
 $patch = Join-Path $projectRoot 'patches\mfaavalonia-v2.12.0-stop-status.patch'
 $deployedAssembly = Join-Path $MfaRoot 'MFAAvalonia.Core.dll'
 $deployedExecutable = Join-Path $MfaRoot 'MFAAvalonia.exe'
+if (Test-Path -LiteralPath (Join-Path $MfaRoot 'MaaBanGDream.exe')) {
+    $deployedExecutable = Join-Path $MfaRoot 'MaaBanGDream.exe'
+}
 $marker = Join-Path $MfaRoot '.maabangdream-mfa-stop-status.json'
 $backupDirectory = Join-Path $MfaRoot '.maabangdream-backup'
 
@@ -127,6 +130,7 @@ if (Test-Path -LiteralPath $marker) {
         $metadata.custom_source_fingerprint -eq $customSourceFingerprint -and
         $metadata.patched_sha256 -eq $currentHash -and
         $metadata.patched_executable_sha256 -eq $currentExecutableHash -and
+        $metadata.desktop_host -eq 'MaaBanGDream' -and
         $metadata.customization_commit -eq $customizationCommit
     ) {
         Write-Host 'Customized MFA runtime and branding are already deployed.'
@@ -139,18 +143,24 @@ if (-not ($sdks -match '^10\.')) {
     throw 'Building the customized MFAAvalonia stop-status fix requires .NET SDK 10.'
 }
 
-& dotnet build $desktopProject -c Release -p:Platform=x64 --no-self-contained
+& dotnet build $desktopProject -c Release -p:Platform=x64 -p:MaaBanGDreamPackageBuild=true --no-self-contained
 if ($LASTEXITCODE -ne 0) {
     throw 'Unable to build the customized MFAAvalonia runtime.'
 }
 
 $builtAssembly = Join-Path $SourceRoot 'MFAAvalonia\bin\x64\Release\net10.0\MFAAvalonia.Core.dll'
-$builtExecutable = Join-Path $SourceRoot 'bin\x64\Release\MFAAvalonia.exe'
+$builtExecutable = Join-Path $SourceRoot 'bin\x64\Release\MaaBanGDream.exe'
 if (-not (Test-Path -LiteralPath $builtAssembly)) {
     throw "Customized MFAAvalonia assembly was not produced: $builtAssembly"
 }
 if (-not (Test-Path -LiteralPath $builtExecutable)) {
     throw "Customized MFAAvalonia executable was not produced: $builtExecutable"
+}
+$hostFiles = @('MaaBanGDream.exe', 'MaaBanGDream.dll', 'MaaBanGDream.deps.json', 'MaaBanGDream.runtimeconfig.json')
+foreach ($hostFile in $hostFiles) {
+    if (-not (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $builtExecutable) $hostFile))) {
+        throw "Branded desktop host file is missing: $hostFile"
+    }
 }
 
 New-Item -ItemType Directory -Force -Path $backupDirectory | Out-Null
@@ -166,7 +176,19 @@ if (-not (Test-Path -LiteralPath $backupExecutable)) {
 }
 
 Copy-Item -LiteralPath $builtAssembly -Destination $deployedAssembly -Force
-Copy-Item -LiteralPath $builtExecutable -Destination $deployedExecutable -Force
+# 新宿主需要同时部署自己的依赖清单和托管入口，不能只改 EXE 文件名。
+foreach ($hostFile in $hostFiles) {
+    Copy-Item -LiteralPath (Join-Path (Split-Path -Parent $builtExecutable) $hostFile) -Destination (Join-Path $MfaRoot $hostFile) -Force
+}
+$deployedExecutable = Join-Path $MfaRoot 'MaaBanGDream.exe'
+foreach ($legacyHostFile in @('MFAAvalonia.exe', 'MFAAvalonia.dll', 'MFAAvalonia.deps.json', 'MFAAvalonia.runtimeconfig.json')) {
+    $legacyHostPath = Join-Path $MfaRoot $legacyHostFile
+    if (Test-Path -LiteralPath $legacyHostPath -PathType Leaf) {
+        $legacyHash = (Get-FileHash -LiteralPath $legacyHostPath -Algorithm SHA256).Hash
+        Copy-Item -LiteralPath $legacyHostPath -Destination (Join-Path $backupDirectory "$legacyHostFile.$legacyHash") -Force
+        Remove-Item -LiteralPath $legacyHostPath -Force
+    }
+}
 $patchedHash = (Get-FileHash -LiteralPath $deployedAssembly -Algorithm SHA256).Hash
 $patchedExecutableHash = (Get-FileHash -LiteralPath $deployedExecutable -Algorithm SHA256).Hash
 [ordered]@{
@@ -179,6 +201,7 @@ $patchedExecutableHash = (Get-FileHash -LiteralPath $deployedExecutable -Algorit
     patch = 'mfaavalonia-v2.12.0-stop-status.patch'
     patched_sha256 = $patchedHash
     patched_executable_sha256 = $patchedExecutableHash
+    desktop_host = 'MaaBanGDream'
     backup = $backupAssembly
     backup_executable = $backupExecutable
 } | ConvertTo-Json | Set-Content -LiteralPath $marker -Encoding utf8

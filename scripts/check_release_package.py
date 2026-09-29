@@ -10,8 +10,10 @@ from pathlib import Path
 
 
 REQUIRED_PATHS = (
-    "MFAAvalonia.exe",
-    "MFAAvalonia.deps.json",
+    "MaaBanGDream.exe",
+    "MaaBanGDream.dll",
+    "MaaBanGDream.deps.json",
+    "MaaBanGDream.runtimeconfig.json",
     "MFAUpdater.exe",
     "libs/MFAAvalonia.Core.dll",
     "interface.json",
@@ -38,6 +40,10 @@ REQUIRED_PATHS = (
     "THIRD-PARTY-NOTICES.md",
 )
 FORBIDDEN_TOP_LEVEL = (
+    "MFAAvalonia.exe",
+    "MFAAvalonia.dll",
+    "MFAAvalonia.deps.json",
+    "MFAAvalonia.runtimeconfig.json",
     "config",
     "logs",
     "debug",

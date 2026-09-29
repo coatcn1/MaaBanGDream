@@ -121,9 +121,18 @@ dotnet publish $mfaProject `
     -c Release `
     -r win-x64 `
     --self-contained true `
+    -p:MaaBanGDreamPackageBuild=true `
     -o $packageRoot
 if ($LASTEXITCODE -ne 0) {
     throw 'Customized MFAAvalonia publish failed.'
+}
+foreach ($hostFile in @('MaaBanGDream.exe', 'MaaBanGDream.dll', 'MaaBanGDream.deps.json', 'MaaBanGDream.runtimeconfig.json')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $packageRoot $hostFile) -PathType Leaf)) {
+        throw "Branded desktop host is missing: $hostFile"
+    }
+}
+if (Test-Path -LiteralPath (Join-Path $packageRoot 'MFAAvalonia.exe')) {
+    throw 'Release publish unexpectedly retained the generic MFAAvalonia.exe host.'
 }
 Get-ChildItem -LiteralPath $packageRoot -Recurse -File -Filter '*.pdb' |
     Remove-Item -Force

@@ -24,6 +24,9 @@ if (-not $CondaRoot) {
 }
 
 $mfaExe = Join-Path $MfaRoot 'MFAAvalonia.exe'
+if (Test-Path -LiteralPath (Join-Path $MfaRoot 'MaaBanGDream.exe')) {
+    $mfaExe = Join-Path $MfaRoot 'MaaBanGDream.exe'
+}
 $sourceInterface = Join-Path $projectRoot 'interface.json'
 $sourceResource = Join-Path $projectRoot 'resource'
 $deployedInterface = Join-Path $MfaRoot 'interface.json'
@@ -55,7 +58,7 @@ foreach ($required in ($mfaExe, $sourceInterface, $sourceResource, $python, $age
 $resolvedTargetMfaPath = (Resolve-Path -LiteralPath $mfaExe).ProviderPath
 $targetMfaProcesses = @()
 $otherMfaProcesses = @()
-Get-CimInstance Win32_Process -Filter "Name = 'MFAAvalonia.exe'" | ForEach-Object {
+Get-CimInstance Win32_Process -Filter "Name = 'MFAAvalonia.exe' OR Name = 'MaaBanGDream.exe'" | ForEach-Object {
     $runningPath = $_.ExecutablePath
     if ([string]::IsNullOrWhiteSpace($runningPath)) {
         $otherMfaProcesses += [PSCustomObject]@{
@@ -65,7 +68,7 @@ Get-CimInstance Win32_Process -Filter "Name = 'MFAAvalonia.exe'" | ForEach-Objec
     }
     else {
         $fullRunningPath = (Resolve-Path -LiteralPath $runningPath).ProviderPath
-        if ($fullRunningPath -ieq $resolvedTargetMfaPath) {
+        if ((Split-Path -Parent $fullRunningPath) -ieq (Split-Path -Parent $resolvedTargetMfaPath)) {
             $targetMfaProcesses += $_
         }
         else {
@@ -296,6 +299,7 @@ if (Test-Path -LiteralPath $instanceConfigDirectory) {
 # With strict failure propagation enabled, that race reports a user stop as a
 # failure. Deploy the pinned one-line upstream-compatible status fix once.
 & $mfaStopStatusPatch -MfaRoot $MfaRoot
+$mfaExe = Join-Path $MfaRoot 'MaaBanGDream.exe'
 
 # Every Agent child launched by this MFA process inherits the same session id.
 # The ALAS conflict guard uses it to allow cleanup only after a first warning
