@@ -753,7 +753,7 @@ def test_fes_photogate_blocks_intro_flash_and_triggers_on_real_note():
     assert report["photogate_settle_pending"] is False
 
 
-def test_fes_photogate_broad_block_gives_up_after_cap():
+def test_fes_photogate_broad_block_fails_closed_after_cap():
     gate = NativeStartPhotogate(
         stable_duration_ms=250.0,
         grace_ms=500.0,
@@ -769,14 +769,57 @@ def test_fes_photogate_broad_block_gives_up_after_cap():
         assert gate.observe(stable, index / 60.0) is None
     assert gate.observe(stable, 479 / 60.0) is None
 
-    # 保险丝触发后不再拦截：宽列变化按原行为触发，宁可提前不可挂死。
+    # 预算耗尽不能把转场假闪当成首音，必须保持零输入并明确失败。
     gate.broad_blocked_events = NativeStartPhotogate._BROAD_BLOCK_MAX_EVENTS
-    flash_score = 3.0 * 30.0
-    expected = 479 / 60 + (3.0 / flash_score) * (1 / 60) + 0.190
-    anchor = gate.observe(flash, 480 / 60.0)
-    assert gate.triggered is True
-    assert anchor == pytest.approx(expected, abs=1e-6)
+    with pytest.raises(RuntimeError, match="首音门控预算耗尽"):
+        gate.observe(flash, 480 / 60.0)
+    assert gate.triggered is False
     assert gate.broad_blocked_events == NativeStartPhotogate._BROAD_BLOCK_MAX_EVENTS
+
+
+def test_fes_repeated_full_band_flash_never_becomes_first_note():
+    gate = NativeStartPhotogate(
+        stable_duration_ms=250, grace_ms=0, change_threshold=3, latency_ms=190,
+        mode="fes-playfield-intro", block_broad_change=True,
+        playfield_detector=lambda _image: True,
+    )
+    stable, flash, _note = _photogate_intro_frames()
+    for index in range(17):
+        assert gate.observe(stable, index / 60) is None
+    limit = gate._BROAD_BLOCK_MAX_EVENTS
+    for index in range(limit):
+        assert gate.observe(flash if index % 2 == 0 else stable, (17 + index) / 60) is None
+    with pytest.raises(RuntimeError, match="首音门控预算耗尽"):
+        gate.observe(flash, (17 + limit) / 60)
+    assert not gate.triggered
+    assert gate.trigger_source is None
+    assert gate.report()["photogate_events"][-1]["event"] == "budget-exhausted"
+
+
+def test_fes_gate_exhaustion_never_starts_native_and_cleans_up_once(monkeypatch):
+    gate = NativeStartPhotogate(
+        mode="fes-playfield-intro", block_broad_change=True,
+        playfield_detector=lambda _image: True,
+    )
+    gate.broad_blocked_events = gate._BROAD_BLOCK_MAX_EVENTS
+    starts, stops, closes = [], [], []
+    backend = SimpleNamespace(
+        exclusive=True, takeover=True, arm=lambda: None,
+        observe_start_frame=gate.observe, start=starts.append,
+        stop=lambda: stops.append(True), report=gate.report,
+    )
+    touch = SimpleNamespace(close=lambda: closes.append(True))
+    engine = RealtimeEngine(None, None, touch, native_backend=backend)
+    with pytest.raises(RuntimeError, match="首音门控预算耗尽") as caught:
+        engine.run(
+            lambda: _photogate_intro_frames()[0], lambda: False,
+            duration_seconds=10, target_fps=60,
+        )
+    assert starts == []
+    assert stops == [True]
+    assert closes == [True]
+    assert caught.value.realtime_stats.dispatched_actions == 0
+    assert "首音门控预算耗尽" in caught.value.realtime_stats.terminal_reason
 
 
 def test_fes_transition_tail_rejected_by_settle():
@@ -894,7 +937,7 @@ def test_fes_settle_accepts_travelling_slide_without_reject():
     assert last["settle_via"] == "travelling"
 
 
-def test_fes_photogate_direct_suppression_bails_out_at_cap():
+def test_fes_photogate_direct_suppression_fails_closed_at_cap():
     gate = NativeStartPhotogate(
         stable_duration_ms=250.0,
         grace_ms=0.0,
@@ -929,11 +972,10 @@ def test_fes_photogate_direct_suppression_bails_out_at_cap():
     assert gate.broad_blocked_events == 1
     assert gate.settle_rejected_events == 0
 
-    # 保险丝耗尽：结构路径让位，退化为直接触发，宁可早锚也不许挂死。
-    anchor = gate.observe(chatter_a, (121 + limit) / 60.0)
-    assert gate.triggered is True
-    assert gate.trigger_source == "direct-threshold"
-    assert anchor == pytest.approx((121 + limit) / 60 + 0.190, abs=1e-9)
+    with pytest.raises(RuntimeError, match="首音门控预算耗尽"):
+        gate.observe(chatter_a, (121 + limit) / 60.0)
+    assert gate.triggered is False
+    assert gate.trigger_source is None
     assert gate.report()["photogate_transition_suppressed"] == limit
 
 
@@ -1009,6 +1051,22 @@ def test_fes_dip_rejected_by_settle_not_arm_window():
     assert events.count("candidate-settle-rejected") == 1
     assert events.count("direct-suppressed") == 1
     assert events[-1] == "trigger"
+
+
+@pytest.mark.parametrize("counter", ("settle_rejected_events", "shape_rejected_events"))
+def test_fes_rejection_budget_never_bypasses_candidate_validation(counter):
+    gate = NativeStartPhotogate(
+        stable_duration_ms=250.0, grace_ms=0.0, change_threshold=3.0,
+        latency_ms=190.0, mode="fes-playfield-intro", block_broad_change=True,
+        playfield_detector=lambda _image: True,
+    )
+    stable, flash, _note = _photogate_intro_frames()
+    for index in range(17):
+        assert gate.observe(stable, index / 60.0) is None
+    setattr(gate, counter, gate._SETTLE_MAX_REJECTS)
+    with pytest.raises(RuntimeError, match="首音门控预算耗尽"):
+        gate.observe(flash, 17 / 60.0)
+    assert not gate.triggered
 
 
 def test_fes_settle_rejects_static_flourish_after_long_quiet():

@@ -213,8 +213,7 @@ class NativeStartPhotogate:
     # 相邻轨道列。逐列变化超过该分量的列数占比过大时视为弹窗转场。
     _BROAD_COLUMN_MIN = 45.0
     _BROAD_COLUMN_FRACTION = 0.35
-    # 死锁保险丝：60FPS 下约 10s 仍在拦截说明判据已不可信，放弃拦截
-    # 退回普通触发——锚点可能提前，但绝不能像真机实测那样挂死零按键。
+    # 拒绝预算用于有界失败；耗尽后仍无首音证据时禁止启动输入。
     _BROAD_BLOCK_MAX_EVENTS = 600
     # 上穿武装窗：需连续这么多帧低于阈值才算“真安静”，挡住转场凹陷用
     # 1 帧安静把 prev 归零、再把恢复帧当上穿（真机 Legendary 局：
@@ -239,14 +238,13 @@ class NativeStartPhotogate:
     _SETTLE_TIMEOUT_FRAMES = 8
     # 质心位移阈值（px）：静置构件滞留区域逐帧完全相同、质心位移 0（45 列
     # 阈值把噪声挡在区域外），滑条约 1.2px/帧、8 帧累计 ~9.6px，阈值 4px 在
-    # 两者间留足余量。总帧背带防任何病态候选挂死（宁可早锚不许挂死）。
+    # 两者间留足余量。总帧上限只拒绝病态候选，不直接提交锚点。
     _SETTLE_SHIFT_PX = 4.0
     _SETTLE_MAX_FRAMES = 60
     # “回到候选前外观”：逐列 L1 变化 ≥ 列阈值的残留列数 ≤ 容差才算
     # 回去（音符残留/转场构件占几十到上百列，静态噪声只有零星几列）。
     _SETTLE_LINGER_COLUMNS = 8
-    # 验证路径自己的保险丝：累计拒绝到此值后放弃验证直接提交，与宽列/
-    # 压制保险丝同一哲学：宁可早锚，不许挂死。
+    # 形状与退场验证共享拒绝预算，耗尽时保持未触发并明确失败。
     _SETTLE_MAX_REJECTS = 60
     # 音符头部只改变一条轨道附近的少数列：宽到跨两轨以上、或变化块
     # 中心不在任何轨道中心附近的高变化只能是转场构件，不进验证直接拒。
@@ -300,9 +298,8 @@ class NativeStartPhotogate:
         if suppress_prepare_popup is None:
             suppress_prepare_popup = str(mode).startswith("cooperative")
         self._popup_gate_enabled = bool(suppress_prepare_popup)
-        # Fes 进场画面转场用同一套宽列结构判据拦截（不走弹窗检测器），
-        # 拦截帧逐帧重基线；转场尾帧的高变化只允许“阈值下方上穿”触发，
-        # 被压制的直触帧单独计数，累计到保险丝后退化为直接触发。
+        # Fes 转场逐帧重基线，不走协力弹窗检测器。宽列与结构压制均有
+        # 拒绝预算，但预算耗尽不得降级为直接触发。
         self._broad_block_enabled = bool(block_broad_change)
         self.broad_blocked_events = 0
         self.transition_suppressed_frames = 0
@@ -389,7 +386,7 @@ class NativeStartPhotogate:
         self._settle_shift_start = None
 
     def _fuse_exhausted(self) -> bool:
-        """任一保险丝熔断即放弃验证直接提交：宁可早锚，不许挂死。"""
+        """验证预算耗尽后终止等待，不得放宽首音证据要求。"""
         return (
             self.broad_blocked_events >= self._BROAD_BLOCK_MAX_EVENTS
             or self.transition_suppressed_frames >= self._BROAD_BLOCK_MAX_EVENTS
@@ -475,6 +472,10 @@ class NativeStartPhotogate:
         """返回第一颗音符的绝对执行时刻；未触发时返回 ``None``。"""
         if self.triggered:
             return None
+        if self._requires_settle and self._fuse_exhausted():
+            self._clear_pending_candidate()
+            self._record_event("budget-exhausted", float(now), self.last_change_score)
+            raise RuntimeError("Fes 首音门控预算耗尽，未确认首音，禁止启动输入")
         if getattr(image, "ndim", 0) != 3 or image.shape[2] < 3:
             raise ValueError("photogate 需要 HxWx3 图像")
         height = int(image.shape[0])
@@ -689,10 +690,7 @@ class NativeStartPhotogate:
             self._last_columns = current_columns
             return None
 
-        block_broad = self._popup_gate_enabled or (
-            self._broad_block_enabled
-            and self.broad_blocked_events < self._BROAD_BLOCK_MAX_EVENTS
-        )
+        block_broad = self._popup_gate_enabled or self._broad_block_enabled
         if (
             change_score >= self._change_threshold
             and block_broad
@@ -762,15 +760,11 @@ class NativeStartPhotogate:
         trigger_s: float | None = None
         trigger_source: str | None = None
         # 转场尾帧曾在拦截后 16ms 以 score=51.4 直接开火（锚点早 1.1s），
-        # direct 兜底只在压制保险丝熔断后启用；fes 非熔断路径由下方结构
-        # 判据主触发。单人/协力保持既有上穿/直接链，公式级不变。
-        allow_direct = (
-            not (self._broad_block_enabled and not self._popup_gate_enabled)
-            or self.transition_suppressed_frames >= self._BROAD_BLOCK_MAX_EVENTS
-        )
+        # Fes 必须通过结构判据，预算耗尽不能启用 direct 兜底。
+        # 单人/协力保持既有上穿/直接链，公式级不变。
+        allow_direct = not self._requires_settle
         structural_path_active = (
             self._requires_settle
-            and not self._fuse_exhausted()
             and current_columns is not None
             and self._last_columns is not None
         )
@@ -840,7 +834,7 @@ class NativeStartPhotogate:
                     change_score,
                 )
         else:
-            # 非 fes、结构保险丝熔断或列信息缺失：保持既有上穿/直接链。
+            # 非 Fes 路径保持既有上穿/直接链。
             if (
                 self._previous_change is not None
                 and self._previous_change < self._change_threshold <= change_score
@@ -875,10 +869,8 @@ class NativeStartPhotogate:
             if (
                 self._requires_settle
                 and current_columns is not None
-                and not self._fuse_exhausted()
             ):
-                # 保险丝未熔断时候选先过形状检查再挂起退场验证；任一
-                # 保险丝熔断则直接提交（宁可早锚，不许挂死）。
+                # 候选始终先过形状检查再挂起退场验证，不能跳过证据门禁。
                 shape_width: int | None = None
                 shape_center: float | None = None
                 shape_ok = False

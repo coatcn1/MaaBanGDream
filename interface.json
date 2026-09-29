@@ -128,7 +128,7 @@
     {
       "name": "FesLive",
       "label": "🎪 团队演出 Fes",
-      "description": "按指定次数完成团队演出 Fes 活动联机演出；难度可选并支持 Special 回退 Expert。房间创建与加入的界面识别待活动截图补充后启用。",
+      "description": "开发候选，待活动开放后验收。仅支持自动匹配，难度为 Easy/Normal/Hard/Expert，不支持 Special 或私人房间。",
       "entry": "FesLive",
       "option": [
         "FesDifficulty",

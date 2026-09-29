@@ -114,6 +114,7 @@ def song_timing_offset_ms(
     光门把谱面第一动作锚到首音视觉时刻，后续按键全用相对间隔，因此
     谱面整体平移会被首音锚吸收成空操作；逐曲常数差只能靠逐曲 offset
     吸收。键为谱面路径父目录名（bestdori 曲目 id），未命中时返回基值。
+    调用方必须限定为 Fes 正式 Native，不能用于其他模式或排练校准。
     """
     if chart_path is None:
         return int(base_ms)
@@ -159,9 +160,7 @@ class RealtimeProfileStore:
         "native_realtime_enabled": False,
         "cooperative_jitter_enabled": True,
         "play_failure_retry_count": 1,
-        # 逐曲 timing offset 覆盖（键=bestdori 曲目 id）。光门把谱面第一
-        # 动作锚到首音视觉时刻，逐曲常数时基差只能靠逐曲 offset 吸收；
-        # 平移谱面会被首音锚吸收成空操作，因此覆盖只放在这里。
+        # 活动专用逐曲偏移缺省为空，仅由 Fes 正式 Native 消费。
         "song_timing_overrides": {},
         "calibration_note_speeds": {
             "Easy": 2.0,

@@ -437,9 +437,22 @@ def test_explicit_native_initialization_failure_never_falls_back(
     assert consume_calls[0][1] == selection.path
 
 
-def test_profile_native_consumes_and_configures_prearmed_backend(monkeypatch):
+@pytest.mark.parametrize("run_mode,is_rehearsal,base_offset,expected_offset,native_requested", (
+    ("formal", False, 17, 17, True),
+    ("cooperative", False, 17, 17, True),
+    ("challenge", False, 17, 17, True),
+    ("medley", False, 17, 17, True),
+    ("calibration-rehearsal", True, 0, 0, True),
+    ("calibration-formal", False, 17, 17, True),
+    ("fes", True, 0, 0, True),
+    ("fes", False, 17, 88, True),
+    ("fes", False, 17, 17, False),
+))
+def test_profile_native_consumes_and_configures_prearmed_backend(
+    monkeypatch, run_mode, is_rehearsal, base_offset, expected_offset, native_requested,
+):
     prepared_run = reset_live_run(
-        mode="formal",
+        mode=run_mode,
         difficulty="Expert",
         prepared_for_play=True,
     )
@@ -447,14 +460,14 @@ def test_profile_native_consumes_and_configures_prearmed_backend(monkeypatch):
     context = SimpleNamespace(tasker=tasker)
     settings = SimpleNamespace(
         target_fps=60,
-        timing_offset_ms=17,
+        timing_offset_ms=base_offset,
         note_speed=10.0,
         profile_path=SimpleNamespace(name="expert.json"),
     )
     selection = SimpleNamespace(
-        path=Path("chart-48-expert.json"),
+        path=Path("resource/charts/bestdori/773/expert.json"),
         timeline=object(),
-        bestdori_song_id=48,
+        bestdori_song_id=773,
         difficulty="expert",
     )
     monkeypatch.setattr(
@@ -468,7 +481,8 @@ def test_profile_native_consumes_and_configures_prearmed_backend(monkeypatch):
         lambda *args, **kwargs: {
             "chart_prediction_enabled": False,
             "chart_predict_presses": False,
-            "native_realtime_enabled": True,
+            "native_realtime_enabled": native_requested,
+            "song_timing_overrides": {"773": 88},
         },
     )
     monkeypatch.setattr(
@@ -520,6 +534,7 @@ def test_profile_native_consumes_and_configures_prearmed_backend(monkeypatch):
 
     class StopAfterSetupEngine:
         def __init__(self, *args, **kwargs):
+            assert args[1].timing_offset_ms == expected_offset
             engine_backends.append(kwargs["native_backend"])
             raise RuntimeError("stop after native setup")
 
@@ -541,14 +556,16 @@ def test_profile_native_consumes_and_configures_prearmed_backend(monkeypatch):
 
     argv = SimpleNamespace(custom_action_param=json.dumps({
         "difficulty": "Expert",
+        "run_mode": run_mode,
+        "rehearsal_mode": is_rehearsal,
     }))
     with pytest.raises(RuntimeError, match="stop after native setup"):
         RealtimeProfilePlay()._run(context, argv)
 
-    assert consume_calls == [(prepared_run.run_id, selection.path)]
-    assert backend.offsets == [17]
-    assert engine_backends == [backend]
-    assert backend.stop_calls == 1
+    assert consume_calls == ([(prepared_run.run_id, selection.path)] if native_requested else [])
+    assert backend.offsets == ([expected_offset] if native_requested else [])
+    assert engine_backends == [backend if native_requested else None]
+    assert backend.stop_calls == int(native_requested)
 
 
 def test_profile_jump_cancellation_reaches_disconnect_branch(monkeypatch):

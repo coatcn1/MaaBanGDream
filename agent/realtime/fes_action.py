@@ -66,6 +66,59 @@ class FesLifeJumpHome(RuntimeError):
     """Fes 生命归零：已切至模拟器桌面且游戏保留在后台，立即结束任务。"""
 
 
+class FesPlayFailure(RuntimeError):
+    """仅携带本局报告确认的失败分类，未知失败保持不可重试。"""
+
+    def __init__(self, reason: str, *, result_status: str = "unknown") -> None:
+        self.result_status = result_status
+        text = reason.casefold()
+        self.retryable = result_status in {
+            "engine_error", "engine_incomplete", "playfield_start_timeout",
+        } and not any(marker in text for marker in (
+            "profile", "配置", "身份", "谱面", "难度", "流速",
+            "final cover", "开演前", "生命归零", "生命值归零",
+            "首音门控预算耗尽", "用户已停止", "task is stopping",
+        ))
+        super().__init__(reason)
+
+
+def read_fes_play_failure(run_id: str) -> FesPlayFailure:
+    """短 ID 仅用于定位文件，重试证据必须匹配完整本局 ID。"""
+    if run_id:
+        candidates = sorted(
+            (PROJECT_ROOT / "screencap").glob(f"realtime-result-*-{run_id[:8]}.json"),
+            reverse=True,
+        )
+        for path in candidates:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if (
+                not isinstance(payload, dict)
+                or payload.get("run_id") != run_id
+                or payload.get("mode") != "fes"
+            ):
+                continue
+            if payload.get("completed") or payload.get("cleanup_failed"):
+                return FesPlayFailure("Fes 本局已完成或触点清理失败，禁止重演")
+            native = payload.get("native")
+            reasons = [payload.get("reason"), payload.get("terminal_reason")]
+            if isinstance(native, dict):
+                reasons.append(native.get("game_terminal_reason"))
+            # 合并本局原因，避免引擎终态掩盖外层 Profile 或身份硬冲突。
+            reason = "; ".join(
+                value.strip() for value in reasons
+                if isinstance(value, str) and value.strip()
+            )
+            if not reason:
+                break
+            return FesPlayFailure(
+                reason, result_status=str(payload.get("result_status", "unknown"))
+            )
+    return FesPlayFailure("RealtimeProfilePlay 返回失败，但缺少本局可解析的终态报告")
+
+
 # 跳车局守卫：FesLiveFinalize 见到该标记必须跳过 CommonRecover，否则会
 # 把正在桌面等玩家手动断网跳车的游戏拽回主页。每轮 run() 入口复位。
 _JUMP_HOME_DONE = False
@@ -543,7 +596,7 @@ class FesLiveFlow:
         断网跳车的窗口，任何失败都不允许触发重试/恢复把它拽回去。
         """
         global _JUMP_HOME_DONE
-        if _JUMP_HOME_DONE:
+        if self.stopped() or _JUMP_HOME_DONE:
             return
         try:
             append_current_run_event(
@@ -563,6 +616,8 @@ class FesLiveFlow:
                 flush=True,
             )
         try:
+            if self.stopped():
+                return
             self.controller.post_click_key(3).wait()
         except Exception as exc:
             # 切桌面失败也绝不允许走重试/恢复：游戏必须留在演出现场。
@@ -572,7 +627,8 @@ class FesLiveFlow:
             )
         else:
             # 留 0.6s 给桌面渲染（与协力跳车同一节奏），也让玩家看清交接。
-            time.sleep(0.6)
+            if not self.stopped():
+                time.sleep(0.6)
             print("FesLive jump_home=true relaunch_game=false", flush=True)
         _JUMP_HOME_DONE = True
 
@@ -585,16 +641,44 @@ class FesLiveFlow:
                 str(self.settings.get("difficulty", "Expert")),
             ),
         )
-        success = bool(
-            RealtimeProfilePlay().run(self.context, self.action_argv(params))
-        )
+        prepared_run = current_live_run()
+        run_id = getattr(prepared_run, "run_id", "")
+        if not run_id or getattr(prepared_run, "mode", None) != "fes":
+            raise RuntimeError("Fes 开演前缺少本局准备身份")
+        try:
+            success = bool(
+                RealtimeProfilePlay().run(self.context, self.action_argv(params))
+            )
+        except Exception:
+            if self.stopped():
+                return True
+            self._check_life_jump(run_id)
+            raise
+        if self.stopped():
+            return True
+        self._check_life_jump(run_id)
         run = current_live_run()
-        if run is not None and bool(run.disconnect_jump_requested):
+        if not success:
+            if run is None or run.run_id != run_id or run.mode != "fes":
+                raise FesPlayFailure("Fes 本局身份已改变，禁止按旧报告重试")
+            raise read_fes_play_failure(run_id)
+        return success
+
+    def _check_life_jump(self, run_id: str) -> None:
+        run = current_live_run()
+        if (
+            not self.stopped()
+            and run is not None
+            and run.run_id == run_id
+            and run.mode == "fes"
+            and bool(run.disconnect_jump_requested)
+        ):
             # 生命归零：引擎已在归零帧停手并置位跳车信号。只切桌面、
             # 不 post_start_app——游戏留在后台，由玩家手动断网跳车。
             self._jump_home_desktop()
+            if self.stopped():
+                return
             raise FesLifeJumpHome("生命归零，已切至模拟器桌面，请手动断网跳车")
-        return success
 
     def run_attempt(self) -> bool:
         self.enter_room()
@@ -603,6 +687,8 @@ class FesLiveFlow:
 
     def recover_after_play_failure(self, reason: str) -> None:
         """完整清理失败单局并从主页重新进入活动，禁止在旧会话中续跑。"""
+        if self.stopped():
+            return
         from .native_prearm import discard_prearmed_backend
 
         discard_prearmed_backend("fes-play-retry")
@@ -620,7 +706,7 @@ class FesLiveFlow:
             ],
             "escape_interval_ms": 1500,
             "escape_timeout_ms": 60000,
-            "restart_limit": 2,
+            "restart_limit": 1,
             "restart_wait_ms": 5000,
             "startup_grace_ms": 12000,
             "login_start_node": "AutoLiveLoginScreenMarker",
@@ -663,6 +749,8 @@ class FesLiveFlow:
             except InterruptedError:
                 raise
             except FesLifeJumpHome as exc:
+                if self.stopped():
+                    return True
                 # 跳车已切桌面：记录可读原因结束任务，禁止重试与恢复。
                 record_failure_reason(str(exc))
                 print(
@@ -670,26 +758,10 @@ class FesLiveFlow:
                     flush=True,
                 )
                 return False
-            except Exception as exc:
-                jump_run = current_live_run()
-                if jump_run is not None and bool(
-                    jump_run.disconnect_jump_requested
-                ):
-                    # 归零跳车信号已置位后的后续异常（原生门禁/清理等）
-                    # 不许进重试：recover_after_play_failure 会把游戏从
-                    # 桌面拽回主页，破坏手动断网跳车窗口。
-                    self._jump_home_desktop()
-                    failure = FesLifeJumpHome(
-                        "生命归零，已切至模拟器桌面，请手动断网跳车"
-                        f"（{type(exc).__name__}: {exc}）"
-                    )
-                    record_failure_reason(str(failure))
-                    print(
-                        f"[任务][团队演出 Fes][流程][ERROR] {failure}",
-                        flush=True,
-                    )
-                    return False
-                if play_failures >= retry_count:
+            except FesPlayFailure as exc:
+                if self.stopped():
+                    return True
+                if not exc.retryable or play_failures >= retry_count:
                     raise
                 play_failures += 1
                 reason = f"{type(exc).__name__}: {exc}"
@@ -719,21 +791,15 @@ class FesLiveFlow:
                 )
                 self.recover_after_play_failure(reason)
                 continue
+            except Exception:
+                if self.stopped():
+                    return True
+                # 导航、身份、配置和未分类异常不属于已确认的瞬时演奏失败。
+                raise
             if self.stopped():
                 return True
             if not success:
-                if play_failures >= retry_count:
-                    return False
-                play_failures += 1
-                reason = "RealtimeProfilePlay 返回失败"
-                print(
-                    "FesLive play_retry=true "
-                    f"attempt={play_failures + 1}/{retry_count + 1} "
-                    f"reason={reason}",
-                    flush=True,
-                )
-                self.recover_after_play_failure(reason)
-                continue
+                return False
 
             completed += 1
             play_failures = 0

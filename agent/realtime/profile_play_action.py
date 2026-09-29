@@ -2568,14 +2568,15 @@ class RealtimeProfilePlay(CustomAction):
         native_backend = None
         try:
             base_timing_offset_ms = int(timing_offset_ms)
-            timing_offset_ms = song_timing_offset_ms(
-                timing_offset_ms,
-                runtime_options,
-                None if selected_chart is None else selected_chart.path,
-            )
+            # Fes Native 的活动专用偏移不得污染排练校准或其他演奏模式。
+            if run_mode == "fes" and not is_rehearsal and native_requested:
+                timing_offset_ms = song_timing_offset_ms(
+                    timing_offset_ms,
+                    runtime_options,
+                    None if selected_chart is None else selected_chart.path,
+                )
             if timing_offset_ms != base_timing_offset_ms:
-                # 逐曲覆盖必须在 native configure 与 planner 之前生效；
-                # 下方两处共用本变量，改这一处即全线生效。
+                # 偏移必须在 Native 配置之前冻结，不能由本局判定动态改写。
                 print(
                     "RealtimeProfilePlay song_timing_offset "
                     f"base={base_timing_offset_ms} "

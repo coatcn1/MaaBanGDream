@@ -139,7 +139,9 @@ def test_fes_retry_budget_not_clamped_to_one():
 
     def attempt():
         attempts.append(True)
-        return len(attempts) == 100
+        if len(attempts) < 100:
+            raise fes_action.FesPlayFailure("瞬时引擎错误", result_status="engine_error")
+        return True
 
     flow.run_attempt = attempt
     assert flow.run() is True
@@ -178,6 +180,54 @@ def test_fes_user_stop_returns_true_mid_round():
     assert flow.run() is True
 
 
+@pytest.mark.parametrize("reason", (
+    "Profile 环境硬冲突", "最终封面身份冲突", "流速不一致", "未知导航异常",
+))
+def test_fes_hard_conflicts_and_unclassified_errors_are_not_retried(monkeypatch, reason):
+    flow = _bare_flow()
+    flow.settings = {"count": 1, "play_failure_retry_count": 99}
+    attempts, recoveries = [], []
+    monkeypatch.setattr(fes_action, "current_live_run", lambda: None)
+
+    def attempt():
+        attempts.append(True)
+        raise RuntimeError(reason)
+
+    flow.run_attempt = attempt
+    flow.recover_after_play_failure = recoveries.append
+    with pytest.raises(RuntimeError, match=reason):
+        flow.run()
+    assert len(attempts) == 1
+    assert recoveries == []
+
+
+def test_fes_unclassified_false_result_is_not_retried():
+    flow = _bare_flow()
+    flow.settings = {"count": 1, "play_failure_retry_count": 99}
+    attempts, recoveries = [], []
+    flow.run_attempt = lambda: attempts.append(True) or False
+    flow.recover_after_play_failure = recoveries.append
+    assert flow.run() is False
+    assert len(attempts) == 1
+    assert recoveries == []
+
+
+def test_fes_stop_during_failure_does_not_recover(monkeypatch):
+    flow = _bare_flow()
+    flow.settings = {"count": 1, "play_failure_retry_count": 1}
+    recoveries = []
+    monkeypatch.setattr(fes_action, "current_live_run", lambda: None)
+
+    def attempt():
+        flow.context.tasker.stopping = True
+        raise RuntimeError("任务已停止")
+
+    flow.run_attempt = attempt
+    flow.recover_after_play_failure = recoveries.append
+    assert flow.run() is True
+    assert recoveries == []
+
+
 def _make_jump_flow(monkeypatch, *, jump_requested):
     """跳车测试流：伪 RealtimeProfilePlay + 信号化 live run + 记录型控制器。"""
 
@@ -190,6 +240,8 @@ def _make_jump_flow(monkeypatch, *, jump_requested):
         fes_action,
         "current_live_run",
         lambda: SimpleNamespace(
+            run_id="12345678-current-fes-run",
+            mode="fes",
             disconnect_jump_requested=jump_requested,
             recording_path=None,
         ),
@@ -260,31 +312,155 @@ def test_fes_run_ends_on_jump_without_retry_or_recovery(monkeypatch):
     assert failures and "手动断网跳车" in failures[0]
 
 
-def test_fes_run_jump_normalizes_post_play_exception(monkeypatch):
+def test_fes_play_jump_normalizes_post_play_exception(monkeypatch):
     # 归零跳车信号已置位后的后续异常（原生门禁/清理等）也必须按跳车
     # 收尾：切桌面、记录原因、结束任务，绝不进重试/恢复。
-    flow = _bare_flow()
-    flow.settings = {"count": 5, "play_failure_retry_count": 9}
+    flow, keys, started = _make_jump_flow(monkeypatch, jump_requested=True)
+    flow.settings.update({"count": 5, "play_failure_retry_count": 9})
     failures = []
     monkeypatch.setattr(fes_action, "record_failure_reason", failures.append)
-    monkeypatch.setattr(
-        fes_action,
-        "current_live_run",
-        lambda: SimpleNamespace(disconnect_jump_requested=True),
-    )
-    homes = []
-    flow._jump_home_desktop = lambda: homes.append(True)
+    class Play:
+        def run(self, _context, _argv):
+            raise RuntimeError("native gate boom")
+
+    monkeypatch.setattr(fes_action, "RealtimeProfilePlay", Play)
     recovered = []
     flow.recover_after_play_failure = recovered.append
 
+    flow.run_attempt = flow.play
+    assert flow.run() is False
+    assert keys == [3]
+    assert started == []
+    assert recovered == []
+    assert failures and "手动断网跳车" in failures[0]
+
+
+def test_fes_navigation_failure_ignores_stale_jump_run(monkeypatch):
+    flow, keys, _started = _make_jump_flow(monkeypatch, jump_requested=True)
+    flow.settings = {"count": 1, "play_failure_retry_count": 99}
+    flow.run_attempt = lambda: (_ for _ in ()).throw(RuntimeError("导航失败"))
+    flow.recover_after_play_failure = lambda _reason: pytest.fail("旧局不能触发恢复")
+    with pytest.raises(RuntimeError, match="导航失败"):
+        flow.run()
+    assert keys == []
+
+
+def test_fes_stop_during_play_skips_home_and_business_failure(monkeypatch):
+    flow, keys, _started = _make_jump_flow(monkeypatch, jump_requested=True)
+    failures = []
+    monkeypatch.setattr(fes_action, "record_failure_reason", failures.append)
+
+    class Play:
+        def run(self, _context, _argv):
+            flow.context.tasker.stopping = True
+            return False
+
+    monkeypatch.setattr(fes_action, "RealtimeProfilePlay", Play)
+    assert flow.play() is True
+    assert keys == []
+    assert failures == []
+
+
+@pytest.mark.parametrize("status,reason,retryable", [
+    ("engine_error", "引擎瞬时异常", True),
+    ("engine_incomplete", "输入尚未完成", True),
+    ("playfield_start_timeout", "演奏场等待超时", True),
+    ("engine_error", "Profile 不一致", False),
+    ("engine_error", "最终封面身份冲突", False),
+    ("engine_error", "流速不一致", False),
+    ("engine_error", "谱面丢失", False),
+    ("engine_error", "Fes 首音门控预算耗尽", False),
+    ("engine_error", "生命归零", False),
+    ("preflight_error", "开演前失败", False),
+    ("life_failed", "生命值归零", False),
+    ("disconnect_jump_requested", "已切桌面", False),
+    ("stopped", "用户已停止", False),
+    ("result_collection_error", "结算失败", False),
+    ("unknown", "未知失败", False),
+])
+def test_fes_retry_classification(status, reason, retryable):
+    failure = fes_action.FesPlayFailure(reason, result_status=status)
+    assert failure.retryable is retryable
+
+
+@pytest.mark.parametrize("override,retryable", [
+    ({}, True),
+    ({"run_id": "12345678-other-run"}, False),
+    ({"mode": "cooperative"}, False),
+    ({"completed": True}, False),
+    ({"cleanup_failed": True}, False),
+    ({"reason": "", "terminal_reason": ""}, False),
+    ({"reason": "Profile 冲突", "native": {"game_terminal_reason": "瞬时引擎错误"}}, False),
+])
+def test_fes_report_requires_exact_current_run(monkeypatch, tmp_path, override, retryable):
+    monkeypatch.setattr(fes_action, "PROJECT_ROOT", tmp_path)
+    output = tmp_path / "screencap"
+    output.mkdir()
+    payload = {
+        "run_id": "12345678-current-fes-run", "mode": "fes",
+        "result_status": "engine_error", "reason": "瞬时引擎错误",
+    }
+    payload.update(override)
+    (output / "realtime-result-test-12345678.json").write_text(json.dumps(payload), encoding="utf-8")
+    failure = fes_action.read_fes_play_failure("12345678-current-fes-run")
+    assert failure.retryable is retryable
+
+
+@pytest.mark.parametrize("report", [None, "bad json", "[]"])
+def test_fes_missing_or_malformed_report_cannot_retry(monkeypatch, tmp_path, report):
+    monkeypatch.setattr(fes_action, "PROJECT_ROOT", tmp_path)
+    output = tmp_path / "screencap"
+    output.mkdir()
+    if report is not None:
+        (output / "realtime-result-test-12345678.json").write_text(report, encoding="utf-8")
+    assert fes_action.read_fes_play_failure("12345678-current-fes-run").retryable is False
+
+
+def test_fes_play_reads_only_same_run_report(monkeypatch):
+    flow, _keys, _started = _make_jump_flow(monkeypatch, jump_requested=False)
+    failure = fes_action.FesPlayFailure("瞬时引擎错误", result_status="engine_error")
+    read_ids = []
+    monkeypatch.setattr(fes_action, "read_fes_play_failure", lambda run_id: read_ids.append(run_id) or failure)
+    monkeypatch.setattr(fes_action, "RealtimeProfilePlay", lambda: SimpleNamespace(run=lambda *_args: False))
+    with pytest.raises(fes_action.FesPlayFailure) as caught:
+        flow.play()
+    assert caught.value is failure
+    assert read_ids == ["12345678-current-fes-run"]
+
+
+def test_fes_retry_budget_resets_only_after_completed_round():
+    flow = _bare_flow()
+    flow.settings = {"count": 2, "play_failure_retry_count": 1}
+    attempts, recoveries, progress = [], [], []
+
     def attempt():
-        raise RuntimeError("native gate boom")
+        attempts.append(True)
+        if len(attempts) % 2:
+            raise fes_action.FesPlayFailure("瞬时引擎错误", result_status="engine_error")
+        return True
 
     flow.run_attempt = attempt
-    assert flow.run() is False
-    assert homes == [True]
-    assert recovered == []
-    assert failures and "native gate boom" in failures[0]
+    flow.recover_after_play_failure = recoveries.append
+    flow.progress_callback = lambda done, _total: progress.append(done)
+    assert flow.run() is True
+    assert len(attempts) == 4
+    assert progress == [1, 2]
+    assert len(recoveries) == 3
+
+
+def test_fes_play_does_not_read_report_after_run_identity_changes(monkeypatch):
+    flow, _keys, _started = _make_jump_flow(monkeypatch, jump_requested=False)
+    original = fes_action.current_live_run()
+    changed = SimpleNamespace(
+        run_id="12345678-another-fes-run", mode="fes", disconnect_jump_requested=False,
+    )
+    runs = iter([original, changed, changed])
+    monkeypatch.setattr(fes_action, "current_live_run", lambda: next(runs))
+    monkeypatch.setattr(fes_action, "RealtimeProfilePlay", lambda: SimpleNamespace(run=lambda *_args: False))
+    monkeypatch.setattr(fes_action, "read_fes_play_failure", lambda _run_id: pytest.fail("禁止读取旧报告"))
+    with pytest.raises(fes_action.FesPlayFailure, match="本局身份已改变") as caught:
+        flow.play()
+    assert caught.value.retryable is False
 
 
 def test_fes_run_resets_jump_flag_per_task(monkeypatch):
