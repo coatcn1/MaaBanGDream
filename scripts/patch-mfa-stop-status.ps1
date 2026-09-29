@@ -25,6 +25,7 @@ if (-not $SourceRoot) {
 $sourceGit = Join-Path $SourceRoot '.git'
 $coreProject = Join-Path $SourceRoot 'MFAAvalonia\MFAAvalonia.csproj'
 $desktopProject = Join-Path $SourceRoot 'MFAAvalonia.Desktop\MFAAvalonia.Desktop.csproj'
+$updaterProject = Join-Path $SourceRoot 'MFAUpdater\MFAUpdater.csproj'
 $applicationIcon = Join-Path $SourceRoot 'MFAAvalonia\Assets\logo.ico'
 $taskSource = Join-Path $SourceRoot 'MFAAvalonia\Helper\ValueType\MFATask.cs'
 $settingsSource = Join-Path $SourceRoot 'MFAAvalonia\Views\Pages\SettingsView.axaml'
@@ -41,6 +42,7 @@ foreach ($required in (
     $sourceGit,
     $coreProject,
     $desktopProject,
+    $updaterProject,
     $applicationIcon,
     $taskSource,
     $settingsSource,
@@ -131,6 +133,10 @@ if (Test-Path -LiteralPath $marker) {
         $metadata.patched_sha256 -eq $currentHash -and
         $metadata.patched_executable_sha256 -eq $currentExecutableHash -and
         $metadata.desktop_host -eq 'MaaBanGDream' -and
+        (Test-Path -LiteralPath (Join-Path $MfaRoot 'MFAUpdater.exe')) -and
+        $metadata.updater_sha256 -eq (Get-FileHash -LiteralPath (Join-Path $MfaRoot 'MFAUpdater.exe') -Algorithm SHA256).Hash -and
+        (Test-Path -LiteralPath (Join-Path $MfaRoot 'ColorTextBlock.Avalonia.dll')) -and
+        $metadata.markdown_sha256 -eq (Get-FileHash -LiteralPath (Join-Path $MfaRoot 'ColorTextBlock.Avalonia.dll') -Algorithm SHA256).Hash -and
         $metadata.customization_commit -eq $customizationCommit
     ) {
         Write-Host 'Customized MFA runtime and branding are already deployed.'
@@ -147,14 +153,24 @@ if (-not ($sdks -match '^10\.')) {
 if ($LASTEXITCODE -ne 0) {
     throw 'Unable to build the customized MFAAvalonia runtime.'
 }
+$updaterPublish = Join-Path $SourceRoot 'bin\UpdaterPublish'
+& dotnet publish $updaterProject -c Release -r win-x64 --self-contained true `
+    -p:PublishSingleFile=true -p:PublishTrimmed=true -p:TrimMode=link -o $updaterPublish
+if ($LASTEXITCODE -ne 0) { throw 'Unable to publish the customized portable updater.' }
+$builtUpdater = Join-Path $updaterPublish 'MFAUpdater.exe'
+if (-not (Test-Path -LiteralPath $builtUpdater)) { throw 'Portable updater executable was not produced.' }
 
 $builtAssembly = Join-Path $SourceRoot 'MFAAvalonia\bin\x64\Release\net10.0\MFAAvalonia.Core.dll'
+$builtMarkdownAssembly = Join-Path (Split-Path -Parent $builtAssembly) 'ColorTextBlock.Avalonia.dll'
 $builtExecutable = Join-Path $SourceRoot 'bin\x64\Release\MaaBanGDream.exe'
 if (-not (Test-Path -LiteralPath $builtAssembly)) {
     throw "Customized MFAAvalonia assembly was not produced: $builtAssembly"
 }
 if (-not (Test-Path -LiteralPath $builtExecutable)) {
     throw "Customized MFAAvalonia executable was not produced: $builtExecutable"
+}
+if (-not (Test-Path -LiteralPath $builtMarkdownAssembly)) {
+    throw "Customized Markdown assembly was not produced: $builtMarkdownAssembly"
 }
 $hostFiles = @('MaaBanGDream.exe', 'MaaBanGDream.dll', 'MaaBanGDream.deps.json', 'MaaBanGDream.runtimeconfig.json')
 foreach ($hostFile in $hostFiles) {
@@ -176,6 +192,19 @@ if (-not (Test-Path -LiteralPath $backupExecutable)) {
 }
 
 Copy-Item -LiteralPath $builtAssembly -Destination $deployedAssembly -Force
+# 文本组件的布局修复不在 Core DLL 中，必须单独备份并同步。
+$deployedMarkdownAssembly = Join-Path $MfaRoot 'ColorTextBlock.Avalonia.dll'
+if (Test-Path -LiteralPath $deployedMarkdownAssembly) {
+    $oldMarkdownHash = (Get-FileHash -LiteralPath $deployedMarkdownAssembly -Algorithm SHA256).Hash
+    Copy-Item -LiteralPath $deployedMarkdownAssembly -Destination (Join-Path $backupDirectory "ColorTextBlock.Avalonia.$oldMarkdownHash.dll") -Force
+}
+Copy-Item -LiteralPath $builtMarkdownAssembly -Destination $deployedMarkdownAssembly -Force
+$deployedUpdater = Join-Path $MfaRoot 'MFAUpdater.exe'
+if (Test-Path -LiteralPath $deployedUpdater) {
+    $oldUpdaterHash = (Get-FileHash -LiteralPath $deployedUpdater -Algorithm SHA256).Hash
+    Copy-Item -LiteralPath $deployedUpdater -Destination (Join-Path $backupDirectory "MFAUpdater.$oldUpdaterHash.exe") -Force
+}
+Copy-Item -LiteralPath $builtUpdater -Destination $deployedUpdater -Force
 # 新宿主需要同时部署自己的依赖清单和托管入口，不能只改 EXE 文件名。
 foreach ($hostFile in $hostFiles) {
     Copy-Item -LiteralPath (Join-Path (Split-Path -Parent $builtExecutable) $hostFile) -Destination (Join-Path $MfaRoot $hostFile) -Force
@@ -202,6 +231,8 @@ $patchedExecutableHash = (Get-FileHash -LiteralPath $deployedExecutable -Algorit
     patched_sha256 = $patchedHash
     patched_executable_sha256 = $patchedExecutableHash
     desktop_host = 'MaaBanGDream'
+    updater_sha256 = (Get-FileHash -LiteralPath $deployedUpdater -Algorithm SHA256).Hash
+    markdown_sha256 = (Get-FileHash -LiteralPath $deployedMarkdownAssembly -Algorithm SHA256).Hash
     backup = $backupAssembly
     backup_executable = $backupExecutable
 } | ConvertTo-Json | Set-Content -LiteralPath $marker -Encoding utf8

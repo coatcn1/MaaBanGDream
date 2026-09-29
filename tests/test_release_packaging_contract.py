@@ -179,6 +179,9 @@ def test_branded_host_launch_and_upgrade_cleanup():
     assert "'MaaBanGDream.runtimeconfig.json'" in patcher
     assert "'MFAAvalonia.runtimeconfig.json'" in launcher
     assert "OR Name = 'MaaBanGDream.exe'" in developer_launcher
+    assert "'ColorTextBlock.Avalonia.dll'" in patcher
+    assert "$metadata.markdown_sha256" in patcher
+    assert "Copy-Item -LiteralPath $builtMarkdownAssembly -Destination $deployedMarkdownAssembly" in patcher
 
 
 def test_v136_launcher_uses_native_mfa_update_flow():
@@ -192,3 +195,33 @@ def test_v136_launcher_uses_native_mfa_update_flow():
     assert "MaaBanGDream-v$currentVersion-win-x64" in normalizer
     assert "normalize-release-directory.ps1" in builder
     assert "scripts\\update.ps1" not in builder
+
+
+def test_update_restart_avoids_batch_console_and_keeps_portable_preparation():
+    restart = read("scripts/restart-release.ps1")
+    normalizer = read("scripts/normalize-release-directory.ps1")
+    builder = read("scripts/build-windows-release.ps1")
+    assert "normalize-release-directory.ps1" in restart and "-Inline" in restart
+    assert "scripts\\start-release.ps1" in restart
+    assert "updater-launch.log" in restart
+    assert "cmd /c" not in restart.lower()
+    assert "[switch]$Inline" in normalizer
+    assert "-WindowStyle Hidden" in normalizer
+    assert "'scripts\\restart-release.ps1'" in builder
+
+
+def test_independent_announcement_is_packaged_and_configured():
+    interface = json.loads(read("interface.json"))
+    assert interface["welcome"] == "https://raw.githubusercontent.com/coatcn1/MaaBanGDream/main/docs/announcement.md"
+    assert read("docs/announcement.md").startswith("# MaaBanGDream")
+    assert "'docs\\announcement.md'" in read("scripts/build-windows-release.ps1")
+
+
+def test_development_document_assets_match_release_version():
+    launcher = read("scripts/launch-mfa.ps1")
+    interface = json.loads(read("interface.json"))
+    assert "'docs/announcement.md'" in launcher
+    assert "docs/release-notes-v{0}.md" in launcher
+    assert "$interface.version.TrimStart('v')" in launcher
+    assert "'resource/Release.md'" in launcher
+    assert read(f"docs/release-notes-v{interface['version'].lstrip('v')}.md")

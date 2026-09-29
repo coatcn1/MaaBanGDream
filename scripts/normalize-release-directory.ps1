@@ -1,3 +1,5 @@
+﻿param([switch]$Inline)
+
 $ErrorActionPreference = 'Stop'
 $packageRoot = Split-Path -Parent $PSScriptRoot
 
@@ -21,11 +23,28 @@ if (-not $currentVersion) {
 $folderName = Split-Path -Leaf $packageRoot
 $expectedFolder = "MaaBanGDream-v$currentVersion-win-x64"
 if ($folderName -notmatch '^MaaBanGDream-v.*-win-x64$' -or $folderName -eq $expectedFolder) {
+    if ($Inline) { return $packageRoot }
     exit 0
 }
 
 $parent = Split-Path -Parent $packageRoot
 $newRoot = Join-Path $parent $expectedFolder
+if ($Inline) {
+    # 更新器与 PowerShell 的工作目录都在安装目录外，改名后继续准备新路径。
+    Set-Location -LiteralPath $parent
+    foreach ($attempt in 1..30) {
+        try {
+            Rename-Item -LiteralPath $packageRoot -NewName $expectedFolder -ErrorAction Stop
+            return $newRoot
+        } catch {
+            if ($attempt -eq 30) {
+                Write-Warning "Unable to rename the install directory: $($_.Exception.Message)"
+                return $packageRoot
+            }
+            Start-Sleep -Milliseconds 1000
+        }
+    }
+}
 $helperPath = Join-Path $env:TEMP "maabangdream-rename-$currentVersion.ps1"
 $rootLiteral = $packageRoot.Replace("'", "''")
 $newRootLiteral = $newRoot.Replace("'", "''")
@@ -45,8 +64,13 @@ foreach (`$attempt in 1..30) {
     }
 }
 `$launchRoot = if (Test-Path -LiteralPath '$newRootLiteral') { '$newRootLiteral' } else { '$rootLiteral' }
-`$launcher = Join-Path `$launchRoot '$launcherLiteral'
-Start-Process -FilePath `$launcher -WorkingDirectory `$launchRoot
+`$restart = Join-Path `$launchRoot 'scripts\restart-release.ps1'
+if (Test-Path -LiteralPath `$restart) {
+    & `$restart
+} else {
+    `$launcher = Join-Path `$launchRoot '$launcherLiteral'
+    Start-Process -FilePath `$launcher -WorkingDirectory `$launchRoot -WindowStyle Hidden
+}
 "@
 [System.IO.File]::WriteAllText(
     $helperPath,

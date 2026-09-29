@@ -69,6 +69,7 @@ foreach ($required in @(
     (Join-Path $projectRoot 'licenses\LICENSE-MaaFramework-LGPL-3.0.md'),
     (Join-Path $projectRoot 'scripts\start-release.ps1'),
     (Join-Path $projectRoot 'scripts\normalize-release-directory.ps1'),
+    (Join-Path $projectRoot 'scripts\restart-release.ps1'),
     $zipBuilder
 )) {
     if (-not (Test-Path -LiteralPath $required)) {
@@ -199,11 +200,13 @@ Copy-ProjectFile -RelativePath 'agent\realtime\native\maabangdream_realtime.pyd'
 foreach ($relativePath in @(
     'docs\about.md',
     'docs\contact.md',
+    'docs\announcement.md',
     'docs\assets\maabangdream-logo-v1.png',
     'requirements.txt',
     'runtime-compatibility.json',
     'scripts\start-release.ps1',
     'scripts\normalize-release-directory.ps1',
+    'scripts\restart-release.ps1',
     'scripts\check_runtime.py',
     'scripts\sync_bestdori_catalog.py',
     'scripts\sync_bestdori_charts.py'

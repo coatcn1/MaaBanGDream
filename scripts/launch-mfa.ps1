@@ -157,7 +157,7 @@ foreach ($relativeAsset in $obsoletePerformanceAssets) {
     }
 }
 
-foreach ($aboutAsset in @('docs/about.md', 'docs/contact.md', 'docs/assets/maabangdream-logo-v1.png')) {
+foreach ($aboutAsset in @('docs/about.md', 'docs/contact.md', 'docs/announcement.md', 'docs/assets/maabangdream-logo-v1.png')) {
     $aboutDestination = Join-Path $MfaRoot $aboutAsset
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $aboutDestination) | Out-Null
     Copy-Item -LiteralPath (Join-Path $projectRoot $aboutAsset) -Destination $aboutDestination -Force
@@ -196,6 +196,11 @@ if (Test-Path -LiteralPath $deployedBestdoriRoot -PathType Container) {
 }
 
 $interface = Get-Content -LiteralPath $sourceInterface -Raw -Encoding utf8 | ConvertFrom-Json
+# 开发候选使用与同版本发布包一致的说明，便于直接验收阅读弹窗。
+$releaseNotes = Join-Path $projectRoot ("docs/release-notes-v{0}.md" -f $interface.version.TrimStart('v'))
+if (Test-Path -LiteralPath $releaseNotes -PathType Leaf) {
+    Copy-Item -LiteralPath $releaseNotes -Destination (Join-Path $MfaRoot 'resource/Release.md') -Force
+}
 $interface.resource[0].path = @('./resource/resource')
 $interface.agent.child_exec = $python.Replace('\', '/')
 $agentArgs = @($agent.Replace('\', '/'))
