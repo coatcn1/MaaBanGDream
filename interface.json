@@ -7,6 +7,7 @@
   "description": "docs/about.md",
   "about_icon": "docs/assets/maabangdream-logo-v1.png",
   "contact": "docs/contact.md",
+  "welcome": "https://raw.githubusercontent.com/coatcn1/MaaBanGDream/main/docs/announcement.md",
   "license": "PolyForm-Noncommercial-1.0.0",
   "github": "https://github.com/coatcn1/MaaBanGDream",
   "controller": [
