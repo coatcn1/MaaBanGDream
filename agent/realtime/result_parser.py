@@ -329,6 +329,31 @@ class ResultParser:
         return np.asarray([np.count_nonzero(region) / region.size for region in regions])
 
 
+# 协力结算面板与单人结算页布局不同：协力帧整体下移约 29px、左移约 18px。
+# 偏移量由 11 张真实协力结算帧投影标定（2026-10-01）。直接把单人 FIELDS
+# 套在协力帧上会落在数字旁边的空白处，读出一串恒定不变的垃圾值。
+COOPERATIVE_PANEL_DX = -18
+COOPERATIVE_PANEL_DY = 29
+
+
+class CooperativeResultParser(ResultParser):
+    """读取协力结算面板的判定数字。
+
+    协力此前完全不读结算数字（识别到 PGGBM 后直接推进返回），面板布局差异
+    因此长期未被发现。除 FIELDS 偏移外，分类与校验逻辑与单人完全一致。
+    """
+
+    FIELDS = {
+        name: (
+            x1 + COOPERATIVE_PANEL_DX,
+            y1 + COOPERATIVE_PANEL_DY,
+            x2 + COOPERATIVE_PANEL_DX,
+            y2 + COOPERATIVE_PANEL_DY,
+        )
+        for name, (x1, y1, x2, y2) in ResultParser.FIELDS.items()
+    }
+
+
 def _install_result_samples_v2() -> None:
     """Add the current game's thin-digit rendering to the nearest-neighbour set."""
     crops = np.frombuffer(

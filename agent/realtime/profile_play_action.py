@@ -57,7 +57,12 @@ from .result_navigation import (
     navigate_result_pages,
     handle_story_page,
 )
-from .result_parser import LiveResult, ResultParser, adjusted_timing_offset
+from .result_parser import (
+    CooperativeResultParser,
+    LiveResult,
+    ResultParser,
+    adjusted_timing_offset,
+)
 from .run_reporting import (
     PreflightPerformanceSnapshot,
     result_report_payload as _result_report_payload,
@@ -860,6 +865,35 @@ def _wait_until(deadline, stopping, *, clock, sleeper) -> bool:
     return not stopping()
 
 
+def _read_cooperative_judgements(image) -> LiveResult | None:
+    """协力结算推进页面前，尽力读取一次判定数字。
+
+    协力此前完全不读结算数字（识别到 PGGBM 后直接推进返回），因此协力局
+    在日志和结果 JSON 里都没有 perfect/great 等真值，无法统计判定质量。
+    协力结算面板比单人结算页整体下移约 29px、左移约 18px，必须使用
+    CooperativeResultParser 的偏移 ROI，否则会读出一串恒定垃圾值。
+
+    这里只做一次单帧读取：数字有入场动画，单帧可能读到中间值，稳定性循环
+    留待后续步骤；本步只负责拿到数据并打日志。
+
+    任何失败都必须返回 None —— 协力结算有固定的三步推进节拍，读取绝不
+    能拖慢或打断它。
+    """
+    if image is None:
+        return None
+    try:
+        return CooperativeResultParser().parse(image)
+    except ValueError:
+        return None
+    except Exception as exc:  # noqa: BLE001 - 结算读取不得中断协力推进
+        print(
+            "RealtimeResult cooperative_judgement_error="
+            f"{type(exc).__name__}: {exc}",
+            flush=True,
+        )
+        return None
+
+
 def _dismiss_reward_popup(
     controller,
     image,
@@ -1153,6 +1187,30 @@ def collect_result(
         if cooperative_mode:
             # 识别到 PGGBM 后也必须完成完整三步节拍，随后由协力外层
             # 继续以相同方式推进，直到最终房间或剧情终点。
+            # 推进前尽力读一次判定数字：协力此前从不读取，日志和结果 JSON
+            # 因此没有 perfect/great 真值，无法统计判定质量。读取失败不影响
+            # 推进节奏，仅记录 unreadable。
+            cooperative_result = _read_cooperative_judgements(
+                navigation.image,
+            )
+            if cooperative_result is not None:
+                print(
+                    "RealtimeProfilePlay cooperative_judgements "
+                    f"perfect={cooperative_result.perfect} "
+                    f"great={cooperative_result.great} "
+                    f"good={cooperative_result.good} "
+                    f"bad={cooperative_result.bad} "
+                    f"miss={cooperative_result.miss} "
+                    f"fast={cooperative_result.fast} "
+                    f"slow={cooperative_result.slow} "
+                    f"total={cooperative_result.total}",
+                    flush=True,
+                )
+            else:
+                print(
+                    "RealtimeProfilePlay cooperative_judgements=unreadable",
+                    flush=True,
+                )
             accelerated_back(
                 controller,
                 before_input=before_input,
@@ -1161,6 +1219,7 @@ def collect_result(
             )
             return ResultCollectionOutcome(
                 ResultCollectionStatus.ADVANCED,
+                result=cooperative_result,
                 image=navigation.image,
                 elapsed_seconds=clock() - started_at,
                 page_state="pggbm",
