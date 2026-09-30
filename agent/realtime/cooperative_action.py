@@ -73,6 +73,7 @@ TEMPLATE_POSITIONS = {
     "private_room_title": (392, 210),
     "room_wait": (110, 58),
     "song_unspecified": (690, 612),
+    "song_random": (690, 528),
     "ready_button": (1010, 575),
     "member_exit_title": (399, 158),
     "connect_failed_body": (580, 345),
@@ -95,6 +96,7 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "debug_recording": False,
     "diagnostic_trace": True,
     "disconnect_jump_enabled": False,
+    "song_choice": "unspecified",
 }
 _SETTINGS = dict(DEFAULT_SETTINGS)
 _SETTINGS_LOCK = threading.Lock()
@@ -122,6 +124,14 @@ HOME_LIVE_POINT = (1175, 645)
 DISCONNECT_CONTINUE_INTERRUPT_POINT = (508, 447)
 DISCONNECT_CONFIRM_INTERRUPT_POINT = (754, 439)
 READY_DELIVERY_OBSERVE_SECONDS = 2.0
+# 协力选曲页三个按钮（1280x720，2026-10-01 真机截图标定）：
+# 「随机选曲」在「不指定歌曲」正上方 84px，两者左边缘对齐；「确定」在右下。
+COOPERATIVE_SONG_RANDOM_POINT = (782, 565)
+COOPERATIVE_SONG_UNSPECIFIED_POINT = (780, 647)
+COOPERATIVE_SONG_CONFIRM_POINT = (1068, 647)
+COOPERATIVE_SONG_CHOICES = ("unspecified", "random", "current")
+# 选择随机/当前曲目时，只在本任务第一轮于选曲页停留，给玩家筛选曲目范围。
+COOPERATIVE_SONG_CHOICE_PAUSE_SECONDS = 10.0
 
 
 def _frame_is_black_transition(image: np.ndarray) -> bool:
@@ -246,6 +256,14 @@ def configure_cooperative_settings(params: dict[str, object]) -> dict[str, objec
         if not 0 <= count <= 999:
             raise ValueError("协力演出次数必须是0到999的整数，0表示无限")
         candidate["count"] = count
+        song_choice = str(candidate.get("song_choice", "unspecified"))
+        if song_choice not in COOPERATIVE_SONG_CHOICES:
+            raise ValueError(
+                "协力歌曲选择必须是 "
+                + "/".join(COOPERATIVE_SONG_CHOICES)
+                + " 之一"
+            )
+        candidate["song_choice"] = song_choice
         _SETTINGS.clear()
         _SETTINGS.update(candidate)
         return dict(_SETTINGS)
@@ -342,6 +360,8 @@ class CooperativeLiveFlow:
         # 稳定最终封面放行，只有已经进入动态演奏场才走生命监控兜底。
         self.playfield_detector = PlayfieldDetector()
         self.playfield_entry_evidence = CooperativePlayfieldEntryEvidence()
+        # 「随机/当前曲目」只在本次任务第一轮留出筛选窗口，用尽即失效。
+        self.song_choice_pause_pending = True
         self.templates = {
             path.stem: imread_unicode(path, cv2.IMREAD_COLOR)
             for path in TEMPLATE_DIR.glob("*.png")
@@ -746,10 +766,32 @@ class CooperativeLiveFlow:
                     time.monotonic()
                     + SONG_CHOICE_TO_READY_TIMEOUT_SECONDS
                 )
-                self.click((780, 647))
-                time.sleep(0.35)
-                self.click((1068, 647))
-                print("CooperativeLive song_choice=unspecified", flush=True)
+                song_choice = str(
+                    getattr(self, "settings", {}).get(
+                        "song_choice", "unspecified"
+                    )
+                )
+                if (
+                    song_choice != "unspecified"
+                    and getattr(self, "song_choice_pause_pending", False)
+                ):
+                    # 只在本任务第一轮停留，给玩家筛选要打的曲目范围。
+                    self.song_choice_pause_pending = False
+                    print(
+                        "CooperativeLive song_choice_pause "
+                        f"seconds={COOPERATIVE_SONG_CHOICE_PAUSE_SECONDS} "
+                        f"choice={song_choice}",
+                        flush=True,
+                    )
+                    time.sleep(COOPERATIVE_SONG_CHOICE_PAUSE_SECONDS)
+                if song_choice == "random":
+                    self.click(COOPERATIVE_SONG_RANDOM_POINT)
+                    time.sleep(0.35)
+                elif song_choice == "unspecified":
+                    self.click(COOPERATIVE_SONG_UNSPECIFIED_POINT)
+                    time.sleep(0.35)
+                self.click(COOPERATIVE_SONG_CONFIRM_POINT)
+                print(f"CooperativeLive song_choice={song_choice}", flush=True)
                 time.sleep(0.5)
                 while time.monotonic() < ready_deadline:
                     ready_state, _ = self.wait_for(

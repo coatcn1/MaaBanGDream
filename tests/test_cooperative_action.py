@@ -890,6 +890,7 @@ def test_cooperative_interface_exposes_requested_modes_and_five_difficulties():
         "CooperativeDifficulty",
         "CooperativeCount",
         "CooperativeMemberExitPolicy",
+        "CooperativeSongChoice",
         "CooperativeDebug",
         "CooperativeDisconnectJump",
     ]
@@ -1038,6 +1039,7 @@ def test_cooperative_templates_are_deployed_and_nonempty():
         "private_room_title.png",
         "room_wait.png",
         "song_unspecified.png",
+        "song_random.png",
         "ready_button.png",
         "member_exit_title.png",
         "connect_failed_body.png",
