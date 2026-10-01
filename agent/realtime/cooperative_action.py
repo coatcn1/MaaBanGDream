@@ -1242,8 +1242,10 @@ class CooperativeLiveFlow:
             return state
         if self.pipeline_box(image, "CooperativeHomeMarker") is not None:
             return "home"
-        # 主页“要退出游戏吗”确认框：点“取消”并像剧情页一样跳过本帧
-        # 的返回键，否则弹窗与返回键来回切换，结算导航卡满超时。
+        # 主页“要关闭游戏吗”确认框：点“取消”后必须按“已到主页”收尾。
+        # 该弹窗只可能出现在主页，因此命中它本身就是已经回到主页的铁证；
+        # 若只返回“story”跳过本帧返回键，外层会在弹窗被取消后再次按 BACK，
+        # 形成“按返回 → 弹窗 → 点取消 → 再按返回”的死循环直到超时。
         quit_box = self.pipeline_box(image, "QuitConfirmCancel")
         if quit_box is not None:
             self.click(
@@ -1252,7 +1254,7 @@ class CooperativeLiveFlow:
                     int(quit_box.y + quit_box.h // 2),
                 )
             )
-            return "story"
+            return "home"
         if handle_story_page(
             image, recognise=self.pipeline_box, click=self.click,
             stopping=self.stopped,
