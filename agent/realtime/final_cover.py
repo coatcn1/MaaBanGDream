@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 import unicodedata
+
+import cv2
+import numpy as np
 
 from .chart_repository import LocalChartRepository
 from .song_identity import (
@@ -15,6 +19,58 @@ from .song_identity import (
     same_song,
 )
 from .song_title_ocr import title_similarity
+from .vision_io import imread_unicode
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# 协力成员加载页左下角的固定表情图标。真正的最终封面页该区域是纯黑，
+# 因此该图标是「仍在成员加载页」的可靠判据。
+MEMBER_LOADING_ICON_TEMPLATE = (
+    PROJECT_ROOT / "resource" / "image" / "cooperative"
+    / "member_loading_icon.png"
+)
+MEMBER_LOADING_ICON_THRESHOLD = 0.90
+
+_loading_icon_cache: np.ndarray | None = None
+
+
+def member_loading_icon() -> np.ndarray | None:
+    global _loading_icon_cache
+    if _loading_icon_cache is None:
+        _loading_icon_cache = imread_unicode(
+            MEMBER_LOADING_ICON_TEMPLATE, cv2.IMREAD_COLOR
+        )
+    return _loading_icon_cache
+
+
+def is_member_loading_screen(image: Any) -> bool:
+    """画面是否仍停留在协力等待/加载阶段。
+
+    加载页会短暂停留并产生稳定的高纹理指纹；只靠「连续两帧稳定」无法与
+    真封面区分，本函数提供内容判据，让加载页在观察阶段就被否决。
+
+    判据是协力等待界面左下角的表情图标。真封面页会先整屏变黑再显示封面，
+    该图标不会出现（4 张真机封面帧实测匹配分仅 0.31–0.34）。
+    必须全图搜索：玩家点开表情面板时图标会上移到中左位置，但**只要图标还在，
+    就说明仍未到封面页**；限制搜索区域反而会在图标上移后误判为封面页。
+    """
+    template = member_loading_icon()
+    if template is None or not isinstance(image, np.ndarray):
+        return False
+    if image.ndim != 3 or image.shape[2] < 3:
+        return False
+    if (
+        image.shape[0] < template.shape[0]
+        or image.shape[1] < template.shape[1]
+    ):
+        return False
+    try:
+        result = cv2.matchTemplate(
+            image[:, :, :3], template, cv2.TM_CCOEFF_NORMED
+        )
+    except cv2.error:
+        return False
+    return bool(float(result.max()) >= MEMBER_LOADING_ICON_THRESHOLD)
 
 
 @dataclass(frozen=True, slots=True)
@@ -269,6 +325,14 @@ class FinalCoverResolver:
 
     def observe(self, image: Any) -> FinalCoverResolution | None:
         self.frames += 1
+        if is_member_loading_screen(image):
+            # 仍在协力成员加载页：该页会停留十几秒并产生稳定的高纹理指纹，
+            # 若在此确认会把封面认成另一首歌，随后按错误谱面开演并耗尽生命。
+            # 清零候选，保证加载页永远凑不满「连续两帧稳定」。
+            self._candidate_song_id = UNKNOWN_SONG_ID
+            self._candidate_frames = 0
+            self.last_reason = "member loading screen"
+            return None
         if self.gate is not None:
             confirmation = self.gate.observe(image)
             self.last_reason = self.gate.last_reason

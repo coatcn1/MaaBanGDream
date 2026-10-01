@@ -1040,6 +1040,7 @@ def test_cooperative_templates_are_deployed_and_nonempty():
         "room_wait.png",
         "song_unspecified.png",
         "song_random.png",
+        "member_loading_icon.png",
         "ready_button.png",
         "member_exit_title.png",
         "connect_failed_body.png",
