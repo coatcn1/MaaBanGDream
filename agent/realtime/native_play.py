@@ -10,7 +10,7 @@ import math
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from statistics import median
+from statistics import mean, median
 from typing import Any, Callable
 
 import numpy as np
@@ -19,7 +19,10 @@ from . import native_engine
 from .native_minitouch import NativeMinitouchDevice
 from .playfield_monitor import LANE_CENTERS, PlayfieldDetector
 from .prepare_popup import CooperativePreparePopupDetector
-from .runtime_flags import native_timing_compensation_enabled
+from .runtime_flags import (
+    native_timing_compensation_enabled,
+    native_wait_jitter_trial_enabled,
+)
 
 
 TOUCH_Y = 590.0
@@ -114,6 +117,57 @@ class _ExecutionTimingTrace:
             "sample_count": len(samples),
             "samples": samples,
             "chunks": chunks,
+        }
+
+
+class _WaitCostEstimator:
+    """只预测未来等待的常态成本，真实卡顿欠账仍由原始校准器计入。"""
+
+    def __init__(self) -> None:
+        self._samples: deque[float] = deque(maxlen=64)
+        self._estimated_ms = 0.0
+        self._clipped_count = 0
+        self._raw_chunk_wait_ms: float | None = None
+
+    def observe(self, event: dict[str, object]) -> None:
+        command = str(event["command"])
+        if command.startswith("w "):
+            self._samples.append(
+                float(event["cost_ms"]) - float(command.split()[1])
+            )
+
+    def estimate(
+        self, fallback: float, *, raw_chunk_wait_ms: float | None = None,
+    ) -> float:
+        self._raw_chunk_wait_ms = raw_chunk_wait_ms
+        self._clipped_count = 0
+        if len(self._samples) < 8:
+            self._estimated_ms = float(fallback)
+            return self._estimated_ms
+        samples = list(self._samples)
+        center = median(samples)
+        # 稀疏块的一次调度卡顿不能变成密集块每条 w 的成本。保留有界的
+        # 常态波动；持续变慢会更新整个窗口，而不是被永久当作异常丢弃。
+        spread = max(1.0, 6.0 * median(abs(value - center) for value in samples))
+        bounded = [min(center + spread, max(center - spread, value)) for value in samples]
+        self._clipped_count = sum(raw != clipped for raw, clipped in zip(samples, bounded))
+        self._estimated_ms = mean(bounded)
+        return self._estimated_ms
+
+    def reset(self) -> None:
+        self._samples.clear()
+        self._estimated_ms = 0.0
+        self._clipped_count = 0
+        self._raw_chunk_wait_ms = None
+
+    def report(self) -> dict[str, object]:
+        return {
+            "sample_count": len(self._samples),
+            "window_samples": 64,
+            "minimum_samples": 8,
+            "estimated_wait_ms": self._estimated_ms,
+            "raw_chunk_wait_ms": self._raw_chunk_wait_ms,
+            "clipped_sample_count": self._clipped_count,
         }
 
 
@@ -541,6 +595,7 @@ class NativeMinitouchBackend:
         require_probe: bool | None = None,
         drift_rate_correction_enabled: bool = False,
         timing_trial_enabled: bool | None = None,
+        wait_jitter_trial_enabled: bool | None = None,
     ) -> None:
         if not native_engine.available():
             raise RuntimeError(
@@ -587,6 +642,14 @@ class NativeMinitouchBackend:
         if self._receipt_reader is None:
             raise RuntimeError("Native 模块缺少动作执行回执接口")
         self._calibrator = native_engine.latency_calibrator()
+        self._wait_cost_estimator = (
+            _WaitCostEstimator()
+            if (
+                native_wait_jitter_trial_enabled()
+                if wait_jitter_trial_enabled is None
+                else bool(wait_jitter_trial_enabled)
+            ) else None
+        )
         self._run_id = run_id or str(uuid.uuid4())
         self._jlog_path = Path(jlog_path) if jlog_path is not None else None
         # 速率估计按 chunk 聚合：设备回执成簇到达（同一 commit 的动作共享
@@ -1018,6 +1081,14 @@ class NativeMinitouchBackend:
                     offset_field,
                     float(getattr(expected.used_offsets, offset_field)),
                 )
+        wait_estimator = getattr(self, "_wait_cost_estimator", None)
+        if wait_estimator is not None and int(sample_counts.get("wait", 1)) > 0:
+            offsets.wait_ms = wait_estimator.estimate(
+                float(expected.used_offsets.wait_ms),
+                raw_chunk_wait_ms=float(offsets.wait_ms),
+            )
+        # correction_ms 已用未过滤的实际成本计算：只替换未来预测，不能
+        # 擦掉这次真实卡顿，也不能修改已发布切片或本局 Profile 偏移。
         self._compiler.add_residual_ms(correction_ms)
         self._compiler.set_offsets(offsets)
         self._last_observed_offsets = self._offsets_to_dict(offsets)
@@ -1215,6 +1286,9 @@ class NativeMinitouchBackend:
             self._expected_commands.popleft()
             self._observed_commands += 1
             self._calibrator.observe(event)
+            wait_estimator = getattr(self, "_wait_cost_estimator", None)
+            if wait_estimator is not None:
+                wait_estimator.observe(event)
             observe = getattr(self._session, "observe_minitouch_log", None)
             if observe is not None:
                 observe(event)
@@ -1746,6 +1820,9 @@ class NativeMinitouchBackend:
             self._observation_cancelled = False
             self._observation_complete.clear()
             self._calibrator = native_engine.latency_calibrator()
+            wait_estimator = getattr(self, "_wait_cost_estimator", None)
+            if wait_estimator is not None:
+                wait_estimator.reset()
             if not bool(self._session.start(*arguments)):
                 self._refresh_session_snapshot()
                 return False
@@ -2224,6 +2301,14 @@ class NativeMinitouchBackend:
             "timing_trial": {
                 "startup": self._startup_timing_trial_report(),
                 "wait_cost_recovery": self._compiler_timing_trial_report(),
+                "wait_jitter_guard": {
+                    "enabled": getattr(self, "_wait_cost_estimator", None) is not None,
+                    **(
+                        self._wait_cost_estimator.report()
+                        if getattr(self, "_wait_cost_estimator", None) is not None
+                        else {}
+                    ),
+                },
             },
             "drift_rate_correction_enabled": (
                 getattr(self, "_drift_rate_estimator", None) is not None
