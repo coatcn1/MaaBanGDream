@@ -183,6 +183,27 @@
     "threshold": 0.9,
     "action": "DoNothing"
   },
+  "RealtimeLiveFailedContinue": {
+    "recognition": "TemplateMatch",
+    "template": "live_failed_continue.png",
+    "roi": [630, 390, 300, 130],
+    "threshold": 0.9,
+    "action": "DoNothing"
+  },
+  "RealtimeLiveFailedExit": {
+    "recognition": "TemplateMatch",
+    "template": "live_failed_exit.png",
+    "roi": [360, 390, 300, 130],
+    "threshold": 0.9,
+    "action": "DoNothing"
+  },
+  "RealtimeQuitConfirmExit": {
+    "recognition": "TemplateMatch",
+    "template": "quit_confirm_exit.png",
+    "roi": [630, 470, 300, 120],
+    "threshold": 0.9,
+    "action": "DoNothing"
+  },
   "MedleyLiveFailedContinue": {
     "recognition": "TemplateMatch",
     "template": "live_failed_continue.png",

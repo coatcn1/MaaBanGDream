@@ -780,7 +780,8 @@
       "task_name": "ChallengeLive",
       "label": "挑战演出",
       "status": "failure",
-      "reason": "挑战演出流程未完成：未到达演出结算或主页恢复失败"
+      "reason": "挑战演出流程未完成：未到达演出结算或主页恢复失败",
+      "reason_source": "latest"
     }
   },
   "ChallengeFreeLiveTemplate": {

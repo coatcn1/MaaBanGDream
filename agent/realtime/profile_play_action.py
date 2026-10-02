@@ -164,8 +164,10 @@ def _native_execution_gate_failures(
     native_report: dict[str, object],
     *,
     expected_jump_cancel: bool = False,
+    expected_life_cancel: bool = False,
 ) -> list[str]:
-    """返回 Native 完整性门禁失败项；空列表才允许进入结算解析。"""
+    """校验完整播放或已确认游戏终态后的安全取消，不把取消视为演出成功。"""
+    expected_cancel = expected_jump_cancel or expected_life_cancel
     planned = int(native_report.get("planned", 0))
     sent = int(native_report.get("sent", 0))
     executed = int(native_report.get("executed", 0))
@@ -175,7 +177,7 @@ def _native_execution_gate_failures(
     session_state = str(
         native_report.get("session_state") or "<missing>"
     ).lower()
-    if expected_jump_cancel:
+    if expected_cancel:
         if state != "cancelled" or session_state != "cancelled":
             failures.append(
                 f"terminal_state={state} session_state={session_state}"
@@ -191,7 +193,7 @@ def _native_execution_gate_failures(
             f"terminal_state={state} session_state={session_state}"
         )
     if (
-        not expected_jump_cancel
+        not expected_cancel
         and (planned <= 0 or sent != planned or executed != planned)
     ):
         failures.append(
@@ -199,7 +201,7 @@ def _native_execution_gate_failures(
         )
     if (
         not bool(native_report.get("executed_observation_complete", False))
-        and not expected_jump_cancel
+        and not expected_cancel
     ):
         failures.append(
             "device evidence incomplete: "
@@ -2668,6 +2670,13 @@ class RealtimeProfilePlay(CustomAction):
                     expected_jump_cancel=(
                         stats.jump_requested and stats.life_depleted
                     ),
+                    # 真实死亡必然中断剩余谱面，但仍须证明 reset、触点释放
+                    # 和设备清理完成；通过此门禁只允许进入死亡处理，不是成功。
+                    expected_life_cancel=(
+                        (stats.life_failed or stats.aborted_for_life)
+                        and stats.life_depleted
+                        and not stats.completed and not stats.cleanup_failed
+                    ),
                 )
                 print(
                     "RealtimeProfilePlay native_timing "
@@ -2878,7 +2887,7 @@ class RealtimeProfilePlay(CustomAction):
                 )
             return True
 
-        if stats.life_failed and not stats.stopped:
+        if (stats.life_failed or stats.aborted_for_life) and not stats.stopped:
             result_output.mkdir(parents=True, exist_ok=True)
             # 生命归零：先把失败现场落盘，再有界退出到主页。退出导航失败时
             # 不掩盖“演出失败”这一真实原因，后续 CommonRecover 仍可兜底。
@@ -2905,16 +2914,23 @@ class RealtimeProfilePlay(CustomAction):
                 )
             navigation_ok = False
             try:
-                navigation_ok = exit_failed_live(context)
+                # 组曲由外层按整组三首的预算和专用两层退出状态机恢复，
+                # 单曲回调不能先用普通退出节点改变现场。
+                if run_mode != "medley":
+                    navigation_ok = exit_failed_live(context)
             except Exception as nav_error:
                 print(
                     "RealtimeProfilePlay life_failed_exit_error="
                     f"{type(nav_error).__name__}: {nav_error}",
                     flush=True,
                 )
+            exit_navigation = (
+                "deferred-medley" if run_mode == "medley"
+                else "ok" if navigation_ok else "failed"
+            )
             print(
                 "RealtimeProfilePlay life_failed "
-                f"exit_navigation={'ok' if navigation_ok else 'failed'}",
+                f"exit_navigation={exit_navigation}",
                 flush=True,
             )
             print(

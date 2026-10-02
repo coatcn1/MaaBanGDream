@@ -21,7 +21,7 @@ _DEFAULT_TEMPLATE = (
     PROJECT_ROOT / "resource" / "image" / "live_failed_continue.png"
 )
 # 1280x720 参考系下“演出失败”弹窗右侧粉色“继续”按钮区域。
-_DEFAULT_ROI = (740, 390, 340, 130)
+_DEFAULT_ROI = (630, 390, 300, 130)
 _REFERENCE_WIDTH = 1280
 _REFERENCE_HEIGHT = 720
 
@@ -121,42 +121,52 @@ def exit_failed_live(
     context: Any,
     *,
     home_node: str = "RealtimeLiveHomeMarker",
+    live_failed_continue_node: str = "RealtimeLiveFailedContinue",
+    live_failed_exit_node: str = "RealtimeLiveFailedExit",
+    quit_confirm_exit_node: str = "RealtimeQuitConfirmExit",
     timeout_seconds: float = 45.0,
 ) -> bool:
     """有界点击退出死亡弹窗并回到主页；主页命中或用户停止时提前返回。"""
-    controller = context.tasker.controller
     deadline = time.monotonic() + timeout_seconds
     clicked_fail_exit = False
     while time.monotonic() < deadline:
         if context.tasker.stopping:
             return True
-        image = controller.post_screencap().wait().get()
+        image = context.tasker.controller.post_screencap().wait().get()
         if context.tasker.stopping:
             return True
         home = context.run_recognition(home_node, image)
         if home and home.hit:
             return True
-        if not clicked_fail_exit:
-            confirm = context.run_recognition("LiveFailedContinue", image)
-            if confirm and confirm.hit:
-                exit_button = context.run_recognition("LiveFailedExit", image)
-                if exit_button and exit_button.hit and exit_button.box:
-                    box = exit_button.box
-                    controller.post_click(
-                        box.x + box.w // 2,
-                        box.y + box.h // 2,
-                    ).wait()
-                    clicked_fail_exit = True
-                    time.sleep(1.5)
-                    continue
-        quit_confirm = context.run_recognition("QuitConfirmExit", image)
-        if quit_confirm and quit_confirm.hit and quit_confirm.box:
-            box = quit_confirm.box
-            controller.post_click(
-                box.x + box.w // 2,
-                box.y + box.h // 2,
-            ).wait()
-            time.sleep(1.5)
+        confirm = context.run_recognition(live_failed_continue_node, image)
+        if confirm and confirm.hit:
+            exit_button = context.run_recognition(live_failed_exit_node, image)
+            if exit_button and exit_button.hit and exit_button.box:
+                if context.tasker.stopping:
+                    return True
+                box = exit_button.box
+                context.tasker.controller.post_click(
+                    box.x + box.w // 2,
+                    box.y + box.h // 2,
+                ).wait()
+                clicked_fail_exit = True
+                time.sleep(1.5)
+            else:
+                time.sleep(0.5)
+            # 第一层“继续”和第二层“退出”的模板可能互相命中。只要
+            # 第一层仍在场，即使上一帧已点击退出，也绝不能发送右侧输入。
             continue
+        if clicked_fail_exit:
+            quit_confirm = context.run_recognition(quit_confirm_exit_node, image)
+            if quit_confirm and quit_confirm.hit and quit_confirm.box:
+                if context.tasker.stopping:
+                    return True
+                box = quit_confirm.box
+                context.tasker.controller.post_click(
+                    box.x + box.w // 2,
+                    box.y + box.h // 2,
+                ).wait()
+                time.sleep(1.5)
+                continue
         time.sleep(0.5)
     return False
