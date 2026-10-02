@@ -141,6 +141,13 @@ def test_medley_pipeline_merges_options_and_defers_recovery_to_flow():
     )
 
 
+def test_challenge_failure_uses_latest_failure_reason():
+    nodes = load(ROOT / "resource/pipeline/challenge_live.json")
+    params = nodes["ChallengeFailure"]["custom_action_param"]
+    assert params["reason_source"] == "latest"
+    assert params["reason"]
+
+
 def test_minimal_navigation_contract():
     common = load(ROOT / "resource/pipeline/common.json")
     nodes = load(ROOT / "resource/pipeline/minimal_navigation.json")

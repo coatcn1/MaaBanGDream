@@ -1125,7 +1125,7 @@ def test_incomplete_round_records_structured_result_and_calibration_can_retry(
         assert calibration["mode"] == run_mode
 
 
-def test_life_depleted_calibration_formal_round_can_retry(monkeypatch, tmp_path):
+def test_life_depleted_calibration_formal_round_reports_death_without_technical_retry(monkeypatch, tmp_path):
     reset_live_run(mode="calibration", difficulty="Hard")
     tasker = Tasker()
     context = SimpleNamespace(tasker=tasker)
@@ -1180,8 +1180,9 @@ def test_life_depleted_calibration_formal_round_can_retry(monkeypatch, tmp_path)
     }
     argv = SimpleNamespace(custom_action_param=json.dumps(params))
 
-    assert RealtimeProfilePlay()._run(context, argv) is True
-    assert reasons == []
+    monkeypatch.setattr(profile_play_action, "exit_failed_live", lambda _context: True)
+    assert RealtimeProfilePlay()._run(context, argv) is False
+    assert reasons == ["演出失败：生命值归零"]
     calibration = json.loads(
         (tmp_path / "screencap" / "calibration-life-retry.json").read_text(
             encoding="utf-8"
@@ -1191,6 +1192,7 @@ def test_life_depleted_calibration_formal_round_can_retry(monkeypatch, tmp_path)
     assert calibration["survived"] is False
     assert calibration["completed"] is False
     assert calibration["mode"] == "calibration-formal"
+    assert calibration["result_status"] == "life_failed"
 
 
 def test_engine_error_writes_invalid_result_with_partial_stats(monkeypatch, tmp_path):
@@ -1648,6 +1650,9 @@ def _completed_play_harness(
     defer_result_collection=False,
     skip_result_check=False,
     life_failed=False,
+    aborted_for_life=False,
+    engine_cleanup_failed=False,
+    native_report=None,
 ):
     reset_live_run(
         mode="pending",
@@ -1663,6 +1668,7 @@ def _completed_play_harness(
     settings = SimpleNamespace(
         target_fps=60,
         timing_offset_ms=0,
+        note_speed=5.0,
         profile_path=SimpleNamespace(name="easy.json"),
     )
     monkeypatch.setattr(
@@ -1676,8 +1682,30 @@ def _completed_play_harness(
     monkeypatch.setattr("agent.realtime.profile_play_action.PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(
         "agent.realtime.profile_play_action.RealtimeProfileStore.runtime_options",
-        lambda *args, **kwargs: {"skip_result_check": skip_result_check},
+        lambda *args, **kwargs: {
+            "skip_result_check": skip_result_check,
+            "native_realtime_enabled": native_report is not None,
+        },
     )
+    if native_report is not None:
+        selection = SimpleNamespace(
+            path=Path("chart-728-easy.json"),
+            timeline=None,
+            bestdori_song_id=728,
+            difficulty="easy",
+        )
+        monkeypatch.setattr(
+            profile_play_action,
+            "resolve_local_chart_for_run",
+            lambda *args, **kwargs: SimpleNamespace(
+                selection=selection, reason="matched",
+            ),
+        )
+        monkeypatch.setattr(
+            profile_play_action,
+            "consume_prearmed_backend",
+            lambda *_args: SimpleNamespace(configure_timing_offset=lambda _: None),
+        )
     monkeypatch.setattr(
         "agent.realtime.profile_play_action._recover_completed_result",
         lambda context: True,
@@ -1735,9 +1763,16 @@ def _completed_play_harness(
                 120,
                 42,
                 engine_stopped,
-                completed=not engine_stopped and not startup_timed_out and not life_failed,
+                completed=(
+                    not engine_stopped and not startup_timed_out
+                    and not life_failed and not aborted_for_life
+                ),
                 life_failed=life_failed,
-                life_depleted=life_failed,
+                aborted_for_life=aborted_for_life,
+                life_depleted=life_failed or aborted_for_life,
+                cleanup_failed=engine_cleanup_failed,
+                engine_mode="native" if native_report is not None else "legacy",
+                native_report=dict(native_report or {}),
                 action_counts={"tap": 31, "flick": 4, "down": 7},
                 frame_interval_p50_ms=16.4,
                 frame_interval_p95_ms=18.2,
@@ -1748,6 +1783,8 @@ def _completed_play_harness(
                     if engine_stopped
                     else "开演后 20 秒仍未识别到生命条"
                     if startup_timed_out
+                    else "演出失败：生命值归零"
+                    if life_failed or aborted_for_life
                     else "已识别演奏结束并进入结算"
                 ),
                 initial_timing_offset_ms=-11,
@@ -1760,6 +1797,7 @@ def _completed_play_harness(
     image = np.full((720, 1280, 3), 128, dtype=np.uint8)
 
     def fake_collect(*args, **kwargs):
+        assert not (life_failed or aborted_for_life), "死亡局不能采集成功结算"
         assert kwargs["cooperative_mode"] is (run_mode == "cooperative")
         assert kwargs["robust_navigation"] is True
         assert kwargs["timeout_seconds"] == 180.0
@@ -1808,6 +1846,8 @@ def _completed_play_harness(
     }
     if calibration_report:
         params["calibration_report"] = "screencap/calibration-round.json"
+    if native_report is not None:
+        params["rehearsal_mode"] = False
     if defer_result_collection:
         params.update({
             "defer_result_collection": True,
@@ -1816,6 +1856,98 @@ def _completed_play_harness(
     argv = SimpleNamespace(custom_action_param=json.dumps(params))
     assert RealtimeProfilePlay()._run(context, argv) is expected_success
     return tmp_path, writes, recorder_holder.get("value")
+
+
+def _life_failed_native_report():
+    return {
+        "planned": 6287,
+        "sent": 2218,
+        "executed": 2195,
+        "underflows": 0,
+        "state": "cancelled",
+        "session_state": "cancelled",
+        "executed_observation_complete": False,
+        "executed_observation_reason": "会话在完整设备回读前取消",
+        "reset_executed": True,
+        "release_confirmed": True,
+        "stop_latency_ms": 21.0,
+    }
+
+
+@pytest.mark.parametrize("death_source", ["popup", "numeric"])
+@pytest.mark.parametrize("run_mode", ["challenge", "medley"])
+def test_native_life_failure_keeps_reason_and_exits_failed_live(
+    tmp_path, monkeypatch, death_source, run_mode,
+):
+    from agent.task_reporting import record_failure_reason, latest_failure_reason
+
+    record_failure_reason("")
+    exits = []
+    monkeypatch.setattr(
+        profile_play_action, "exit_failed_live", lambda context: exits.append(context) or True,
+    )
+    root, writes, _ = _completed_play_harness(
+        monkeypatch, tmp_path,
+        debug_recording=False,
+        diagnostic_trace=False,
+        run_mode=run_mode,
+        life_failed=death_source == "popup",
+        aborted_for_life=death_source == "numeric",
+        native_report=_life_failed_native_report(),
+        expected_success=False,
+    )
+    report = next((root / "screencap").glob("realtime-result-*.json"))
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["result_status"] == "life_failed"
+    assert payload["reason"] == "演出失败：生命值归零"
+    assert payload["completed"] is False
+    assert latest_failure_reason() == "演出失败：生命值归零"
+    assert len(exits) == (0 if run_mode == "medley" else 1)
+    assert writes == []
+
+
+@pytest.mark.parametrize("override", [
+    {"release_confirmed": False},
+    {"reset_executed": False},
+    {"executed": 2219},
+    {"underflows": 1},
+    {"device_error": "connection lost"},
+    {"stop_latency_ms": 1001.0},
+])
+def test_native_life_failure_does_not_hide_unsafe_cleanup(tmp_path, monkeypatch, override):
+    exits = []
+    monkeypatch.setattr(
+        profile_play_action, "exit_failed_live", lambda context: exits.append(context) or True,
+    )
+    with pytest.raises(RuntimeError, match="Native 演奏未通过完整性门禁"):
+        _completed_play_harness(
+            monkeypatch, tmp_path,
+            debug_recording=False,
+            diagnostic_trace=False,
+            run_mode="challenge",
+            life_failed=True,
+            native_report=_life_failed_native_report() | override,
+            expected_success=False,
+        )
+    assert exits == []
+
+
+def test_native_life_failure_keeps_engine_cleanup_failure_blocking(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        profile_play_action, "exit_failed_live",
+        lambda context: pytest.fail("触点清理失败时不能继续导航"),
+    )
+    with pytest.raises(RuntimeError, match="Native 演奏未通过完整性门禁"):
+        _completed_play_harness(
+            monkeypatch, tmp_path,
+            debug_recording=False,
+            diagnostic_trace=False,
+            run_mode="challenge",
+            life_failed=True,
+            engine_cleanup_failed=True,
+            native_report=_life_failed_native_report(),
+            expected_success=False,
+        )
 
 
 def test_completed_medley_play_defers_pggbm_collection(tmp_path, monkeypatch):
