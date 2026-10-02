@@ -4,13 +4,15 @@
     [string]$EnvironmentName = 'maabangdream',
     [switch]$OrderedStartupTrial,
     [switch]$NativeTimingTrial,
-    [switch]$DisableNativeTimingCompensation
+    [switch]$DisableNativeTimingCompensation,
+    [switch]$VerifyAdbEndpoint
 )
 
 $ErrorActionPreference = 'Stop'
 # 候选行为仅由本次启动显式启用；普通启动保留已发布行为，便于真机对照。
 
 $env:MAABANGDREAM_ORDERED_STARTUP = if ($OrderedStartupTrial) { '1' } else { '0' }
+$env:MFA_VERIFY_ADB_ENDPOINT = if ($VerifyAdbEndpoint) { '1' } else { '0' }
 # 已验收的等待成本与首命令启动补偿默认启用，仅保留显式关闭入口用于回归排查。
 
 $env:MAABANGDREAM_NATIVE_TIMING_TRIAL = if ($DisableNativeTimingCompensation) { '0' } else { '1' }
@@ -316,6 +318,7 @@ try {
 }
 finally {
     Remove-Item Env:MAABANGDREAM_ORDERED_STARTUP -ErrorAction SilentlyContinue
+    Remove-Item Env:MFA_VERIFY_ADB_ENDPOINT -ErrorAction SilentlyContinue
     Remove-Item Env:MAABANGDREAM_NATIVE_TIMING_TRIAL -ErrorAction SilentlyContinue
     Remove-Item Env:MAABANGDREAM_MFA_SESSION_ID -ErrorAction SilentlyContinue
     Remove-Item Env:MAABANGDREAM_MFA_ROOT -ErrorAction SilentlyContinue
