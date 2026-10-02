@@ -7,6 +7,7 @@ from collections.abc import Sequence
 NATIVE_TIMING_TRIAL_ARG = "--native-timing-trial"
 DISABLE_NATIVE_TIMING_COMPENSATION_ARG = "--disable-native-timing-compensation"
 NATIVE_TIMING_TRIAL_ENV = "MAABANGDREAM_NATIVE_TIMING_TRIAL"
+NATIVE_WAIT_JITTER_TRIAL_ENV = "MAABANGDREAM_NATIVE_WAIT_JITTER_TRIAL"
 
 _native_timing_trial_enabled = False
 
@@ -26,3 +27,8 @@ def native_timing_compensation_enabled() -> bool:
     """返回当前 Agent 进程实际启用的 Native timing 补偿状态。"""
 
     return _native_timing_trial_enabled
+
+
+def native_wait_jitter_trial_enabled() -> bool:
+    """等待成本异常值候选未经过真机验收，仅由本次进程显式启用。"""
+    return os.environ.get(NATIVE_WAIT_JITTER_TRIAL_ENV) == "1"
