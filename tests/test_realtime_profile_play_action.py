@@ -1653,6 +1653,7 @@ def _completed_play_harness(
     aborted_for_life=False,
     engine_cleanup_failed=False,
     native_report=None,
+    collected_result=None,
 ):
     reset_live_run(
         mode="pending",
@@ -1806,6 +1807,7 @@ def _completed_play_harness(
         return ResultCollectionOutcome(
             collection_status,
             result=(
+                collected_result if collected_result is not None else
                 LiveResult(100, 10, 2, 1, 2, 3, 4)
                 if collection_status is ResultCollectionStatus.STABLE else None
             ),
@@ -2051,7 +2053,7 @@ def test_completed_without_video_writes_json_and_trace_only(tmp_path, monkeypatc
     assert summary["recording_mode"] == "trace-only"
 
 
-def test_completed_cooperative_play_advances_score_page_without_pggbm_parse(
+def test_completed_cooperative_play_advances_when_judgements_are_unreadable(
     tmp_path, monkeypatch,
 ):
     root, writes, _ = _completed_play_harness(
@@ -2066,6 +2068,22 @@ def test_completed_cooperative_play_advances_score_page_without_pggbm_parse(
     payload = json.loads(report.read_text(encoding="utf-8"))
     assert payload["result_status"] == "cooperative_result_advanced"
     assert payload["valid"] is False
+    assert payload["cooperative_judgements_status"] == "unreadable"
+    assert writes == []
+
+
+def test_completed_cooperative_play_saves_stable_judgements(tmp_path, monkeypatch):
+    reading = LiveResult(100, 10, 2, 1, 2, 3, 4)
+    root, writes, _ = _completed_play_harness(
+        monkeypatch, tmp_path, debug_recording=False,
+        collection_status=ResultCollectionStatus.ADVANCED,
+        run_mode="cooperative", collected_result=reading,
+    )
+    payload = json.loads(next((root / "screencap").glob("realtime-result-*.json")).read_text(encoding="utf-8"))
+    assert payload["cooperative_judgements_status"] == "stable"
+    for name, value in reading.to_dict().items():
+        assert payload[name] == value
+    assert payload["eligible_for_profile_acceptance"] is False
     assert writes == []
 
 

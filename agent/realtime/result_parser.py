@@ -329,6 +329,23 @@ class ResultParser:
         return np.asarray([np.count_nonzero(region) / region.size for region in regions])
 
 
+# 协力结算面板复用同一数字分类器，位置使用 PR #68 提供的布局偏移。
+COOPERATIVE_PANEL_DX = -18
+COOPERATIVE_PANEL_DY = 29
+
+
+class CooperativeResultParser(ResultParser):
+    """读取协力结算页偏移后的判定数字区域。"""
+
+    FIELDS = {
+        name: (
+            x1 + COOPERATIVE_PANEL_DX, y1 + COOPERATIVE_PANEL_DY,
+            x2 + COOPERATIVE_PANEL_DX, y2 + COOPERATIVE_PANEL_DY,
+        )
+        for name, (x1, y1, x2, y2) in ResultParser.FIELDS.items()
+    }
+
+
 def _install_result_samples_v2() -> None:
     """Add the current game's thin-digit rendering to the nearest-neighbour set."""
     crops = np.frombuffer(

@@ -105,6 +105,14 @@
     "action": "Custom",
     "custom_action": "CooperativeLiveConfigure",
     "custom_action_param": {"member_exit_policy": "fail", "max_reconnects": 3},
+    "next": ["CooperativeSongChoiceConfigure"],
+    "on_error": ["CooperativeFailure"]
+  },
+  "CooperativeSongChoiceConfigure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "CooperativeLiveConfigure",
+    "custom_action_param": {"song_choice": "unspecified"},
     "next": ["CooperativeDebugConfigure"],
     "on_error": ["CooperativeFailure"]
   },

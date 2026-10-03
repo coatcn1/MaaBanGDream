@@ -42,7 +42,9 @@ def main() -> None:
         "Agent runtime flags: "
         "native_timing_compensation="
         f"{runtime_flags['native_timing_compensation']} "
-        f"native_wait_jitter_trial={native_wait_jitter_trial_enabled()}",
+        f"native_wait_jitter_trial={native_wait_jitter_trial_enabled()} "
+        "cooperative_member_loading_guard_trial="
+        f"{runtime_flags['cooperative_member_loading_guard_trial']}",
         flush=True,
     )
     Tasker.set_log_dir("./debug")
