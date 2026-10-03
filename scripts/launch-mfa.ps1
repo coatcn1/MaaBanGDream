@@ -4,6 +4,7 @@
     [string]$EnvironmentName = 'maabangdream',
     [switch]$OrderedStartupTrial,
     [switch]$NativeTimingTrial,
+    [switch]$CooperativeMemberLoadingGuardTrial,
     [switch]$DisableNativeTimingCompensation,
     [switch]$VerifyAdbEndpoint
 )
@@ -214,6 +215,10 @@ else {
 
     $agentArgs += '--native-timing-trial'
 }
+if ($CooperativeMemberLoadingGuardTrial) {
+    # 通过命令行传递候选，避免 MFA 子进程过滤临时环境变量后保护失效。
+    $agentArgs += '--cooperative-member-loading-guard-trial'
+}
 $interface.agent.child_args = $agentArgs
 $interfaceJson = $interface | ConvertTo-Json -Depth 100
 [System.IO.File]::WriteAllText(
@@ -236,6 +241,12 @@ if (
     '--disable-native-timing-compensation' -notin $deployedAgentArgs
 ) {
     throw 'Native timing compensation disable flag was not written to deployed interface.json'
+}
+if (
+    $CooperativeMemberLoadingGuardTrial -and
+    '--cooperative-member-loading-guard-trial' -notin $deployedAgentArgs
+) {
+    throw 'Cooperative member loading guard trial flag was not written to deployed interface.json'
 }
 
 # The custom MFA settings page reads this ignored, machine-local sidecar. It is
@@ -330,3 +341,4 @@ Write-Host "Deployment: $MfaRoot"
 Write-Host "Conda environment: $EnvironmentName ($python)"
 Write-Host "Ordered startup trial: $([bool]$OrderedStartupTrial)"
 Write-Host "Native timing compensation: $(-not [bool]$DisableNativeTimingCompensation)"
+Write-Host "Cooperative member loading guard trial: $([bool]$CooperativeMemberLoadingGuardTrial)"

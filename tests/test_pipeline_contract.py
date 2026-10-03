@@ -14,6 +14,45 @@ def load(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def test_cooperative_song_choice_overrides_resolve_in_real_maafw(tmp_path):
+    import subprocess
+    import sys
+
+    interface = load(ROOT / "interface.json")
+    pipeline = load(ROOT / "resource/pipeline/cooperative_live.json")
+    option = interface["option"]["CooperativeSongChoice"]
+    node = "CooperativeSongChoiceConfigure"
+    assert option["default_case"] == "Unspecified"
+    assert pipeline["CooperativeMemberExitConfigure"]["next"] == [node]
+    code = """
+import json, sys
+from maa.resource import Resource
+from maa.toolkit import Toolkit
+data = json.load(sys.stdin)
+Toolkit.init_option(data['log_dir'])
+resource = Resource()
+assert resource.override_pipeline({data['node']: data['base']})
+effective = {}
+for name, override in data['overrides'].items():
+    assert resource.override_pipeline({data['node']: override})
+    effective[name] = resource.get_node_data(data['node'])['action']['param']['custom_action_param']
+print(json.dumps(effective))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        input=json.dumps({
+            "log_dir": str(tmp_path), "node": node, "base": pipeline[node],
+            "overrides": {case["name"]: case["pipeline_override"][node] for case in option["cases"]},
+        }),
+        text=True, capture_output=True, check=True,
+    )
+    assert json.loads(result.stdout) == {
+        "Unspecified": {"song_choice": "unspecified"},
+        "Random": {"song_choice": "random"},
+        "Current": {"song_choice": "current"},
+    }
+
+
 def test_all_count_inputs_accept_zero_and_reject_out_of_range():
     import re
 
@@ -36,7 +75,7 @@ def test_all_pipeline_clicks_use_the_foreground_guard():
 def test_interface_references_existing_entry_and_resource():
     interface = load(ROOT / "interface.json")
     assert interface["interface_version"] == 2
-    assert interface["version"] == "1.4.4"
+    assert interface["version"] == "1.4.5"
     assert interface["license"] == "PolyForm-Noncommercial-1.0.0"
     assert interface["github"] == "https://github.com/coatcn1/MaaBanGDream"
     assert "mirrorchyan_rid" not in interface

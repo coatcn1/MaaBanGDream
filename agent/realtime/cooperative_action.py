@@ -40,7 +40,7 @@ from .live_visual_gate import MODE_TOGGLE_POINT, live_performance_mode_is_off
 from .performance_settings_action import RealtimePerformanceSettingsGate
 from .playfield_monitor import PlayfieldDetector
 from .chart_repository import LocalChartRepository
-from .final_cover import FinalCoverResolver
+from .final_cover import FinalCoverResolver, cooperative_member_loading_guard_enabled
 from .profile_play_action import RealtimeProfilePlay
 from .profile_store import (
     EnvironmentSignature,
@@ -73,6 +73,7 @@ TEMPLATE_POSITIONS = {
     "private_room_title": (392, 210),
     "room_wait": (110, 58),
     "song_unspecified": (690, 612),
+    "song_random": (690, 528),
     "ready_button": (1010, 575),
     "member_exit_title": (399, 158),
     "connect_failed_body": (580, 345),
@@ -95,6 +96,7 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "debug_recording": False,
     "diagnostic_trace": True,
     "disconnect_jump_enabled": False,
+    "song_choice": "unspecified",
 }
 _SETTINGS = dict(DEFAULT_SETTINGS)
 _SETTINGS_LOCK = threading.Lock()
@@ -122,6 +124,12 @@ HOME_LIVE_POINT = (1175, 645)
 DISCONNECT_CONTINUE_INTERRUPT_POINT = (508, 447)
 DISCONNECT_CONFIRM_INTERRUPT_POINT = (754, 439)
 READY_DELIVERY_OBSERVE_SECONDS = 2.0
+# 选曲页坐标沿用贡献者的 1280×720 标定；默认仍选择不指定歌曲。
+COOPERATIVE_SONG_RANDOM_POINT = (782, 565)
+COOPERATIVE_SONG_UNSPECIFIED_POINT = (780, 647)
+COOPERATIVE_SONG_CONFIRM_POINT = (1068, 647)
+COOPERATIVE_SONG_CHOICES = ("unspecified", "random", "current")
+COOPERATIVE_SONG_CHOICE_PAUSE_SECONDS = 10.0
 
 
 def _frame_is_black_transition(image: np.ndarray) -> bool:
@@ -246,6 +254,10 @@ def configure_cooperative_settings(params: dict[str, object]) -> dict[str, objec
         if not 0 <= count <= 999:
             raise ValueError("协力演出次数必须是0到999的整数，0表示无限")
         candidate["count"] = count
+        song_choice = str(candidate.get("song_choice", "unspecified"))
+        if song_choice not in COOPERATIVE_SONG_CHOICES:
+            raise ValueError("协力歌曲选择必须是 unspecified/random/current 之一")
+        candidate["song_choice"] = song_choice
         _SETTINGS.clear()
         _SETTINGS.update(candidate)
         return dict(_SETTINGS)
@@ -342,6 +354,7 @@ class CooperativeLiveFlow:
         # 稳定最终封面放行，只有已经进入动态演奏场才走生命监控兜底。
         self.playfield_detector = PlayfieldDetector()
         self.playfield_entry_evidence = CooperativePlayfieldEntryEvidence()
+        self.song_choice_pause_pending = True
         self.templates = {
             path.stem: imread_unicode(path, cv2.IMREAD_COLOR)
             for path in TEMPLATE_DIR.glob("*.png")
@@ -727,6 +740,23 @@ class CooperativeLiveFlow:
         else:
             raise ValueError(f"不支持的协力入房方式：{method}")
 
+    def pause_for_song_filter(self) -> str | None:
+        """留出筛歌窗口，同时观察停止、成员退出和玩家提前确认。"""
+        deadline = time.monotonic() + COOPERATIVE_SONG_CHOICE_PAUSE_SECONDS
+        while True:
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
+            state, _ = self.wait_for(
+                ("song_unspecified", "ready_button"), timeout=0.0,
+            )
+            if state == "ready_button":
+                return state
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                # 后续输入只消费最新画面；选曲页消失时由外层继续观察。
+                return state
+            time.sleep(min(0.1, remaining))
+
     def wait_for_preparation(self) -> None:
         choice_deadline = (
             time.monotonic() + ROOM_SONG_CHOICE_TIMEOUT_SECONDS
@@ -740,16 +770,40 @@ class CooperativeLiveFlow:
                 ),
             )
             if state == "ready_button":
+                # 首轮已提前确认时不把筛歌窗口顺延到后续轮次。
+                self.song_choice_pause_pending = False
                 return
             if state == "song_unspecified":
+                song_choice = str(
+                    getattr(self, "settings", {}).get("song_choice", "unspecified")
+                )
+                if (
+                    song_choice != "unspecified"
+                    and getattr(self, "song_choice_pause_pending", False)
+                ):
+                    self.song_choice_pause_pending = False
+                    print(
+                        "CooperativeLive song_choice_pause "
+                        f"seconds={COOPERATIVE_SONG_CHOICE_PAUSE_SECONDS} choice={song_choice}",
+                        flush=True,
+                    )
+                    state = self.pause_for_song_filter()
+                    if state == "ready_button":
+                        return
+                    if state != "song_unspecified":
+                        continue
                 ready_deadline = (
                     time.monotonic()
                     + SONG_CHOICE_TO_READY_TIMEOUT_SECONDS
                 )
-                self.click((780, 647))
-                time.sleep(0.35)
-                self.click((1068, 647))
-                print("CooperativeLive song_choice=unspecified", flush=True)
+                if song_choice == "random":
+                    self.click(COOPERATIVE_SONG_RANDOM_POINT)
+                    time.sleep(0.35)
+                elif song_choice == "unspecified":
+                    self.click(COOPERATIVE_SONG_UNSPECIFIED_POINT)
+                    time.sleep(0.35)
+                self.click(COOPERATIVE_SONG_CONFIRM_POINT)
+                print(f"CooperativeLive song_choice={song_choice}", flush=True)
                 time.sleep(0.5)
                 while time.monotonic() < ready_deadline:
                     ready_state, _ = self.wait_for(
@@ -762,7 +816,7 @@ class CooperativeLiveFlow:
                     if ready_state == "ready_button":
                         return
                 raise RuntimeError(
-                    "点击不指定歌曲后60秒内未进入协力演出准备页"
+                    "确认协力选曲后60秒内未进入演出准备页"
                 )
         self.jump_after_startup_failure(
             "进入协力房间后180秒内未出现不指定歌曲或准备页，"
@@ -992,6 +1046,7 @@ class CooperativeLiveFlow:
             repository=LocalChartRepository(
                 PROJECT_ROOT / "resource" / "charts"
             ),
+            reject_member_loading=cooperative_member_loading_guard_enabled(),
         )
 
     def watch_member_exit_before_black(
@@ -1197,12 +1252,18 @@ class CooperativeLiveFlow:
         finally:
             self._post_score_refresh = False
         if state is not None:
+            self._quit_cancel_home_pending = False
             return state
         if self.pipeline_box(image, "CooperativeHomeMarker") is not None:
+            self._quit_cancel_home_pending = False
             return "home"
-        # 主页“要退出游戏吗”确认框：点“取消”并像剧情页一样跳过本帧
-        # 的返回键，否则弹窗与返回键来回切换，结算导航卡满超时。
+        # 该确认框提供主页到达证据；取消后复核弹窗消失，再按主页终点收尾。
+        # 若仍返回剧情状态且主页模板漏识别，外层可能再次按 BACK 打开弹窗。
         quit_box = self.pipeline_box(image, "QuitConfirmCancel")
+        if quit_box is None and getattr(self, "_quit_cancel_home_pending", False):
+            # 取消动画可能跨越多帧；弹窗消失后消费之前的主页证据，期间不发 BACK。
+            self._quit_cancel_home_pending = False
+            return "home"
         if quit_box is not None:
             self.click(
                 (
@@ -1210,7 +1271,16 @@ class CooperativeLiveFlow:
                     int(quit_box.y + quit_box.h // 2),
                 )
             )
-            return "story"
+            self._quit_cancel_home_pending = True
+            self._post_score_refresh = True
+            try:
+                after_cancel = self.capture()
+            finally:
+                self._post_score_refresh = False
+            if self.pipeline_box(after_cancel, "QuitConfirmCancel") is not None:
+                return "story"
+            self._quit_cancel_home_pending = False
+            return "home"
         if handle_story_page(
             image, recognise=self.pipeline_box, click=self.click,
             stopping=self.stopped,

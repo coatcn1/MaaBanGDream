@@ -3,7 +3,7 @@
   "interface_version": 2,
   "name": "MaaBanGDream",
   "label": "BanG Dream! 自动化（MaaFramework）",
-  "version": "1.4.4",
+  "version": "1.4.5",
   "description": "docs/about.md",
   "about_icon": "docs/assets/maabangdream-logo-v1.png",
   "contact": "docs/contact.md",
@@ -71,6 +71,7 @@
         "CooperativeDifficulty",
         "CooperativeCount",
         "CooperativeMemberExitPolicy",
+        "CooperativeSongChoice",
         "CooperativeDebug",
         "CooperativeDisconnectJump"
       ]
@@ -549,6 +550,40 @@
           "pipeline_override": {
             "CooperativeMemberExitConfigure": {
               "custom_action_param": {"member_exit_policy": "reconnect", "max_reconnects": 3}
+            }
+          }
+        }
+      ]
+    },
+    "CooperativeSongChoice": {
+      "type": "select",
+      "label": "歌曲选择",
+      "default_case": "Unspecified",
+      "cases": [
+        {
+          "name": "Unspecified",
+          "label": "不指定歌曲",
+          "pipeline_override": {
+            "CooperativeSongChoiceConfigure": {
+              "custom_action_param": {"song_choice": "unspecified"}
+            }
+          }
+        },
+        {
+          "name": "Random",
+          "label": "随机选曲（第一轮留 10 秒筛歌）",
+          "pipeline_override": {
+            "CooperativeSongChoiceConfigure": {
+              "custom_action_param": {"song_choice": "random"}
+            }
+          }
+        },
+        {
+          "name": "Current",
+          "label": "当前曲目（第一轮留 10 秒筛歌）",
+          "pipeline_override": {
+            "CooperativeSongChoiceConfigure": {
+              "custom_action_param": {"song_choice": "current"}
             }
           }
         }

@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 import unicodedata
 
+import cv2
+import numpy as np
+
 from .chart_repository import LocalChartRepository
+from .runtime_flags import cooperative_member_loading_guard_enabled
 from .song_identity import (
     LOOSE_SAME_SONG_DISTANCE,
     UNKNOWN_SONG_ID,
@@ -15,6 +21,34 @@ from .song_identity import (
     same_song,
 )
 from .song_title_ocr import title_similarity
+from .vision_io import imread_unicode
+
+
+MEMBER_LOADING_ICON_TEMPLATE = (
+    Path(__file__).resolve().parents[2]
+    / "resource" / "image" / "cooperative" / "member_loading_icon.png"
+)
+MEMBER_LOADING_ICON_THRESHOLD = 0.90
+
+
+@lru_cache(maxsize=1)
+def member_loading_icon() -> np.ndarray:
+    template = imread_unicode(MEMBER_LOADING_ICON_TEMPLATE, cv2.IMREAD_COLOR)
+    if template is None:
+        # 启用候选后模板缺失必须失败，不能退回未经保护的身份确认。
+        raise RuntimeError("协力成员加载页模板缺失或损坏")
+    return template
+
+
+def is_member_loading_screen(image: Any) -> bool:
+    """全图寻找等待页表情图标，兼容玩家展开表情面板后图标上移。"""
+    if not isinstance(image, np.ndarray) or image.ndim != 3 or image.shape[2] < 3:
+        return False
+    template = member_loading_icon()
+    if image.shape[0] < template.shape[0] or image.shape[1] < template.shape[1]:
+        return False
+    result = cv2.matchTemplate(image[:, :, :3], template, cv2.TM_CCOEFF_NORMED)
+    return bool(float(cv2.minMaxLoc(result)[1]) >= MEMBER_LOADING_ICON_THRESHOLD)
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,9 +215,14 @@ class FinalCoverResolver:
         repository: LocalChartRepository | None = None,
         require_observed_title: bool = False,
         allow_missing_level: bool = False,
+        reject_member_loading: bool = False,
     ) -> None:
         if selection is None and repository is None:
             raise ValueError("缺少最终封面谱面解析器")
+        self.reject_member_loading = bool(reject_member_loading)
+        if self.reject_member_loading:
+            member_loading_icon()
+            print("FinalCover member_loading_guard=enabled", flush=True)
         self.difficulty = str(difficulty).strip().lower()
         self.observed_level = (
             None if observed_level is None else int(observed_level)
@@ -269,6 +308,12 @@ class FinalCoverResolver:
 
     def observe(self, image: Any) -> FinalCoverResolution | None:
         self.frames += 1
+        if self.reject_member_loading and is_member_loading_screen(image):
+            # 加载页即使稳定多帧也不能确认；出现该页会中断连续候选计数。
+            self._candidate_song_id = UNKNOWN_SONG_ID
+            self._candidate_frames = 0
+            self.last_reason = "member loading screen"
+            return None
         if self.gate is not None:
             confirmation = self.gate.observe(image)
             self.last_reason = self.gate.last_reason

@@ -27,7 +27,9 @@ from maa.custom_action import CustomAction
 from .controller_touch import ControllerTouchDispatcher
 from .debug_recorder import RealtimeDebugRecorder, append_lifecycle_event
 from .engine import EngineStats, RealtimeEngine
-from .final_cover import FinalCoverResolution, FinalCoverResolver
+from .final_cover import (
+    FinalCoverResolution, FinalCoverResolver, cooperative_member_loading_guard_enabled,
+)
 from .life_monitor import LifeDetector, LifeGuard, PlayfieldCompletionGuard
 from .live_failed_detector import (
     LiveFailedPopupDetector,
@@ -57,7 +59,7 @@ from .result_navigation import (
     navigate_result_pages,
     handle_story_page,
 )
-from .result_parser import LiveResult, ResultParser, adjusted_timing_offset
+from .result_parser import CooperativeResultParser, LiveResult, ResultParser, adjusted_timing_offset
 from .run_reporting import (
     PreflightPerformanceSnapshot,
     result_report_payload as _result_report_payload,
@@ -343,6 +345,10 @@ def wait_for_final_cover(
         ),
         require_observed_title=require_observed_title,
         allow_missing_level=ignore_preparation_level,
+        reject_member_loading=(
+            getattr(live_run, "mode", "") == "cooperative"
+            and cooperative_member_loading_guard_enabled()
+        ),
     )
     evidence_reason = resolver.evidence_reason()
     if evidence_reason is not None:
@@ -1005,6 +1011,67 @@ def _plausible_result(
     return True, None
 
 
+COOPERATIVE_RESULT_READ_TIMEOUT_SECONDS = 3.0
+
+
+def _read_stable_cooperative_judgements(
+    controller, stopping, first_image, *, parser, expected_notes, maximum_notes,
+    deadline, stability_interval_seconds, is_result_page, clock, sleeper,
+) -> tuple[LiveResult | None, object]:
+    """有界读取稳定协力数字，任何技术故障都只放弃统计，不打断结算。"""
+    candidate = None
+    candidate_at = 0.0
+    image = first_image
+    interval = max(0.05, float(stability_interval_seconds))
+    read_deadline = min(deadline, clock() + COOPERATIVE_RESULT_READ_TIMEOUT_SECONDS)
+    while clock() < read_deadline:
+        if stopping():
+            return None, image
+        now = clock()
+        try:
+            result = parser.parse(image)
+            plausible, _ = _plausible_result(
+                result, expected_notes=expected_notes, maximum_notes=maximum_notes,
+            )
+        except ValueError:
+            result, plausible = None, False
+        except Exception as exc:
+            print(
+                "RealtimeResult cooperative_judgement_warning="
+                f"{type(exc).__name__}: {exc}", flush=True,
+            )
+            return None, image
+        if plausible:
+            if (
+                candidate is not None
+                and now - candidate_at >= interval
+                and _result_counts(result) == _result_counts(candidate)
+            ):
+                return result, image
+            if candidate is None or _result_counts(result) != _result_counts(candidate):
+                candidate, candidate_at = result, now
+        else:
+            candidate = None
+        if not _wait_until(
+            min(read_deadline, now + interval), stopping, clock=clock, sleeper=sleeper,
+        ) or clock() >= read_deadline:
+            return None, image
+        if stopping():
+            return None, image
+        try:
+            current_controller = controller() if callable(controller) else controller
+            image = current_controller.post_screencap().wait().get()
+            if stopping() or not is_result_page(image):
+                return None, image
+        except Exception as exc:
+            print(
+                "RealtimeResult cooperative_capture_warning="
+                f"{type(exc).__name__}: {exc}", flush=True,
+            )
+            return None, image
+    return None, image
+
+
 def _advance_result_rank_page(
     controller,
     image,
@@ -1088,7 +1155,7 @@ def collect_result(
     """
     # 所有共用入口的身份已在开演前确认；结算只检查 PGGBM 页面和
     # 判定数字，不再识别歌曲标题、等级或难度来反判本局身份。
-    parser = parser or ResultParser()
+    parser = parser or (CooperativeResultParser() if cooperative_mode else ResultParser())
     started_at = clock()
     deadline = started_at + timeout_seconds
     candidate: LiveResult | None = None
@@ -1153,8 +1220,29 @@ def collect_result(
             )
         pending_image = navigation.image
         if cooperative_mode:
-            # 识别到 PGGBM 后也必须完成完整三步节拍，随后由协力外层
-            # 继续以相同方式推进，直到最终房间或剧情终点。
+            # 数字只在短预算内尝试；读不到时仍推进，不能重演已完成的演出。
+            cooperative_result, cooperative_image = _read_stable_cooperative_judgements(
+                controller, stopping, navigation.image, parser=parser,
+                expected_notes=expected_notes, maximum_notes=maximum_notes,
+                deadline=deadline, stability_interval_seconds=stability_interval_seconds,
+                is_result_page=lambda image: identify_terminal(image) == "pggbm",
+                clock=clock, sleeper=sleeper,
+            )
+            if stopping():
+                return ResultCollectionOutcome(
+                    ResultCollectionStatus.STOPPED, image=cooperative_image,
+                    elapsed_seconds=clock() - started_at, page_state="pggbm",
+                    reason="用户在协力结算读取期间停止任务",
+                )
+            if cooperative_result is not None:
+                counts = " ".join(
+                    f"{name}={getattr(cooperative_result, name)}"
+                    for name in ("perfect", "great", "good", "bad", "miss", "fast", "slow", "total")
+                )
+                print(f"RealtimeProfilePlay cooperative_judgements {counts} status=stable", flush=True)
+            else:
+                print("RealtimeProfilePlay cooperative_judgements=unreadable", flush=True)
+            # 保留协力统一节拍，由外层继续推进至最终房间或主页。
             accelerated_back(
                 controller,
                 before_input=before_input,
@@ -1163,7 +1251,8 @@ def collect_result(
             )
             return ResultCollectionOutcome(
                 ResultCollectionStatus.ADVANCED,
-                image=navigation.image,
+                result=cooperative_result,
+                image=cooperative_image,
                 elapsed_seconds=clock() - started_at,
                 page_state="pggbm",
                 reason=(
@@ -3086,13 +3175,17 @@ class RealtimeProfilePlay(CustomAction):
                 raise
             if outcome.status is ResultCollectionStatus.ADVANCED:
                 advanced_payload = _result_report_payload(
-                    None,
+                    outcome.result,
                     stats,
                     timing_offset_ms=timing_offset_ms,
                     suggested_timing_offset_ms=None,
                     run_context=live_run,
                     result_status="cooperative_result_advanced",
                     reason=outcome.reason or "协力总分页已推进",
+                )
+                # 页面推进状态与数字统计分开记录；协力结果不参与自动接受 Profile。
+                advanced_payload["cooperative_judgements_status"] = (
+                    "stable" if outcome.result is not None else "unreadable"
                 )
                 _write_json_atomic(result_report_path, advanced_payload)
                 print(

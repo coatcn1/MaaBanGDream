@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from agent.realtime import profile_play_action
+from agent.realtime import final_cover
 from agent.realtime.chart_repository import ChartResolution, LocalChartRepository
 from agent.realtime.final_cover import (
     FinalCoverConfirmation,
@@ -192,6 +193,93 @@ def selection(song_id: str):
         fingerprints=(song_id,),
         shared_jacket=True,
     )
+
+
+def loading_frame(position=(20, 600)):
+    image, song_id = final_cover_frame()
+    template = final_cover.member_loading_icon()
+    x, y = position
+    image[y:y + template.shape[0], x:x + template.shape[1]] = template
+    return image, song_id
+
+
+@pytest.mark.parametrize("position", [(20, 600), (20, 280)])
+def test_member_loading_icon_is_found_after_panel_moves(position):
+    image, _ = loading_frame(position)
+    assert final_cover.is_member_loading_screen(image)
+    assert not final_cover.is_member_loading_screen(final_cover_frame()[0])
+
+
+def test_loading_guard_is_off_by_default_and_missing_template_fails_closed(monkeypatch):
+    monkeypatch.delenv("MAABANGDREAM_COOPERATIVE_MEMBER_LOADING_GUARD_TRIAL", raising=False)
+    assert not final_cover.cooperative_member_loading_guard_enabled()
+    monkeypatch.setenv("MAABANGDREAM_COOPERATIVE_MEMBER_LOADING_GUARD_TRIAL", "1")
+    assert final_cover.cooperative_member_loading_guard_enabled()
+    final_cover.member_loading_icon.cache_clear()
+    monkeypatch.setattr(final_cover, "imread_unicode", lambda *args: None)
+    cover, song_id = final_cover_frame()
+    resolver = FinalCoverResolver(
+        difficulty="Expert", observed_level=28, observed_title="SAVIOR OF SONG",
+        selection=selection(song_id),
+    )
+    assert resolver.observe(cover) is not None
+    with pytest.raises(RuntimeError, match="模板缺失或损坏"):
+        FinalCoverResolver(
+            difficulty="Expert", observed_level=28, observed_title="SAVIOR OF SONG",
+            selection=selection(song_id), reject_member_loading=True,
+        )
+
+
+def test_loading_guard_rejects_even_a_matching_selected_jacket():
+    loading, song_id = loading_frame()
+    resolver = FinalCoverResolver(
+        difficulty="Expert", observed_level=28, observed_title="SAVIOR OF SONG",
+        selection=selection(song_id), reject_member_loading=True,
+    )
+    assert resolver.observe(loading) is None
+    assert resolver.last_reason == "member loading screen"
+    assert resolver.observe(final_cover_frame()[0]) is not None
+
+
+def test_loading_frame_interrupts_continuous_deferred_cover_candidate():
+    loading, song_id = loading_frame()
+    selected = selection(song_id)
+
+    class Repository:
+        def resolve(self, *args, **kwargs):
+            return ChartResolution(selected, "confirmed")
+
+    resolver = FinalCoverResolver(
+        difficulty="Expert", observed_level=28, observed_title="SAVIOR OF SONG",
+        repository=Repository(), reject_member_loading=True,
+    )
+    cover = final_cover_frame()[0]
+    assert resolver.observe(cover) is None
+    assert resolver.observe(loading) is None
+    assert resolver.observe(cover) is None
+    assert resolver.observe(cover) is not None
+
+
+@pytest.mark.parametrize("mode", ["cooperative", "formal"])
+def test_normal_final_cover_wait_applies_loading_guard_only_to_cooperative(monkeypatch, mode):
+    monkeypatch.setenv("MAABANGDREAM_COOPERATIVE_MEMBER_LOADING_GUARD_TRIAL", "1")
+    loading, song_id = loading_frame()
+    images = iter([loading, final_cover_frame()[0]])
+    captured = []
+
+    class Controller:
+        def post_screencap(self):
+            image = next(images)
+            captured.append(image)
+            return SimpleNamespace(wait=lambda: SimpleNamespace(get=lambda: image))
+
+    outcome = wait_for_final_cover(
+        Controller(), SimpleNamespace(mode=mode, song_level=28, song_title="SAVIOR OF SONG"),
+        selection(song_id), "Expert", lambda: False,
+        timeout_seconds=1, poll_interval_seconds=0,
+    )
+    assert outcome.status == "confirmed"
+    assert len(captured) == (2 if mode == "cooperative" else 1)
 
 
 def test_final_cover_confirms_only_with_preparation_title_level_and_difficulty():
