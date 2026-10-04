@@ -131,6 +131,22 @@ COOPERATIVE_SONG_UNSPECIFIED_POINT = (780, 647)
 COOPERATIVE_SONG_CONFIRM_POINT = (1068, 647)
 COOPERATIVE_SONG_CHOICES = ("unspecified", "random", "current")
 COOPERATIVE_SONG_CHOICE_PAUSE_SECONDS = 10.0
+# 协力房间选择页「确定」按钮（1280x720 真机标定，按钮实测 bbox
+# x[903,1166] y[619,674]）。单击可能被吞：2026-10-01 23:29 实测点完后页面
+# 30 秒内没有离开选择页、日志全程静默，最终以超时硬失败告终；而全天 130+
+# 次正常轮次该步只耗时 3.2–7.7 秒。因此停在选择页时重试点击。
+ROOM_CONFIRM_POINT = (1060, 650)
+ROOM_ENTRY_TIMEOUT_SECONDS = 45.0
+ROOM_ENTRY_RECLICK_AFTER_SECONDS = 12.0
+ROOM_ENTRY_MAX_RECLICKS = 2
+# 进房后 180 秒没出现准备页 = 游戏卡在房间成员加载页。2026-10-02 实测 4 次
+# （02:54/04:32/05:27/06:37），失败帧匹配 member_loading_icon 1.000、
+# room_wait 0.92–0.95，所有报错与断线弹窗模板 <0.42，房型无关，集中在凌晨
+# 低人口时段；进房本身正常（4.48–5.70s），之后 193–194s 全静默。这是游戏侧
+# 卡死而非流程缺陷，旧实现却直接判任务失败，把整场任务连同已完成局数一起
+# 丢掉。改为退房重试：放弃当前房间、回到房间选择页重新进房，连续多轮仍拿不
+# 下一局才结束任务。
+ROOM_PREPARATION_RETRY_LIMIT = 2
 
 
 def _frame_is_black_transition(image: np.ndarray) -> bool:
@@ -242,6 +258,10 @@ class MemberExited(RuntimeError):
 
 class JumpOutUnavailable(RuntimeError):
     """协力局已安全跳车或无法继续自动恢复，应立即结束任务。"""
+
+
+class RoomPreparationTimeout(RuntimeError):
+    """进房后长时间未出现准备页（游戏卡在成员加载页），应退房重试。"""
 
 
 def configure_cooperative_settings(params: dict[str, object]) -> dict[str, object]:
@@ -708,9 +728,10 @@ class CooperativeLiveFlow:
             f"elapsed={time.monotonic() - started:.2f}s",
             flush=True,
         )
-        self.click((1060, 650))
+        self.click(ROOM_CONFIRM_POINT)
         self.verify_room_entry(
-            "点击所选协力房间后仍停留在房间选择页，未开始匹配"
+            "点击所选协力房间后仍停留在房间选择页，未开始匹配",
+            confirm_point=ROOM_CONFIRM_POINT,
         )
         print(
             "CooperativeLive select_room room_entry_confirmed "
@@ -718,8 +739,15 @@ class CooperativeLiveFlow:
             flush=True,
         )
 
-    def verify_room_entry(self, failure_reason: str) -> None:
-        deadline = time.monotonic() + 30.0
+    def verify_room_entry(
+        self,
+        failure_reason: str,
+        *,
+        confirm_point: tuple[int, int] | None = None,
+    ) -> None:
+        deadline = time.monotonic() + ROOM_ENTRY_TIMEOUT_SECONDS
+        next_reclick_at = time.monotonic() + ROOM_ENTRY_RECLICK_AFTER_SECONDS
+        reclicked = 0
         departed_frames = 0
         while time.monotonic() < deadline:
             image = self.capture()
@@ -734,7 +762,8 @@ class CooperativeLiveFlow:
                     flush=True,
                 )
                 return
-            if self.visible(image, "room_search"):
+            on_selection_page = self.visible(image, "room_search")
+            if on_selection_page:
                 departed_frames = 0
             else:
                 departed_frames += 1
@@ -749,6 +778,26 @@ class CooperativeLiveFlow:
                         flush=True,
                     )
                     return
+            # 仍能识别到「房间搜索」按钮说明还停在选择页，这一次点击没有
+            # 生效（按钮未启用或输入被吞）。正常进房 3.2–7.7 秒就会离开该
+            # 页，所以这里重试点击，而不是一路干等到超时。
+            if (
+                on_selection_page
+                and confirm_point is not None
+                and reclicked < ROOM_ENTRY_MAX_RECLICKS
+                and time.monotonic() >= next_reclick_at
+            ):
+                reclicked += 1
+                next_reclick_at = (
+                    time.monotonic() + ROOM_ENTRY_RECLICK_AFTER_SECONDS
+                )
+                print(
+                    "CooperativeLive room_entry=reclick "
+                    f"attempt={reclicked}/{ROOM_ENTRY_MAX_RECLICKS}",
+                    flush=True,
+                )
+                self.click(confirm_point)
+                departed_frames = 0
             time.sleep(0.25)
         raise RuntimeError(failure_reason)
 
@@ -875,9 +924,9 @@ class CooperativeLiveFlow:
                 raise RuntimeError(
                     "确认协力选曲后60秒内未进入演出准备页"
                 )
-        self.jump_after_startup_failure(
-            "进入协力房间后180秒内未出现不指定歌曲或准备页，"
-            "已退后台返回游戏"
+        raise RoomPreparationTimeout(
+            "进入协力房间后180秒内未出现不指定歌曲或准备页"
+            "（游戏卡在房间成员加载页）"
         )
 
     @staticmethod
@@ -1579,7 +1628,7 @@ class CooperativeLiveFlow:
         except InterruptedError:
             outcome = "stopped"
             raise
-        except (MemberExited, JumpOutUnavailable):
+        except (MemberExited, JumpOutUnavailable, RoomPreparationTimeout):
             outcome = "stopped" if self.stopped() else "startup-failed"
             raise
         except Exception as exc:
@@ -1694,6 +1743,7 @@ class CooperativeLiveFlow:
         reconnects = 0
         reuse_room = False
         play_failures = 0
+        room_timeouts = 0
         retry_count = max(
             0,
             min(99, int(self.settings.get("play_failure_retry_count", 0))),
@@ -1731,6 +1781,28 @@ class CooperativeLiveFlow:
                     flush=True,
                 )
                 return False
+            except RoomPreparationTimeout as exc:
+                # 进房超时是游戏侧卡死，退房重试即可恢复，不该赔上整场任务。
+                # 与重连预算同构：约束的是「连续拿不下一局」，完成一局即清零。
+                if room_timeouts >= ROOM_PREPARATION_RETRY_LIMIT:
+                    record_failure_reason(str(exc))
+                    print(
+                        f"[任务][协力演出][流程][ERROR] {exc}，"
+                        f"连续 {ROOM_PREPARATION_RETRY_LIMIT + 1} 次退房重试"
+                        "仍未能开始演出",
+                        flush=True,
+                    )
+                    return False
+                room_timeouts += 1
+                print(
+                    "CooperativeLive room_retry=true "
+                    f"attempt={room_timeouts}/{ROOM_PREPARATION_RETRY_LIMIT} "
+                    f"reason={exc}",
+                    flush=True,
+                )
+                self.recover_after_play_failure(str(exc))
+                reuse_room = False
+                continue
             except InterruptedError:
                 raise
             except Exception as exc:
@@ -1802,6 +1874,13 @@ class CooperativeLiveFlow:
 
             completed += 1
             play_failures = 0
+            # 重连预算按“连续未能完成一局”计算。原实现跨轮累加且成功后不
+            # 重置，21 轮的社交模式里 3 次预算会被互不相干的成员退出耗尽：
+            # 2026-10-01 23:42 实测三次重连各自约 4.65 秒、全部成功回到房间
+            # 并重新进房，却在第 4/21 局因计数已满直接终止整个任务。真正的
+            # 死循环保护是“连续重连仍拿不下一局”，完成一局即视为已恢复。
+            reconnects = 0
+            room_timeouts = 0
             callback = getattr(self, "progress_callback", None)
             if callback is not None:
                 try:

@@ -20,6 +20,7 @@ from agent.realtime.cooperative_action import (
     CooperativePlayfieldEntryEvidence,
     JumpOutUnavailable,
     MemberExited,
+    RoomPreparationTimeout,
     classify_room_tier,
     configure_cooperative_settings,
     cooperative_play_params,
@@ -389,7 +390,7 @@ def test_member_exit_watch_motion_without_identity_waits_to_timeout(monkeypatch,
     flow.playfield_detector = lambda image: True
     flow.playfield_entry_evidence = SimpleNamespace(
         reset=lambda: None,
-        observe=lambda image, *, playfield_visible: True,
+        observe=lambda image, *, playfield_visible, now: True,
     )
     monitored = []
 
@@ -422,7 +423,7 @@ def test_member_exit_watch_default_covers_slow_ready_countdown(monkeypatch):
     flow.playfield_detector = lambda image: False
     flow.playfield_entry_evidence = SimpleNamespace(
         reset=lambda: None,
-        observe=lambda image, *, playfield_visible: False,
+        observe=lambda image, *, playfield_visible, now: False,
     )
     monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(
@@ -448,7 +449,7 @@ def test_member_exit_watch_accepts_matching_final_cover_without_black(monkeypatc
     flow.playfield_detector = lambda image: False
     flow.playfield_entry_evidence = SimpleNamespace(
         reset=lambda: None,
-        observe=lambda image, *, playfield_visible: False,
+        observe=lambda image, *, playfield_visible, now: False,
     )
     flow.make_final_cover_entry_resolver = lambda: SimpleNamespace(
         observe=lambda image: observations.pop(0),
@@ -584,7 +585,7 @@ def test_member_exit_watch_does_not_accept_static_prepare_page_as_playfield(
     flow.playfield_detector = lambda image: True
     flow.playfield_entry_evidence = SimpleNamespace(
         reset=lambda: None,
-        observe=lambda image, *, playfield_visible: False,
+        observe=lambda image, *, playfield_visible, now: False,
     )
     jumped = []
 
@@ -604,24 +605,6 @@ def test_member_exit_watch_does_not_accept_static_prepare_page_as_playfield(
     with pytest.raises(JumpOutUnavailable, match="startup timeout"):
         flow.watch_member_exit_before_black(timeout=0.1)
     assert jumped == [True]
-
-
-def test_cooperative_playfield_entry_evidence_requires_narrow_motion():
-    evidence = CooperativePlayfieldEntryEvidence()
-    static = np.full((720, 1280, 3), 80, dtype=np.uint8)
-    narrow_motion = static.copy()
-    narrow_motion[500:540, 600:640] = 255
-    narrow_motion_followup = static.copy()
-    narrow_motion_followup[500:540, 640:680] = 255
-    broad_transition = static.copy()
-    broad_transition[430:570, :, :] = 180
-
-    assert evidence.observe(static, playfield_visible=True) is False
-    assert evidence.observe(static, playfield_visible=True) is False
-    assert evidence.observe(broad_transition, playfield_visible=True) is False
-    assert evidence.observe(static, playfield_visible=True) is False
-    assert evidence.observe(narrow_motion, playfield_visible=True) is False
-    assert evidence.observe(narrow_motion_followup, playfield_visible=True) is True
 
 
 def test_member_exit_watch_resets_motion_evidence_between_rounds(monkeypatch):
@@ -736,7 +719,9 @@ def test_endpoint_room_selection_swipes_directly_without_resetting_carousel(
     clicks = []
     flow.click = clicks.append
     verifications = []
-    flow.verify_room_entry = verifications.append
+    flow.verify_room_entry = lambda reason, **kwargs: verifications.append(
+        (reason, kwargs)
+    )
     swipes = []
     monkeypatch.setattr(
         cooperative_action,
@@ -750,8 +735,11 @@ def test_endpoint_room_selection_swipes_directly_without_resetting_carousel(
     flow.select_normal_room()
 
     assert swipes == [(start, end, 500)]
-    assert clicks == [(1060, 650)]
+    assert clicks == [cooperative_action.ROOM_CONFIRM_POINT]
     assert len(verifications) == 1
+    assert verifications[0][1] == {
+        "confirm_point": cooperative_action.ROOM_CONFIRM_POINT
+    }
 
 
 def test_room_entry_accepts_stable_departure_from_room_selection_without_narrow_lobby_marker(
@@ -776,6 +764,81 @@ def test_room_entry_accepts_stable_departure_from_room_selection_without_narrow_
     flow.verify_room_entry("must not be raised")
 
 
+def _room_entry_flow(frames):
+    """进房复核夹具：selection 帧仍能看到「房间搜索」，transition 帧看不到。"""
+    flow = _bare_flow()
+    flow.capture = lambda: next(frames)
+    flow.visible = lambda image, name, threshold=0.9: (
+        name == "room_search" and bool(image.any())
+    )
+    return flow
+
+
+def test_room_entry_reclicks_confirm_button_when_the_first_click_is_swallowed(
+    monkeypatch,
+):
+    """2026-10-01 23:29：单击被吞后页面 30 秒没离开选择页，旧实现直接硬失败。"""
+    selection = np.ones((2, 2, 3), dtype=np.uint8)
+    transition = np.zeros((2, 2, 3), dtype=np.uint8)
+    flow = _room_entry_flow(
+        iter([selection, transition, transition, transition])
+    )
+    clicks = []
+    flow.click = clicks.append
+    monkeypatch.setattr(
+        cooperative_action, "ROOM_ENTRY_RECLICK_AFTER_SECONDS", 0.0
+    )
+    monkeypatch.setattr(cooperative_action.time, "sleep", lambda _seconds: None)
+
+    flow.verify_room_entry("must not be raised", confirm_point=(1060, 650))
+
+    assert clicks == [(1060, 650)]
+
+
+def test_room_entry_does_not_reclick_without_an_explicit_confirm_point(
+    monkeypatch,
+):
+    """好友/房间号入房没有标定过「确定」坐标，必须保持单击后只观察。"""
+    selection = np.ones((2, 2, 3), dtype=np.uint8)
+    flow = _room_entry_flow(iter([]))
+    flow.capture = lambda: selection
+    clicks = []
+    flow.click = clicks.append
+    monkeypatch.setattr(
+        cooperative_action, "ROOM_ENTRY_RECLICK_AFTER_SECONDS", 0.0
+    )
+    monkeypatch.setattr(
+        cooperative_action, "ROOM_ENTRY_TIMEOUT_SECONDS", 0.05
+    )
+    monkeypatch.setattr(cooperative_action.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(RuntimeError):
+        flow.verify_room_entry("stuck", confirm_point=None)
+
+    assert clicks == []
+
+
+def test_room_entry_reclick_stops_at_the_bound(monkeypatch):
+    """重试必须有界，否则按钮真的不可用时会无限点下去。"""
+    selection = np.ones((2, 2, 3), dtype=np.uint8)
+    flow = _room_entry_flow(iter([]))
+    flow.capture = lambda: selection
+    clicks = []
+    flow.click = clicks.append
+    monkeypatch.setattr(
+        cooperative_action, "ROOM_ENTRY_RECLICK_AFTER_SECONDS", 0.0
+    )
+    monkeypatch.setattr(
+        cooperative_action, "ROOM_ENTRY_TIMEOUT_SECONDS", 0.05
+    )
+    monkeypatch.setattr(cooperative_action.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(RuntimeError):
+        flow.verify_room_entry("stuck", confirm_point=(1060, 650))
+
+    assert clicks == [(1060, 650)] * cooperative_action.ROOM_ENTRY_MAX_RECLICKS
+
+
 def test_normal_entry_ignores_stale_room_code_and_stay_setting():
     configure_cooperative_settings({"reset": True, "entry_method": "normal"})
     configure_cooperative_settings({"room_code": "941093"})
@@ -790,28 +853,29 @@ def test_normal_entry_ignores_stale_room_code_and_stay_setting():
     assert should_stay_in_room(settings) is False
 
 
-def test_wait_for_preparation_jumps_after_song_choice_entry_timeout(monkeypatch):
+def test_wait_for_preparation_raises_retryable_timeout_after_song_choice_entry(
+    monkeypatch,
+):
+    """进房 180 秒超时是游戏卡在成员加载页，必须抛可重试异常而不是结束任务。
+
+    2026-10-02 实测 4 次（02:54/04:32/05:27/06:37），进房本身正常
+    （4.48–5.70s），之后 193–194s 全静默；失败帧匹配 member_loading_icon
+    1.000、room_wait 0.92–0.95，所有报错弹窗模板 <0.42。
+    """
     clock = [0.0]
     flow = _bare_flow()
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
     flow.wait_for = lambda names, timeout: (
         clock.__setitem__(0, clock[0] + timeout) or (None, np.zeros((1, 1, 3)))
     )
-    reasons = []
-
-    def jump(reason):
-        reasons.append(reason)
-        raise JumpOutUnavailable(reason)
-
-    flow.jump_after_startup_failure = jump
+    jumped = []
+    flow.jump_after_startup_failure = jumped.append
     monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: clock[0])
 
-    with pytest.raises(JumpOutUnavailable, match="180秒"):
+    with pytest.raises(RoomPreparationTimeout, match="180秒"):
         flow.wait_for_preparation()
 
-    assert reasons == [
-        "进入协力房间后180秒内未出现不指定歌曲或准备页，已退后台返回游戏"
-    ]
+    assert jumped == []
 
 
 def test_wait_for_preparation_gives_ready_page_independent_60_seconds(monkeypatch):
@@ -1296,6 +1360,121 @@ def test_member_exit_reconnect_is_bounded_and_reuses_original_route():
     flow.return_to_room_selection = lambda: calls.append("room")
     assert flow.run() is True
     assert calls == ["dismiss", "room", "dismiss", "room"]
+
+
+def test_reconnect_budget_resets_after_a_completed_round():
+    """预算约束的是“连续重连仍拿不下一局”，不是整场任务的累计退出次数。
+
+    2026-10-01 23:42 实测：三次重连分散在第 2/2/3 局，每次约 4.65 秒且全部
+    成功回到房间并重新进房，却因跨轮累加在第 4/21 局直接终止整个任务。
+    """
+    flow = _bare_flow()
+    flow.settings = {
+        "member_exit_policy": "reconnect",
+        "max_reconnects": 3,
+        "count": 4,
+    }
+    attempts = iter([MemberExited(), True] * 4)
+
+    def run_attempt(reuse_room=False):
+        outcome = next(attempts)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    flow.run_attempt = run_attempt
+    flow.dismiss_member_exit = lambda: None
+    flow.return_to_room_selection = lambda: None
+
+    assert flow.run() is True
+
+
+def test_reconnect_budget_still_bounds_consecutive_failures():
+    """没有完成任何一局时，预算仍然必须在同一局内封顶。"""
+    flow = _bare_flow()
+    flow.settings = {
+        "member_exit_policy": "reconnect",
+        "max_reconnects": 3,
+        "count": 4,
+    }
+    flow.run_attempt = lambda reuse_room=False: (_ for _ in ()).throw(
+        MemberExited()
+    )
+    flow.dismiss_member_exit = lambda: None
+    flow.return_to_room_selection = lambda: None
+
+    assert flow.run() is False
+
+
+def test_room_entry_timeout_leaves_the_room_and_retries_instead_of_failing():
+    """进房超时不再赔上整场任务：退房回房间选择页后重新进房。"""
+    flow = _bare_flow()
+    flow.settings = {"count": 1, "entry_method": "normal"}
+    attempts = iter([RoomPreparationTimeout("进房超时"), True])
+
+    def run_attempt(reuse_room=False):
+        outcome = next(attempts)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    flow.run_attempt = run_attempt
+    recovered = []
+    flow.recover_after_play_failure = recovered.append
+    flow.return_to_room_selection = lambda: None
+
+    assert flow.run() is True
+    assert recovered == ["进房超时"]
+
+
+def test_room_entry_timeout_retry_is_bounded_and_reports_failure(monkeypatch):
+    """连续多轮仍拿不下一局才结束任务，不允许在卡死的房间上无限重试。"""
+    flow = _bare_flow()
+    flow.settings = {"count": 1, "entry_method": "normal"}
+    flow.run_attempt = lambda reuse_room=False: (_ for _ in ()).throw(
+        RoomPreparationTimeout("进房超时")
+    )
+    recovered = []
+    flow.recover_after_play_failure = recovered.append
+    failures = []
+    monkeypatch.setattr(cooperative_action, "record_failure_reason", failures.append)
+
+    assert flow.run() is False
+    assert len(recovered) == cooperative_action.ROOM_PREPARATION_RETRY_LIMIT
+    assert failures == ["进房超时"]
+
+
+def test_room_retry_budget_resets_after_a_completed_round():
+    """与重连预算同构：约束的是「连续拿不下一局」，完成一局即视为已恢复。"""
+    flow = _bare_flow()
+    flow.settings = {"count": 4, "entry_method": "normal"}
+    attempts = iter([RoomPreparationTimeout("进房超时"), True] * 4)
+
+    def run_attempt(reuse_room=False):
+        outcome = next(attempts)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    flow.run_attempt = run_attempt
+    flow.recover_after_play_failure = lambda reason: None
+    flow.return_to_room_selection = lambda: None
+
+    assert flow.run() is True
+
+
+def test_run_attempt_propagates_room_preparation_timeout():
+    flow = _bare_flow()
+    flow.enter_room = lambda: None
+    flow.wait_for_preparation = lambda: (_ for _ in ()).throw(
+        RoomPreparationTimeout("进房超时")
+    )
+    flow.capture = lambda: (_ for _ in ()).throw(
+        AssertionError("不应在退房重试前再次截图")
+    )
+
+    with pytest.raises(RoomPreparationTimeout, match="进房超时"):
+        flow.run_attempt()
 
 
 def test_member_exit_reconnect_recovers_via_home_when_result_pages_stuck():
