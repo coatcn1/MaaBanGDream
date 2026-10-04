@@ -183,6 +183,36 @@ def test_runtime_options_default_to_speed_only_settings(tmp_path):
     assert options["skip_result_check"] is False
 
 
+def test_cooperative_loading_guard_defaults_and_old_selection_migrate_enabled(tmp_path):
+    store = RealtimeProfileStore(tmp_path)
+    assert store.runtime_options()["cooperative_member_loading_guard_enabled"] is True
+    (tmp_path / "selection.json").write_text(
+        '{"version": 1, "pinned": {}, "runtime_options": {"native_realtime_enabled": false}}',
+        encoding="utf-8",
+    )
+    assert store.runtime_options()["cooperative_member_loading_guard_enabled"] is True
+
+
+def test_cooperative_loading_guard_false_survives_other_option_update(tmp_path):
+    store = RealtimeProfileStore(tmp_path)
+    options = store.runtime_options()
+    options["cooperative_member_loading_guard_enabled"] = False
+    store.update_runtime_options(options)
+    options = RealtimeProfileStore(tmp_path).runtime_options()
+    assert options["cooperative_member_loading_guard_enabled"] is False
+    options["skip_result_check"] = True
+    store.update_runtime_options(options)
+    assert store.runtime_options()["cooperative_member_loading_guard_enabled"] is False
+
+
+@pytest.mark.parametrize("value", [0, 1, "true", "false", None, []])
+def test_cooperative_loading_guard_rejects_non_boolean(tmp_path, value):
+    with pytest.raises(ValueError, match="cooperative_member_loading_guard_enabled"):
+        RealtimeProfileStore(tmp_path).update_runtime_options({
+            "cooperative_member_loading_guard_enabled": value,
+        })
+
+
 def test_runtime_options_persist_process_conflict_cleanup_switch(tmp_path):
     store = RealtimeProfileStore(tmp_path)
     options = store.runtime_options()

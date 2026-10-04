@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import os
 from collections.abc import Sequence
+from pathlib import Path
+
+from .profile_store import RealtimeProfileStore
 
 
 NATIVE_TIMING_TRIAL_ARG = "--native-timing-trial"
@@ -10,26 +13,26 @@ NATIVE_TIMING_TRIAL_ENV = "MAABANGDREAM_NATIVE_TIMING_TRIAL"
 NATIVE_WAIT_JITTER_TRIAL_ENV = "MAABANGDREAM_NATIVE_WAIT_JITTER_TRIAL"
 COOPERATIVE_MEMBER_LOADING_GUARD_TRIAL_ARG = "--cooperative-member-loading-guard-trial"
 COOPERATIVE_MEMBER_LOADING_GUARD_TRIAL_ENV = "MAABANGDREAM_COOPERATIVE_MEMBER_LOADING_GUARD_TRIAL"
+# 旧入口只为兼容启动脚本保留，保护状态以持久化运行选项为准。
 
 _native_timing_trial_enabled = False
-_cooperative_member_loading_guard_trial_enabled = False
 
 
 def configure_agent_runtime_flags(arguments: Sequence[str]) -> dict[str, bool]:
     """配置已验收的补偿和本次进程显式启用的开发候选。"""
 
     global _native_timing_trial_enabled
-    global _cooperative_member_loading_guard_trial_enabled
     _native_timing_trial_enabled = not (
         DISABLE_NATIVE_TIMING_COMPENSATION_ARG in arguments
         or os.environ.get(NATIVE_TIMING_TRIAL_ENV) == "0"
     )
-    _cooperative_member_loading_guard_trial_enabled = (
-        COOPERATIVE_MEMBER_LOADING_GUARD_TRIAL_ARG in arguments
-    )
     return {
         "native_timing_compensation": _native_timing_trial_enabled,
-        "cooperative_member_loading_guard_trial": cooperative_member_loading_guard_enabled(),
+        "cooperative_member_loading_guard_enabled": cooperative_member_loading_guard_enabled(),
+        "deprecated_cooperative_member_loading_guard_trial_requested": (
+            COOPERATIVE_MEMBER_LOADING_GUARD_TRIAL_ARG in arguments
+            or os.environ.get(COOPERATIVE_MEMBER_LOADING_GUARD_TRIAL_ENV) == "1"
+        ),
     }
 
 
@@ -45,8 +48,7 @@ def native_wait_jitter_trial_enabled() -> bool:
 
 
 def cooperative_member_loading_guard_enabled() -> bool:
-    """加载页保护默认关闭；命令行可跨越 MFA 子进程的环境变量过滤。"""
-    return (
-        _cooperative_member_loading_guard_trial_enabled
-        or os.environ.get(COOPERATIVE_MEMBER_LOADING_GUARD_TRIAL_ENV) == "1"
-    )
+    """启动诊断读取持久选项；旧 trial 参数和环境变量已废弃，不覆盖界面。"""
+    return RealtimeProfileStore(
+        Path(__file__).resolve().parents[2] / "profiles"
+    ).runtime_options()["cooperative_member_loading_guard_enabled"]

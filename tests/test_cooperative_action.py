@@ -38,6 +38,8 @@ ROOT = Path(__file__).parents[1]
 def _bare_flow():
     flow = object.__new__(CooperativeLiveFlow)
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    # 绕过构造器的流程测试仍须提供正常任务已冻结的保护开关。
+    flow.settings = {"cooperative_member_loading_guard_enabled": True}
     return flow
 
 
@@ -792,14 +794,16 @@ def test_invalid_song_choice_preserves_previous_settings():
 
 
 @pytest.mark.parametrize("enabled", [False, True])
-def test_preconfirmation_resolver_uses_loading_guard_trial(monkeypatch, enabled):
-    monkeypatch.setenv("MAABANGDREAM_COOPERATIVE_MEMBER_LOADING_GUARD_TRIAL", "1" if enabled else "0")
+def test_preconfirmation_resolver_uses_task_loading_guard_snapshot(monkeypatch, enabled):
+    monkeypatch.setenv("MAABANGDREAM_COOPERATIVE_MEMBER_LOADING_GUARD_TRIAL", "1")
     monkeypatch.setattr(cooperative_action, "current_live_run", lambda: SimpleNamespace(
         difficulty="Expert", song_level=28, song_title="FIRE BIRD", song_title_confidence=0.9,
     ))
     monkeypatch.setattr(cooperative_action, "LocalChartRepository", lambda *args: object())
     monkeypatch.setattr(cooperative_action, "FinalCoverResolver", lambda **kwargs: SimpleNamespace(**kwargs))
-    assert _bare_flow().make_final_cover_entry_resolver().reject_member_loading is enabled
+    flow = _bare_flow()
+    flow.settings = {"cooperative_member_loading_guard_enabled": enabled}
+    assert flow.make_final_cover_entry_resolver().reject_member_loading is enabled
 
 
 @pytest.mark.parametrize("choice", ["unspecified", "random", "current"])
@@ -2000,7 +2004,7 @@ def test_live_action_fails_immediately_on_preflight_error(monkeypatch):
             pass
 
         def runtime_options(self):
-            return {"play_failure_retry_count": 2}
+            return {"play_failure_retry_count": 2, "cooperative_member_loading_guard_enabled": True}
 
     monkeypatch.setattr(cooperative_action, "RealtimeProfileStore", FakeStore)
     monkeypatch.setattr(

@@ -12,7 +12,6 @@ import cv2
 import numpy as np
 
 from .chart_repository import LocalChartRepository
-from .runtime_flags import cooperative_member_loading_guard_enabled
 from .song_identity import (
     LOOSE_SAME_SONG_DISTANCE,
     UNKNOWN_SONG_ID,
@@ -35,7 +34,7 @@ MEMBER_LOADING_ICON_THRESHOLD = 0.90
 def member_loading_icon() -> np.ndarray:
     template = imread_unicode(MEMBER_LOADING_ICON_TEMPLATE, cv2.IMREAD_COLOR)
     if template is None:
-        # 启用候选后模板缺失必须失败，不能退回未经保护的身份确认。
+        # 启用保护后模板缺失必须失败，不能退回未经保护的身份确认。
         raise RuntimeError("协力成员加载页模板缺失或损坏")
     return template
 

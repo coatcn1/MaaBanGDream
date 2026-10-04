@@ -839,6 +839,38 @@ def test_explicit_native_requires_controller_adb_endpoint():
     )
 
 
+@pytest.mark.parametrize("saved", [True, False])
+@pytest.mark.parametrize("snapshot", [None, True, False])
+def test_cooperative_play_forwards_guard_snapshot_to_final_cover(monkeypatch, tmp_path, saved, snapshot):
+    from agent.realtime.profile_store import RealtimeProfileStore
+    reset_live_run(mode="cooperative", difficulty="Expert", prepared_for_play=True)
+    update_live_run(preparation_identity_pending_final_cover=True)
+    monkeypatch.setattr(profile_play_action, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(profile_play_action, "resolve_local_chart_for_run", lambda *args: SimpleNamespace(
+        selection=_chart_selection("resource/charts/bestdori/55/expert.json"), reason="selected chart",
+    ))
+    RealtimeProfileStore(tmp_path / "profiles").update_runtime_options({
+        "cooperative_member_loading_guard_enabled": saved,
+        "chart_prediction_enabled": False,
+        "chart_predict_presses": False,
+        "native_realtime_enabled": False,
+    })
+    captured = []
+
+    def stop_at_cover(*args, **kwargs):
+        captured.append(kwargs["cooperative_member_loading_guard_enabled"])
+        raise RuntimeError("stop at final cover")
+
+    monkeypatch.setattr(profile_play_action, "wait_for_final_cover", stop_at_cover)
+    params = {"difficulty": "Expert", "require_profile": False, "run_mode": "cooperative"}
+    if snapshot is not None:
+        params["cooperative_member_loading_guard_enabled"] = snapshot
+    context = SimpleNamespace(tasker=SimpleNamespace(stopping=False, controller=Controller()))
+    with pytest.raises(RuntimeError, match="stop at final cover"):
+        RealtimeProfilePlay()._run(context, SimpleNamespace(custom_action_param=json.dumps(params)))
+    assert captured == [saved if snapshot is None else snapshot]
+
+
 def test_native_completion_guard_keeps_frame_threshold_time_equivalent():
     assert profile_play_action._completion_missing_frames(
         120,

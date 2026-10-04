@@ -40,7 +40,7 @@ from .live_visual_gate import MODE_TOGGLE_POINT, live_performance_mode_is_off
 from .performance_settings_action import RealtimePerformanceSettingsGate
 from .playfield_monitor import PlayfieldDetector
 from .chart_repository import LocalChartRepository
-from .final_cover import FinalCoverResolver, cooperative_member_loading_guard_enabled
+from .final_cover import FinalCoverResolver
 from .profile_play_action import RealtimeProfilePlay
 from .profile_store import (
     EnvironmentSignature,
@@ -224,6 +224,9 @@ def cooperative_play_params(
         "continue_after_life_depleted": True,
         "run_mode": "cooperative",
         "confirm_final_cover": True,
+        "cooperative_member_loading_guard_enabled": settings.get(
+            "cooperative_member_loading_guard_enabled", True
+        ),
         "final_cover_timeout_seconds": MEMBER_DOWNLOAD_TIMEOUT_SECONDS,
         "native_prearm_deferred": True,
         "life_depleted_jump_request": bool(
@@ -346,7 +349,19 @@ class CooperativeLiveFlow:
         progress_callback: Callable[[int, int], None] | None = None,
     ) -> None:
         self.context = context
-        self.settings = settings
+        self.settings = dict(settings)
+        # 在导航输入前冻结本任务的保护开关，两条封面门禁共享，不逐帧读文件。
+        if "cooperative_member_loading_guard_enabled" not in self.settings:
+            self.settings["cooperative_member_loading_guard_enabled"] = RealtimeProfileStore(
+                PROJECT_ROOT / "profiles"
+            ).runtime_options()["cooperative_member_loading_guard_enabled"]
+        if not isinstance(self.settings["cooperative_member_loading_guard_enabled"], bool):
+            raise ValueError("cooperative_member_loading_guard_enabled 必须是布尔值")
+        print(
+            "CooperativeLive cooperative_member_loading_guard_enabled="
+            f"{self.settings['cooperative_member_loading_guard_enabled']} source=task_snapshot",
+            flush=True,
+        )
         self.effective_difficulty = str(settings["difficulty"])
         self.progress_callback = progress_callback
         self.detector = LifeDetector()
@@ -1046,7 +1061,7 @@ class CooperativeLiveFlow:
             repository=LocalChartRepository(
                 PROJECT_ROOT / "resource" / "charts"
             ),
-            reject_member_loading=cooperative_member_loading_guard_enabled(),
+            reject_member_loading=self.settings["cooperative_member_loading_guard_enabled"],
         )
 
     def watch_member_exit_before_black(
@@ -1815,10 +1830,14 @@ class CooperativeLiveAction(CustomAction):
             if context.tasker.stopping:
                 return True
             settings = current_cooperative_settings()
+            runtime_options = RealtimeProfileStore(
+                PROJECT_ROOT / "profiles"
+            ).runtime_options()
+            settings["cooperative_member_loading_guard_enabled"] = runtime_options[
+                "cooperative_member_loading_guard_enabled"
+            ]
             settings["play_failure_retry_count"] = int(
-                RealtimeProfileStore(
-                    PROJECT_ROOT / "profiles"
-                ).runtime_options().get("play_failure_retry_count", 1)
+                runtime_options.get("play_failure_retry_count", 1)
             )
             preflight_error = cooperative_profile_preflight(
                 context, str(settings["difficulty"])

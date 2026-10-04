@@ -216,7 +216,7 @@ else {
     $agentArgs += '--native-timing-trial'
 }
 if ($CooperativeMemberLoadingGuardTrial) {
-    # 通过命令行传递候选，避免 MFA 子进程过滤临时环境变量后保护失效。
+    # 旧参数仅兼容保留；Agent 会记录已忽略，不能覆盖界面保存的开关。
     $agentArgs += '--cooperative-member-loading-guard-trial'
 }
 $interface.agent.child_args = $agentArgs
@@ -341,4 +341,4 @@ Write-Host "Deployment: $MfaRoot"
 Write-Host "Conda environment: $EnvironmentName ($python)"
 Write-Host "Ordered startup trial: $([bool]$OrderedStartupTrial)"
 Write-Host "Native timing compensation: $(-not [bool]$DisableNativeTimingCompensation)"
-Write-Host "Cooperative member loading guard trial: $([bool]$CooperativeMemberLoadingGuardTrial)"
+Write-Host "Cooperative member loading guard uses saved runtime option (default enabled); deprecated trial switch ignored: $([bool]$CooperativeMemberLoadingGuardTrial)"
