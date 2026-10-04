@@ -210,11 +210,7 @@ def test_member_loading_icon_is_found_after_panel_moves(position):
     assert not final_cover.is_member_loading_screen(final_cover_frame()[0])
 
 
-def test_loading_guard_is_off_by_default_and_missing_template_fails_closed(monkeypatch):
-    monkeypatch.delenv("MAABANGDREAM_COOPERATIVE_MEMBER_LOADING_GUARD_TRIAL", raising=False)
-    assert not final_cover.cooperative_member_loading_guard_enabled()
-    monkeypatch.setenv("MAABANGDREAM_COOPERATIVE_MEMBER_LOADING_GUARD_TRIAL", "1")
-    assert final_cover.cooperative_member_loading_guard_enabled()
+def test_missing_loading_guard_template_fails_closed(monkeypatch):
     final_cover.member_loading_icon.cache_clear()
     monkeypatch.setattr(final_cover, "imread_unicode", lambda *args: None)
     cover, song_id = final_cover_frame()
@@ -260,9 +256,9 @@ def test_loading_frame_interrupts_continuous_deferred_cover_candidate():
     assert resolver.observe(cover) is not None
 
 
-@pytest.mark.parametrize("mode", ["cooperative", "formal"])
+@pytest.mark.parametrize("mode", ["cooperative", "formal", "challenge", "medley", "continuous"])
 def test_normal_final_cover_wait_applies_loading_guard_only_to_cooperative(monkeypatch, mode):
-    monkeypatch.setenv("MAABANGDREAM_COOPERATIVE_MEMBER_LOADING_GUARD_TRIAL", "1")
+    monkeypatch.delenv("MAABANGDREAM_COOPERATIVE_MEMBER_LOADING_GUARD_TRIAL", raising=False)
     loading, song_id = loading_frame()
     images = iter([loading, final_cover_frame()[0]])
     captured = []
@@ -280,6 +276,63 @@ def test_normal_final_cover_wait_applies_loading_guard_only_to_cooperative(monke
     )
     assert outcome.status == "confirmed"
     assert len(captured) == (2 if mode == "cooperative" else 1)
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize("native", [True, False])
+@pytest.mark.parametrize("position", [(20, 600), (20, 280)])
+def test_both_cooperative_cover_paths_consume_persisted_guard(monkeypatch, tmp_path, enabled, native, position):
+    from agent.realtime import cooperative_action
+    from agent.realtime.profile_store import RealtimeProfileStore
+    monkeypatch.setenv("MAABANGDREAM_COOPERATIVE_MEMBER_LOADING_GUARD_TRIAL", "1")
+    store = RealtimeProfileStore(tmp_path / "profiles")
+    store.update_runtime_options({
+        "cooperative_member_loading_guard_enabled": enabled, "native_realtime_enabled": native,
+    })
+    monkeypatch.setattr(cooperative_action, "PROJECT_ROOT", tmp_path)
+    loading, song_id = loading_frame(position)
+    selected = selection(song_id)
+
+    class Repository:
+        def resolve(self, *args, **kwargs):
+            return ChartResolution(selected, "confirmed")
+
+    monkeypatch.setattr(cooperative_action, "LocalChartRepository", lambda *args: Repository())
+    run = SimpleNamespace(mode="cooperative", difficulty="Expert", song_level=28,
+                          song_title="SAVIOR OF SONG", song_title_confidence=0.9)
+    monkeypatch.setattr(cooperative_action, "current_live_run", lambda: run)
+    flow = cooperative_action.CooperativeLiveFlow(
+        SimpleNamespace(), dict(cooperative_action.DEFAULT_SETTINGS),
+    )
+    resolver = flow.make_final_cover_entry_resolver()
+    assert resolver.reject_member_loading is enabled
+    assert resolver.observe(loading) is None
+    assert (resolver.observe(loading) is None) is enabled
+    if enabled:
+        assert resolver.last_reason == "member loading screen"
+    resolver = flow.make_final_cover_entry_resolver()
+    assert resolver.observe(final_cover_frame()[0]) is None
+    assert resolver.observe(final_cover_frame()[0]) is not None
+
+    # 在第二条门禁开始前修改文件，仍应沿用同一任务的快照。
+    store.update_runtime_options({"cooperative_member_loading_guard_enabled": not enabled})
+    params = cooperative_action.cooperative_play_params(flow.settings)
+    images = iter([loading, final_cover_frame()[0]])
+    captured = []
+
+    class Controller:
+        def post_screencap(self):
+            image = next(images)
+            captured.append(image)
+            return SimpleNamespace(wait=lambda: SimpleNamespace(get=lambda: image))
+
+    outcome = wait_for_final_cover(
+        Controller(), run, selected, "Expert", lambda: False,
+        timeout_seconds=1, poll_interval_seconds=0,
+        cooperative_member_loading_guard_enabled=params["cooperative_member_loading_guard_enabled"],
+    )
+    assert outcome.status == "confirmed"
+    assert len(captured) == (2 if enabled else 1)
 
 
 def test_final_cover_confirms_only_with_preparation_title_level_and_difficulty():

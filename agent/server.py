@@ -43,8 +43,10 @@ def main() -> None:
         "native_timing_compensation="
         f"{runtime_flags['native_timing_compensation']} "
         f"native_wait_jitter_trial={native_wait_jitter_trial_enabled()} "
-        "cooperative_member_loading_guard_trial="
-        f"{runtime_flags['cooperative_member_loading_guard_trial']}",
+        "cooperative_member_loading_guard_enabled="
+        f"{runtime_flags['cooperative_member_loading_guard_enabled']} "
+        "deprecated_cooperative_member_loading_guard_trial_ignored="
+        f"{runtime_flags['deprecated_cooperative_member_loading_guard_trial_requested']}",
         flush=True,
     )
     Tasker.set_log_dir("./debug")

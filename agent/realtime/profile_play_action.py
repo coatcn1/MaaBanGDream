@@ -28,7 +28,7 @@ from .controller_touch import ControllerTouchDispatcher
 from .debug_recorder import RealtimeDebugRecorder, append_lifecycle_event
 from .engine import EngineStats, RealtimeEngine
 from .final_cover import (
-    FinalCoverResolution, FinalCoverResolver, cooperative_member_loading_guard_enabled,
+    FinalCoverResolution, FinalCoverResolver,
 )
 from .life_monitor import LifeDetector, LifeGuard, PlayfieldCompletionGuard
 from .live_failed_detector import (
@@ -318,10 +318,13 @@ def wait_for_final_cover(
     initial_resolution: FinalCoverResolution | None = None,
     require_observed_title: bool = False,
     ignore_preparation_level: bool = False,
+    cooperative_member_loading_guard_enabled: bool = True,
 ) -> FinalCoverWaitOutcome:
     """确认最终封面；识别缺失时保留准备页谱面或降级到视觉演奏。"""
     if not 1 <= float(timeout_seconds) <= 180:
         raise ValueError("final_cover_timeout_seconds 必须在 1..180 之间")
+    if not isinstance(cooperative_member_loading_guard_enabled, bool):
+        raise ValueError("cooperative_member_loading_guard_enabled 必须是布尔值")
     resolver = FinalCoverResolver(
         difficulty=difficulty,
         observed_level=(
@@ -347,7 +350,7 @@ def wait_for_final_cover(
         allow_missing_level=ignore_preparation_level,
         reject_member_loading=(
             getattr(live_run, "mode", "") == "cooperative"
-            and cooperative_member_loading_guard_enabled()
+            and cooperative_member_loading_guard_enabled
         ),
     )
     evidence_reason = resolver.evidence_reason()
@@ -1904,6 +1907,18 @@ class RealtimeProfilePlay(CustomAction):
             runtime_options = RealtimeProfileStore(
                 PROJECT_ROOT / "profiles"
             ).runtime_options()
+            cooperative_member_loading_guard_enabled = params.get(
+                "cooperative_member_loading_guard_enabled",
+                runtime_options.get("cooperative_member_loading_guard_enabled", True),
+            )
+            if not isinstance(cooperative_member_loading_guard_enabled, bool):
+                raise ValueError("cooperative_member_loading_guard_enabled 必须是布尔值")
+            if params.get("run_mode") == "cooperative":
+                print(
+                    "RealtimeProfilePlay cooperative_member_loading_guard_enabled="
+                    f"{cooperative_member_loading_guard_enabled} source=task_snapshot",
+                    flush=True,
+                )
             chart_prediction_enabled = (
                 bool(runtime_options.get("chart_prediction_enabled", False))
             )
@@ -2243,6 +2258,7 @@ class RealtimeProfilePlay(CustomAction):
                         else (preflight_image if ordered_startup else None)
                     ),
                     initial_resolution=startup_cover_resolution,
+                    cooperative_member_loading_guard_enabled=cooperative_member_loading_guard_enabled,
                     require_observed_title=require_final_cover_title,
                     ignore_preparation_level=preparation_identity_pending_final_cover,
                 )

@@ -130,6 +130,9 @@ class RealtimeProfileStore:
         "chart_predict_presses": True,
         "native_realtime_enabled": False,
         "cooperative_jitter_enabled": True,
+        "cooperative_member_loading_guard_enabled": True,
+        "bestdori_auto_update_enabled": True,
+        "bestdori_auto_update_interval_hours": 24,
         "play_failure_retry_count": 1,
         "calibration_note_speeds": {
             "Easy": 2.0,
@@ -258,6 +261,18 @@ class RealtimeProfileStore:
         )
         if not isinstance(cooperative_jitter_enabled, bool):
             raise ValueError("cooperative_jitter_enabled 必须是布尔值")
+        cooperative_member_loading_guard_enabled = options.get(
+            "cooperative_member_loading_guard_enabled", True
+        )
+        if not isinstance(cooperative_member_loading_guard_enabled, bool):
+            raise ValueError("cooperative_member_loading_guard_enabled 必须是布尔值")
+        bestdori_auto_update_enabled = options.get("bestdori_auto_update_enabled", True)
+        if not isinstance(bestdori_auto_update_enabled, bool):
+            raise ValueError("bestdori_auto_update_enabled 必须是布尔值")
+        bestdori_auto_update_interval_hours = options.get("bestdori_auto_update_interval_hours", 24)
+        if (type(bestdori_auto_update_interval_hours) is not int
+                or not 1 <= bestdori_auto_update_interval_hours <= 720):
+            raise ValueError("bestdori_auto_update_interval_hours 必须是 1..720 的整数")
         retry_count_raw = options.get("play_failure_retry_count", 1)
         if isinstance(retry_count_raw, bool):
             raise ValueError("play_failure_retry_count 必须是 0..99 的整数")
@@ -299,6 +314,9 @@ class RealtimeProfileStore:
             "chart_predict_presses": chart_predict_presses,
             "native_realtime_enabled": native_realtime_enabled,
             "cooperative_jitter_enabled": cooperative_jitter_enabled,
+            "cooperative_member_loading_guard_enabled": cooperative_member_loading_guard_enabled,
+            "bestdori_auto_update_enabled": bestdori_auto_update_enabled,
+            "bestdori_auto_update_interval_hours": bestdori_auto_update_interval_hours,
             "play_failure_retry_count": play_failure_retry_count,
             "calibration_note_speeds": speeds,
         }

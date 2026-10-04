@@ -18,9 +18,9 @@ def test_catalog_repository_contains_full_targeted_snapshot():
         (CHART_ROOT / "manifest.json").read_text(encoding="utf-8")
     )
 
-    assert len(manifest["songs"]) == 809
-    assert sum(len(song["difficulties"]) for song in manifest["songs"]) == 1777
-    assert sum(len(song["jackets"]) for song in manifest["songs"]) == 867
+    assert len(manifest["songs"]) == 822
+    assert sum(len(song["difficulties"]) for song in manifest["songs"]) == 1805
+    assert sum(len(song["jackets"]) for song in manifest["songs"]) == 880
     assert manifest["summary"]["recoverable_errors"] == 0
     assert manifest["summary"]["fatal_errors"] == 0
     assert manifest["source"]["runtime_network_access"] is False
