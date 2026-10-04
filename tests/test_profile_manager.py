@@ -9,6 +9,16 @@ from agent.realtime.profile_store import RealtimeProfileStore
 from tests.test_realtime_profile import SIGNATURE, payload
 
 
+def test_runtime_options_does_not_enumerate_profile_files(tmp_path, monkeypatch):
+    def unexpected(*args, **kwargs):
+        raise AssertionError("lightweight runtime options operation enumerated profiles")
+    monkeypatch.setattr(RealtimeProfileStore, "list_profiles", unexpected)
+    result = handle_request({"operation": "runtime-options"}, root=tmp_path)
+    assert result["runtime_options"]["bestdori_auto_update_enabled"] is True
+    assert result["runtime_options"]["bestdori_auto_update_interval_hours"] == 24
+    assert not (tmp_path / "selection.json").exists()
+
+
 def test_list_reports_automatic_selection_and_full_records(tmp_path):
     store = RealtimeProfileStore(tmp_path)
     profile = payload(difficulty="Expert", accepted=True)
@@ -140,6 +150,8 @@ def test_selection_state_is_written_atomically(tmp_path):
             "native_realtime_enabled": False,
             "cooperative_jitter_enabled": True,
             "cooperative_member_loading_guard_enabled": True,
+            "bestdori_auto_update_enabled": True,
+            "bestdori_auto_update_interval_hours": 24,
             "play_failure_retry_count": 1,
             "calibration_note_speeds": {
                 "Easy": 2.0,
@@ -170,6 +182,8 @@ def test_runtime_options_default_and_atomic_update_do_not_invalidate_profile(tmp
             "native_realtime_enabled": False,
             "cooperative_jitter_enabled": True,
             "cooperative_member_loading_guard_enabled": True,
+            "bestdori_auto_update_enabled": True,
+            "bestdori_auto_update_interval_hours": 24,
             "play_failure_retry_count": 1,
             "calibration_note_speeds": {
             "Easy": 2.0,

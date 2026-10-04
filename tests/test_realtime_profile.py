@@ -181,6 +181,30 @@ def test_runtime_options_default_to_speed_only_settings(tmp_path):
     assert "tap_effect" not in options
     assert options["skip_process_conflict_cleanup"] is False
     assert options["skip_result_check"] is False
+    assert options["bestdori_auto_update_enabled"] is True
+    assert options["bestdori_auto_update_interval_hours"] == 24
+
+
+@pytest.mark.parametrize("value", [False, True])
+def test_bestdori_update_setting_survives_reload(tmp_path, value):
+    store = RealtimeProfileStore(tmp_path)
+    options = store.runtime_options()
+    options.update(bestdori_auto_update_enabled=value, bestdori_auto_update_interval_hours=720)
+    store.update_runtime_options(options)
+    assert RealtimeProfileStore(tmp_path).runtime_options()["bestdori_auto_update_enabled"] is value
+    assert RealtimeProfileStore(tmp_path).runtime_options()["bestdori_auto_update_interval_hours"] == 720
+
+
+@pytest.mark.parametrize("value", [0, 721, True, 24.0, "24", None])
+def test_bestdori_update_interval_rejects_non_integer_or_out_of_range(tmp_path, value):
+    with pytest.raises(ValueError, match="bestdori_auto_update_interval_hours"):
+        RealtimeProfileStore(tmp_path).update_runtime_options({"bestdori_auto_update_interval_hours": value})
+
+
+@pytest.mark.parametrize("value", [1, 0, "true", None])
+def test_bestdori_update_enabled_is_strict_boolean(tmp_path, value):
+    with pytest.raises(ValueError, match="bestdori_auto_update_enabled"):
+        RealtimeProfileStore(tmp_path).update_runtime_options({"bestdori_auto_update_enabled": value})
 
 
 def test_cooperative_loading_guard_defaults_and_old_selection_migrate_enabled(tmp_path):

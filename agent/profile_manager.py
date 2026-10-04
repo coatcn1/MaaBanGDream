@@ -43,6 +43,8 @@ def handle_request(request: dict[str, Any], *, root: str | Path = PROJECT_ROOT /
         raise ValueError("请求必须是 JSON 对象")
     store = RealtimeProfileStore(root)
     operation = request.get("operation")
+    if operation == "runtime-options":
+        return {"runtime_options": store.runtime_options()}
     if operation == "pin":
         return {"pinned": store.pin(str(request.get("difficulty", "")), str(request.get("profile", "")))}
     if operation == "unpin":

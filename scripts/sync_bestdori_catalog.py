@@ -98,8 +98,8 @@ def sync_catalog(
     output_root = output_root.resolve()
     report("fetching Bestdori song index")
     index, _ = fetch_json(SONGS_INDEX_URL)
-    if not isinstance(index, dict):
-        raise ValueError("Bestdori song index must be a JSON object")
+    if not isinstance(index, dict) or not index:
+        raise ValueError("Bestdori song index must be a non-empty JSON object")
 
     old_songs = _load_existing_manifest_songs(output_root / "manifest.json")
     indexed_songs: list[tuple[int, dict[str, Any]]] = []
@@ -112,6 +112,8 @@ def sync_catalog(
             continue
         indexed_songs.append((song_id, metadata))
     indexed_songs.sort(key=lambda item: item[0])
+    if not indexed_songs or len(indexed_songs) != len(index):
+        raise ValueError("Bestdori song index contains invalid metadata")
     if song_limit is not None:
         if song_limit <= 0:
             raise ValueError("song_limit must be positive")
@@ -141,18 +143,23 @@ def sync_catalog(
             song_id = futures[future]
             try:
                 song = future.result()
-                results.append(song)
                 report(
                     f"[{completed}/{len(futures)}] song={song_id} "
                     f"charts={len(song['difficulties'])} "
                     f"jackets={len(song['jackets'])} errors={len(song['errors'])}"
                 )
+                results.append(song)
             except Exception as exc:  # keep the remainder of the catalog useful
                 fatal_errors.append({"song_id": song_id, "error": str(exc)})
+                if song_id in old_songs:
+                    results.append(old_songs[song_id])
                 report(
                     f"[{completed}/{len(futures)}] song={song_id} failed: {exc}"
                 )
 
+    # 索引暂时缺项或单曲元数据失败不能删除既有可用歌曲。
+    stored_ids = {song["bestdori_song_id"] for song in results}
+    results.extend(song for song_id, song in old_songs.items() if song_id not in stored_ids)
     results.sort(key=lambda item: item["bestdori_song_id"])
     chart_count = sum(len(song["difficulties"]) for song in results)
     jacket_count = sum(len(song["jackets"]) for song in results)
@@ -182,6 +189,16 @@ def sync_catalog(
         "fatal_errors": fatal_errors,
         "songs": results,
     }
+    previous_success = None
+    try:
+        previous = json.loads((output_root / "manifest.json").read_text(encoding="utf-8-sig"))
+        previous_success = previous.get("last_successful_check_at", previous.get("generated_at"))
+    except (OSError, ValueError, TypeError):
+        pass
+    # 失败保留上次成功时间，定时器不能把部分失败当作成功后延迟整天。
+    manifest["last_successful_check_at"] = (
+        manifest["generated_at"] if not fatal_errors and not recoverable_errors else previous_success
+    )
     _write_json_atomic(output_root / "manifest.json", manifest)
     report(
         f"wrote manifest songs={len(results)} charts={chart_count} "
@@ -201,11 +218,13 @@ def _sync_song(
     reuse_existing: bool,
     old_song: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    if not isinstance(metadata.get("musicTitle"), list):
+        raise ValueError("metadata titles must be a list")
     titles = [str(value) for value in metadata.get("musicTitle", []) if value]
     if not titles:
         raise ValueError("metadata has no titles")
     difficulty_metadata = metadata.get("difficulty")
-    if not isinstance(difficulty_metadata, dict):
+    if not isinstance(difficulty_metadata, dict) or not difficulty_metadata:
         raise ValueError("metadata has no difficulty map")
 
     fingerprints = {
@@ -225,12 +244,22 @@ def _sync_song(
             jacket_name.lower(), default_bundle_id
         )
         asset_names = tuple(dict.fromkeys((jacket_name, jacket_name.lower())))
+        if reuse_existing:
+            cached = next((entry for entry in (old_song or {}).get("jackets", [])
+                           if entry.get("name") == jacket_name
+                           and entry.get("server") in jacket_servers
+                           and _valid_cached_jacket(output_root, entry)), None)
+            if cached is not None:
+                # 已校验的 fallback 封面直接复用，避免再次请求不存在的 CN 资源。
+                jackets.append(dict(cached))
+                fingerprints.add(cached["fingerprint"])
+                continue
         attempt_errors: list[str] = []
         for jacket_server in jacket_servers:
             relative = Path("bestdori") / str(song_id) / (
                 f"jacket-{jacket_server}-{number}.png"
             )
-            path = output_root / relative
+            path = _safe_resource_path(output_root, relative)
             for asset_name in asset_names:
                 url = JACKET_URL.format(
                     server=jacket_server,
@@ -238,11 +267,8 @@ def _sync_song(
                     jacket_name=quote(asset_name, safe="_-"),
                 )
                 try:
-                    raw = (
-                        path.read_bytes()
-                        if reuse_existing and path.is_file()
-                        else fetch_bytes(url)
-                    )
+                    # 只有上方可信 manifest 快速路径可复用；坏图或名称变更必须重新下载。
+                    raw = fetch_bytes(url)
                     image = cv2.imdecode(
                         np.frombuffer(raw, dtype=np.uint8),
                         cv2.IMREAD_COLOR,
@@ -250,6 +276,11 @@ def _sync_song(
                     identity = fingerprint_jacket(image)
                     if identity.method == "unknown":
                         raise ValueError("downloaded jacket is not a valid image")
+                    if any(old.get("path") == relative.as_posix() and _valid_cached_jacket(output_root, old)
+                           for old in (old_song or {}).get("jackets", [])):
+                        # 已可用资源不能原位替换，退出/强杀时旧 manifest 仍能引用旧文件。
+                        relative = relative.with_name(f"jacket-{jacket_server}-{number}-{hashlib.sha256(raw).hexdigest()}.png")
+                        path = _safe_resource_path(output_root, relative)
                     if not path.is_file() or path.read_bytes() != raw:
                         _write_bytes_atomic(path, raw)
                     fingerprints.add(identity.song_id)
@@ -282,10 +313,17 @@ def _sync_song(
         details = difficulty_metadata.get(key)
         if not isinstance(details, dict):
             continue
-        relative = Path("bestdori") / str(song_id) / f"{difficulty}.json"
+        old_entry = (old_song or {}).get("difficulties", {}).get(difficulty)
+        relative = _chart_relative(output_root, song_id, difficulty, old_entry)
         path = output_root / relative
         try:
             entry = None
+            valid_old = _existing_chart_entry(
+                path, song_id=song_id, difficulty=difficulty, relative=relative,
+                level=(old_entry or {}).get("level", int(details["playLevel"])),
+                expected_notes=(old_entry or {}).get("expected_notes"),
+                expected_sha256=(old_entry or {}).get("chart_sha256"),
+            ) if path.is_file() else None
             if reuse_existing and path.is_file():
                 entry = _existing_chart_entry(
                     path,
@@ -294,7 +332,13 @@ def _sync_song(
                     relative=relative,
                     level=int(details["playLevel"]),
                     expected_notes=_metadata_note_count(metadata, key),
+                    expected_sha256=(old_entry or {}).get("chart_sha256"),
                 )
+                previous_notes = (old_entry or {}).get("expected_notes")
+                if (previous_notes is not None
+                        and _metadata_note_count(metadata, key) is not None
+                        and previous_notes != _metadata_note_count(metadata, key)):
+                    entry = None
             if entry is None:
                 source_url = CHART_URL.format(
                     song_id=song_id,
@@ -322,6 +366,11 @@ def _sync_song(
                     },
                     "chart": chart,
                 }
+                if valid_old is not None:
+                    # 包含元数据的完整内容寻址，重复的音符数变更也不能覆盖旧版本 wrapper。
+                    version = hashlib.sha256(json.dumps(wrapper, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+                    relative = relative.with_name(f"{difficulty}-{version}.json")
+                    path = _safe_resource_path(output_root, relative)
                 _write_json_atomic(path, wrapper)
                 entry = {
                     "path": relative.as_posix(),
@@ -349,6 +398,26 @@ def _sync_song(
                 "item": difficulty,
                 "error": str(exc),
             })
+            if old_entry is not None and _existing_chart_entry(
+                output_root / _chart_relative(output_root, song_id, difficulty, old_entry),
+                song_id=song_id, difficulty=difficulty,
+                relative=_chart_relative(output_root, song_id, difficulty, old_entry),
+                level=old_entry["level"], expected_notes=old_entry.get("expected_notes"),
+                expected_sha256=old_entry.get("chart_sha256"),
+            ) is not None:
+                difficulties[difficulty] = dict(old_entry)
+
+    for difficulty, old_entry in (old_song or {}).get("difficulties", {}).items():
+        if difficulty not in difficulties:
+            relative = _chart_relative(output_root, song_id, difficulty, old_entry)
+            if _existing_chart_entry(output_root / relative, song_id=song_id, difficulty=difficulty,
+                                     relative=relative, level=old_entry["level"],
+                                     expected_notes=old_entry.get("expected_notes"),
+                                     expected_sha256=old_entry.get("chart_sha256")) is not None:
+                difficulties[difficulty] = dict(old_entry)
+    for old_jacket in (old_song or {}).get("jackets", []):
+        if old_jacket not in jackets and _valid_cached_jacket(output_root, old_jacket):
+            jackets.append(dict(old_jacket))
 
     return {
         "bestdori_song_id": song_id,
@@ -362,6 +431,35 @@ def _sync_song(
     }
 
 
+def _chart_relative(output_root: Path, song_id: int, difficulty: str, entry: dict[str, Any] | None) -> Path:
+    relative = Path((entry or {}).get("path", Path("bestdori") / str(song_id) / f"{difficulty}.json"))
+    resolved = _safe_resource_path(output_root, relative)
+    if relative.is_absolute() or resolved.parent != (output_root / "bestdori" / str(song_id)).resolve():
+        raise ValueError("existing chart path is outside its song directory")
+    return relative
+
+
+def _safe_resource_path(output_root: Path, relative: Path) -> Path:
+    resolved = (output_root / relative).resolve()
+    if relative.is_absolute() or not resolved.is_relative_to(output_root):
+        raise ValueError("catalog resource path is outside output root")
+    return resolved
+
+
+def _valid_cached_jacket(output_root: Path, entry: dict[str, Any]) -> bool:
+    try:
+        path = (output_root / entry["path"]).resolve()
+        if not path.is_relative_to(output_root) or not path.is_file():
+            return False
+        raw = path.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != entry["raw_sha256"]:
+            return False
+        image = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
+        return fingerprint_jacket(image).song_id == entry["fingerprint"]
+    except (KeyError, OSError, ValueError, TypeError, cv2.error):
+        return False
+
+
 def _existing_chart_entry(
     path: Path,
     *,
@@ -370,6 +468,7 @@ def _existing_chart_entry(
     relative: Path,
     level: int,
     expected_notes: int | None,
+    expected_sha256: str | None = None,
 ) -> dict[str, Any] | None:
     try:
         wrapper = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -383,7 +482,7 @@ def _existing_chart_entry(
             return None
         _validate_chart(chart, song_id=song_id, difficulty=difficulty)
         digest = _chart_sha256(chart)
-        if digest != source.get("chart_sha256"):
+        if digest != source.get("chart_sha256") or (expected_sha256 is not None and digest != expected_sha256):
             return None
         return {
             "path": relative.as_posix(),
@@ -483,7 +582,7 @@ def main() -> int:
             f"pruned non-target charts={prune_other_difficulties(args.output_root)}",
             flush=True,
         )
-    return 0 if not manifest["fatal_errors"] else 2
+    return 0 if not manifest["fatal_errors"] and not manifest["summary"]["recoverable_errors"] else 2
 
 
 if __name__ == "__main__":
