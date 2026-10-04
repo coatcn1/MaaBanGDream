@@ -275,7 +275,9 @@
   },
   "CommonRefreshScreen": {
     "recognition": "DirectHit",
-    "action": "DoNothing"
+    "action": "DoNothing",
+    "pre_delay": 0,
+    "post_delay": 0
   },
   "ResultRefreshScreen": {
     "recognition": "DirectHit",
