@@ -16,6 +16,7 @@ from typing import Any, Callable
 import numpy as np
 
 from . import native_engine
+from .life_monitor import LifeDetector
 from .native_minitouch import NativeMinitouchDevice
 from .playfield_monitor import LANE_CENTERS, PlayfieldDetector
 from .prepare_popup import CooperativePreparePopupDetector
@@ -95,6 +96,13 @@ class _ExecutionTimingTrace:
             median(row[5] for row in samples) if samples else None,
         ))
         self._chunk_start = len(self._samples)
+
+    def pending(self, cursor: int) -> tuple[int, list[tuple]]:
+        """返回 ``(新游标, cursor 之后新增的样本)``。
+
+        只复制增量，不复制历史——逐帧诊断每帧都会调用它，整局样本可达数千条。
+        """
+        return len(self._samples), self._samples[max(0, int(cursor)):]
 
     def report(self) -> dict[str, object]:
         # 单 owner 追加不可变行；先快照完整 chunk，再快照样本，保证每个
@@ -254,6 +262,34 @@ class NativeStartPhotogate:
     # 相邻轨道列。逐列变化超过该分量的列数占比过大时视为弹窗转场。
     _BROAD_COLUMN_MIN = 45.0
     _BROAD_COLUMN_FRACTION = 0.35
+    # 宽限期本意是跳过转场构件，但真实音符流也会在宽限期内开跑并被当成前奏
+    # 吞掉，门控一路等到宽限到点才开火，锚点整体后移。
+    #
+    # 判据用生命条而不是画面形态：门控阶段会话尚未启动、agent 不按压，只要
+    # 游戏已经在放音符，每个音符都是 MISS，生命条必然持续下降；真正的转场
+    # 构件期间游戏还没开始漏音符，生命条稳在满值。「宽限期内生命条下降」因此
+    # 是真实音符流已在判定带内的语义证据——纯画面形态（变化流是否持续）无法
+    # 区分转场与音符流，2026-10-03 曾据此在另一局误锚。
+    #
+    # 真机 2026-10-02 18:32/18:47 与 10-03 20:16（曲目 125 天下トーイツA to Z☆）：
+    # 稳定后 17ms 起连续 25/26 个 ignored-prelude 贯穿整个 500ms 宽限、间隙
+    # ≤50ms，生命条同步下降，门控在宽限到点才开火，锚点后移约 483ms，前 33 个
+    # 下发全部落空、生命 2 秒归零。
+    _GRACE_LIFE_DROP = 30.0
+
+    # 弹窗消失后的稳定窗口（秒）。弹窗淡出会让判定带连续变化好几十毫秒，
+    # 2026-10-04 曲目 125 实测：弹窗 7710.7ms 消失，淡出持续到 7777.3ms
+    # （change_score 222.74 → 123.47 → 49.14 → 10.00 递减），真正的第一个
+    # 音符进入判定带是 7845.0ms（+134ms）。120ms 两边都留有余量：跳过淡出，
+    # 又不至于把真音符也一起跳过。
+    _GRACE_POPUP_SETTLE_S = 0.120
+
+    # 尚未冻结时的生命下降阈值（点）。生命条宽 212px 映射 1000 点，1px ≈ 4.7 点，
+    # 所以 12 点约 2.5px：远高于填充边缘的抗锯齿抖动，又低于单个音符的扣血量
+    # （真机实测单音符可低到 24 点）。门控阶段会话未启动、agent 不按压，每个
+    # 音符都是 MISS，所以「生命从峰值掉下来」等价于「已经过了至少一个音符的
+    # 判定点」，是首音的绝对时间证据，且与判定带是否安静无关。
+    _LIFE_DROP_TRIGGER = 12.0
 
     def __init__(
         self,
@@ -269,6 +305,7 @@ class NativeStartPhotogate:
         playfield_detector: Callable[[Any], bool] | None = None,
         popup_detector: Callable[[Any], bool] | None = None,
         suppress_prepare_popup: bool | None = None,
+        life_detector: Callable[[Any], Any] | None = None,
     ) -> None:
         if not 0 <= from_row <= to_row < reference_height:
             raise ValueError("photogate 行范围无效")
@@ -331,6 +368,24 @@ class NativeStartPhotogate:
         self.prepare_popup_frames = 0
         self.prepare_popup_blocked_events = 0
         self._significant_events: deque[dict[str, object]] = deque(maxlen=32)
+        # 单调递增的事件序号。诊断录制用它判断「这一帧有没有关键事件」——
+        # deque 有 maxlen，长度会饱和，不能靠 len() 判断。
+        self.event_serial = 0
+        # 生命证据：`_life_peak` 是演奏场出现后读到过的最高生命值，跨冻结保留，
+        # 由它判断生命是否在下降。峰值刻意不在冻结瞬间取——冻结帧常常正是转场
+        # 画面，那里的生命条要么读不到（LifeDetector 返回 visible=False），要么
+        # 被当成空条读成 0：前者让判据在整局里第一次调用就 return False，后者让
+        # 「下降 N 点」在数学上无法满足（任何值都 ≤ 0-30）。峰值语义没有这个陷阱，
+        # 而且条本身是渐入的（0 一路涨到 1000），取最大值天然不受渐入影响。
+        self._life_detector = (
+            life_detector if life_detector is not None else LifeDetector()
+        )
+        self._life_peak: int | None = None
+        self._grace_life_min: int | None = None
+        self._grace_stream_since_s: float | None = None
+        self._grace_stream_score: float | None = None
+        # 弹窗消失后到该时刻为止的变化不算「变化流首帧」（弹窗淡出）。
+        self._grace_settle_until_s: float | None = None
 
     def _reset_band_state(self) -> None:
         """演奏场尚未成立或短暂消失时，丢弃此前加载页颜色基线。"""
@@ -342,12 +397,130 @@ class NativeStartPhotogate:
         self.frozen_at_s = None
         self.waited_frames = 0
         self.frozen = False
+        # `_life_peak` 刻意不在这里重置：它跨冻结保留，只在演奏场重新出现时清空，
+        # 否则弹窗出现/消失（会走这个函数）就会把已经建立的生命基线丢掉。
+        self._grace_life_min = None
+        self._grace_stream_since_s = None
+        self._grace_stream_score = None
+        self._grace_settle_until_s = None
+
+    def _park_band_for_popup(self, frame_s: float) -> None:
+        """准备弹窗遮住判定带时保留已经建立的冻结，只丢弃颜色基线。
+
+        弹窗只说明画面被遮挡，不代表「前奏还没找到」。原实现直接
+        ``_reset_band_state()``，把 ``frozen`` 一起清掉——2026-10-04 曲目 125
+        协力实测：门控在演奏场出现后 133ms 就正确冻结（和单人一样），7775ms
+        「其他成员正在准备中」弹窗出现把它丢掉，此后音符流已经开始、判定带
+        持续变化，门控再也冻结不了，锚点晚 633ms；同一首歌单人没有这个弹窗，
+        锚点落在演奏场出现后 3133.5ms，与谱面首音 3137ms 吻合。弹窗淡出不会被
+        误当成首音：基线已挪到弹窗那一帧，且宽限期后的 ``broad-change-blocked``
+        还会按逐列占比再拦一次（音符只改少数相邻轨道列）。
+        """
+        if not self.frozen:
+            # 还没冻结时稳定性确实被弹窗打断了，必须重新计时。
+            self._reset_band_state()
+            return
+        # 冻结保留，但宽限期从这一帧重新起算：弹窗淡出仍然不会被当成首音，
+        # 而已经建立的「前奏已找到」这个结论不会丢。
+        #
+        # 颜色基线刻意不动。弹窗那几帧直接 return，不参与 change_score，所以
+        # 基线仍停在弹窗前的演奏场画面，弹窗后的第一颗音符照常被检出；反过来
+        # 把基线挪到弹窗帧，弹窗一消失就会因为画面突变而误触发。
+        self.frozen_at_s = frame_s
+        self._grace_life_min = None
+        self._grace_stream_since_s = None
+        self._grace_stream_score = None
+        # 淡出期间的变化不能当锚点候选，否则锚点落在弹窗淡出上。
+        self._grace_settle_until_s = frame_s + self._GRACE_POPUP_SETTLE_S
+        # 弹窗跨过了若干帧，插值会跨过这段空隙，改用直接过阈。
+        self._previous_change = None
+
+    def _read_life(self, image: Any) -> int | None:
+        """读一次生命值；不可读时返回 None。"""
+        if self._life_detector is None:
+            return None
+        try:
+            reading = self._life_detector.detect(image)
+        except Exception:  # noqa: BLE001 - 生命读数只做佐证，不得中断门控
+            return None
+        if not getattr(reading, "visible", False):
+            return None
+        return int(getattr(reading, "value", 0))
+
+    def _is_broad_change(
+        self, image: Any, from_row: int, to_row: int
+    ) -> bool:
+        """判定带的变化是不是整带大面积（弹窗缩放/背景变暗），而不是音符。
+
+        音符只改变少数相邻轨道列；弹窗出现/消失会让整行同向变化。这条判据
+        原先只在宽限期**之后**生效，2026-10-04 曲目 125 实测的漏洞是：弹窗
+        消失后的淡出（`change_score=222.74`）被宽限期内的生命判据当成了
+        「变化流首帧」，锚点因此落在弹窗淡出上——单人局锚点在演奏场出现后
+        3133.5ms（谱面首音 3137ms），协力局是 3374.3ms，晚 241ms。
+        """
+        if not self._popup_gate_enabled or self._frozen_columns is None:
+            return False
+        current_columns = image[
+            from_row : to_row + 1, :, :3
+        ].astype("float64").mean(axis=0)
+        column_change = np.abs(current_columns - self._frozen_columns).sum(axis=1)
+        broad_columns = int((column_change >= self._BROAD_COLUMN_MIN).sum())
+        return broad_columns >= self._BROAD_COLUMN_FRACTION * image.shape[1]
+
+    def _grace_life_refutes(self, value: int | None) -> bool:
+        """宽限期内生命条下降是否证明真实音符流已在判定带内。
+
+        门控阶段会话尚未启动、agent 不按压，只要游戏已经在放音符，每个音符
+        都是 MISS，生命条必然持续下降；真正的转场构件期间游戏还没开始漏音符，
+        生命条稳在满值。因此这是语义证据，不是对画面形态的猜测。
+        """
+        if value is None:
+            return False
+        if self._life_peak is None or value > self._life_peak:
+            self._life_peak = value
+        if self._grace_life_min is None or value < self._grace_life_min:
+            self._grace_life_min = value
+        return self._grace_life_min <= self._life_peak - self._GRACE_LIFE_DROP
+
+    def _life_drop_trigger_s(
+        self, image: Any, frame_s: float, change_score: float
+    ) -> float | None:
+        """尚未冻结时生命条下降 = 音符流已经开跑，首音就是这一帧。
+
+        这条判据不依赖「判定带安静」这个前提，而那个前提对部分歌曲不成立：
+        2026-10-04 曲目 125（天下トーイツA to Z☆）真机实测，判定带从演奏场
+        出现起就持续变化（24 个 stability-reset），门控只能在音符流中间的
+        133ms 间隙里冻结，冻结时生命已经从 1000 掉到 722，锚点晚了约 617ms，
+        45 个下发全部落空、3 秒生命归零。生命条开局满值，漏一个音符掉一段，
+        所以「从峰值掉下来」等价于「至少过了一个音符的判定点」。
+        """
+        value = self._read_life(image)
+        if value is None:
+            return None
+        if self._life_peak is None or value > self._life_peak:
+            self._life_peak = value
+            return None
+        if value > self._life_peak - self._LIFE_DROP_TRIGGER:
+            return None
+        self.triggered = True
+        self.triggered_at_s = frame_s
+        self.trigger_score = change_score
+        self.trigger_source = "life-drop"
+        self._record_event(
+            "trigger",
+            frame_s,
+            change_score,
+            life=value,
+            life_peak=self._life_peak,
+        )
+        return frame_s
 
     def _record_event(
         self,
         event: str,
         frame_s: float,
         change_score: float,
+        **extra: object,
     ) -> None:
         """只保留有界关键事件，避免逐帧日志反过来干扰实时路径。"""
         elapsed_ms = (
@@ -355,10 +528,12 @@ class NativeStartPhotogate:
             if self._observed_since_s is not None
             else 0.0
         )
+        self.event_serial += 1
         self._significant_events.append({
             "event": event,
             "elapsed_ms": elapsed_ms,
             "change_score": change_score,
+            **extra,
         })
 
     def report(self) -> dict[str, object]:
@@ -390,6 +565,10 @@ class NativeStartPhotogate:
             "photogate_playfield_loss_events": self.playfield_loss_events,
             "photogate_stable_ms": stable_ms,
             "photogate_grace_ms": self._grace_s * 1000.0,
+            # 门控期间读到的生命峰/谷：判据没触发时，靠这两个值判断是「读不到
+            # 生命条」还是「生命没降够」，不必再靠猜。
+            "photogate_life_peak": self._life_peak,
+            "photogate_life_min": self._grace_life_min,
             "photogate_waited_frames": self.waited_frames,
             "photogate_ignored_prelude_events": self.ignored_prelude_events,
             "photogate_trigger_score": self.trigger_score,
@@ -438,6 +617,8 @@ class NativeStartPhotogate:
             self._playfield_active = True
             self.playfield_seen_at_s = frame_s
             self._reset_band_state()
+            # 生命基线从演奏场出现这一刻重新起算。
+            self._life_peak = None
             self._record_event("playfield-visible", frame_s, 0.0)
         if self._popup_gate_enabled:
             # 弹窗存在时不允许建立颜色基线，也不允许首拍触发；弹窗消失
@@ -455,13 +636,13 @@ class NativeStartPhotogate:
                         frame_s,
                         0.0,
                     )
-                self._reset_band_state()
+                self._park_band_for_popup(frame_s)
                 return None
             if self._prepare_popup_active:
                 self._prepare_popup_active = False
                 self.prepare_popup_blocked_events += 1
                 self._record_event("prepare-popup-gone", frame_s, 0.0)
-                self._reset_band_state()
+                self._park_band_for_popup(frame_s)
                 return None
         if self._last_color is None:
             self._last_color = current
@@ -471,6 +652,15 @@ class NativeStartPhotogate:
         self.last_change_score = change_score
 
         if not self.frozen:
+            # 尚未冻结时先看生命。判定带在音符流里同样会安静 120ms 以上，门控因此
+            # 可能冻结在音符流中间的间隙上——2026-10-04 曲目 125 实测就是这样：
+            # 冻结时生命已经从 1000 掉到 722，锚点晚约 617ms，45 个下发全落空、
+            # 3 秒生命归零。生命条不会骗人。冻结之后不走这条：锚点语义交给下面的
+            # 宽限/首拍路径，以免改动已经真机标定过的 190ms 延迟。
+            life_trigger_s = self._life_drop_trigger_s(image, frame_s, change_score)
+            if life_trigger_s is not None:
+                return life_trigger_s + self._latency_s
+
             if change_score <= self._change_threshold:
                 if self.stable_since_s is None:
                     self.stable_since_s = (
@@ -487,6 +677,10 @@ class NativeStartPhotogate:
                     self._frozen_columns = image[
                         from_row : to_row + 1, :, :3
                     ].astype("float64").mean(axis=0)
+                    # 生命峰值跨冻结保留（演奏场出现时已清空过），只有宽限期内的
+                    # 谷值需要在这里重新起算。
+                    self._grace_life_min = None
+                    self._grace_settle_until_s = None
                     self._record_event("stable", frame_s, change_score)
             else:
                 # 必须连续稳定；开场动画的任一显著变化都会重新计时。
@@ -502,37 +696,69 @@ class NativeStartPhotogate:
         if frame_s - self.frozen_at_s < self._grace_s:
             if change_score >= self._change_threshold:
                 self.ignored_prelude_events += 1
-                self._record_event("ignored-prelude", frame_s, change_score)
+                # 生命读数与宽窄判定都写进事件：判据有没有生效、为什么没生效，
+                # 必须能从日志复盘。
+                life = self._read_life(image)
+                broad = self._is_broad_change(image, from_row, to_row)
+                self._record_event(
+                    "ignored-prelude",
+                    frame_s,
+                    change_score,
+                    life=life,
+                    broad=broad,
+                )
+                # 弹窗淡出期间的变化不能当锚点候选，否则锚点会落在淡出上
+                # （2026-10-04 实测晚 241ms）。两道判据：整带大面积变化，以及
+                # 弹窗消失后 120ms 的稳定窗口。
+                settled = (
+                    self._grace_settle_until_s is None
+                    or frame_s >= self._grace_settle_until_s
+                )
+                if not broad and settled and self._grace_stream_since_s is None:
+                    self._grace_stream_since_s = frame_s
+                    self._grace_stream_score = change_score
+                if self._grace_life_refutes(life):
+                    # 生命条在掉 = 游戏已经在放音符、agent 还没开始按压 =
+                    # 判定带里的变化就是真实音符流。锚点必须回到这段变化流的
+                    # 首帧，否则整段音符被当前奏吞掉、锚点全局后移。
+                    stream_s = self._grace_stream_since_s
+                    if stream_s is None:
+                        # 生命已经证明音符流在跑，但迄今只见过整带变化（弹窗
+                        # 淡出）：退回当前帧，至少不把锚点钉在弹窗上。
+                        stream_s = frame_s
+                        self._grace_stream_score = change_score
+                    self.triggered = True
+                    self.triggered_at_s = stream_s
+                    self.trigger_score = self._grace_stream_score
+                    self.trigger_source = "grace-life-drop"
+                    self._record_event(
+                        "trigger",
+                        frame_s,
+                        change_score,
+                        grace_stream_ms=(frame_s - stream_s) * 1000.0,
+                        life=life,
+                        life_peak=self._life_peak,
+                    )
+                    self._last_color = current
+                    return stream_s + self._latency_s
             self._previous_change = change_score
             self._previous_frame_s = frame_s
             self._last_color = current
             return None
 
-        if (
-            change_score >= self._change_threshold
-            and self._popup_gate_enabled
-            and self._frozen_columns is not None
+        if change_score >= self._change_threshold and self._is_broad_change(
+            image, from_row, to_row
         ):
             # 弹窗缩放出现/消失或背景变暗时，判定带会发生大面积变化；首颗
-            # 音符只改变少数相邻轨道列。逐列比较冻结基线，变化列占比过高
-            # 就判定为弹窗转场，重置基线后继续等待真正的首音。
-            current_columns = image[
-                from_row : to_row + 1, :, :3
-            ].astype("float64").mean(axis=0)
-            column_change = np.abs(
-                current_columns - self._frozen_columns
-            ).sum(axis=1)
-            broad_columns = int(
-                (column_change >= self._BROAD_COLUMN_MIN).sum()
+            # 音符只改变少数相邻轨道列。判定为弹窗转场就重置基线，继续等待
+            # 真正的首音。
+            self._record_event(
+                "broad-change-blocked",
+                frame_s,
+                change_score,
             )
-            if broad_columns >= self._BROAD_COLUMN_FRACTION * image.shape[1]:
-                self._record_event(
-                    "broad-change-blocked",
-                    frame_s,
-                    change_score,
-                )
-                self._reset_band_state()
-                return None
+            self._reset_band_state()
+            return None
 
         trigger_s: float | None = None
         trigger_source: str | None = None
@@ -587,6 +813,7 @@ class NativeMinitouchBackend:
         initial_offsets: dict[str, float] | None = None,
         photogate: NativeStartPhotogate | None = None,
         start_gate_mode: str = "realtime",
+        recorder: Any | None = None,
         device: NativeMinitouchDevice | None = None,
         session_factory: Callable[..., Any] | None = None,
         run_id: str | None = None,
@@ -710,6 +937,11 @@ class NativeMinitouchBackend:
         self._phase_events: deque[dict[str, object]] = deque(maxlen=128)
         self._phase_receipts: deque[tuple[int, float, float]] = deque(maxlen=64)
         self._feedback_input_snapshot = (float("-inf"), float("-inf"))
+        # 光门阶段的诊断录制。录制器是异步有界队列、满了就丢帧，绝不会给
+        # 实时触控循环施加反压；这里再按时间节流，避免 60fps 的门控把队列灌满。
+        self._recorder = recorder
+        self._gate_record_serial = -1
+        self._gate_record_last_s = float("-inf")
         self._state = "idle"
         self._first_read_delay_s = 0.004
         self._first_action_anchor_s: float | None = None
@@ -737,6 +969,7 @@ class NativeMinitouchBackend:
         self._chunk_timing: deque[dict[str, object]] = deque(maxlen=4096)
         self._chunk_timing_total = 0
         self._execution_timing = _ExecutionTimingTrace()
+        self._drift_trace_cursor = 0
         self._first_chunk_pipeline_lock = threading.Lock()
         self._first_chunk_pipeline = self._new_first_chunk_pipeline()
         self._startup_timing_trial_lock = threading.Lock()
@@ -1572,9 +1805,79 @@ class NativeMinitouchBackend:
         self._frozen_timing_offset_ms = value
         self._config["press_bias_ms"] = value
 
+    _GATE_RECORD_INTERVAL_S = 0.1
+
+    def _record_gate_frame(self, image: Any, now: float) -> None:
+        """把光门阶段的画面喂给诊断录制器。
+
+        门控阶段此前一帧都不记录：``trace.jsonl`` 的 ``phase`` 只有
+        ``final-cover`` 和 ``engine``，失败局从帧 20 直接跳到帧 21，中间 8 秒
+        的门控过程没有任何画面证据——而 2026-10-04 曲目 125 的失败恰好发生在
+        这段里，所有结论都只能从事件时间戳反推。这里按 100ms 节流补上常态帧，
+        并在门控产生关键事件（playfield-visible / stable / prepare-popup-* /
+        stability-reset / ignored-prelude / trigger）的那一帧强制补一张。
+        """
+        if self._recorder is None:
+            return
+        record_phase = getattr(self._recorder, "record_phase", None)
+        if not callable(record_phase):
+            return
+        serial = self._photogate.event_serial
+        if (
+            serial == self._gate_record_serial
+            and now - self._gate_record_last_s < self._GATE_RECORD_INTERVAL_S
+        ):
+            return
+        self._gate_record_serial = serial
+        self._gate_record_last_s = now
+        record_phase(
+            image,
+            now,
+            "first-note-gate",
+            diagnostics=[{
+                "event": "gate-frame",
+                "frozen": self._photogate.frozen,
+                "ignored_prelude_events": self._photogate.ignored_prelude_events,
+                "prepare_popup_frames": self._photogate.prepare_popup_frames,
+                "last_change_score": self._photogate.last_change_score,
+            }],
+        )
+
+    def drain_execution_drift(self) -> dict[str, object] | None:
+        """返回自上次调用以来新增样本里最差的那一条，供逐帧诊断。
+
+        整局的 ``drift_max`` 只说明「最坏多少」，看不到尖峰发生在哪一秒；
+        逐帧记录后就能把它和「生命开始下降」的时刻直接对齐。
+
+        刻意**不设阈值**：2026-10-04 实测一局 C++ 侧报 ``drift_max=88.6ms``，
+        而同局 Python 侧样本最大只有 40.6ms —— 两个口径并不等价，按阈值筛会
+        一直抓不到东西。每帧只写一个五字段 dict（5Hz，一局约 240 条），代价
+        可以忽略；录制器本身是异步有界队列（满了丢帧），不会施加反压。
+        """
+        cursor, samples = self._execution_timing.pending(self._drift_trace_cursor)
+        self._drift_trace_cursor = cursor
+        if not samples:
+            return None
+        worst = max(samples, key=lambda row: abs(float(row[5])))
+        return {
+            "samples": len(samples),
+            "signed_ms": round(float(worst[5]), 1),
+            "elapsed_s": round(float(worst[2]), 3),
+            "token": int(worst[0]),
+        }
+
+    def attach_recorder(self, recorder: Any | None) -> None:
+        """把诊断录制器接到光门阶段。
+
+        后端是预武装的，创建时刻早于录制器，所以只能事后挂接；没有录制器
+        （trace-only 以外的正常路径）时保持 ``None``，光门阶段不做任何额外工作。
+        """
+        self._recorder = recorder
+
     def observe_start_frame(self, image: Any, now: float) -> float | None:
         """只观察首拍门控；触发时设备未就绪则立即失败。"""
         anchor = self._photogate.observe(image, now)
+        self._record_gate_frame(image, now)
         if anchor is None:
             return None
         if self._device_error is not None:

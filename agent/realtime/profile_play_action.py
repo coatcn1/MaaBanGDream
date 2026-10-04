@@ -2695,6 +2695,13 @@ class RealtimeProfilePlay(CustomAction):
                         selected_chart.path,
                     )
                     native_backend.configure_timing_offset(timing_offset_ms)
+                    # 光门阶段的画面此前完全不入档：trace 的 phase 只有
+                    # final-cover 和 engine，中间 8 秒没有任何画面证据。
+                    attach_recorder = getattr(
+                        native_backend, "attach_recorder", None
+                    )
+                    if recorder is not None and callable(attach_recorder):
+                        attach_recorder(recorder)
                     print(
                         "RealtimeProfilePlay native_prearmed=consumed "
                         f"chart={selected_chart.path} "
