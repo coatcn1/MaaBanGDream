@@ -167,6 +167,79 @@ def test_explicit_full_title_disambiguates_shared_fire_bird_jacket():
     assert confirmed_full.selection.bestdori_song_id == 243
 
 
+def test_unique_cover_tolerates_single_level_regional_drift(tmp_path):
+    """封面在目录里唯一命中时身份已由封面确定，±1 级是区服/元数据回填。"""
+    build_repository(tmp_path)
+    repository = LocalChartRepository(tmp_path)
+
+    drifted = repository.resolve(FINGERPRINT, "Hard", level=19)
+
+    assert drifted.selection is not None
+    assert drifted.selection.bestdori_song_id == 99
+    assert drifted.reason == "confirmed local chart with regional level drift"
+
+    # 超过 1 级说明等级读数或本地元数据本身不可信，仍按身份冲突硬拒绝。
+    for wrong_level in (18, 25):
+        rejected = repository.resolve(FINGERPRINT, "Hard", level=wrong_level)
+        assert rejected.selection is None
+        assert (
+            rejected.reason
+            == "selected song level does not match local chart metadata"
+        )
+
+
+def test_shared_cover_keeps_level_guard_even_when_full_title_narrows_catalog():
+    """FIRE BIRD 187/243 共用封面：按 [FULL] 标题收窄后封面看似唯一命中，
+    但等级仍是唯一判别信号，不能按区服等级漂移放行。"""
+    repository = LocalChartRepository(PROJECT_CHART_ROOT)
+    fingerprint = "song-jacket-phash-v2-c52d4b1e6a1ab5e3"
+
+    drifted = repository.resolve(
+        fingerprint, "Expert", level=27, title="[FULL]FIRE BIRD",
+    )
+
+    assert drifted.selection is None
+    assert (
+        drifted.reason
+        == "selected song level does not match local chart metadata"
+    )
+
+
+def test_unique_cover_level_drift_resolves_real_catalog_song():
+    """真实曲库里的唯一封面曲目：观测等级与 manifest 相差 1 级时不再判死。
+
+    曲目 571 グッド・バイ，2026-10-05 02:27 协力生命归零的根因。曲库同步会让
+    manifest 的 Expert 等级跟着 bestdori 回填，而谱面文件停在旧值，两者相差
+    1 级；等级硬约束因此把整首曲目判死，整局降级成视觉 Legacy 后打空血。
+    这里不硬编码 manifest 的当前值 —— 它随同步时间变化，只要求相差 1 级时放行。
+    """
+    repository = LocalChartRepository(PROJECT_CHART_ROOT)
+    songs = json.loads(
+        repository.manifest_path.read_text(encoding="utf-8")
+    )["songs"]
+    song = next(item for item in songs if item["bestdori_song_id"] == 571)
+    manifest_level = song["difficulties"]["expert"]["level"]
+
+    resolution = repository.resolve(
+        song["fingerprints"][0], "Expert", level=manifest_level - 1,
+    )
+
+    assert resolution.selection is not None
+    assert resolution.selection.bestdori_song_id == 571
+    assert resolution.selection.shared_jacket is False
+    assert resolution.reason == "confirmed local chart with regional level drift"
+
+    # 相差 2 级说明等级读数或本地元数据本身不可信，仍按身份冲突硬拒绝。
+    rejected = repository.resolve(
+        song["fingerprints"][0], "Expert", level=manifest_level - 2,
+    )
+    assert rejected.selection is None
+    assert (
+        rejected.reason
+        == "selected song level does not match local chart metadata"
+    )
+
+
 def test_little_busters_continuous_cover_resolves_expert_chart():
     repository = LocalChartRepository(
         Path(__file__).resolve().parents[1] / "resource/charts"

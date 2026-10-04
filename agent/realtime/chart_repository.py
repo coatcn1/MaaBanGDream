@@ -152,6 +152,20 @@ class LocalChartRepository:
         bestdori_song_id: int | None = None,
     ) -> ChartResolution:
         manifest = self._load_manifest()
+        # 这张封面在整份目录里是否只对应一首曲目。判断"封面本身能否唯一确定
+        # 身份"必须在按标题或 bestdori id 收窄之前完成：FIRE BIRD 187/243 共用
+        # 封面，一旦按 [FULL] 标题收窄就会变成"唯一命中"，等级会被误当成冗余。
+        unique_cover_in_catalog = (
+            sum(
+                1
+                for song in _coalesce_equivalent_songs(manifest["songs"])
+                if any(
+                    same_song(song_fingerprint, confirmed)
+                    for confirmed in song["fingerprints"]
+                )
+            )
+            == 1
+        )
         songs = manifest["songs"]
         if bestdori_song_id is not None:
             songs = [
@@ -192,6 +206,19 @@ class LocalChartRepository:
                     for confirmed in song["fingerprints"]
                 )
             ]
+        # 封面在整份目录里唯一命中时身份已由封面确定，等级不参与判别；此时
+        # ±1 级的差异只能是区服进度或元数据回填（见 regional_difficulty 模块
+        # 注释），不能因此把整首曲目判死。封面被多首曲目共用（[FULL]、
+        # English Version、SPECIAL 等与原版共用封面）或等级差超过 1 级时，
+        # 等级仍是唯一判别信号，继续硬拒绝。
+        tolerated_level_drift = bool(
+            matched_exact_fingerprint
+            and unique_cover_in_catalog
+            and level is not None
+            and _regional_level_drift_tolerated(
+                fingerprint_matches[0], normalized_difficulty, int(level),
+            )
+        )
         matches = fingerprint_matches
         level_scope = songs
         matched_by_level = False
@@ -208,6 +235,7 @@ class LocalChartRepository:
                 matched_exact_fingerprint
                 and matches
                 and not level_matches
+                and not tolerated_level_drift
             ):
                 return ChartResolution(
                     None,
@@ -220,7 +248,9 @@ class LocalChartRepository:
             # lose a leading [FULL] marker and otherwise make the shorter
             # same-title chart look like the unique title winner.  Never let
             # title similarity restore a candidate from the wrong level.
-            matches = level_matches
+            # 唯一封面已确定身份时保留该候选，由 tolerated_level_drift 放行。
+            if level_matches or not tolerated_level_drift:
+                matches = level_matches
         matched_by_title = False
         if len(matches) != 1 and title:
             title_scope = matches or level_scope
@@ -247,6 +277,7 @@ class LocalChartRepository:
         song = matches[0]
         if (
             level is not None
+            and not tolerated_level_drift
             and not _difficulty_level_matches(
                 song, normalized_difficulty, int(level),
             )
@@ -293,6 +324,14 @@ class LocalChartRepository:
                 )
             )
         )
+        if matched_by_title:
+            reason = "confirmed local chart by song title"
+        elif matched_by_level:
+            reason = "confirmed local chart by song level"
+        elif tolerated_level_drift:
+            reason = "confirmed local chart with regional level drift"
+        else:
+            reason = "confirmed local chart"
         return ChartResolution(
             ChartSelection(
                 bestdori_song_id=song["bestdori_song_id"],
@@ -311,15 +350,7 @@ class LocalChartRepository:
                 shared_jacket=len(fingerprint_matches) > 1,
                 shared_jacket_level_unique=same_level_shared == 1,
             ),
-            (
-                "confirmed local chart by song title"
-                if matched_by_title
-                else (
-                    "confirmed local chart by song level"
-                    if matched_by_level
-                    else "confirmed local chart"
-                )
-            ),
+            reason,
         )
 
     def _load_manifest(self) -> dict[str, Any]:
@@ -419,6 +450,30 @@ def _difficulty_level(song: dict[str, Any], difficulty: str) -> int | None:
         return int(entry["level"])
     except (TypeError, ValueError):
         return None
+
+
+# 区服进度与元数据回填造成的 Expert 等级差异实测恒为 1 级（见
+# regional_difficulty 模块注释与 _VERIFIED_CN_EXPERT_LEVELS）。超过 1 级说明
+# 等级读数或本地元数据本身不可信，仍按身份冲突硬拒绝。
+MAX_REGIONAL_LEVEL_DRIFT = 1
+
+
+def _regional_level_drift_tolerated(
+    song: dict[str, Any], difficulty: str, observed_level: int,
+) -> bool:
+    """严格等级判据失败后，等级差是否仍可由区服/元数据回填解释。
+
+    已登记的区服差异（_VERIFIED_CN_EXPERT_LEVELS）由
+    _difficulty_level_matches 直接放行，不算容忍；只有严格判据确实失败、
+    且差距在 MAX_REGIONAL_LEVEL_DRIFT 以内时才返回 True。
+    """
+    if _difficulty_level_matches(song, difficulty, observed_level):
+        return False
+    expected_level = _difficulty_level(song, difficulty)
+    if expected_level is None:
+        return False
+    drift = abs(expected_level - int(observed_level))
+    return 0 < drift <= MAX_REGIONAL_LEVEL_DRIFT
 
 
 def _difficulty_level_matches(

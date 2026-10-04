@@ -617,6 +617,152 @@ def test_refresh_observed_title_only_upgrades_validated_confidence(tmp_path):
     assert resolver.observed_title == "FIRE BIRD"
 
 
+def test_deferred_resolver_confirms_unique_cover_with_regional_level_drift(tmp_path):
+    """唯一封面 + 1 级区服差异：延迟解析路径必须确认谱面。
+
+    2026-10-05 02:27 协力生命归零的根因是这一层把 571 グッド・バイ 判成
+    等级冲突，随后整局降级成 degraded-visual-legacy（无谱面、视觉 Legacy），
+    9.7 秒打空血。封面在目录里唯一命中时等级不参与判别。
+    """
+    cover, song_id = final_cover_frame()
+    chart = [
+        {"type": "BPM", "beat": 0, "bpm": 120},
+        {"type": "Single", "beat": 1, "lane": 2},
+    ]
+    digest = hashlib.sha256(
+        json.dumps(
+            chart,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    (tmp_path / "bestdori" / "571").mkdir(parents=True)
+    (tmp_path / "bestdori" / "571" / "expert.json").write_text(
+        json.dumps({
+            "schema_version": 1,
+            "source": {"provider": "bestdori", "chart_sha256": digest},
+            "song": {"bestdori_id": 571, "titles": ["グッド・バイ"]},
+            "difficulty": {"name": "expert", "level": 27},
+            "chart": chart,
+        }),
+        encoding="utf-8",
+    )
+    (tmp_path / "manifest.json").write_text(json.dumps({
+        "schema_version": 1,
+        "songs": [{
+            "bestdori_song_id": 571,
+            "display_title": "グッド・バイ",
+            "titles": ["グッド・バイ"],
+            "fingerprints": [song_id],
+            "difficulties": {
+                "expert": {
+                    "path": "bestdori/571/expert.json",
+                    "level": 27,
+                    "chart_sha256": digest,
+                }
+            },
+        }],
+    }), encoding="utf-8")
+    resolver = FinalCoverResolver(
+        difficulty="Expert",
+        observed_level=26,
+        observed_title="グッド・バイ",
+        repository=LocalChartRepository(tmp_path),
+    )
+
+    assert resolver.observe(cover) is None
+    resolution = resolver.observe(cover)
+
+    assert resolution is not None
+    assert resolution.selection.bestdori_song_id == 571
+    assert resolution.confirmation.bestdori_song_id == 571
+    assert resolution.selection.shared_jacket is False
+
+
+def test_deferred_resolver_still_rejects_shared_cover_level_conflict(tmp_path):
+    """共享封面（[FULL]/English/SPECIAL 与原版共用封面）等级仍是唯一判别
+    信号：观测等级只差 1 级也不能按区服漂移放行。"""
+    cover, song_id = final_cover_frame()
+    chart = [
+        {"type": "BPM", "beat": 0, "bpm": 120},
+        {"type": "Single", "beat": 1, "lane": 2},
+    ]
+    digest = hashlib.sha256(
+        json.dumps(
+            chart,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    (tmp_path / "bestdori" / "187").mkdir(parents=True)
+    (tmp_path / "bestdori" / "187" / "expert.json").write_text(
+        json.dumps({
+            "schema_version": 1,
+            "source": {"provider": "bestdori", "chart_sha256": digest},
+            "song": {"bestdori_id": 187, "titles": ["FIRE BIRD"]},
+            "difficulty": {"name": "expert", "level": 27},
+            "chart": chart,
+        }),
+        encoding="utf-8",
+    )
+    (tmp_path / "bestdori" / "243").mkdir(parents=True)
+    (tmp_path / "bestdori" / "243" / "expert.json").write_text(
+        json.dumps({
+            "schema_version": 1,
+            "source": {"provider": "bestdori", "chart_sha256": digest},
+            "song": {"bestdori_id": 243, "titles": ["[FULL]FIRE BIRD"]},
+            "difficulty": {"name": "expert", "level": 28},
+            "chart": chart,
+        }),
+        encoding="utf-8",
+    )
+    (tmp_path / "manifest.json").write_text(json.dumps({
+        "schema_version": 1,
+        "songs": [
+            {
+                "bestdori_song_id": 187,
+                "display_title": "FIRE BIRD",
+                "titles": ["FIRE BIRD"],
+                "fingerprints": [song_id],
+                "difficulties": {
+                    "expert": {
+                        "path": "bestdori/187/expert.json",
+                        "level": 27,
+                        "chart_sha256": digest,
+                    }
+                },
+            },
+            {
+                "bestdori_song_id": 243,
+                "display_title": "[FULL]FIRE BIRD",
+                "titles": ["[FULL]FIRE BIRD"],
+                "fingerprints": [song_id],
+                "difficulties": {
+                    "expert": {
+                        "path": "bestdori/243/expert.json",
+                        "level": 28,
+                        "chart_sha256": digest,
+                    }
+                },
+            },
+        ],
+    }), encoding="utf-8")
+    resolver = FinalCoverResolver(
+        difficulty="Expert",
+        observed_level=26,
+        observed_title="[FULL]FIRE BIRD",
+        repository=LocalChartRepository(tmp_path),
+    )
+
+    assert resolver.observe(cover) is None
+    assert resolver.observe(cover) is None
+    assert resolver.last_reason == (
+        "selected song level does not match local chart metadata"
+    )
+
+
 def test_final_cover_resolver_can_require_title_after_early_ocr_failed():
     cover, song_id = final_cover_frame()
     selection = SimpleNamespace(
