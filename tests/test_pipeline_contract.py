@@ -251,9 +251,18 @@ def test_recovery_is_bounded_and_shared():
     assert download_progress["roi"] == [20, 550, 240, 100]
     assert download_progress["threshold"] == .82
     refresh = common["CommonRefreshScreen"]
+    # 通用截屏节点必须显式压掉框架默认的 200ms pre_delay / 1000ms post_delay。
+    # 它被所有 agent 轮询循环当作「取一帧」使用（capture_image），继承默认值
+    # 会让每次采样耗时约 1.2 秒：2026-10-02 实测相邻两次 CommonRefreshScreen
+    # 往返为 1223–1578ms，与 maafw 日志里该节点每次识别后的 TaskBase::sleep
+    # 200ms + 1000ms 完全对应。协力准备→黑场窗口只有约 1.3 秒，采样周期与黑场
+    # 长度同量级就会整段漏检（192 次转场里出现 1 次 playfield-motion-missed-
+    # transition）。MedleyResultRefreshScreen 早已这样压过，本节点是漏网的。
     assert refresh == {
         "recognition": "DirectHit",
         "action": "DoNothing",
+        "pre_delay": 0,
+        "post_delay": 0,
     }
     assert common["MedleyResultRefreshScreen"] == {
         "recognition": "DirectHit",

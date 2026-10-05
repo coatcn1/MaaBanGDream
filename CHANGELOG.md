@@ -1,5 +1,10 @@
 # 变更记录
 
+## 2026-10-05（通用截屏节点压掉框架默认延迟）
+
+- 压掉通用截屏节点 `CommonRefreshScreen` 继承的框架默认延迟。该节点只声明 `DirectHit` + `DoNothing`，没写 `pre_delay`/`post_delay`，于是每次识别后都走框架默认的 200ms + 1000ms。它是所有 agent 轮询循环的取帧入口（`capture_image` 调 `context.run_task("CommonRefreshScreen")` 再读 `controller.cached_image`），因此每次采样实际耗时约 1.2 秒：2026-10-02 实测相邻两次往返为 1223–1578ms，与 maafw 调试日志中该节点每次 `TaskBase::sleep 200ms`（pre_delay）与 `TaskBase::sleep 1000ms`（post_delay）完全对应，识别本身只要 2–3ms。两个后果：一是「准备完毕 → 开演黑场」窗口只有约 1.3 秒，与采样周期同量级，整段黑场会落在两帧之间，192 次转场里漏检 1 次并误走 `playfield-motion-missed-transition` 分支丢局；二是 agent 读到帧时画面已陈旧约 1 秒。现在与 `MedleyResultRefreshScreen` 对齐设为 `pre_delay: 0` / `post_delay: 0`，采样周期降到约 0.2–0.3 秒（修复后实测 183–226ms，约 7 倍）。共用方 `common_recover`、`live_select`、`game_effect_settings_action`、`medley_action`、`cooperative_action` 都是轮询循环，节拍由各自的显式 `escape_interval_ms` / `interval_ms` 控制，循环变快不会增加输入次数。
+- 验证：`tests/test_pipeline_contract.py` 新增断言钉住该节点必须显式声明 `pre_delay: 0` / `post_delay: 0`。真机 A/B 对照（同为 `b45cb2e` 基线的发布包与本地开发版，仅此一处差异）：`select_room room_entry_confirmed` 5.77s → 1.78–1.83s、`reached_selection → ready_to_click` 1.23s → 0.05s、`ready_click → button-gone` 1.81s → 0.65s，逐步差约 1.2 秒，与 `post_delay` 完全吻合。2026-10-04 真机复验：18 次开演转场全部走 `black`，0 次误判。
+
 ## v1.4.6（2026-10-04）
 
 - 协力成员加载页保护改为默认开启的持久选项，Maa“演出设置 → 任务安全”提供自动保存开关；旧配置缺字段迁移为开启，显式关闭保留，两条协力最终封面检查消费同一任务快照，旧 trial 入口不覆盖界面选择。协力 Native 与 Legacy 均接线，其他模式不变，不调整识别阈值、演奏时序或 Profile timing offset。
