@@ -28,10 +28,83 @@ SINGLE_LIVE_TITLE_ROI = (120, 260, 440, 90)
 FINAL_COVER_TITLE_ROI = (480, 485, 318, 70)
 
 
+def is_final_score_layout(image) -> bool:
+    """仅接受目标得分条的黄色星章和右侧粉色数字共同出现的页面证据。"""
+    if not isinstance(image, np.ndarray) or image.ndim != 3 or image.shape[0] < 550 or image.shape[1] < 960:
+        return False
+    hsv = cv2.cvtColor(image[485:550, 350:960, :3], cv2.COLOR_BGR2HSV)
+    badge = hsv[:, :70]
+    digits = hsv[:, 380:610]
+    yellow = (badge[:, :, 0] > 10) & (badge[:, :, 0] < 45) & (badge[:, :, 1] > 35) & (badge[:, :, 2] > 140)
+    pink = (digits[:, :, 0] > 150) & (digits[:, :, 0] < 180) & (digits[:, :, 1] > 40) & (digits[:, :, 2] > 160)
+    if np.count_nonzero(yellow) < 200 or np.count_nonzero(pink) < 200:
+        return False
+    _, _, stats, _ = cv2.connectedComponentsWithStats(pink.astype(np.uint8))
+    return sum(int(area) >= 8 and int(height) >= 8 for _, _, _, height, area in stats[1:]) >= 3
+
+
+def is_final_score_text(text: str) -> bool:
+    normalized = normalize_song_title(text)
+    return (
+        ("得分" in normalized or "targetscore" in normalized)
+        and sum(character.isdigit() for character in normalized) >= 3
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class TitleReading:
     text: str
     confidence: float
+
+
+def final_cover_ink_roi(image) -> tuple[int, int, int, int] | None:
+    """仅裁切最终标题条内完整的深色墨迹，触边长标题保持既有固定 ROI。"""
+    x, y, width, height = FINAL_COVER_TITLE_ROI
+    if not isinstance(image, np.ndarray) or image.ndim != 3 or image.shape[0] < y + height or image.shape[1] < x + width:
+        return None
+    gray = cv2.cvtColor(image[y:y + height, x:x + width, :3], cv2.COLOR_BGR2GRAY)
+    ink_y, ink_x = np.where(gray < 180)
+    if not len(ink_x):
+        return None
+    left, top = int(ink_x.min()), int(ink_y.min())
+    right, bottom = int(ink_x.max()) + 1, int(ink_y.max()) + 1
+    if left == 0 or top == 0 or right == width or bottom == height or bottom - top < 8 or right - left < 4:
+        return None
+    left, top = max(0, left - 16), max(0, top - 10)
+    right, bottom = min(width, right + 16), min(height, bottom + 10)
+    return x + left, y + top, right - left, bottom - top
+
+
+def recognize_final_cover_title(image, *, reader=None, diagnostics=None) -> TitleReading | None:
+    """最终页低置信度短标题最多追加一次同模型识读，保持既有确认阈值。"""
+    detail = diagnostics if diagnostics is not None else {}
+    detail.update({"source": "fixed-roi", "source_roi": FINAL_COVER_TITLE_ROI, "attempts": []})
+    if is_final_score_layout(image):
+        detail["status"] = "excluded-score-layout"
+        return None
+    recognize = reader or recognize_song_title
+    reading = recognize(image, roi=FINAL_COVER_TITLE_ROI)
+    detail["attempts"].append({"roi": FINAL_COVER_TITLE_ROI, "text": reading.text if reading else None,
+                               "confidence": reading.confidence if reading else None})
+    if reading is not None and is_final_score_text(reading.text):
+        detail["status"] = "excluded-score-text"
+        return None
+    if reading is None or reading.confidence < 0.7:
+        ink_roi = final_cover_ink_roi(image)
+        if ink_roi is not None:
+            enhanced = recognize(image, roi=ink_roi)
+            detail["attempts"].append({"roi": ink_roi, "text": enhanced.text if enhanced else None,
+                                       "confidence": enhanced.confidence if enhanced else None})
+            if enhanced is not None and is_final_score_text(enhanced.text):
+                detail["status"] = "excluded-score-text"
+                return None
+            if enhanced is not None and (reading is None or enhanced.confidence > reading.confidence):
+                reading = enhanced
+                detail["source"] = "ink-roi"
+                detail["source_roi"] = ink_roi
+    detail.update({"status": "read" if reading else "missing", "text": reading.text if reading else None,
+                   "confidence": reading.confidence if reading else None})
+    return reading
 
 
 def normalize_song_title(value: str) -> str:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,16 @@ from .song_identity import (
     same_song,
 )
 from .song_title_ocr import normalize_song_title, title_similarity
+
+
+REGIONAL_LEVEL_DRIFT_TRIAL_ENV = "MAABANGDREAM_REGIONAL_LEVEL_DRIFT_TRIAL"
+_regional_level_drift_trial_configured: bool | None = None
+
+
+def configure_regional_level_drift_trial(enabled: bool) -> None:
+    """只配置当前 Agent 进程的身份规则，不写入用户持久设置。"""
+    global _regional_level_drift_trial_configured
+    _regional_level_drift_trial_configured = bool(enabled)
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +45,8 @@ class ChartSelection:
     # 共享封面组内该难度等级是否唯一：唯一时等级即可区分 FULL/普通等
     # 同封面谱面，最终封面确认无需再依赖经常失败的标题 OCR。
     shared_jacket_level_unique: bool = False
+    # 等级容忍必须在最终封面重新取得实读标题，不能复用准备页候选直接开演。
+    level_drift_tolerated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,9 +74,25 @@ class LocalChartRepository:
 
     SCHEMA_VERSION = 1
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(
+        self, root: str | Path, *, regional_level_drift_enabled: bool | None = None,
+    ) -> None:
         self.root = Path(root).resolve()
         self.manifest_path = self.root / "manifest.json"
+        # 已验收的身份规则默认开启；显式关闭优先，并冻结本次解析器的状态。
+        if regional_level_drift_enabled is not None and not isinstance(
+            regional_level_drift_enabled, bool,
+        ):
+            raise ValueError("regional_level_drift_enabled 必须是布尔值")
+        self.regional_level_drift_enabled = (
+            (
+                _regional_level_drift_trial_configured
+                if _regional_level_drift_trial_configured is not None
+                else os.environ.get(REGIONAL_LEVEL_DRIFT_TRIAL_ENV) != "0"
+            )
+            if regional_level_drift_enabled is None
+            else regional_level_drift_enabled
+        )
 
     def identify_by_cover_title(
         self,
@@ -152,6 +181,21 @@ class LocalChartRepository:
         bestdori_song_id: int | None = None,
     ) -> ChartResolution:
         manifest = self._load_manifest()
+        # 唯一封面候选必须在完整目录里统计，再与实读标题交叉确认。
+        # 不能先按标题或 ID 收窄，否则 FIRE BIRD 187/243 等共享封面会
+        # 被误当作唯一封面，绕过仍然必要的版本消歧。
+        unique_cover_in_catalog = (
+            self.regional_level_drift_enabled
+            and sum(
+                1
+                for song in _coalesce_equivalent_songs(manifest["songs"])
+                if any(
+                    same_song(song_fingerprint, confirmed)
+                    for confirmed in song["fingerprints"]
+                )
+            )
+            == 1
+        )
         songs = manifest["songs"]
         if bestdori_song_id is not None:
             songs = [
@@ -192,6 +236,32 @@ class LocalChartRepository:
                     for confirmed in song["fingerprints"]
                 )
             ]
+        # pHash 唯一命中只代表候选唯一。等级差异只有在实读标题也独立支持
+        # 同一候选时才可容忍，不能把 OCR 误读或封面近似匹配解释成区服差异。
+        tolerated_level_drift = bool(
+            matched_exact_fingerprint
+            and unique_cover_in_catalog
+            and level is not None
+            and _regional_level_drift_tolerated(
+                fingerprint_matches[0], normalized_difficulty, int(level),
+            )
+        )
+        if tolerated_level_drift:
+            if not title or not str(title).strip():
+                return ChartResolution(
+                    None, "regional level drift requires confirmed song title",
+                )
+            title_matches = _unique_title_matches(
+                _coalesce_equivalent_songs(manifest["songs"]), title,
+            )
+            title_supported = any(
+                len(_coalesce_equivalent_songs([fingerprint_matches[0], candidate])) == 1
+                for candidate in title_matches
+            )
+            if not title_supported:
+                return ChartResolution(
+                    None, "song title conflicts with regional level drift candidate",
+                )
         matches = fingerprint_matches
         level_scope = songs
         matched_by_level = False
@@ -208,6 +278,7 @@ class LocalChartRepository:
                 matched_exact_fingerprint
                 and matches
                 and not level_matches
+                and not tolerated_level_drift
             ):
                 return ChartResolution(
                     None,
@@ -216,11 +287,10 @@ class LocalChartRepository:
             matched_by_level = (
                 len(level_matches) == 1 and len(matches) != 1
             )
-            # Level is part of song identity.  In particular, an OCR crop can
-            # lose a leading [FULL] marker and otherwise make the shorter
-            # same-title chart look like the unique title winner.  Never let
-            # title similarity restore a candidate from the wrong level.
-            matches = level_matches
+            # 共享封面的等级仍辅助区分版本，不能用裁掉 FULL 前缀的标题
+            # 恢复错误候选；只有封面与实读标题交叉一致时才保留等级容忍结果。
+            if level_matches or not tolerated_level_drift:
+                matches = level_matches
         matched_by_title = False
         if len(matches) != 1 and title:
             title_scope = matches or level_scope
@@ -247,6 +317,7 @@ class LocalChartRepository:
         song = matches[0]
         if (
             level is not None
+            and not tolerated_level_drift
             and not _difficulty_level_matches(
                 song, normalized_difficulty, int(level),
             )
@@ -293,6 +364,14 @@ class LocalChartRepository:
                 )
             )
         )
+        if matched_by_title:
+            reason = "confirmed local chart by song title"
+        elif matched_by_level:
+            reason = "confirmed local chart by song level"
+        elif tolerated_level_drift:
+            reason = "confirmed local chart with regional level drift"
+        else:
+            reason = "confirmed local chart"
         return ChartResolution(
             ChartSelection(
                 bestdori_song_id=song["bestdori_song_id"],
@@ -310,16 +389,9 @@ class LocalChartRepository:
                 ),
                 shared_jacket=len(fingerprint_matches) > 1,
                 shared_jacket_level_unique=same_level_shared == 1,
+                level_drift_tolerated=tolerated_level_drift,
             ),
-            (
-                "confirmed local chart by song title"
-                if matched_by_title
-                else (
-                    "confirmed local chart by song level"
-                    if matched_by_level
-                    else "confirmed local chart"
-                )
-            ),
+            reason,
         )
 
     def _load_manifest(self) -> dict[str, Any]:
@@ -419,6 +491,28 @@ def _difficulty_level(song: dict[str, Any], difficulty: str) -> int | None:
         return int(entry["level"])
     except (TypeError, ValueError):
         return None
+
+
+# 本地候选只覆盖已发现的 1 级元数据差异；标题与封面一致性由调用方另行校验。
+MAX_REGIONAL_LEVEL_DRIFT = 1
+
+
+def _regional_level_drift_tolerated(
+    song: dict[str, Any], difficulty: str, observed_level: int,
+) -> bool:
+    """严格等级判据失败后，等级差是否落在本次候选验证范围。
+
+    已登记的区服差异（_VERIFIED_CN_EXPERT_LEVELS）由
+    _difficulty_level_matches 直接放行，不算容忍；只有严格判据确实失败、
+    且差距在 MAX_REGIONAL_LEVEL_DRIFT 以内时才返回 True；这不能证明歌曲身份。
+    """
+    if _difficulty_level_matches(song, difficulty, observed_level):
+        return False
+    expected_level = _difficulty_level(song, difficulty)
+    if expected_level is None:
+        return False
+    drift = abs(expected_level - int(observed_level))
+    return 0 < drift <= MAX_REGIONAL_LEVEL_DRIFT
 
 
 def _difficulty_level_matches(

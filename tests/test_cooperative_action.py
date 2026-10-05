@@ -380,9 +380,7 @@ def test_member_exit_watch_returns_immediately_on_black_transition():
     assert dismissed == []
 
 
-def test_member_exit_watch_fails_closed_when_playfield_motion_proves_missed_transition(
-    capsys,
-):
+def test_member_exit_watch_motion_without_identity_waits_to_timeout(monkeypatch, capsys):
     frame = np.full((720, 1280, 3), 128, dtype=np.uint8)
     flow = _bare_flow()
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
@@ -400,12 +398,17 @@ def test_member_exit_watch_fails_closed_when_playfield_motion_proves_missed_tran
         raise JumpOutUnavailable("missed transition")
 
     flow.wait_for_life_depleted_after_missed_transition = monitor
-
-    with pytest.raises(JumpOutUnavailable, match="missed transition"):
+    flow.make_final_cover_entry_resolver = lambda: None
+    flow.jump_after_download_timeout = lambda: (_ for _ in ()).throw(
+        JumpOutUnavailable("startup timeout")
+    )
+    clock = [0.0]
+    monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(cooperative_action.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    with pytest.raises(JumpOutUnavailable, match="startup timeout"):
         flow.watch_member_exit_before_black(timeout=2.0)
-    assert "outcome=playfield-motion-missed-transition" in capsys.readouterr().out
-    assert len(monitored) == 1
-    assert np.array_equal(monitored[0], frame)
+    assert "outcome=timeout" in capsys.readouterr().out
+    assert not monitored
 
 
 def test_member_exit_watch_default_covers_slow_ready_countdown(monkeypatch):
@@ -466,6 +469,72 @@ def test_member_exit_watch_accepts_matching_final_cover_without_black(monkeypatc
     assert len(changes) == 1
     assert changes[0]["startup_final_cover_resolution"] is resolution
     assert np.array_equal(changes[0]["startup_final_cover_image"], cover)
+
+
+def test_member_loading_motion_cannot_preempt_final_cover(monkeypatch):
+    from agent.realtime import final_cover
+
+    loading = np.full((720, 1280, 3), 80, dtype=np.uint8)
+    icon = final_cover.member_loading_icon()
+    loading[600:600 + icon.shape[0], 20:20 + icon.shape[1]] = icon
+    moving = loading.copy()
+    moving[500:540, 600:640] = 255
+    moving_again = loading.copy()
+    moving_again[500:540, 640:680] = 255
+    blank = np.full_like(loading, 80)
+    black = np.zeros_like(loading)
+    images = iter([loading, moving, moving_again, blank, blank, black])
+    flow = _bare_flow()
+    flow.capture = lambda: next(images)
+    flow.visible = lambda *_args: False
+    flow.playfield_detector = lambda _image: True
+    flow.playfield_entry_evidence = CooperativePlayfieldEntryEvidence()
+    flow.make_final_cover_entry_resolver = lambda: final_cover.FinalCoverResolver(
+        difficulty="Expert", observed_level=28, observed_title="SAVIOR OF SONG",
+        repository=SimpleNamespace(resolve=lambda *_a, **_k: None),
+        reject_member_loading=True,
+    )
+    flow.wait_for_life_depleted_after_missed_transition = lambda _image: (
+        _ for _ in ()
+    ).throw(AssertionError("加载页动态不能抢占最终封面检测"))
+    monkeypatch.setattr(cooperative_action.time, "sleep", lambda _seconds: None)
+    assert flow.watch_member_exit_before_black(timeout=2) == "black"
+
+
+def test_startup_diagnostics_cover_first_ready_click_and_attempt_cleanup(tmp_path, monkeypatch):
+    frame = np.full((720, 1280, 3), 128, dtype=np.uint8)
+    flow = _bare_flow()
+    flow.settings["diagnostic_trace"] = True
+    flow.enter_room = lambda: None
+    flow.wait_for_preparation = lambda: None
+    flow.capture = lambda: frame.copy()
+    flow.visible = lambda *_args: False
+    buttons = iter([(100, 100, 50, 50), None])
+    flow.template_box = lambda *_args: next(buttons)
+    clicks = []
+    flow.click = lambda point: clicks.append(point)
+    flow.prepare = lambda: flow.ready_up_and_verify(initial_image=frame)
+    flow.play = lambda: True
+    monkeypatch.setattr(cooperative_action, "PROJECT_ROOT", tmp_path)
+    reset_live_run(mode="cooperative", difficulty="Expert")
+    assert flow.run_attempt() is True
+    assert clicks == [(125, 125)]
+    output = next((tmp_path / "debug" / "recordings").iterdir())
+    rows = [json.loads(line) for line in (output / "observations.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [row["phase"] for row in rows] == ["ready-before-click", "ready-delivery"]
+    assert rows[0]["cached_preparation"] is True
+    summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
+    assert summary["startup_policy"] == "final-cover-first"
+    assert summary["loading_guard_enabled"] is True
+    assert flow._startup_recorder is None
+
+
+def test_startup_diagnostic_playfield_error_is_a_warning(capsys):
+    flow = _bare_flow()
+    flow._startup_recorder = object()
+    flow.playfield_detector = lambda _image: (_ for _ in ()).throw(ValueError("diagnostic failure"))
+    assert flow._startup_playfield_visible(np.zeros((16, 16, 3), dtype=np.uint8)) is None
+    assert "diagnostics_warning=ValueError" in capsys.readouterr().out
 
 
 def test_missed_transition_monitor_jumps_after_confirmed_zero(monkeypatch):

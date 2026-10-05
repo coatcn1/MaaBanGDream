@@ -10,6 +10,7 @@ import pytest
 
 from agent.realtime import profile_play_action
 from agent.realtime import final_cover
+from agent.realtime import chart_repository, runtime_flags
 from agent.realtime.chart_repository import ChartResolution, LocalChartRepository
 from agent.realtime.final_cover import (
     FinalCoverConfirmation,
@@ -617,6 +618,337 @@ def test_refresh_observed_title_only_upgrades_validated_confidence(tmp_path):
     assert resolver.observed_title == "FIRE BIRD"
 
 
+@pytest.mark.parametrize("second_page", ["title", "goal"])
+@pytest.mark.parametrize("entry", ["repository", "agent"])
+def test_deferred_resolver_confirms_unique_cover_with_regional_level_drift(
+    tmp_path, monkeypatch, second_page, entry,
+):
+    """唯一封面和最终实读标题一致时允许 1 级差；默认曲库与无参数 Agent
+    两条启动路径都必须取得相同确认结果。
+    """
+    monkeypatch.setattr(chart_repository, "_regional_level_drift_trial_configured", None)
+    monkeypatch.delenv(chart_repository.REGIONAL_LEVEL_DRIFT_TRIAL_ENV, raising=False)
+    if entry == "agent":
+        monkeypatch.setattr(runtime_flags, "_native_timing_trial_enabled", runtime_flags._native_timing_trial_enabled)
+        monkeypatch.setattr(runtime_flags, "cooperative_member_loading_guard_enabled", lambda: True)
+        assert runtime_flags.configure_agent_runtime_flags([])["regional_level_drift_trial"] is True
+    cover, song_id = final_cover_frame()
+    second = cover.copy()
+    if second_page == "goal":
+        cv2.circle(second, (382, 515), 26, (90, 200, 240), -1)
+        cv2.putText(second, "5082000", (738, 530), cv2.FONT_HERSHEY_SIMPLEX, .9,
+                    (180, 140, 250), 2)
+    chart = [
+        {"type": "BPM", "beat": 0, "bpm": 120},
+        {"type": "Single", "beat": 1, "lane": 2},
+    ]
+    digest = hashlib.sha256(
+        json.dumps(
+            chart,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    (tmp_path / "bestdori" / "571").mkdir(parents=True)
+    (tmp_path / "bestdori" / "571" / "expert.json").write_text(
+        json.dumps({
+            "schema_version": 1,
+            "source": {"provider": "bestdori", "chart_sha256": digest},
+            "song": {"bestdori_id": 571, "titles": ["グッド・バイ"]},
+            "difficulty": {"name": "expert", "level": 27},
+            "chart": chart,
+        }),
+        encoding="utf-8",
+    )
+    (tmp_path / "manifest.json").write_text(json.dumps({
+        "schema_version": 1,
+        "songs": [{
+            "bestdori_song_id": 571,
+            "display_title": "グッド・バイ",
+            "titles": ["グッド・バイ"],
+            "fingerprints": [song_id],
+            "difficulties": {
+                "expert": {
+                    "path": "bestdori/571/expert.json",
+                    "level": 27,
+                    "chart_sha256": digest,
+                }
+            },
+        }],
+    }), encoding="utf-8")
+    def reader(image, **_kwargs):
+        if image is second:
+            raise AssertionError("第二帧应消费本局首帧实读标题，不能把目标得分当歌名")
+        return TitleReading("グッド・バイ", 0.99)
+    monkeypatch.setattr(final_cover, "recognize_song_title", reader)
+    resolver = FinalCoverResolver(
+        difficulty="Expert",
+        observed_level=26,
+        observed_title="准备页乱码",
+        repository=LocalChartRepository(tmp_path),
+        require_observed_title=True,
+    )
+
+    assert resolver.observe(cover) is None
+    resolution = resolver.observe(second)
+
+    assert resolution is not None
+    assert resolution.selection.bestdori_song_id == 571
+    assert resolution.confirmation.bestdori_song_id == 571
+    assert resolution.selection.shared_jacket is False
+    assert resolution.final_title_confirmed is True
+    assert resolution.observed_title == "グッド・バイ"
+    assert resolution.selection.level_drift_tolerated is True
+
+
+def test_deferred_resolver_still_rejects_shared_cover_level_conflict(tmp_path, monkeypatch):
+    """共享封面（[FULL]/English/SPECIAL 与原版共用封面）等级仍是唯一判别
+    信号：观测等级只差 1 级也不能按区服漂移放行。"""
+    cover, song_id = final_cover_frame()
+    chart = [
+        {"type": "BPM", "beat": 0, "bpm": 120},
+        {"type": "Single", "beat": 1, "lane": 2},
+    ]
+    digest = hashlib.sha256(
+        json.dumps(
+            chart,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    (tmp_path / "bestdori" / "187").mkdir(parents=True)
+    (tmp_path / "bestdori" / "187" / "expert.json").write_text(
+        json.dumps({
+            "schema_version": 1,
+            "source": {"provider": "bestdori", "chart_sha256": digest},
+            "song": {"bestdori_id": 187, "titles": ["FIRE BIRD"]},
+            "difficulty": {"name": "expert", "level": 27},
+            "chart": chart,
+        }),
+        encoding="utf-8",
+    )
+    (tmp_path / "bestdori" / "243").mkdir(parents=True)
+    (tmp_path / "bestdori" / "243" / "expert.json").write_text(
+        json.dumps({
+            "schema_version": 1,
+            "source": {"provider": "bestdori", "chart_sha256": digest},
+            "song": {"bestdori_id": 243, "titles": ["[FULL]FIRE BIRD"]},
+            "difficulty": {"name": "expert", "level": 28},
+            "chart": chart,
+        }),
+        encoding="utf-8",
+    )
+    (tmp_path / "manifest.json").write_text(json.dumps({
+        "schema_version": 1,
+        "songs": [
+            {
+                "bestdori_song_id": 187,
+                "display_title": "FIRE BIRD",
+                "titles": ["FIRE BIRD"],
+                "fingerprints": [song_id],
+                "difficulties": {
+                    "expert": {
+                        "path": "bestdori/187/expert.json",
+                        "level": 27,
+                        "chart_sha256": digest,
+                    }
+                },
+            },
+            {
+                "bestdori_song_id": 243,
+                "display_title": "[FULL]FIRE BIRD",
+                "titles": ["[FULL]FIRE BIRD"],
+                "fingerprints": [song_id],
+                "difficulties": {
+                    "expert": {
+                        "path": "bestdori/243/expert.json",
+                        "level": 28,
+                        "chart_sha256": digest,
+                    }
+                },
+            },
+        ],
+    }), encoding="utf-8")
+    monkeypatch.setattr(final_cover, "recognize_song_title", lambda *_args, **_kwargs: TitleReading("[FULL]FIRE BIRD", 0.99))
+    resolver = FinalCoverResolver(
+        difficulty="Expert",
+        observed_level=26,
+        observed_title="[FULL]FIRE BIRD",
+        repository=LocalChartRepository(tmp_path, regional_level_drift_enabled=True),
+    )
+
+    assert resolver.observe(cover) is None
+    assert resolver.observe(cover) is None
+    assert resolver.last_reason == (
+        "selected song level does not match local chart metadata"
+    )
+
+
+def _regional_drift_test_repository(tmp_path, *, fingerprint_mask=0):
+    """构造封面唯一、全局等级 27 的谱面，观测场景使用等级 26。"""
+    image, fingerprint = final_cover_frame()
+    prefix, digest = fingerprint.rsplit("-", 1)
+    stored = f"{prefix}-{int(digest, 16) ^ fingerprint_mask:016x}"
+    chart = [
+        {"type": "BPM", "beat": 0, "bpm": 120},
+        {"type": "Single", "beat": 1, "lane": 2},
+    ]
+    digest = hashlib.sha256(json.dumps(
+        chart, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+    chart_path = tmp_path / "bestdori/571/expert.json"
+    chart_path.parent.mkdir(parents=True)
+    chart_path.write_text(json.dumps({
+        "schema_version": 1,
+        "source": {"provider": "bestdori", "chart_sha256": digest},
+        "song": {"bestdori_id": 571, "titles": ["グッド・バイ"]},
+        "difficulty": {"name": "expert", "level": 27},
+        "chart": chart,
+    }), encoding="utf-8")
+    (tmp_path / "manifest.json").write_text(json.dumps({
+        "schema_version": 1,
+        "songs": [{
+            "bestdori_song_id": 571,
+            "display_title": "グッド・バイ",
+            "titles": ["グッド・バイ"],
+            "fingerprints": [stored],
+            "difficulties": {"expert": {
+                "path": "bestdori/571/expert.json", "level": 27,
+                "chart_sha256": digest,
+            }},
+        }],
+    }), encoding="utf-8")
+    return image, LocalChartRepository(tmp_path, regional_level_drift_enabled=True)
+
+
+def test_final_title_refresh_ignores_level_and_preparation_confidence(tmp_path, monkeypatch):
+    image, repository = _regional_drift_test_repository(tmp_path)
+    resolver = FinalCoverResolver(
+        difficulty="Expert", observed_level=26,
+        observed_title="Wrong Preparation Title", observed_title_confidence=0.99,
+        repository=repository,
+    )
+    monkeypatch.setattr(final_cover, "recognize_song_title", lambda *_args, **_kwargs: None)
+    assert resolver.observe(image) is None
+    assert resolver.refresh_observed_title("グッド・バイ", 0.8) is True
+    assert resolver.observed_title_confidence == pytest.approx(0.8)
+    resolution = resolver.observe(image)
+    assert resolution is not None
+    assert resolution.selection.bestdori_song_id == 571
+    assert resolution.selection.level_drift_tolerated is True
+    assert resolution.final_title_confirmed is True
+
+
+@pytest.mark.parametrize("reading", [None, TitleReading("グッド・バイ", 0.69)])
+def test_drift_needs_final_title_despite_trusted_preparation_title(tmp_path, monkeypatch, reading):
+    image, repository = _regional_drift_test_repository(tmp_path)
+    resolver = FinalCoverResolver(
+        difficulty="Expert", observed_level=26,
+        observed_title="グッド・バイ", observed_title_confidence=0.99,
+        repository=repository,
+    )
+    monkeypatch.setattr(final_cover, "recognize_song_title", lambda *_args, **_kwargs: reading)
+    assert resolver.observe(image) is None
+    assert resolver.observe(image) is None
+    assert resolver.last_reason == "final cover title is not confirmed"
+    monkeypatch.setattr(final_cover, "recognize_song_title", lambda *_args, **_kwargs: TitleReading("グッド・バイ", 0.8))
+    assert resolver.observe(image).final_title_confirmed is True
+
+
+def test_approximate_cover_with_conflicting_final_title_is_hard_failure(tmp_path, monkeypatch):
+    image, repository = _regional_drift_test_repository(tmp_path, fingerprint_mask=0xff)
+    resolver = FinalCoverResolver(
+        difficulty="Expert", observed_level=26,
+        observed_title="グッド・バイ", observed_title_confidence=0.99,
+        repository=repository,
+    )
+    monkeypatch.setattr(final_cover, "recognize_song_title", lambda *_args, **_kwargs: TitleReading("Completely Different Tune", 0.99))
+    assert resolver.observe(image) is None
+    with pytest.raises(RuntimeError, match="最终封面歌曲身份冲突"):
+        resolver.observe(image)
+
+
+def test_wait_for_final_cover_cannot_degrade_after_title_conflict(tmp_path, monkeypatch):
+    image, repository = _regional_drift_test_repository(tmp_path, fingerprint_mask=0xff)
+    calls = []
+    clock = [0.0]
+
+    class Controller:
+        def post_screencap(self):
+            calls.append("capture")
+            clock[0] += 0.1
+            return SimpleNamespace(wait=lambda: SimpleNamespace(get=lambda: image))
+
+    monkeypatch.setattr(profile_play_action.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(profile_play_action, "PlayfieldDetector", lambda: (lambda _image: True))
+    monkeypatch.setattr(final_cover, "recognize_song_title", lambda *_args, **_kwargs: TitleReading("Completely Different Tune", 0.99))
+    with pytest.raises(RuntimeError, match="最终封面歌曲身份冲突"):
+        wait_for_final_cover(
+            Controller(), SimpleNamespace(song_level=26, song_title="グッド・バイ", song_title_confidence=0.99),
+            None, "Expert", lambda: False, repository=repository,
+            timeout_seconds=1, poll_interval_seconds=0,
+            fallback_selection_available=True,
+        )
+    assert calls == ["capture", "capture"]
+
+
+def test_drift_gate_rejects_loose_cover_after_level_was_tolerated(tmp_path):
+    image, repository = _regional_drift_test_repository(tmp_path, fingerprint_mask=0x3ff)
+    fingerprint = repository._load_manifest()["songs"][0]["fingerprints"][0]
+    resolution = repository.resolve(fingerprint, "Expert", level=26, title="グッド・バイ")
+    assert resolution.selection is not None
+    gate = FinalCoverGate(
+        resolution.selection, difficulty="Expert", observed_level=26,
+        observed_title="グッド・バイ",
+    )
+    assert gate.observe(image) is None
+    assert gate.last_reason == "final cover jacket does not match selected chart"
+
+
+def test_drift_preconfirmed_result_without_final_title_is_not_reused(tmp_path, monkeypatch):
+    image, repository = _regional_drift_test_repository(tmp_path)
+    fingerprint = repository._load_manifest()["songs"][0]["fingerprints"][0]
+    chart = repository.resolve(fingerprint, "Expert", level=26, title="グッド・バイ").selection
+    initial = FinalCoverResolution(
+        FinalCoverConfirmation(fingerprint, "song-jacket-phash-v2", 571), chart,
+        observed_title="グッド・バイ", observed_title_confidence=0.99,
+    )
+    calls = []
+    clock = [0.0]
+
+    class Controller:
+        def post_screencap(self):
+            calls.append("capture")
+            clock[0] += 0.1
+            return SimpleNamespace(wait=lambda: SimpleNamespace(get=lambda: image))
+
+    monkeypatch.setattr(profile_play_action.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(profile_play_action, "PlayfieldDetector", lambda: (lambda _image: False))
+    monkeypatch.setattr(final_cover, "recognize_song_title", lambda *_args, **_kwargs: TitleReading("グッド・バイ", 0.8))
+    outcome = wait_for_final_cover(
+        Controller(), SimpleNamespace(song_level=26, song_title="グッド・バイ", song_title_confidence=0.99),
+        chart, "Expert", lambda: False, repository=repository,
+        initial_image=image, initial_resolution=initial,
+        timeout_seconds=1, poll_interval_seconds=0,
+    )
+    assert calls
+    assert outcome.status == "confirmed"
+    assert outcome.resolution.final_title_confirmed is True
+    assert outcome.resolution.observed_title_confidence == pytest.approx(0.8)
+
+
+def test_drift_final_cover_stop_does_not_capture_or_ocr(tmp_path, monkeypatch):
+    _image, repository = _regional_drift_test_repository(tmp_path)
+    monkeypatch.setattr(final_cover, "recognize_song_title", lambda *_args, **_kwargs: pytest.fail("stopped task must not OCR"))
+    with pytest.raises(InterruptedError):
+        wait_for_final_cover(
+            None, SimpleNamespace(song_level=26, song_title="グッド・バイ"),
+            None, "Expert", lambda: True, repository=repository,
+        )
+
+
 def test_final_cover_resolver_can_require_title_after_early_ocr_failed():
     cover, song_id = final_cover_frame()
     selection = SimpleNamespace(
@@ -782,6 +1114,325 @@ def test_required_final_cover_title_does_not_degrade_at_playfield(monkeypatch):
         )
 
 
+def test_cooperative_loading_and_false_playfield_keep_scanning_until_cover(monkeypatch):
+    loading, song_id = loading_frame()
+    blank = np.full_like(loading, 80)
+    cover, _ = final_cover_frame()
+    frames = iter([loading, loading, loading, blank, blank, cover])
+    observations = []
+
+    class Controller:
+        def post_screencap(self):
+            image = next(frames)
+            return SimpleNamespace(wait=lambda: SimpleNamespace(get=lambda: image))
+
+    monkeypatch.setattr(profile_play_action, "PlayfieldDetector", lambda: lambda _: True)
+    outcome = wait_for_final_cover(
+        Controller(), SimpleNamespace(mode="cooperative", song_level=28,
+                                      song_title="SAVIOR OF SONG"),
+        selection(song_id), "Expert", lambda: False,
+        timeout_seconds=2, poll_interval_seconds=0,
+        observer=lambda _image, _time, detail: observations.append(detail),
+    )
+    assert outcome.status == "confirmed"
+    assert len(observations) == 6
+
+
+def test_cooperative_missing_final_title_waits_to_timeout_without_fallback(monkeypatch):
+    cover, _ = final_cover_frame()
+    clock = [0.0]
+    observed = []
+
+    class Controller:
+        def post_screencap(self):
+            clock[0] += 0.1
+            return SimpleNamespace(wait=lambda: SimpleNamespace(get=lambda: cover))
+
+    class Repository:
+        regional_level_drift_enabled = True
+
+        def resolve(self, *_a, **_k):
+            raise AssertionError("缺少实读标题不能解析谱面")
+
+    monkeypatch.setattr(profile_play_action.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(profile_play_action, "PlayfieldDetector", lambda: lambda _: True)
+    monkeypatch.setattr(final_cover, "recognize_song_title", lambda *_a, **_k: None)
+    with pytest.raises(RuntimeError, match="最终封面确认超时"):
+        wait_for_final_cover(
+            Controller(), SimpleNamespace(mode="cooperative", song_level=28,
+                                          song_title="SAVIOR OF SONG", song_title_confidence=.99),
+            None, "Expert", lambda: False, repository=Repository(),
+            timeout_seconds=1, poll_interval_seconds=0,
+            observer=lambda _i, _t, detail: observed.append(detail),
+            fallback_selection_available=True,
+        )
+    assert len(observed) >= 9
+    assert observed[-1]["reason"] == "final cover title is not confirmed"
+
+
+def test_cooperative_preconfirmed_loading_frame_cannot_bypass_guard(monkeypatch):
+    loading, song_id = loading_frame()
+    cover, _ = final_cover_frame()
+    selected = selection(song_id)
+    resolution = FinalCoverResolution(
+        FinalCoverConfirmation(song_id, "song-jacket-phash-v2", selected.bestdori_song_id),
+        selected,
+    )
+    observed = []
+    class Controller:
+        def post_screencap(self):
+            return SimpleNamespace(wait=lambda: SimpleNamespace(get=lambda: cover))
+
+    outcome = wait_for_final_cover(
+        Controller(), SimpleNamespace(mode="cooperative", song_level=28,
+                                      song_title="SAVIOR OF SONG"),
+        selected, "Expert", lambda: False, initial_image=loading,
+        initial_resolution=resolution, poll_interval_seconds=0,
+        observer=lambda _i, _t, detail: observed.append(detail),
+    )
+    assert outcome.status == "confirmed"
+    assert observed[0]["member_loading"] is True
+    assert observed[0]["playfield_streak"] == 0
+    assert len(observed) == 2
+
+
+def test_loading_guard_runs_before_nontrial_final_title_ocr(monkeypatch):
+    loading, _ = loading_frame()
+    readings = []
+    resolver = FinalCoverResolver(
+        difficulty="Expert", observed_level=28, observed_title=None,
+        repository=SimpleNamespace(), reject_member_loading=True,
+    )
+    assert resolver.observe(loading, refresh_title=True,
+                            title_reader=lambda *_a, **_k: readings.append(True)) is None
+    assert not readings
+    assert resolver.last_member_loading_detected is True
+    assert resolver.last_member_loading_score >= final_cover.MEMBER_LOADING_ICON_THRESHOLD
+
+
+def test_first_cover_title_survives_second_frame_without_title(monkeypatch):
+    cover, song_id = final_cover_frame()
+    selected = selection(song_id)
+    second_cover = cover.copy()
+
+    class Repository:
+        regional_level_drift_enabled = True
+        def resolve(self, *_args, **_kwargs):
+            return ChartResolution(selected, "confirmed")
+
+    monkeypatch.setattr(final_cover, "recognize_song_title", lambda image, **_k:
+                        TitleReading("SAVIOR OF SONG", .95) if image is cover else None)
+    resolver = FinalCoverResolver(difficulty="Expert", observed_level=28,
+                                 observed_title=None, repository=Repository(),
+                                 require_observed_title=True)
+    assert resolver.observe(cover) is None
+    outcome = resolver.observe(second_cover)
+    assert outcome is not None
+    assert outcome.observed_title == "SAVIOR OF SONG"
+    assert outcome.final_title_confirmed is True
+
+
+def test_score_text_cannot_be_promoted_to_conflicting_song_title(monkeypatch):
+    cover, song_id = final_cover_frame()
+    selected = selection(song_id)
+
+    class Repository:
+        regional_level_drift_enabled = True
+        def resolve(self, fingerprint, _difficulty, **_kwargs):
+            return ChartResolution(selected if fingerprint != "unknown" else None, "confirmed")
+
+    monkeypatch.setattr(final_cover, "recognize_song_title", lambda *_a, **_k: TitleReading("标得分'5''0''8'", .98))
+    resolver = FinalCoverResolver(difficulty="Expert", observed_level=28,
+                                 observed_title=None, repository=Repository(),
+                                 require_observed_title=True)
+    assert resolver.observe(cover) is None
+    assert resolver.observe(cover) is None
+    assert resolver._final_title_confirmed is False
+    assert resolver.observed_title is None
+
+
+@pytest.mark.parametrize("interruption", ["loading", "unknown", "different-cover", "goal-unknown", "goal-different-cover"])
+def test_first_cover_title_cache_is_reset_by_page_or_identity_change(monkeypatch, interruption):
+    cover, song_id = final_cover_frame()
+    selected = selection(song_id)
+    after = cover.copy()
+    if interruption == "loading":
+        interrupted, _ = loading_frame()
+    elif interruption in {"unknown", "goal-unknown"}:
+        interrupted = np.zeros_like(cover)
+    else:
+        interrupted, _ = final_cover_frame(seed=83)
+    if interruption.startswith("goal-"):
+        cv2.circle(interrupted, (382, 515), 26, (90, 200, 240), -1)
+        cv2.putText(interrupted, "5082000", (738, 530), cv2.FONT_HERSHEY_SIMPLEX, .9,
+                    (180, 140, 250), 2)
+
+    class Repository:
+        regional_level_drift_enabled = True
+        def resolve(self, *_a, **_k):
+            return ChartResolution(selected, "confirmed")
+
+    monkeypatch.setattr(final_cover, "recognize_song_title", lambda image, **_k:
+                        TitleReading("SAVIOR OF SONG", .95) if image is cover else None)
+    resolver = FinalCoverResolver(difficulty="Expert", observed_level=28,
+                                 observed_title=None, repository=Repository(),
+                                 require_observed_title=True, reject_member_loading=True)
+    assert resolver.observe(cover) is None
+    assert resolver._final_title_confirmed is True
+    assert resolver.observe(interrupted) is None
+    assert resolver._final_title_confirmed is False
+    assert resolver.observed_title is None
+    assert resolver.observe(after) is None
+    assert resolver.observe(after) is None
+
+
+@pytest.mark.parametrize("preparation_title", [None, "SAVIOR OF SONG"])
+def test_score_layout_only_never_reads_or_confirms_a_song_title(monkeypatch, tmp_path, preparation_title):
+    monkeypatch.setattr(chart_repository, "_regional_level_drift_trial_configured", None)
+    monkeypatch.delenv(chart_repository.REGIONAL_LEVEL_DRIFT_TRIAL_ENV, raising=False)
+    cover, _ = final_cover_frame()
+    cv2.circle(cover, (382, 515), 26, (90, 200, 240), -1)
+    cv2.putText(cover, "5082000", (738, 530), cv2.FONT_HERSHEY_SIMPLEX, .9,
+                (180, 140, 250), 2)
+    class Repository(LocalChartRepository):
+        def resolve(self, *_a, **_k):
+            raise AssertionError("得分页面不应解析曲名")
+
+    monkeypatch.setattr(final_cover, "recognize_song_title", lambda *_a, **_k: (
+        _ for _ in ()
+    ).throw(AssertionError("目标得分页不应被 OCR 成曲名")))
+    resolver = FinalCoverResolver(difficulty="Expert", observed_level=28,
+                                 observed_title=preparation_title, observed_title_confidence=.99,
+                                 repository=Repository(tmp_path),
+                                 require_observed_title=True)
+    for _ in range(4):
+        assert resolver.observe(cover) is None
+    assert resolver.last_reason == "goal score page is not a song title"
+    assert resolver.last_title_diagnostic["status"] == "excluded-score-layout"
+
+
+def test_same_cover_score_layout_preserves_only_its_actual_title_cache(monkeypatch):
+    cover, song_id = final_cover_frame()
+    selected = selection(song_id)
+    goal = cover.copy()
+    cv2.circle(goal, (382, 515), 26, (90, 200, 240), -1)
+    cv2.putText(goal, "5082000", (738, 530), cv2.FONT_HERSHEY_SIMPLEX, .9,
+                (180, 140, 250), 2)
+    class Repository:
+        regional_level_drift_enabled = True
+        def resolve(self, *_a, **_k):
+            return ChartResolution(selected, "confirmed")
+
+    def reader(image, **_kwargs):
+        if image is goal:
+            raise AssertionError("得分页必须复用本局实读标题，不能 OCR 得分")
+        return TitleReading("SAVIOR OF SONG", .95) if image is cover else None
+    monkeypatch.setattr(final_cover, "recognize_song_title", reader)
+    resolver = FinalCoverResolver(difficulty="Expert", observed_level=28,
+                                 observed_title=None, repository=Repository(),
+                                 require_observed_title=True)
+    assert resolver.observe(cover) is None
+    outcome = resolver.observe(goal)
+    assert outcome is not None
+    assert outcome.final_title_confirmed is True
+    assert outcome.observed_title == "SAVIOR OF SONG"
+    assert resolver._final_title_confirmed is True
+    assert resolver._final_title_observed_frame == 1
+
+
+def test_wrong_cached_title_still_conflicts_when_second_cover_is_goal(monkeypatch):
+    cover, song_id = final_cover_frame()
+    selected = selection(song_id)
+    goal = cover.copy()
+    cv2.circle(goal, (382, 515), 26, (90, 200, 240), -1)
+    cv2.putText(goal, "5082000", (738, 530), cv2.FONT_HERSHEY_SIMPLEX, .9,
+                (180, 140, 250), 2)
+    class Repository:
+        regional_level_drift_enabled = True
+        def resolve(self, *_a, **_k):
+            return ChartResolution(selected, "confirmed")
+
+    def reader(image, **_kwargs):
+        if image is goal:
+            raise AssertionError("目标得分页不能重读标题")
+        return TitleReading("FIRE BIRD", .99)
+    monkeypatch.setattr(final_cover, "recognize_song_title", reader)
+    resolver = FinalCoverResolver(difficulty="Expert", observed_level=28,
+                                 observed_title=None, repository=Repository(),
+                                 require_observed_title=True)
+    assert resolver.observe(cover) is None
+    with pytest.raises(RuntimeError, match="歌曲身份冲突"):
+        resolver.observe(goal)
+
+
+def test_cooperative_final_cover_wait_preserves_diagnostics_stream(tmp_path):
+    from agent.realtime.startup_diagnostics import CooperativeStartupRecorder
+    cover, song_id = final_cover_frame()
+    recorder = CooperativeStartupRecorder(tmp_path, "diag-run", close_timeout=1)
+    class Controller:
+        def post_screencap(self):
+            return SimpleNamespace(wait=lambda: SimpleNamespace(get=lambda: cover))
+
+    try:
+        outcome = wait_for_final_cover(
+            Controller(), SimpleNamespace(mode="cooperative", run_id="diag-run", song_level=28,
+                                          song_title="SAVIOR OF SONG"),
+            selection(song_id), "Expert", lambda: False, poll_interval_seconds=0,
+        )
+        assert outcome.status == "confirmed"
+    finally:
+        recorder.close("confirmed")
+    rows = (recorder.output_dir / "observations.jsonl").read_text(encoding="utf-8").splitlines()
+    assert json.loads(rows[0])["phase"] == "final-cover-wait"
+    assert json.loads(rows[0])["member_loading"] is False
+
+
+def test_cooperative_stop_after_loading_does_not_capture_again(monkeypatch):
+    loading, song_id = loading_frame()
+    captures = []
+    stopping = [False]
+    class Controller:
+        def post_screencap(self):
+            captures.append(True)
+            if len(captures) > 1:
+                raise AssertionError("停止后不能再次截图")
+            return SimpleNamespace(wait=lambda: SimpleNamespace(get=lambda: loading))
+
+    def observed(_image, _time, detail):
+        assert detail["member_loading"] is True
+        stopping[0] = True
+
+    monkeypatch.setattr(profile_play_action, "PlayfieldDetector", lambda: lambda _: True)
+    with pytest.raises(InterruptedError):
+        wait_for_final_cover(
+            Controller(), SimpleNamespace(mode="cooperative", song_level=28,
+                                          song_title="SAVIOR OF SONG"),
+            selection(song_id), "Expert", lambda: stopping[0],
+            poll_interval_seconds=0, observer=observed,
+        )
+    assert len(captures) == 1
+
+
+def test_cooperative_diagnostic_playfield_error_keeps_cover_scan(monkeypatch, capsys):
+    cover, song_id = final_cover_frame()
+    images = iter([np.full_like(cover, 80), cover])
+    class Controller:
+        def post_screencap(self):
+            image = next(images)
+            return SimpleNamespace(wait=lambda: SimpleNamespace(get=lambda: image))
+
+    monkeypatch.setattr(profile_play_action, "PlayfieldDetector", lambda: lambda _: (
+        _ for _ in ()
+    ).throw(ValueError("diagnostic failure")))
+    outcome = wait_for_final_cover(
+        Controller(), SimpleNamespace(mode="cooperative", song_level=28,
+                                      song_title="SAVIOR OF SONG"),
+        selection(song_id), "Expert", lambda: False, poll_interval_seconds=0,
+    )
+    assert outcome.status == "confirmed"
+    assert "diagnostics_warning=ValueError" in capsys.readouterr().out
+
+
 def test_wait_for_final_cover_refreshes_title_from_final_page(
     monkeypatch,
     tmp_path,
@@ -854,6 +1505,7 @@ def test_wait_for_final_cover_refreshes_title_from_final_page(
         "recognize_song_title",
         fake_recognize,
     )
+    monkeypatch.setattr(final_cover, "recognize_song_title", fake_recognize)
 
     outcome = wait_for_final_cover(
         Controller(),

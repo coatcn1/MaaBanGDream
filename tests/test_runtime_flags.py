@@ -2,6 +2,13 @@ from __future__ import annotations
 
 import pytest
 
+from agent.realtime import chart_repository
+from agent.realtime.chart_repository import LocalChartRepository
+from agent.realtime.runtime_flags import (
+    DISABLE_REGIONAL_LEVEL_DRIFT_ARG,
+    REGIONAL_LEVEL_DRIFT_TRIAL_ARG,
+)
+
 from agent.realtime import runtime_flags
 from agent.realtime.profile_store import RealtimeProfileStore
 from agent.realtime.runtime_flags import (
@@ -17,6 +24,9 @@ from agent.realtime.runtime_flags import (
 
 @pytest.fixture(autouse=True)
 def isolated_runtime_store(monkeypatch, tmp_path):
+    monkeypatch.setattr(runtime_flags, "_native_timing_trial_enabled", runtime_flags._native_timing_trial_enabled)
+    monkeypatch.setattr(chart_repository, "_regional_level_drift_trial_configured", None)
+    monkeypatch.delenv(chart_repository.REGIONAL_LEVEL_DRIFT_TRIAL_ENV, raising=False)
     store = RealtimeProfileStore(tmp_path)
     monkeypatch.setattr(runtime_flags, "RealtimeProfileStore", lambda root: store)
     return store
@@ -72,3 +82,30 @@ def test_deprecated_loading_guard_trial_never_overrides_persisted_value(
     assert report["deprecated_cooperative_member_loading_guard_trial_requested"] is (argument or environment)
     assert "cooperative_member_loading_guard_trial" not in report
     assert cooperative_member_loading_guard_enabled() is enabled
+
+
+def test_regional_level_drift_defaults_enabled_without_trial(tmp_path):
+    report = configure_agent_runtime_flags([])
+    assert report["regional_level_drift_trial"] is True
+    assert LocalChartRepository(tmp_path).regional_level_drift_enabled is True
+    assert LocalChartRepository(tmp_path, regional_level_drift_enabled=False).regional_level_drift_enabled is False
+
+
+@pytest.mark.parametrize("environment,arguments,enabled", [
+    ("0", [], False),
+    ("1", [], True),
+    ("0", [REGIONAL_LEVEL_DRIFT_TRIAL_ARG], True),
+    ("1", [DISABLE_REGIONAL_LEVEL_DRIFT_ARG], False),
+    ("1", [REGIONAL_LEVEL_DRIFT_TRIAL_ARG, DISABLE_REGIONAL_LEVEL_DRIFT_ARG], False),
+])
+def test_regional_level_drift_explicit_disable_and_legacy_enable(
+    monkeypatch, tmp_path, environment, arguments, enabled,
+):
+    monkeypatch.setenv(chart_repository.REGIONAL_LEVEL_DRIFT_TRIAL_ENV, environment)
+    report = configure_agent_runtime_flags(arguments)
+    assert report["regional_level_drift_trial"] is enabled
+    repository = LocalChartRepository(tmp_path)
+    assert repository.regional_level_drift_enabled is enabled
+    monkeypatch.setenv(chart_repository.REGIONAL_LEVEL_DRIFT_TRIAL_ENV, "0" if enabled else "1")
+    assert LocalChartRepository(tmp_path).regional_level_drift_enabled is enabled
+    assert repository.regional_level_drift_enabled is enabled
