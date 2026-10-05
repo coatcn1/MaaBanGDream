@@ -93,8 +93,11 @@ def test_final_short_title_uses_bounded_ink_padding_after_low_confidence():
 
 
 def test_final_long_title_touching_band_edge_keeps_fixed_roi():
+    # 墨迹按当前固定 ROI 的边界铺满。触边说明标题被框切掉，墨迹裁剪不可信，
+    # 必须退回固定 ROI。用常量推导而不是硬编码坐标，ROI 调整后断言才不失真。
+    x, y, width, height = FINAL_COVER_TITLE_ROI
     image = np.full((720, 1280, 3), 220, dtype=np.uint8)
-    image[500:530, 480:798] = 100
+    image[y + 15:y + 45, x:x + width] = 100
     assert final_cover_ink_roi(image) is None
     rois = []
     def reader(_image, *, roi):
