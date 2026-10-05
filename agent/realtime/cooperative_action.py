@@ -41,6 +41,7 @@ from .performance_settings_action import RealtimePerformanceSettingsGate
 from .playfield_monitor import PlayfieldDetector
 from .chart_repository import LocalChartRepository
 from .final_cover import FinalCoverResolver
+from .startup_diagnostics import CooperativeStartupRecorder, cover_diagnostic
 from .profile_play_action import RealtimeProfilePlay
 from .profile_store import (
     EnvironmentSignature,
@@ -366,7 +367,7 @@ class CooperativeLiveFlow:
         self.progress_callback = progress_callback
         self.detector = LifeDetector()
         # 准备完毕后的短黑场可能只持续一帧；漏检时先用与本局身份一致的
-        # 稳定最终封面放行，只有已经进入动态演奏场才走生命监控兜底。
+        # 稳定最终封面放行；演奏场误判不能抢先结束最终封面的连续检测。
         self.playfield_detector = PlayfieldDetector()
         self.playfield_entry_evidence = CooperativePlayfieldEntryEvidence()
         self.song_choice_pause_pending = True
@@ -394,11 +395,52 @@ class CooperativeLiveFlow:
         if self.stopped():
             raise InterruptedError("用户已停止任务")
         try:
+            started_at = time.monotonic()
             if getattr(self, "_post_score_refresh", False):
-                return capture_image(self.context, node="ResultRefreshScreen")
-            return capture_image(self.context)
+                image = capture_image(self.context, node="ResultRefreshScreen")
+            else:
+                image = capture_image(self.context)
+            self._last_capture_timestamp = time.monotonic()
+            self._last_capture_duration_ms = (self._last_capture_timestamp - started_at) * 1000
+            return image
         except ScreenRefreshCancelled as exc:
             raise InterruptedError("用户已停止任务") from exc
+
+    def _startup_record(self, image, phase, **details):
+        recorder = getattr(self, "_startup_recorder", None)
+        if recorder is not None:
+            try:
+                recorder.record(image, time.monotonic(), {
+                    "phase": phase,
+                    "capture_ms": getattr(self, "_last_capture_duration_ms", None),
+                    "captured_at": getattr(self, "_last_capture_timestamp", None),
+                    **details,
+                })
+            except Exception as exc:
+                print(f"CooperativeStartup diagnostics_warning={type(exc).__name__}: {exc}", flush=True)
+
+    def _start_startup_diagnostics(self):
+        if not self.settings.get("diagnostic_trace", False) or getattr(self, "_startup_recorder", None) is not None:
+            return
+        try:
+            run = current_live_run()
+            self._startup_recorder = CooperativeStartupRecorder(
+                PROJECT_ROOT / "debug" / "recordings", getattr(run, "run_id", None),
+                loading_guard_enabled=self.settings["cooperative_member_loading_guard_enabled"],
+            )
+            print(f"CooperativeStartup recording={self._startup_recorder.output_dir}", flush=True)
+        except Exception as exc:
+            print(f"CooperativeStartup diagnostics_warning={type(exc).__name__}: {exc}", flush=True)
+
+    def _startup_playfield_visible(self, image):
+        if getattr(self, "_startup_recorder", None) is None:
+            return None
+        try:
+            return bool(self.playfield_detector(image))
+        except Exception as exc:
+            # 仅为诊断读取演奏场；检测器故障不能改变最终封面的业务结果。
+            print(f"CooperativeStartup diagnostics_warning={type(exc).__name__}: {exc}", flush=True)
+            return None
 
     def template_box(
         self,
@@ -971,6 +1013,9 @@ class CooperativeLiveFlow:
         initial_image: np.ndarray | None = None,
     ) -> str:
         """点击“准备完毕”并确认按钮消失，防止触控未送达造成空演奏。"""
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
+        self._start_startup_diagnostics()
         image = initial_image
         for attempt in range(3):
             if self.stopped():
@@ -985,6 +1030,8 @@ class CooperativeLiveFlow:
                 image = self.capture()
                 reused = False
                 box = self.template_box(image, "ready_button", 0.90)
+            self._startup_record(image, "ready-before-click", attempt=attempt + 1,
+                                 ready_visible=box is not None, cached_preparation=reused)
             if box is None:
                 # 按钮已消失：已进入准备完毕/成员等待或加载流程。
                 print(
@@ -1023,6 +1070,7 @@ class CooperativeLiveFlow:
                 raise InterruptedError("用户已停止任务")
             image = self.capture()
             if self.visible(image, "member_exit_title", 0.93):
+                self._startup_record(image, "ready-delivery", member_exit=True)
                 self.dismiss_member_exit()
                 raise MemberExited("协力成员退出房间")
             if _frame_is_black_transition(image):
@@ -1030,9 +1078,12 @@ class CooperativeLiveFlow:
             elif self.template_box(image, "ready_button", 0.90) is None:
                 outcome = "button-gone"
             else:
+                self._startup_record(image, "ready-delivery", ready_visible=True, black=False)
                 time.sleep(0.05)
                 continue
             elapsed_ms = (time.monotonic() - started_at) * 1000.0
+            self._startup_record(image, "ready-delivery", outcome=outcome, black=outcome == "black",
+                                 ready_visible=False, elapsed_ms=elapsed_ms)
             print(
                 "CooperativeLive ready_delivery "
                 f"outcome={outcome} elapsed_ms={elapsed_ms:.1f} "
@@ -1076,9 +1127,8 @@ class CooperativeLiveFlow:
         黑场出现为止：看到弹窗就点“确定”并按成员退出策略处理；看到黑场
         说明转场已开始，弹窗不再可能，立即退出本窗口。若短黑场漏检，连续
         两帧稳定且能由本局难度、等级、标题共同确认的最终封面也可证明正常
-        转场，并把该证据直接交给演奏入口；只有已经进入动态演奏场时才进入
-        只监控生命的 fail-closed 路径，绝不能把谱面开头锚到中段。静态准备页
-        可能误中生命条与判定线，60 秒超时同样安全跳车并停止任务。
+        转场，并把该证据直接交给演奏入口。加载页和准备页可能误中生命条、
+        判定线及局部动态，不能抢先结束封面检测；60 秒超时仍安全跳车并停止。
         """
         # 每局准备后窗口都从空白动态基线开始，绝不能让上一局未完成的局部
         # 变化跨局累积成“已错过转场”的第二次证据。
@@ -1102,27 +1152,38 @@ class CooperativeLiveFlow:
                 raise InterruptedError("用户已停止任务")
             image = self.capture()
             if _frame_is_black_transition(image):
+                self._startup_record(image, "ready-transition", black=True, outcome="black")
                 # 整屏黑场转场已经开始，成员退出弹窗窗口已过。
                 return finish("black")
             if self.visible(image, "member_exit_title", 0.93):
+                self._startup_record(image, "ready-transition", member_exit=True)
                 finish("member-exit")
                 self.dismiss_member_exit()
                 raise MemberExited("协力成员退出房间")
             if final_cover_resolver is not None:
-                cover_resolution = final_cover_resolver.observe(image)
+                resolve_started_at = time.monotonic()
+                try:
+                    cover_resolution = final_cover_resolver.observe(image)
+                except Exception as exc:
+                    self._startup_record(image, "ready-transition", **cover_diagnostic(final_cover_resolver),
+                                         error=f"{type(exc).__name__}: {exc}")
+                    raise
+                resolver_ms = (time.monotonic() - resolve_started_at) * 1000
+                self._startup_record(image, "ready-transition", **cover_diagnostic(final_cover_resolver),
+                                     black=False, confirmed=cover_resolution is not None,
+                                     playfield_visible=(self._startup_playfield_visible(image)
+                                                        if cover_resolution is None else None),
+                                     resolver_ms=resolver_ms)
                 if cover_resolution is not None:
                     update_live_run(
                         startup_final_cover_image=image.copy(),
                         startup_final_cover_resolution=cover_resolution,
                     )
                     return finish("final-cover")
-            playfield_visible = self.playfield_detector(image)
-            if self.playfield_entry_evidence.observe(
-                image,
-                playfield_visible=playfield_visible,
-            ):
-                finish("playfield-motion-missed-transition")
-                self.wait_for_life_depleted_after_missed_transition(image)
+            else:
+                self._startup_record(image, "ready-transition", black=False, reason="missing resolver")
+            # 封面未确认时持续检测；成员加载与局部动画不能替代本局歌曲身份。
+            self.playfield_entry_evidence.reset()
             time.sleep(0.1)
         finish("timeout")
         self.jump_after_download_timeout()
@@ -1506,13 +1567,20 @@ class CooperativeLiveFlow:
         print("CooperativeLive repeat_room=stay confirmed=true", flush=True)
 
     def run_attempt(self, reuse_room: bool = False) -> bool:
+        outcome = "failed"
         try:
             if not reuse_room:
                 self.enter_room()
             self.wait_for_preparation()
             self.prepare()
-            return self.play()
-        except (InterruptedError, MemberExited, JumpOutUnavailable):
+            success = self.play()
+            outcome = "completed" if success else "failed"
+            return success
+        except InterruptedError:
+            outcome = "stopped"
+            raise
+        except (MemberExited, JumpOutUnavailable):
+            outcome = "stopped" if self.stopped() else "startup-failed"
             raise
         except Exception as exc:
             if isinstance(exc, OSError) and "access violation" in str(exc).lower():
@@ -1526,6 +1594,14 @@ class CooperativeLiveFlow:
             if self.visible(image, "member_exit_title", 0.93):
                 raise MemberExited("协力成员退出房间") from exc
             raise
+        finally:
+            recorder = getattr(self, "_startup_recorder", None)
+            if recorder is not None:
+                try:
+                    recorder.close(outcome)
+                except Exception as exc:
+                    print(f"CooperativeStartup diagnostics_warning={type(exc).__name__}: {exc}", flush=True)
+                self._startup_recorder = None
 
     def recover_after_play_failure(self, reason: str) -> None:
         """完整清理失败单局并从主页重新进入协力，禁止在旧会话中续跑。"""

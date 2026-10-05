@@ -5,18 +5,23 @@
     [switch]$OrderedStartupTrial,
     [switch]$NativeTimingTrial,
     [switch]$CooperativeMemberLoadingGuardTrial,
+    [switch]$RegionalLevelDriftTrial,
+    [switch]$DisableRegionalLevelDrift,
     [switch]$DisableNativeTimingCompensation,
     [switch]$VerifyAdbEndpoint
 )
 
 $ErrorActionPreference = 'Stop'
-# 候选行为仅由本次启动显式启用；普通启动保留已发布行为，便于真机对照。
+# 未验收的有序开演候选仅显式启用；已验收的身份规则默认开启。
 
 $env:MAABANGDREAM_ORDERED_STARTUP = if ($OrderedStartupTrial) { '1' } else { '0' }
 $env:MFA_VERIFY_ADB_ENDPOINT = if ($VerifyAdbEndpoint) { '1' } else { '0' }
 # 已验收的等待成本与首命令启动补偿默认启用，仅保留显式关闭入口用于回归排查。
 
 $env:MAABANGDREAM_NATIVE_TIMING_TRIAL = if ($DisableNativeTimingCompensation) { '0' } else { '1' }
+$regionalLevelDriftEnabled = -not $DisableRegionalLevelDrift -and (
+    $RegionalLevelDriftTrial -or $env:MAABANGDREAM_REGIONAL_LEVEL_DRIFT_TRIAL -ne '0'
+)
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $workspaceRoot = Split-Path -Parent $projectRoot
 if (-not $MfaRoot) {
@@ -219,6 +224,13 @@ if ($CooperativeMemberLoadingGuardTrial) {
     # 旧参数仅兼容保留；Agent 会记录已忽略，不能覆盖界面保存的开关。
     $agentArgs += '--cooperative-member-loading-guard-trial'
 }
+if ($regionalLevelDriftEnabled) {
+    # 用可核验的命令行传递实际状态，避免 MFA 子进程丢失临时环境变量。
+    $agentArgs += '--regional-level-drift-trial'
+}
+else {
+    $agentArgs += '--disable-regional-level-drift'
+}
 $interface.agent.child_args = $agentArgs
 $interfaceJson = $interface | ConvertTo-Json -Depth 100
 [System.IO.File]::WriteAllText(
@@ -247,6 +259,12 @@ if (
     '--cooperative-member-loading-guard-trial' -notin $deployedAgentArgs
 ) {
     throw 'Cooperative member loading guard trial flag was not written to deployed interface.json'
+}
+if ($regionalLevelDriftEnabled -and '--regional-level-drift-trial' -notin $deployedAgentArgs) {
+    throw 'Regional level drift enable flag was not written to deployed interface.json'
+}
+if (-not $regionalLevelDriftEnabled -and '--disable-regional-level-drift' -notin $deployedAgentArgs) {
+    throw 'Regional level drift disable flag was not written to deployed interface.json'
 }
 
 # The custom MFA settings page reads this ignored, machine-local sidecar. It is
@@ -340,5 +358,6 @@ Write-Host "Project: $projectRoot"
 Write-Host "Deployment: $MfaRoot"
 Write-Host "Conda environment: $EnvironmentName ($python)"
 Write-Host "Ordered startup trial: $([bool]$OrderedStartupTrial)"
+Write-Host "Regional level drift identity enabled: $([bool]$regionalLevelDriftEnabled)"
 Write-Host "Native timing compensation: $(-not [bool]$DisableNativeTimingCompensation)"
 Write-Host "Cooperative member loading guard uses saved runtime option (default enabled); deprecated trial switch ignored: $([bool]$CooperativeMemberLoadingGuardTrial)"

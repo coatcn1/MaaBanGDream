@@ -7,11 +7,18 @@ import shutil
 
 import pytest
 
+from agent.realtime import chart_repository
 from agent.realtime.chart_repository import LocalChartRepository
 from agent.realtime.song_identity import UNKNOWN_SONG_ID
 
 
 PROJECT_CHART_ROOT = Path(__file__).resolve().parents[1] / "resource/charts"
+
+
+@pytest.fixture(autouse=True)
+def isolated_identity_defaults(monkeypatch):
+    monkeypatch.setattr(chart_repository, "_regional_level_drift_trial_configured", None)
+    monkeypatch.delenv(chart_repository.REGIONAL_LEVEL_DRIFT_TRIAL_ENV, raising=False)
 
 
 def test_marina_identical_chart_aliases_resolve_for_all_realtime_entry_points():
@@ -165,6 +172,155 @@ def test_explicit_full_title_disambiguates_shared_fire_bird_jacket():
         bestdori_song_id=243,
     )
     assert confirmed_full.selection.bestdori_song_id == 243
+
+
+@pytest.mark.parametrize("enabled", [None, True])
+def test_unique_cover_tolerates_single_level_regional_drift(tmp_path, enabled):
+    """唯一封面与实读标题一致时，候选允许 1 级元数据差异。"""
+    build_repository(tmp_path)
+    repository = LocalChartRepository(tmp_path, regional_level_drift_enabled=enabled)
+
+    drifted = repository.resolve(FINGERPRINT, "Hard", level=19, title="Song")
+
+    assert drifted.selection is not None
+    assert drifted.selection.bestdori_song_id == 99
+    assert drifted.selection.level_drift_tolerated is True
+    assert drifted.reason == "confirmed local chart with regional level drift"
+
+    # 超过 1 级说明等级读数或本地元数据本身不可信，仍按身份冲突硬拒绝。
+    for wrong_level in (18, 25):
+        rejected = repository.resolve(FINGERPRINT, "Hard", level=wrong_level)
+        assert rejected.selection is None
+        assert (
+            rejected.reason
+            == "selected song level does not match local chart metadata"
+        )
+
+
+@pytest.mark.parametrize("enabled", [None, True])
+def test_shared_cover_keeps_level_guard_even_when_full_title_narrows_catalog(enabled):
+    """FIRE BIRD 187/243 共用封面：按 [FULL] 标题收窄后封面看似唯一命中，
+    但等级仍是唯一判别信号，不能按区服等级漂移放行。"""
+    repository = LocalChartRepository(PROJECT_CHART_ROOT, regional_level_drift_enabled=enabled)
+    fingerprint = "song-jacket-phash-v2-c52d4b1e6a1ab5e3"
+
+    drifted = repository.resolve(
+        fingerprint, "Expert", level=27, title="[FULL]FIRE BIRD",
+    )
+
+    assert drifted.selection is None
+    assert (
+        drifted.reason
+        == "selected song level does not match local chart metadata"
+    )
+
+
+def test_unique_cover_level_drift_resolves_real_catalog_song():
+    """真实曲目 571 的目录和谱面等级可能相差 1 级；测试不硬编码同步值，
+    仍要求唯一封面和实读标题一致。
+    """
+    repository = LocalChartRepository(PROJECT_CHART_ROOT, regional_level_drift_enabled=True)
+    songs = json.loads(
+        repository.manifest_path.read_text(encoding="utf-8")
+    )["songs"]
+    song = next(item for item in songs if item["bestdori_song_id"] == 571)
+    manifest_level = song["difficulties"]["expert"]["level"]
+
+    resolution = repository.resolve(
+        song["fingerprints"][0], "Expert", level=manifest_level - 1,
+        title=song["display_title"],
+    )
+
+    assert resolution.selection is not None
+    assert resolution.selection.bestdori_song_id == 571
+    assert resolution.selection.shared_jacket is False
+    assert resolution.reason == "confirmed local chart with regional level drift"
+
+    # 相差 2 级说明等级读数或本地元数据本身不可信，仍按身份冲突硬拒绝。
+    rejected = repository.resolve(
+        song["fingerprints"][0], "Expert", level=manifest_level - 2,
+    )
+    assert rejected.selection is None
+    assert (
+        rejected.reason
+        == "selected song level does not match local chart metadata"
+    )
+
+
+def test_regional_level_drift_defaults_on_and_freezes_explicit_disable(monkeypatch, tmp_path):
+    build_repository(tmp_path)
+    default = LocalChartRepository(tmp_path)
+    assert default.resolve(FINGERPRINT, "Hard", level=19, title="Song").selection is not None
+    monkeypatch.setenv(chart_repository.REGIONAL_LEVEL_DRIFT_TRIAL_ENV, "0")
+    disabled = LocalChartRepository(tmp_path)
+    assert disabled.resolve(FINGERPRINT, "Hard", level=19, title="Song").selection is None
+    assert default.resolve(FINGERPRINT, "Hard", level=19, title="Song").selection is not None
+    monkeypatch.setenv("MAABANGDREAM_REGIONAL_LEVEL_DRIFT_TRIAL", "1")
+    assert disabled.resolve(FINGERPRINT, "Hard", level=19, title="Song").selection is None
+    enabled = LocalChartRepository(tmp_path)
+    assert enabled.resolve(FINGERPRINT, "Hard", level=19, title="Song").selection is not None
+
+
+def test_explicit_identity_disable_keeps_exact_level_and_rejects_drift(monkeypatch, tmp_path):
+    build_repository(tmp_path)
+    monkeypatch.setenv(chart_repository.REGIONAL_LEVEL_DRIFT_TRIAL_ENV, "1")
+    repository = LocalChartRepository(tmp_path, regional_level_drift_enabled=False)
+    assert repository.resolve(FINGERPRINT, "Hard", level=20, title="Song").selection is not None
+    drifted = repository.resolve(FINGERPRINT, "Hard", level=19, title="Song")
+    assert drifted.selection is None
+    assert drifted.reason == "selected song level does not match local chart metadata"
+
+
+@pytest.mark.parametrize("title", [None, "", "Completely Different Tune"])
+@pytest.mark.parametrize("enabled", [None, True])
+def test_level_drift_requires_independently_matching_title(tmp_path, title, enabled):
+    build_repository(tmp_path)
+    repository = LocalChartRepository(tmp_path, regional_level_drift_enabled=enabled)
+    resolution = repository.resolve(FINGERPRINT, "Hard", level=19, title=title)
+    assert resolution.selection is None
+    assert "song title" in resolution.reason
+
+
+def test_level_drift_keeps_chart_hash_validation(tmp_path):
+    build_repository(tmp_path)
+    path = tmp_path / "bestdori/99/hard.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["chart"][1]["lane"] = 6
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    repository = LocalChartRepository(tmp_path, regional_level_drift_enabled=True)
+    with pytest.raises(ValueError, match="chart hash mismatch"):
+        repository.resolve(FINGERPRINT, "Hard", level=19, title="Song")
+
+
+def test_level_drift_preserves_verified_equivalent_explicit_alias():
+    repository = LocalChartRepository(PROJECT_CHART_ROOT, regional_level_drift_enabled=True)
+    resolution = repository.resolve(
+        "song-jacket-phash-v2-ee919d62942bf20f", "Hard", level=19,
+        title="ときめきエクスペリエンス！ (月岛麻里奈ver.)", bestdori_song_id=790,
+    )
+    assert resolution.selection is not None
+    assert resolution.selection.bestdori_song_id == 790
+    assert resolution.selection.level_drift_tolerated is True
+
+
+def test_all_catalog_level_differences_resolve_with_cover_and_title():
+    repository = LocalChartRepository(PROJECT_CHART_ROOT, regional_level_drift_enabled=True)
+    manifest = json.loads(repository.manifest_path.read_text(encoding="utf-8"))
+    checked = []
+    for song in manifest["songs"]:
+        for difficulty, entry in song["difficulties"].items():
+            payload = json.loads((PROJECT_CHART_ROOT / entry["path"]).read_text(encoding="utf-8"))
+            observed_level = payload["difficulty"]["level"]
+            if observed_level == entry["level"]:
+                continue
+            resolution = repository.resolve(
+                song["fingerprints"][0], difficulty, level=observed_level,
+                title=song["display_title"],
+            )
+            assert resolution.selection is not None, (song["bestdori_song_id"], resolution.reason)
+            assert resolution.selection.bestdori_song_id == song["bestdori_song_id"]
+            checked.append(song["bestdori_song_id"])
+    assert checked
 
 
 def test_little_busters_continuous_cover_resolves_expert_chart():

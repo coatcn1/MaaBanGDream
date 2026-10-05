@@ -28,7 +28,7 @@ from .controller_touch import ControllerTouchDispatcher
 from .debug_recorder import RealtimeDebugRecorder, append_lifecycle_event
 from .engine import EngineStats, RealtimeEngine
 from .final_cover import (
-    FinalCoverResolution, FinalCoverResolver,
+    FinalCoverResolution, FinalCoverResolver, is_member_loading_screen,
 )
 from .life_monitor import LifeDetector, LifeGuard, PlayfieldCompletionGuard
 from .live_failed_detector import (
@@ -325,6 +325,41 @@ def wait_for_final_cover(
         raise ValueError("final_cover_timeout_seconds 必须在 1..180 之间")
     if not isinstance(cooperative_member_loading_guard_enabled, bool):
         raise ValueError("cooperative_member_loading_guard_enabled 必须是布尔值")
+    cooperative = getattr(live_run, "mode", "") == "cooperative"
+    if cooperative:
+        from .startup_diagnostics import startup_recorder, cover_diagnostic
+        startup = startup_recorder(getattr(live_run, "run_id", None))
+        previous_observer = observer
+
+        def observe_startup(image, timestamp, details):
+            if startup is not None:
+                try:
+                    startup.record(image, timestamp, {"phase": "final-cover-wait", **details})
+                except Exception as exc:
+                    print(f"CooperativeStartup diagnostics_warning={type(exc).__name__}: {exc}", flush=True)
+            if previous_observer is not None:
+                previous_observer(image, timestamp, details)
+
+        observer = observe_startup
+    if bool(getattr(selection, "level_drift_tolerated", False)):
+        # 等级容忍后的准备页谱面不得成为最终确认失败时的旧谱面回退依据。
+        selection = None
+        repository = repository or LocalChartRepository(PROJECT_ROOT / "resource" / "charts")
+        fallback_selection_available = False
+        require_observed_title = True
+    if bool(getattr(repository, "regional_level_drift_enabled", False)):
+        require_observed_title = True
+        fallback_selection_available = False
+    if (
+        initial_resolution is not None
+        and (
+            bool(getattr(initial_resolution.selection, "level_drift_tolerated", False))
+            or bool(getattr(repository, "regional_level_drift_enabled", False))
+        )
+        and not initial_resolution.final_title_confirmed
+    ):
+        # 旧的预确认结构不能代替候选要求的最终页标题证据。
+        initial_resolution = None
     resolver = FinalCoverResolver(
         difficulty=difficulty,
         observed_level=(
@@ -361,6 +396,10 @@ def wait_for_final_cover(
             raise ValueError("预确认封面结果缺少对应画面")
         if stopping():
             raise InterruptedError("用户已停止任务")
+        if resolver.reject_member_loading and is_member_loading_screen(initial_image):
+            # 交接必须对应真实封面帧；加载图标存在时废弃预确认，继续本局检测。
+            initial_resolution = None
+    if initial_resolution is not None:
         if observer is not None:
             observer(
                 initial_image,
@@ -403,10 +442,13 @@ def wait_for_final_cover(
     while time.monotonic() < deadline:
         if stopping():
             raise InterruptedError("用户已停止任务")
+        capture_ms = None
         if initial_image is not None:
             image, initial_image = initial_image, None
         else:
+            capture_started_at = time.monotonic()
             image = controller.post_screencap().wait().get()
+            capture_ms = (time.monotonic() - capture_started_at) * 1000
         last_image = image
         now_mono = time.monotonic()
         if _frame_is_black(image):
@@ -429,27 +471,33 @@ def wait_for_final_cover(
             if not black_seen and poll_interval_seconds > 0:
                 time.sleep(float(poll_interval_seconds))
             continue
-        if (
-            not _frame_is_black(image)
-            and repository is not None
-            and resolver.observed_title_confidence < 0.9
-        ):
-            # 最终歌曲信息页封面下方还有一行标题，字体比协力准备页清晰；
-            # 用它在两三秒的展示窗口内刷新准备页可能读乱的标题，辅助
-            # 谱面身份解析（拿到高置信度读数后本局不再重复 OCR）。
-            title_reading = recognize_song_title(
-                image,
-                roi=FINAL_COVER_TITLE_ROI,
+        resolve_started_at = time.monotonic()
+        try:
+            resolution = resolver.observe(
+                image, refresh_title=not _frame_is_black(image),
+                title_reader=recognize_song_title,
             )
-            if title_reading is not None:
-                resolver.refresh_observed_title(
-                    title_reading.text,
-                    title_reading.confidence,
-                )
-        resolution = resolver.observe(image)
-        playfield_streak = (
-            playfield_streak + 1 if playfield_detector(image) else 0
-        )
+        except Exception as exc:
+            if observer is not None:
+                observer(image, now_mono, {
+                    "event": "final_cover_observation", "status": "error",
+                    "reason": f"{type(exc).__name__}: {exc}",
+                    **(cover_diagnostic(resolver) if cooperative else {}),
+                    "error": f"{type(exc).__name__}: {exc}",
+                })
+            raise
+        resolver_ms = (time.monotonic() - resolve_started_at) * 1000
+        playfield_visible = False
+        if not resolver.last_member_loading_detected and not (cooperative and resolution is not None):
+            try:
+                playfield_visible = bool(playfield_detector(image))
+            except Exception as exc:
+                if not cooperative:
+                    raise
+                # 协力身份确认之前只记录演奏场诊断，不能让它抢占最终封面门禁。
+                print(f"CooperativeStartup diagnostics_warning={type(exc).__name__}: {exc}", flush=True)
+                playfield_visible = None
+        playfield_streak = playfield_streak + 1 if playfield_visible else 0
         if observer is not None:
             observer(
                 image,
@@ -460,6 +508,11 @@ def wait_for_final_cover(
                     "frames": resolver.frames,
                     "playfield_streak": playfield_streak,
                     "reason": resolver.last_reason,
+                    "capture_ms": capture_ms,
+                    "resolver_ms": resolver_ms,
+                    "playfield_visible": playfield_visible,
+                    "black": _frame_is_black(image),
+                    **(cover_diagnostic(resolver) if cooperative else {}),
                 },
             )
         if resolution is not None:
@@ -478,7 +531,7 @@ def wait_for_final_cover(
                 playfield_seen=playfield_streak > 0,
                 image=image,
             )
-        if playfield_streak >= 2 and now_mono >= black_burst_until:
+        if not cooperative and playfield_streak >= 2 and now_mono >= black_burst_until:
             if require_observed_title:
                 raise RuntimeError(
                     "最终封面页标题未确认，已在发送演奏触控前停止："
@@ -506,6 +559,11 @@ def wait_for_final_cover(
     if require_black_transition:
         stage = "全黑开演转场" if not black_seen else "黑场后的歌曲封面或完整演奏场"
         raise RuntimeError(f"启动阶段超时：{float(timeout_seconds):g} 秒内未确认{stage}；未启动输入或结算")
+    if cooperative:
+        raise RuntimeError(
+            f"最终封面确认超时：{float(timeout_seconds):g} 秒内未确认本局歌曲封面与标题："
+            f"{resolver.last_reason}；未启动演奏输入"
+        )
     if require_observed_title:
         raise RuntimeError(
             "最终封面页标题未确认，已在发送演奏触控前停止："
