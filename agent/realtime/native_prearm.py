@@ -315,6 +315,23 @@ def controller_adb_endpoint(controller: Any) -> tuple[str, str]:
     return adb_path, adb_serial
 
 
+def frozen_native_runtime_options(live_run, runtime_options):
+    if live_run is None:
+        return dict(runtime_options)
+    from .live_session import current_live_run, update_live_run
+    current = current_live_run()
+    if current is not None and current.run_id == live_run.run_id:
+        live_run = current
+    snapshot = getattr(live_run, "native_runtime_options", None)
+    if snapshot is not None:
+        return dict(runtime_options) | snapshot
+    snapshot = {key: bool(runtime_options.get(key, False)) for key in (
+        "native_realtime_enabled", "native_life_feedback_enabled", "native_wait_jitter_filter_enabled")}
+    if current is not None and current.run_id == live_run.run_id:
+        update_live_run(native_runtime_options=dict(snapshot))
+    return dict(runtime_options) | snapshot
+
+
 def prepare_native_for_settings_gate(
     *,
     controller: Any,
@@ -336,6 +353,7 @@ def prepare_native_for_settings_gate(
         runtime_options = RealtimeProfileStore(
             root / "profiles"
         ).runtime_options()
+    runtime_options = frozen_native_runtime_options(live_run, runtime_options)
     if not bool(runtime_options.get("native_realtime_enabled", False)):
         return None
 
@@ -378,6 +396,10 @@ def prepare_native_for_settings_gate(
         drift_rate_correction_enabled=_env_flag(
             "MAABANGDREAM_NATIVE_DRIFT_RATE_CORRECTION"
         ),
+        wait_jitter_trial_enabled=bool(runtime_options.get("native_wait_jitter_filter_enabled", False)),
+        life_feedback_enabled=(bool(runtime_options.get("native_life_feedback_enabled", False))
+                               and str(getattr(live_run, "mode", "")) in {
+                                   "formal", "challenge", "cooperative", "continuous", "medley"}),
     )
     try:
         backend.arm()

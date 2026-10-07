@@ -967,7 +967,23 @@ void test_wait_cost_recovery_trial_keeps_double_slide_across_chunks() {
     CHECK(compiler.timing_trial_report().positive_recovered_ms > 0.0);
 }
 
+static void test_phase_boundary_rejects_hold_and_pending_transient() {
+    TouchScriptCompiler compiler;
+    EngineConfig config;
+    CHECK(compiler.phase_boundary_safe());
+    compiler.compile({action(ActionKind::Down, 3, 0, 0)}, config, 0, false, .1);
+    CHECK(!compiler.phase_boundary_safe());
+    compiler.compile({action(ActionKind::Up, 3, .2, 0)}, config, .1, false, .3);
+    CHECK(compiler.phase_boundary_safe());
+    CHECK(std::abs(compiler.contact_available_s() - .2) < 1e-9);
+    compiler.compile({action(ActionKind::Flick, 1, .39, -1)}, config, .3, false, .4);
+    CHECK(!compiler.phase_boundary_safe());
+    compiler.compile({}, config, .4, true, .6);
+    CHECK(compiler.phase_boundary_safe());
+}
+
 int run_touch_script_tests() {
+    test_phase_boundary_rejects_hold_and_pending_transient();
     test_commit_intervals_do_not_accumulate_phase();
     test_wait_cost_recovery_trial_repays_known_positive_wait_cost();
     test_wait_cost_recovery_trial_preserves_negative_limit_and_zero_wait();

@@ -36,6 +36,7 @@ from .live_session import (
 from .native_prearm import (
     discard_prearmed_backend,
     prepare_native_for_settings_gate,
+    frozen_native_runtime_options,
 )
 from .chart_repository import LocalChartRepository
 from .run_reporting import (
@@ -537,6 +538,19 @@ class RealtimePerformanceSettingsGate(CustomAction):
             if context.tasker.stopping:
                 return True
         run = current_live_run()
+        # 共享选曲节点尚未区分正式/排练；准备分路的显式模式必须在预武装前传递。
+        # 只补全待定模式，保留校准等已明确模式，避免误给正式参数时启用反馈。
+        if (
+            run is not None
+            and run.mode == "realtime"
+            and params.get("run_mode") in {"formal", "rehearsal"}
+        ):
+            run = update_live_run(mode=params["run_mode"])
+            print(
+                "RealtimePerformanceSettingsGate selection_mode=realtime "
+                f"run_mode={run.mode} source=preparation-route",
+                flush=True,
+            )
         identity_pending_final_cover = bool(
             run is not None
             and (
@@ -571,6 +585,7 @@ class RealtimePerformanceSettingsGate(CustomAction):
             ))
         store = RealtimeProfileStore(PROJECT_ROOT / "profiles")
         options = store.runtime_options()
+        options = frozen_native_runtime_options(current_live_run(), options)
 
         def finish_without_dialog(source: str) -> bool:
             publish_verified_performance_settings(
@@ -606,6 +621,7 @@ class RealtimePerformanceSettingsGate(CustomAction):
                     live_run=current_live_run(),
                     difficulty=difficulty,
                     project_root=PROJECT_ROOT,
+                    runtime_options=options,
                     ready_timeout_s=float(
                         effective_params.get("native_ready_timeout_seconds", 10.0)
                     ),

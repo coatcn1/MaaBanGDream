@@ -634,7 +634,57 @@ void test_real_chart_48_streams_to_final_tail_without_underflow() {
 
 }  // namespace
 
+static void test_future_phase_shifts_only_unpublished_groups_and_final_tail() {
+    Fixture fixture;
+    PlaybackSession session(fixture.callbacks());
+    CHECK(session.arm({tap(0), tap(.8), tap(.8, 1), tap(1.2)}, EngineConfig{}));
+    CHECK(session.start(0));
+    CHECK(session.publish());
+    const auto old = fixture.chunks.front();
+    CHECK_EQ(session.apply_future_phase(2, .9), std::string("unsafe-gap"));
+    CHECK_EQ(session.apply_future_phase(2, .1), std::string("applied"));
+    CHECK(std::abs(session.future_phase_offset_ms() - 2) < 1e-9);
+    fixture.now_s = .31;
+    CHECK(session.publish());
+    CHECK_EQ(fixture.chunks.back().actions.size(), static_cast<std::size_t>(2));
+    for (const auto& row : fixture.chunks.back().actions) {
+        CHECK(std::abs(row.engine_due_s - .802) < 1e-9);
+    }
+    CHECK_EQ(old.actions.front().engine_due_s, fixture.chunks.front().actions.front().engine_due_s);
+    fixture.now_s = .62;
+    CHECK(session.publish());
+    fixture.now_s = .93;
+    CHECK(session.publish());
+    CHECK(fixture.chunks.back().final_chunk);
+    CHECK(std::abs(fixture.chunks.back().actions.back().engine_due_s - 1.202) < 1e-9);
+    CHECK(std::abs(fixture.chunks.back().window_end_s - (1.202 + EngineConfig{}.tap_duration_ms / 1000.0)) < 1e-9);
+    CHECK_EQ(session.apply_future_phase(-2, 0), std::string("no-future-actions"));
+    CHECK_EQ(session.report().queue_underflows, static_cast<uint64_t>(0));
+}
+
+static void test_future_phase_limits_stop_and_reservations() {
+    Fixture fixture;
+    PlaybackSession session(fixture.callbacks());
+    CHECK(session.arm({tap(0), tap(.98), counted_action(ActionKind::Down, .865, 1, 7),
+                       counted_action(ActionKind::Up, 1.5, 1, 7)}, EngineConfig{}));
+    CHECK_EQ(session.apply_future_phase(2, 0), std::string("not-running"));
+    CHECK(session.start(0));
+    CHECK(session.publish());
+    for (int index = 0; index < 20; ++index) {
+        CHECK_EQ(session.apply_future_phase(-2, 0), std::string("applied"));
+    }
+    CHECK_EQ(session.apply_future_phase(-2, 0), std::string("phase-limit"));
+    fixture.now_s = .31;
+    CHECK(session.publish());
+    CHECK_EQ(fixture.chunks.back().future_down_reservations.size(), static_cast<std::size_t>(1));
+    CHECK(std::abs(fixture.chunks.back().future_down_reservations.front().engine_due_s - .825) < 1e-9);
+    CHECK(session.cancel("stop"));
+    CHECK_EQ(session.apply_future_phase(2, 0), std::string("not-running"));
+}
+
 int run_playback_session_tests() {
+    test_future_phase_shifts_only_unpublished_groups_and_final_tail();
+    test_future_phase_limits_stop_and_reservations();
     test_absolute_windows_respect_watermarks_and_final_marker();
     test_sparse_timeline_emits_empty_wait_window();
     test_chunk_reserves_future_hold_down_without_sending_it();

@@ -302,3 +302,26 @@ def test_settings_prearm_success_arms_waits_and_caches_exact_key(tmp_path):
     assert constructed[0]["judgement_y"] == 590
     assert manager.consume("run-48", chart) is backend
     assert timers.timers[0].seconds == 25
+
+
+@pytest.mark.parametrize("mode,enabled", [
+    ("formal", True), ("challenge", True), ("cooperative", True),
+    ("continuous", True), ("medley", True), ("rehearsal", False),
+    ("calibration", False), ("calibration-formal", False), ("calibration-rehearsal", False),
+    ("unknown", False), (None, False),
+])
+def test_experimental_options_only_enable_feedback_for_formal_modes(tmp_path, mode, enabled):
+    chart = tmp_path / "expert.json"
+    constructed = []
+    backend = FakeBackend()
+    prepare_native_for_settings_gate(
+        controller=SimpleNamespace(info={"adb_path": "adb", "adb_serial": "test"}),
+        live_run=_confirmed_run(mode=mode), difficulty="Expert", project_root=tmp_path,
+        runtime_options={"native_realtime_enabled": True, "native_life_feedback_enabled": True,
+                         "native_wait_jitter_filter_enabled": True},
+        repository=_repository(chart),
+        backend_factory=lambda *args, **kwargs: constructed.append(kwargs) or backend,
+        manager=NativePrearmManager(timer_factory=TimerFactory()),
+    )
+    assert constructed[0]["life_feedback_enabled"] is enabled
+    assert constructed[0]["wait_jitter_trial_enabled"] is True

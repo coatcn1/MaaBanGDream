@@ -630,6 +630,7 @@
     "action": "Custom",
     "custom_action": "RealtimePerformanceSettingsGate",
     "custom_action_param": {
+      "run_mode": "formal",
       "confirm_preparation_identity": true,
       "difficulty": "Easy",
       "require_profile": true,

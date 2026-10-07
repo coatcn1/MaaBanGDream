@@ -114,6 +114,12 @@ public:
     // 低于 low_water 时至多发布一个窗口；队列充足时返回 false 但不失败。
     bool publish();
 
+    // 单 owner 在下一次发布前调用；只移动未发布动作，不改锚点或已发布回执。
+    std::string apply_future_phase(double delta_ms, double contact_available_s);
+    double future_phase_offset_ms() const noexcept {
+        return future_phase_offset_s_ * 1000.0;
+    }
+
     // cancel 先发非阻塞 reset；poll 在 100ms 后触发 fallback，并在 500ms
     // 截止时间处 fail-closed。设备异步确认 reset 时调用 acknowledge_reset。
     bool cancel(std::string reason);
@@ -172,6 +178,12 @@ private:
     double cancel_started_s_ = 0.0;
     double chart_first_due_s_ = 0.0;
     double playback_end_engine_s_ = 0.0;
+    double future_phase_offset_s_ = 0.0;
+    double published_completion_s_ = 0.0;
+    std::vector<double> completion_suffix_max_;
+    double effective_due(std::size_t index) const noexcept {
+        return entries_[index].timed.engine_due_s + future_phase_offset_s_;
+    }
     std::string cancel_reason_;
     PlaybackReport report_;
     std::vector<double> absolute_drift_ms_;

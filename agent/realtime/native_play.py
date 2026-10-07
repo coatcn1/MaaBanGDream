@@ -596,6 +596,7 @@ class NativeMinitouchBackend:
         drift_rate_correction_enabled: bool = False,
         timing_trial_enabled: bool | None = None,
         wait_jitter_trial_enabled: bool | None = None,
+        life_feedback_enabled: bool = False,
     ) -> None:
         if not native_engine.available():
             raise RuntimeError(
@@ -645,11 +646,13 @@ class NativeMinitouchBackend:
         self._wait_cost_estimator = (
             _WaitCostEstimator()
             if (
-                native_wait_jitter_trial_enabled()
+                False
                 if wait_jitter_trial_enabled is None
                 else bool(wait_jitter_trial_enabled)
             ) else None
         )
+        if native_wait_jitter_trial_enabled():
+            print("NativeMinitouch MAABANGDREAM_NATIVE_WAIT_JITTER_TRIAL 已弃用；以演出设置为准", flush=True)
         self._run_id = run_id or str(uuid.uuid4())
         self._jlog_path = Path(jlog_path) if jlog_path is not None else None
         # 速率估计按 chunk 聚合：设备回执成簇到达（同一 commit 的动作共享
@@ -690,6 +693,23 @@ class NativeMinitouchBackend:
                 "cancel_deadline_s": 1.000,
             },
         )
+        self.life_feedback_enabled = bool(life_feedback_enabled)
+        if self.life_feedback_enabled and not all(callable(method) for method in (
+            getattr(self._session, "apply_future_phase", None),
+            getattr(self._compiler, "phase_boundary_safe", None),
+            getattr(self._compiler, "contact_available_s", None),
+        )):
+            raise RuntimeError("Native 模块缺少掉血反馈安全相位接口，请重新构建 Native")
+        # 主截图消费者只覆盖单槽候选；唯一 owner 才能验证并移动未来切片。
+        self._phase_lock = threading.Lock()
+        self._phase_closed = False
+        self._phase_slot: tuple[str, int, float, float, float] | None = None
+        self._phase_sequence = 0
+        self._phase_invalidated_sequence = 0
+        self._phase_applied_pending = None
+        self._phase_events: deque[dict[str, object]] = deque(maxlen=128)
+        self._phase_receipts: deque[tuple[int, float, float]] = deque(maxlen=64)
+        self._feedback_input_snapshot = (float("-inf"), float("-inf"))
         self._state = "idle"
         self._first_read_delay_s = 0.004
         self._first_action_anchor_s: float | None = None
@@ -713,6 +733,9 @@ class NativeMinitouchBackend:
         self._observation_complete = threading.Event()
         self._calibration_chunks = 0
         self._calibration_correction_ms = 0.0
+        self._chunk_timing_lock = threading.Lock()
+        self._chunk_timing: deque[dict[str, object]] = deque(maxlen=4096)
+        self._chunk_timing_total = 0
         self._execution_timing = _ExecutionTimingTrace()
         self._first_chunk_pipeline_lock = threading.Lock()
         self._first_chunk_pipeline = self._new_first_chunk_pipeline()
@@ -743,6 +766,9 @@ class NativeMinitouchBackend:
             "reset_execution_latency_ms": None,
             "release_proof": None,
             "forced_kill_used": False,
+            "release_sequence_confirmed": False,
+            "release_contacts": [],
+            "release_scope": "minitouch-protocol-and-cleanup",
         }
         self._cleanup_warning: str | None = None
         self._publish_error: str | None = None
@@ -1048,6 +1074,22 @@ class NativeMinitouchBackend:
         self._observation_error = reason
         raise RuntimeError(f"Native jlog 执行证据无效：{reason}")
 
+    def _record_chunk_timing(self, values: dict[str, object]) -> None:
+        # 唯一 owner 只更新有界内存证据；报告线程读取副本，不做热路径落盘。
+        lock = getattr(self, "_chunk_timing_lock", None)
+        if lock is not None:
+            with lock:
+                self._chunk_timing.append(values)
+                self._chunk_timing_total += 1
+
+    def _chunk_timing_report(self) -> dict[str, object]:
+        lock = getattr(self, "_chunk_timing_lock", None)
+        if lock is None:
+            return {"records": [], "dropped_records": 0}
+        with lock:
+            return {"records": list(self._chunk_timing),
+                    "dropped_records": self._chunk_timing_total - len(self._chunk_timing)}
+
     def _complete_observed_chunk(self, expected: _ExpectedCommand) -> None:
         """只用完整执行完的切片校准尚未编译的未来切片。"""
         if expected.used_offsets is None:
@@ -1062,6 +1104,8 @@ class NativeMinitouchBackend:
             self._calibrator.correction_ms(expected.used_offsets)
         )
         offsets = self._calibrator.offsets
+        raw_offsets = self._offsets_to_dict(offsets)
+        residual_before = self._compiler_timing_trial_report()["residual_ms"]
         sample_counts_value = getattr(
             self._calibrator, "sample_counts", None
         )
@@ -1092,6 +1136,15 @@ class NativeMinitouchBackend:
         self._compiler.add_residual_ms(correction_ms)
         self._compiler.set_offsets(offsets)
         self._last_observed_offsets = self._offsets_to_dict(offsets)
+        self._record_chunk_timing({
+            "event": "calibration", "sequence": int(expected.chunk_sequence),
+            "observed_s": self._diagnostic_clock_s(),
+            "used_offsets": self._offsets_to_dict(expected.used_offsets),
+            "raw_offsets": raw_offsets, "filtered_offsets": dict(self._last_observed_offsets),
+            "correction_ms": correction_ms, "sample_counts": sample_counts,
+            "residual_before_ms": residual_before,
+            "residual_after_ms": self._compiler_timing_trial_report()["residual_ms"],
+        })
         self._calibration_correction_ms += correction_ms
         self._calibration_chunks += 1
         self._calibrator.reset()
@@ -1307,6 +1360,20 @@ class NativeMinitouchBackend:
                     )
                     self._clock_basis = "first-action-relative"
                 actual_s = device_commit_s + self._device_clock_offset_s
+                if self.life_feedback_enabled:
+                    errors = [abs(actual_s - float(row["planned_engine_s"])) * 1000
+                              for row in expected.receipts]
+                    # 一个 commit 只算一个可信样本；双押不能凑足三份证据。
+                    if self._clock_basis != "first-action-relative":
+                        self._phase_receipts.append((self._observed_commands, actual_s, median(errors)))
+                    transient_at, release_at = self._feedback_input_snapshot
+                    for row in expected.receipts:
+                        kind = row.get("action_kind")
+                        if kind in {"tap", "flick"}:
+                            transient_at = actual_s
+                        if kind == "up" or (kind == "flick" and row.get("command") == "m"):
+                            release_at = actual_s
+                    self._feedback_input_snapshot = (transient_at, release_at)
                 for receipt in expected.receipts:
                     token = int(receipt["action_token"])
                     if token in self._observed_action_tokens:
@@ -1554,6 +1621,8 @@ class NativeMinitouchBackend:
                 action["due_s"] = float(entry["engine_due_s"])
                 future_down_reservations.append(action)
             used_offsets = self._compiler.offsets
+            compile_start_s = self._diagnostic_clock_s()
+            residual_before = self._compiler_timing_trial_report()["residual_ms"]
             if record_first:
                 self._update_first_chunk_pipeline(
                     sequence, compile_start_s=self._diagnostic_clock_s()
@@ -1566,6 +1635,8 @@ class NativeMinitouchBackend:
                 float(chunk["window_end_s"]),
                 future_down_reservations,
             ))
+            compile_end_s = self._diagnostic_clock_s()
+            residual_after = self._compiler_timing_trial_report()["residual_ms"]
             if record_first:
                 self._update_first_chunk_pipeline(
                     sequence, compile_end_s=self._diagnostic_clock_s()
@@ -1659,9 +1730,24 @@ class NativeMinitouchBackend:
                 self._update_first_chunk_pipeline(
                     sequence, socket_send_begin_s=self._diagnostic_clock_s()
                 )
+            publish_start_s = self._diagnostic_clock_s()
+            publish_success = False
             try:
                 self._device.publish(payload)
+                publish_success = True
             finally:
+                self._record_chunk_timing({
+                    "event": "publish", "sequence": sequence,
+                    "callback_entry_s": callback_entry_s,
+                    "compile_start_s": compile_start_s, "compile_end_s": compile_end_s,
+                    "publish_start_s": publish_start_s,
+                    "publish_end_s": self._diagnostic_clock_s(),
+                    "publish_success": publish_success,
+                    "window_start_s": float(chunk["window_start_s"]),
+                    "window_end_s": float(chunk["window_end_s"]),
+                    "commands": len(commands), "used_offsets": self._offsets_to_dict(used_offsets),
+                    "residual_before_ms": residual_before, "residual_after_ms": residual_after,
+                })
                 if record_first:
                     diagnostics = getattr(
                         self._device, "last_publish_diagnostics", None
@@ -1690,6 +1776,11 @@ class NativeMinitouchBackend:
                         ),
                     )
             self._expected_commands.extend(records)
+            phase_event = getattr(self, "_phase_applied_pending", None)
+            if phase_event is not None and actions:
+                phase_event.update({"chunk_sequence": sequence,
+                                    "first_adjusted_due_s": float(actions[0]["due_s"])})
+                self._phase_applied_pending = None
             self._published_commands += len(records)
             self._published_action_tokens.update(new_tokens)
             if final_chunk:
@@ -1907,6 +1998,7 @@ class NativeMinitouchBackend:
                 f"pending={len(self._expected_commands)}"
             )
         if self._session_state == "running":
+            self._consume_phase_candidate()
             self._session.publish()
             if self._finish_when_fully_published():
                 return
@@ -1974,6 +2066,7 @@ class NativeMinitouchBackend:
                 pass
             self._session_terminal.set()
             try:
+                self._observation_cancelled = True
                 self._device.request_reset()
             finally:
                 self._stop_device_with_budget(1.0)
@@ -1999,8 +2092,91 @@ class NativeMinitouchBackend:
         """保存游戏层终态，避免与 Native 传输终态混成一个原因。"""
         self._game_terminal_reason = str(reason) if reason else None
 
+    def feedback_input_eligible(self, now: float) -> bool:
+        transient_at, release_at = self._feedback_input_snapshot
+        return 0 <= now - transient_at <= .6 and now - release_at >= .15
+
+    def request_future_phase(self, delta_ms: float, observed_s: float) -> bool:
+        """非阻塞单槽请求，不等待 owner，也不触碰 C++ 会话。"""
+        if not self.life_feedback_enabled or not self._phase_lock.acquire(False):
+            return False
+        try:
+            if self._phase_closed or self._state != "running" or self._phase_slot is not None:
+                return False
+            if delta_ms not in {-2.0, 2.0} or not math.isfinite(observed_s):
+                return False
+            self._phase_sequence += 1
+            self._phase_slot = (self._run_id, self._phase_sequence, observed_s,
+                                delta_ms, observed_s + 2.0)
+            self._phase_events.append({"event": "requested", "sequence": self._phase_sequence,
+                                       "observed_s": observed_s, "delta_ms": delta_ms})
+            return True
+        finally:
+            self._phase_lock.release()
+
+    def _consume_phase_candidate(self) -> None:
+        if not getattr(self, "life_feedback_enabled", False):
+            return
+        with self._phase_lock:
+            candidate = self._phase_slot
+            if candidate is None:
+                return
+            run_id, sequence, observed_s, delta_ms, expiry_s = candidate
+            now = self._clock()
+            reason = None
+            if self._phase_closed or self._session_state != "running":
+                reason = "stopped"
+            elif sequence <= getattr(self, "_phase_invalidated_sequence", 0):
+                reason = "invalidated-window"
+            elif run_id != self._run_id:
+                reason = "stale-run"
+            elif now > expiry_s or now < observed_s:
+                reason = "expired"
+            elif not self._compiler.phase_boundary_safe():
+                # HOLD 或隐式 FLICK 尚未完成时保留候选，正常补粮不能被阻断。
+                return
+            else:
+                recent = list({commit: error for commit, actual_s, error in self._phase_receipts
+                               if 0 <= now - actual_s <= .5}.values())
+                uncertainty = self._clock_uncertainty_ms
+                if (self._clock_basis != "probe-midpoint" or uncertainty is None
+                    or not math.isfinite(uncertainty) or not 0 <= uncertainty <= 1.0
+                    or len(recent) < 3 or median(recent) > 40.0):
+                    reason = "untrusted-execution-receipts"
+                else:
+                    reason = str(self._session.apply_future_phase(
+                        delta_ms, self._compiler.contact_available_s()))
+                    if reason == "unsafe-gap":
+                        return
+            self._phase_slot = None
+            event = {"event": reason, "sequence": sequence,
+                                       "applied_s": now, "delta_ms": delta_ms,
+                                       "cumulative_phase_ms": float(getattr(
+                                           self._session, "future_phase_offset_ms", 0.0))}
+            self._phase_events.append(event)
+            if reason == "applied":
+                self._phase_applied_pending = event
+
+    def revoke_future_phase(self, reason: str) -> None:
+        # 标量失效标记不等待 owner；即使锁正在使用，下一次消费也会拒绝旧候选。
+        self._phase_invalidated_sequence = self._phase_sequence
+        if not self._phase_lock.acquire(False):
+            return
+        try:
+            if self._phase_slot is not None:
+                self._phase_events.append({"event": "revoked", "reason": reason,
+                                           "sequence": self._phase_slot[1]})
+                self._phase_slot = None
+        finally:
+            self._phase_lock.release()
+
     def stop(self) -> None:
-        """在 1s 硬预算内取消生产并取得设备端 reset 执行证据。"""
+        """在 1s 硬预算内取消生产并取得完整 UP/commit/reset 协议证据。"""
+        # 停止先封闭请求与应用入口；之后任何在途采样都只能被拒绝。
+        if hasattr(self, "_phase_lock"):
+            with self._phase_lock:
+                self._phase_closed = True
+                self._phase_slot = None
         stop_started = time.monotonic()
         release_deadline = stop_started + 1.000
         release_errors: list[str] = []
@@ -2041,9 +2217,9 @@ class NativeMinitouchBackend:
                 self._publish_error = f"cancel {type(exc).__name__}: {exc}"
 
         device_thread = self._device_thread
-        # r 可能排在最长 750ms 的设备队列后。在本轮 jlog 确认 r 之前
+        # 释放批次可能排在最长 750ms 队列后；本轮完整序列确认之前
         # 保留 owner、socket 与日志线程；否则 C++ 会话无法从 cancelling
-        # 转到 cancelled，也无法证明设备真正执行了 reset。
+        # 转到 cancelled，也无法证明设备执行了本轮完整释放协议。
         device_release_ok = self._stop_device_with_budget(remaining())
 
         # 不用一次 poll 周期猜测 owner 是否已经推进；必须把确认命令交给
@@ -2105,7 +2281,21 @@ class NativeMinitouchBackend:
                     "injected-device-release" if device_release_ok else None
                 ),
                 "forced_kill_used": False,
+                "release_scope": "injected-device-release",
             }
+        if not isinstance(self._device, NativeMinitouchDevice) and "release_scope" not in self._release_diagnostics:
+            self._release_diagnostics["release_scope"] = "injected-device-release"
+        sequence_required = (
+            self._release_diagnostics.get("release_scope") == "minitouch-protocol-and-cleanup"
+            and self._release_diagnostics.get("release_proof") != "no-touch-possible-and-cleanup"
+        )
+        sequence_ok = not sequence_required or (
+            self._release_diagnostics.get("reset_sent") is True
+            and self._release_diagnostics.get("reset_executed") is True
+            and self._release_diagnostics.get("release_sequence_confirmed") is True
+        )
+        if not sequence_ok:
+            release_errors.append("本轮完整 UP/commit/reset 释放协议未确认")
         device_cleanup_detail = str(
             getattr(self._device, "last_release_error", None) or ""
         ) or None
@@ -2128,6 +2318,7 @@ class NativeMinitouchBackend:
             )
         self._release_confirmed = bool(
             device_release_ok
+            and sequence_ok
             and start_cancel_synchronized
             and session_cancel_confirmed
             and owner_stopped
@@ -2278,6 +2469,10 @@ class NativeMinitouchBackend:
         )
         defaults.update({
             "run_id": self._run_id,
+            "life_feedback": {"enabled": getattr(self, "life_feedback_enabled", False),
+                              "summary": getattr(self, "_life_feedback_summary", {}),
+                              "sampling_events": getattr(self, "_life_feedback_report", []),
+                              "phase_events": list(getattr(self, "_phase_events", []))},
             "state": self._state,
             "session_state": self._session_state,
             "first_action_anchor_s": self._first_action_anchor_s,
@@ -2287,6 +2482,8 @@ class NativeMinitouchBackend:
                 getattr(self, "_config", {}).get("judgement_y", TOUCH_Y)
             ),
             "jlog_path": str(self._jlog_path) if self._jlog_path is not None else None,
+            "jlog_io": getattr(getattr(self, "_device", None), "jlog_io_diagnostics", {}),
+            "chunk_timing": self._chunk_timing_report(),
             "frozen_offsets": dict(self._frozen_offsets),
             "frozen_timing_offset_ms": self._frozen_timing_offset_ms,
             "executed_observation_supported": True,

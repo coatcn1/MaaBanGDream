@@ -94,6 +94,7 @@ def test_formal_mode_keeps_strict_profile_checks_with_every_difficulty():
         assert merged["RealtimeLiveFormalSettingsGate"][
             "custom_action_param"
         ] == {
+            "run_mode": "formal",
             "confirm_preparation_identity": True,
             "difficulty": difficulty,
             "require_profile": True,

@@ -145,6 +145,13 @@ bool PlaybackSession::arm(
     }
 
     cursor_ = 0;
+    future_phase_offset_s_ = 0.0;
+    published_completion_s_ = 0.0;
+    completion_suffix_max_.assign(entries_.size() + 1, 0.0);
+    for (std::size_t index = entries_.size(); index-- > 0;) {
+        completion_suffix_max_[index] = std::max(
+            completion_suffix_max_[index + 1], entries_[index].completion_s);
+    }
     next_sequence_ = 1;
     queue_tail_s_ = 0.0;
     last_clock_s_ = 0.0;
@@ -241,6 +248,9 @@ bool PlaybackSession::start(double first_action_engine_s) {
             playback_end_engine_s_, entry.completion_s);
     }
     report_.first_action_engine_s = first_action_engine_s;
+    for (double& completion : completion_suffix_max_) {
+        completion += first_action_engine_s;
+    }
     queue_tail_s_ = current_s;
     state_ = PlaybackState::Running;
     return true;
@@ -269,6 +279,8 @@ bool PlaybackSession::publish() {
     const double queue_cap_s = current_s + config_.max_queue_s;
     const double desired_end_s = std::min(
         current_s + config_.lookahead_s, queue_cap_s);
+    playback_end_engine_s_ = std::max(published_completion_s_,
+        completion_suffix_max_[cursor_] + future_phase_offset_s_);
     const double base_window_end_s = std::max(
         window_start_s,
         std::min(desired_end_s, playback_end_engine_s_));
@@ -276,13 +288,13 @@ bool PlaybackSession::publish() {
     std::size_t next_cursor = cursor_;
     while (next_cursor < entries_.size()) {
         const double group_due_s =
-            entries_[next_cursor].timed.engine_due_s;
+            effective_due(next_cursor);
         if (group_due_s > base_window_end_s + kTimeEpsilon) {
             break;
         }
         std::size_t group_end = next_cursor + 1;
         while (group_end < entries_.size()
-               && std::abs(entries_[group_end].timed.engine_due_s
+               && std::abs(effective_due(group_end)
                     - group_due_s) <= kTimeEpsilon) {
             ++group_end;
         }
@@ -314,14 +326,17 @@ bool PlaybackSession::publish() {
     chunk.touch_config = engine_config_;
     chunk.actions.reserve(next_cursor - cursor_);
     for (std::size_t index = cursor_; index < next_cursor; ++index) {
-        chunk.actions.push_back(entries_[index].timed);
+        TimedPlaybackAction timed = entries_[index].timed;
+        timed.engine_due_s = effective_due(index);
+        chunk.actions.push_back(timed);
     }
     const double reservation_horizon_s = window_end_s
         + std::max(
             std::max(0, engine_config_.tap_duration_ms),
             std::max(0, engine_config_.flick_duration_ms)) / kMillis;
     for (std::size_t index = next_cursor; index < entries_.size(); ++index) {
-        const TimedPlaybackAction& timed = entries_[index].timed;
+        TimedPlaybackAction timed = entries_[index].timed;
+        timed.engine_due_s = effective_due(index);
         if (timed.engine_due_s > reservation_horizon_s + kTimeEpsilon) {
             break;
         }
@@ -344,6 +359,10 @@ bool PlaybackSession::publish() {
         return false;
     }
 
+    for (std::size_t index = cursor_; index < next_cursor; ++index) {
+        published_completion_s_ = std::max(published_completion_s_,
+            entries_[index].completion_s + future_phase_offset_s_);
+    }
     cursor_ = next_cursor;
     ++next_sequence_;
     queue_tail_s_ = window_end_s;
@@ -356,6 +375,23 @@ bool PlaybackSession::publish() {
         report_.max_queue_depth_ms,
         std::max(0.0, queue_tail_s_ - current_s) * kMillis);
     return true;
+}
+
+std::string PlaybackSession::apply_future_phase(
+    double delta_ms, double contact_available_s) {
+    if (state_ != PlaybackState::Running) return "not-running";
+    if (final_chunk_published_ || cursor_ == entries_.size()) return "no-future-actions";
+    if (!std::isfinite(delta_ms) || std::abs(delta_ms) > 2.0
+        || !std::isfinite(contact_available_s)) return "invalid-request";
+    const double candidate = future_phase_offset_s_ + delta_ms / kMillis;
+    if (std::abs(candidate) > 0.040 + kTimeEpsilon) return "phase-limit";
+    const double current_s = now();
+    if (!clock_is_valid(current_s)) return "invalid-clock";
+    const double first_due = entries_[cursor_].timed.engine_due_s + candidate;
+    if (first_due <= std::max({queue_tail_s_, contact_available_s, current_s})
+        + 0.010 + kTimeEpsilon) return "unsafe-gap";
+    future_phase_offset_s_ = candidate;
+    return "applied";
 }
 
 bool PlaybackSession::cancel(std::string reason) {

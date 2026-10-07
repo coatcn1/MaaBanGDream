@@ -141,8 +141,10 @@ Realtime 闭环固定为：证据提取 → 必要的独立审查 → 最小实�
 ### 输入与触点
 
 - 实时截图、检测、跟踪和派发热路径禁止阻塞等待或同步 ADB 前台查询。
-- Native 停止只有在本轮 reset 请求之后的 jlog 明确执行 `r`，并完成本地与设备清理时，
-  才能标记 `release_confirmed=true`；历史 `r`、断开 socket 或 kill 进程不能替代回执。
+- Native 停止必须确认本轮 generation 的全部合法触点 `UP → commit → reset → commit` 完整发送，
+  并取得本轮请求游标之后的连续 jlog 执行回执及本地、设备清理证据，才允许
+  `release_confirmed=true`；单个或历史 `r`、断开 socket、kill 进程不能替代完整序列。
+  该证据仅证明 minitouch 协议与清理完成，不等于直接读取内核 evdev 触点状态。
 - Legacy HOLD/Slide 只能由连续轨迹和离散拓扑事件建立；长条头 DOWN 后要抑制同轨重复 TAP。
 - 普通音符紫色外圈不是 FLICK；只有成组、同向的粉色箭头/折线证据才能升级为 FLICK。
 - 密集同轨音符不能用固定宽度合并；阈值要随透视和音符头尺寸缩放。

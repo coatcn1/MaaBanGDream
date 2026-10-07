@@ -21,7 +21,11 @@ def test_native_life_drop_keeps_bounded_before_and_after_evidence(tmp_path):
     frame = np.zeros((72, 128, 3), dtype=np.uint8)
     # 低频监控保留掉血前画面，不能等到归零弹窗才开始取证。
     for index, value in enumerate([1000] * 12 + [967, 769, 575, 476, 132, 0] + [0] * 15):
-        recorder.record_native_life(frame, index * 0.2, value, visible=True, alive_confirmed=True)
+        metadata = {"sequence": index, "request_s": index * .2 - .04,
+                    "reused": False, "observed_s": index * .2}
+        recorder.record_native_life(frame, index * 0.2, value, visible=True,
+                                    alive_confirmed=True, frame_metadata=metadata)
+        metadata["sequence"] = -1
         # 测试中等待单项消费，避免用人工瞬间灌满队列冒充真实的 5Hz 输入。
         deadline = time.monotonic() + 2
         while not recorder._record_queue.empty() and time.monotonic() < deadline:
@@ -35,7 +39,42 @@ def test_native_life_drop_keeps_bounded_before_and_after_evidence(tmp_path):
     assert all((recorder.output_dir / event["screenshot"]).is_file() for event in events)
     assert any("life=967" in event["reason"] for event in events)
     assert any("life=0" in event["reason"] for event in events)
+    assert all(event["frame_metadata"]["sequence"] >= 0 for event in events)
+    assert all(event["frame_metadata"]["observed_s"] == event["timestamp"] for event in events)
+    assert all(event["frame_metadata"]["request_s"] == pytest.approx(event["timestamp"] - .04)
+               for event in events)
     assert not (recorder.output_dir / "trace.jsonl").read_text(encoding="utf-8")
+
+
+def test_native_feedback_roi_is_bounded_and_keeps_image_metadata(tmp_path):
+    recorder = RealtimeDebugRecorder(tmp_path, video_enabled=False)
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+    frame[514:556, 570:710] = 123
+    metadata = {"sequence": 9, "request_s": 1.01, "observed_s": 1.05, "reused": False}
+    recorder.record_native_feedback(frame, 1.05, metadata, 1.0)
+    recorder.record(frame, 1.05, [], [], "alive", frame_metadata=metadata)
+    metadata["sequence"] = 10
+    frame[:] = 0
+    recorder.close()
+    event = json.loads((recorder.output_dir / "events.jsonl").read_text(encoding="utf-8"))
+    assert event["frame_metadata"]["sequence"] == 9
+    assert event["frame_metadata"]["roi"] == [570, 514, 710, 556]
+    from agent.realtime.vision_io import imread_unicode
+    crop = imread_unicode(recorder.output_dir / event["screenshot"])
+    assert crop.shape == (42, 140, 3)
+    assert np.all(crop == 123)
+    trace = json.loads((recorder.output_dir / "trace.jsonl").read_text(encoding="utf-8"))
+    assert trace["frame_metadata"]["sequence"] == 9
+    recorder._closed = False
+    recorder._record_queue = queue.Queue(maxsize=200)
+    for index in range(200):
+        recorder.record_native_feedback(frame, index / 60, metadata, 1.0)
+    assert recorder._record_queue.qsize() == 119
+    recorder._discard_pending_records()
+    assert recorder._dropped_native_feedback_frames == 119
+    recorder._closed = True
+    recorder.record_native_feedback(frame, 9, metadata, 1.0)
+    assert recorder._record_queue.empty()
 
 
 def test_native_life_evidence_ignores_unconfirmed_and_stale_life(tmp_path):

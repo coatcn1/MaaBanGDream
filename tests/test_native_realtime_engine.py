@@ -487,14 +487,16 @@ def test_native_backend_owns_input_from_first_note_and_reports_session(
             return LifeReading(True, 1000)
 
     class LifeRecorder:
+        supports_frame_metadata = True
         frames = []
+        traced = []
 
         def record_native_life(self, image, timestamp, value, **kwargs):
             assert backend.active
             self.frames.append((timestamp, value, kwargs))
 
         def record(self, *args, **kwargs):
-            pass
+            self.traced.append((int(args[0][0, 0, 0]), args[1], kwargs["frame_metadata"]))
 
         def close(self):
             pass
@@ -539,8 +541,12 @@ def test_native_backend_owns_input_from_first_note_and_reports_session(
 
     def capture() -> np.ndarray:
         events.append("capture")
+        sequence = events.count("capture")
+        request_s = clock.value
         clock.value += 0.2
-        return np.zeros((720, 1280, 3), dtype=np.uint8)
+        capture.frame_metadata = {"sequence": sequence, "request_s": request_s,
+                                  "reused": sequence > 3}
+        return np.full((720, 1280, 3), sequence, dtype=np.uint8)
 
     stats = engine.run(
         capture,
@@ -562,6 +568,14 @@ def test_native_backend_owns_input_from_first_note_and_reports_session(
     assert recorder.frames
     assert all(value == 1000 and flags["visible"] and flags["alive_confirmed"]
                for _, value, flags in recorder.frames)
+    assert recorder.traced
+    for pixel, observed_s, metadata in recorder.traced:
+        assert metadata["sequence"] == pixel
+        assert metadata["observed_s"] == observed_s
+        assert metadata["request_s"] == pytest.approx(observed_s - .2)
+        assert metadata["reused"] == (pixel > 3)
+    assert all(flags["frame_metadata"]["observed_s"] == observed_s
+               for observed_s, _, flags in recorder.frames)
 
 
 def test_native_start_photogate_maps_first_note_to_delayed_anchor():
@@ -1510,6 +1524,18 @@ def test_native_backend_publishes_first_chunk_from_photogate_anchor(monkeypatch)
     assert backend.report()["published_commands"] == 4
     assert backend.report()["observed_commands"] == 4
     assert backend.report()["calibration_chunks"] == 2
+    chunk_records = backend.report()["chunk_timing"]["records"]
+    publishes = [row for row in chunk_records if row["event"] == "publish"]
+    calibrations = [row for row in chunk_records if row["event"] == "calibration"]
+    assert len(publishes) == len(calibrations) == 2
+    for published, calibration in zip(publishes, calibrations):
+        assert published["sequence"] == calibration["sequence"]
+        assert published["publish_success"] is True
+        assert published["compile_start_s"] <= published["compile_end_s"]
+        assert published["publish_start_s"] <= published["publish_end_s"]
+        assert published["used_offsets"] == calibration["used_offsets"]
+        assert set(calibration["raw_offsets"]) == set(calibration["filtered_offsets"])
+        assert "correction_ms" in calibration
     assert backend.report()["clock_offset_ms"] is not None
     assert backend.report()["device_offsets"]["move_ms"] == pytest.approx(7.0)
     assert backend.report()["absolute_drift_valid"] is False
@@ -1949,6 +1975,7 @@ def test_native_device_emergency_stop_avoids_adb_cleanup(monkeypatch):
     device._process = Process()
     device._closed = False
     device._touch_possible = True
+    device._max_contacts = 10
     monkeypatch.setattr(
         device,
         "_run_adb",
@@ -1962,8 +1989,338 @@ def test_native_device_emergency_stop_avoids_adb_cleanup(monkeypatch):
     device._reset_thread.join(timeout=1.0)
     assert device.emergency_stop() is True
 
-    assert events == ["r\n", "close", "kill"]
+    assert events[0].splitlines() == ["w 0", "w 0", *(f"u {contact}" for contact in range(10)), "c", "r", "c"]
+    assert events[1:] == ["close", "kill"]
     assert device.connected is False
+
+
+def _ack_release_text(device, text, first_start_ms=10):
+    for index, command in enumerate(text.splitlines()):
+        device._record_log_line("jlog " + json.dumps({"st": first_start_ms + index * 2,
+                                                     "et": first_start_ms + index * 2 + 1,
+                                                     "c": 1, "cmd": command}))
+
+
+def test_native_release_sends_all_ups_before_reset_and_requires_full_sequence():
+    published = []
+    client = SimpleNamespace(connected=True, publish=lambda text: published.append(text) or True)
+    device = NativeMinitouchDevice("adb", "test")
+    device._client = client
+    device._closed = False
+    device._max_contacts = 3
+    device._touch_possible = True
+    assert device.request_reset() is False
+    device._reset_thread.join(timeout=1)
+    commands = published[0].splitlines()
+    assert commands[-6:] == ["u 0", "u 1", "u 2", "c", "r", "c"]
+    device._record_log_line('jlog {"st":1,"et":2,"c":1,"cmd": "r"}')
+    assert device.reset_executed is False
+    for index, command in enumerate(commands):
+        device._record_log_line("jlog " + json.dumps({"st": 10 + index, "et": 11 + index,
+                                                     "c": 1, "cmd": command}))
+    assert device.reset_executed is True
+    assert device.release_diagnostics["release_sequence_confirmed"] is True
+
+
+@pytest.mark.parametrize("failure", ["single-reset", "missing-up", "missing-commit", "missing-final-commit",
+                                     "wrong-order", "late-down", "late-move", "nan", "malformed", "partial-send"])
+def test_release_fsm_rejects_incomplete_or_untrusted_receipts(failure):
+    device = NativeMinitouchDevice("adb", "test")
+    device._closed = False
+    device._touch_possible = True
+    device._max_contacts = 3
+    def publish(text):
+        commands = text.splitlines()
+        if failure == "single-reset":
+            commands = ["r"]
+        elif failure == "missing-up":
+            commands.remove("u 2")
+        elif failure == "missing-commit":
+            del commands[-3]
+        elif failure == "missing-final-commit":
+            commands.pop()
+        elif failure == "wrong-order":
+            commands[2], commands[3] = commands[3], commands[2]
+        elif failure in {"late-down", "late-move"}:
+            commands += ["d 2 10 10 50" if failure == "late-down" else "m 2 10 10 50"]
+        for index, command in enumerate(commands):
+            row = "jlog " + json.dumps({"st": index * 2, "et": index * 2 + 1, "c": 1, "cmd": command})
+            if index == 2 and failure == "nan":
+                row = row.replace('"st": 4', '"st": NaN')
+            elif index == 2 and failure == "malformed":
+                row += " broken"
+            device._record_log_line(row)
+        return failure != "partial-send"
+    device._client = SimpleNamespace(connected=True, publish=publish)
+    assert device.request_reset() is False
+    device._reset_thread.join(timeout=1)
+    assert device.reset_executed is False
+    assert device._touch_possible is True
+    assert device.release_diagnostics["release_sequence_confirmed"] is False
+
+
+@pytest.mark.parametrize("max_contacts", [0, -1, 11, 3.0, True, None])
+def test_release_without_valid_contact_handshake_cannot_send_or_confirm(max_contacts):
+    calls = []
+    device = NativeMinitouchDevice("adb", "test")
+    device._closed = False
+    device._touch_possible = True
+    device._max_contacts = max_contacts
+    device._client = SimpleNamespace(connected=True, publish=lambda text: calls.append(text) or True)
+    assert device.request_reset() is False
+    assert calls == []
+    assert device.reset_executed is False
+    assert device.release_diagnostics["release_sequence_error"] == "invalid-contact-handshake"
+
+
+def test_release_allows_normal_queue_drain_but_prevents_prefix_reuse_and_late_publication():
+    device = NativeMinitouchDevice("adb", "test")
+    device._closed = False
+    device._touch_possible = True
+    device._max_contacts = 3
+    published = []
+    def publish(text):
+        published.append(text)
+        _ack_release_text(device, "d 1 20 20 50\nm 1 25 25 50\nu 1\nc\nw 0\nc\nr\n", 0)
+        _ack_release_text(device, text, 20)
+        return True
+    device._client = SimpleNamespace(connected=True, publish=publish)
+    assert device.request_reset() is False
+    device._reset_thread.join(timeout=1)
+    assert device.reset_executed is True
+    with pytest.raises(RuntimeError, match="发布已封闭"):
+        device.publish("d 2 10 10 50\nc\n")
+    assert len(published) == 1
+    _ack_release_text(device, "d 2 10 10 50\n", 50)
+    assert device.reset_executed is False
+    assert device._reset_executed_event.is_set() is False
+
+
+def test_release_send_and_normal_publish_are_serial_and_nonblocking_request():
+    entered = threading.Event()
+    continue_send = threading.Event()
+    calls = []
+    device = NativeMinitouchDevice("adb", "test")
+    device._closed = False
+    device._max_contacts = 3
+    def publish(text):
+        calls.append(text)
+        if text.startswith("d "):
+            entered.set()
+            assert continue_send.wait(timeout=1)
+        else:
+            _ack_release_text(device, text)
+        return True
+    device._client = SimpleNamespace(connected=True, publish=publish)
+    normal = threading.Thread(target=lambda: device.publish("d 1 20 20 50\nc\n"))
+    normal.start()
+    assert entered.wait(timeout=1)
+    started = time.perf_counter()
+    assert device.request_reset() is False
+    assert time.perf_counter() - started < .05
+    assert len(calls) == 1
+    continue_send.set()
+    normal.join(timeout=1)
+    device._reset_thread.join(timeout=1)
+    assert len(calls) == 2
+    assert device.reset_executed is True
+
+
+def test_reserved_release_marker_cannot_be_queued_by_normal_publish():
+    device = NativeMinitouchDevice("adb", "test")
+    with pytest.raises(RuntimeError, match="保留"):
+        device.publish("w 0\nw 0\nc\n")
+    device._closed = False
+    device._client = SimpleNamespace(connected=True, publish=lambda text: True)
+    device.publish("w 0\n")
+    with pytest.raises(RuntimeError, match="跨批次"):
+        device.publish("w 0\nc\n")
+
+
+@pytest.mark.parametrize("missing_marker", [False, True])
+def test_single_queued_zero_wait_cannot_supply_a_missing_release_marker(missing_marker):
+    device = NativeMinitouchDevice("adb", "test")
+    device._closed = False
+    device._max_contacts = 3
+    device._touch_possible = True
+    published = []
+    def publish(text):
+        published.append(text)
+        if text != "w 0\n":
+            assert text.startswith("w 1\nw 0\nw 0\n")
+            _ack_release_text(device, "w 0\n", 0)
+            commands = text.splitlines()
+            if missing_marker:
+                commands.remove("w 0")
+            _ack_release_text(device, "\n".join(commands), 10)
+        return True
+    device._client = SimpleNamespace(connected=True, publish=publish)
+    device.publish("w 0\n")
+    assert device.request_reset() is False
+    device._reset_thread.join(timeout=1)
+    assert device.reset_executed is (not missing_marker)
+    assert published[-1].splitlines().count("c") == 2
+
+
+def test_old_reader_generation_cannot_confirm_current_release():
+    device = NativeMinitouchDevice("adb", "test")
+    device._closed = False
+    device._max_contacts = 3
+    device._touch_possible = True
+    device._reset_generation = 1
+    old_rows = "\n".join("jlog " + json.dumps({"st": index * 2, "et": index * 2 + 1,
+                                               "c": 1, "cmd": command})
+                          for index, command in enumerate(["w 0", "w 0", "u 0", "u 1", "u 2", "c", "r", "c"])) + "\n"
+    current = SimpleNamespace(connected=True, publish=lambda text: True)
+    class OldClient:
+        connected = True
+        def receive(self, *args):
+            device._reset_generation = 2
+            device._client = current
+            assert device.request_reset() is False
+            device._reset_thread.join(timeout=1)
+            return old_rows
+    old = OldClient()
+    device._client = old
+    device._read_logs(old, 1)
+    assert device.reset_executed is False
+    assert device._log_sequence == 0
+    device._record_log_line(old_rows.splitlines()[0], source_generation=1, source_client=old)
+    assert device._log_sequence == 0
+    device._observe_reset_execution(1, old_rows.splitlines()[0], time.perf_counter(), 1)
+    assert device._release_match_index == 0
+
+
+def test_same_received_batch_late_down_prevents_even_transient_release_ack():
+    device = NativeMinitouchDevice("adb", "test")
+    device._closed = False
+    device._max_contacts = 3
+    device._touch_possible = True
+    sent = []
+    class Client:
+        connected = True
+        def publish(self, text):
+            sent.append(text)
+            return True
+        def receive(self, *args):
+            self.connected = False
+            commands = sent[0].splitlines() + ["d 2 10 10 50"]
+            return "\n".join("jlog " + json.dumps({"st": index * 2, "et": index * 2 + 1,
+                                                   "c": 1, "cmd": command})
+                              for index, command in enumerate(commands)) + "\n"
+    device._client = Client()
+    assert device.request_reset() is False
+    device._reset_thread.join(timeout=1)
+    acknowledgements = []
+    original_set = device._reset_executed_event.set
+    device._reset_executed_event.set = lambda: acknowledgements.append(True) or original_set()
+    device._read_logs(device._client, device._reset_generation)
+    assert acknowledgements == []
+    assert device.reset_executed is False
+    assert device.release_diagnostics["release_sequence_error"] == "late-touch-after-release"
+
+
+def test_split_tcp_tail_after_release_cannot_be_hidden_by_early_ack():
+    device = NativeMinitouchDevice("adb", "test")
+    device._closed = False
+    device._max_contacts = 3
+    device._touch_possible = True
+    sent = []
+    class Client:
+        connected = True
+        reads = 0
+        def publish(self, text):
+            sent.append(text)
+            return True
+        def receive(self, *args):
+            self.reads += 1
+            if self.reads == 1:
+                commands = sent[0].splitlines()
+                return "\n".join("jlog " + json.dumps({"st": index * 2, "et": index * 2 + 1,
+                                                       "c": 1, "cmd": command})
+                                  for index, command in enumerate(commands)) + '\njlog {"st":30,"et":31,"c":1,"cmd": "d 2'
+            assert not device.reset_executed
+            assert not device._reset_executed_event.is_set()
+            self.connected = False
+            return ' 10 10 50"}\n'
+    device._client = Client()
+    assert device.request_reset() is False
+    device._reset_thread.join(timeout=1)
+    device._read_logs(device._client, device._reset_generation)
+    assert device.reset_executed is False
+    assert device.release_diagnostics["release_sequence_error"] == "late-touch-after-release"
+
+
+@requires_native
+@pytest.mark.parametrize("held", ["hold", "flick", "partial"])
+def test_backend_cancel_releases_type_b_contacts_with_real_device_fsm(monkeypatch, held):
+    enabled, committed, pending = set(), set(), {}
+    published = []
+    device = NativeMinitouchDevice("adb", "test")
+    device._closed = False
+    device._max_contacts = 10
+    device._max_x, device._max_y = 1280, 720
+    class Client:
+        connected = True
+        device_ms = 1000.0
+        fail_next = False
+        def publish(self, text):
+            published.append(text)
+            partial = self.fail_next
+            self.fail_next = False
+            commands = text.splitlines()[:2] if partial else text.splitlines()
+            for command in commands:
+                words = command.split()
+                if words[0] == "d":
+                    contact = int(words[1])
+                    enabled.add(contact)
+                    pending[contact] = True
+                elif words[0] == "u":
+                    contact = int(words[1])
+                    if contact in enabled:
+                        enabled.remove(contact)
+                        pending[contact] = False
+                elif words[0] == "c":
+                    for contact, down in pending.items():
+                        (committed.add if down else committed.discard)(contact)
+                    pending.clear()
+                elif words[0] == "r":
+                    # 对照已匹配 Type-B 源码：reset 本身只清 enabled，不生成 tracking-id UP。
+                    enabled.clear()
+                row = {"st": self.device_ms, "et": self.device_ms + .1, "c": .1, "cmd": command}
+                device._record_log_line("jlog " + json.dumps(row))
+                self.device_ms += .2
+            return not partial
+        def close(self):
+            self.connected = False
+    device._client = Client()
+    monkeypatch.setattr(device, "start", lambda **kwargs: None)
+    monkeypatch.setattr(device, "_run_adb_cleanup", lambda *args, **kwargs: pytest.fail("离线不应调用 ADB"))
+    backend = NativeMinitouchBackend(CHART_306, adb_path="adb", serial="test", device=device, require_probe=False)
+    backend.arm()
+    assert backend.wait_until_ready(1)
+    # 注入已有 HOLD、FLICK 或部分发送的状态，验证真正的 cancel→device FSM→session ACK 链。
+    enabled.add(5)
+    committed.add(5)
+    if held == "flick":
+        enabled.add(7)
+        committed.add(7)
+    device._touch_possible = True
+    if held == "partial":
+        device._client.fail_next = True
+        with pytest.raises(RuntimeError, match="publish 失败"):
+            device.publish("d 5 100 100 50\nc\nw 20\n")
+    # 模拟 photogate 已冻结首拍，使用实际 C++ 发布与运行中取消回执链。
+    backend._state = "ready"
+    backend.start(time.perf_counter() + .020)
+    backend.stop()
+    report = backend.report()
+    assert report["release_confirmed"] is True
+    assert report["release_sequence_confirmed"] is True
+    assert report["release_scope"] == "minitouch-protocol-and-cleanup"
+    assert report["session_state"] == "cancelled"
+    assert enabled == committed == set()
+    assert published[-1].splitlines()[-13:] == [*(f"u {contact}" for contact in range(10)), "c", "r", "c"]
 
 
 def test_native_device_log_cursor_preserves_identical_jlog_rows():
@@ -2423,11 +2780,8 @@ def test_native_device_stop_requires_bounded_remote_pid_evidence(monkeypatch):
         connected = True
 
         def publish(self, text):
-            if text == "r\n":
-                device._record_log_line(
-                    'jlog {"st":1,"et":2,"c":1,"cmd":"r"}'
-                )
-            return text == "r\n"
+            _ack_release_text(device, text)
+            return True
 
         def close(self):
             return None
@@ -2448,6 +2802,7 @@ def test_native_device_stop_requires_bounded_remote_pid_evidence(monkeypatch):
     device._client = Client()
     device._process = Process()
     device._touch_possible = True
+    device._max_contacts = 10
     cleanup_calls: list[tuple[str, ...]] = []
 
     def cleanup(*args, timeout_s):
@@ -2523,13 +2878,11 @@ def test_native_device_release_waits_for_current_reset_execution(monkeypatch):
 
         def publish(self, text):
             events.append(f"publish:{text.strip()}")
-            if text == "r\n":
+            if text.endswith("c\nr\nc\n"):
                 def acknowledge():
                     time.sleep(0.03)
-                    events.append("ack:r")
-                    device._record_log_line(
-                        'jlog {"st":1,"et":2,"c":1,"cmd":"r"}'
-                    )
+                    events.append("ack:release")
+                    _ack_release_text(device, text)
 
                 threading.Thread(target=acknowledge, daemon=True).start()
             return True
@@ -2552,6 +2905,7 @@ def test_native_device_release_waits_for_current_reset_execution(monkeypatch):
     device._client = Client()
     device._process = Process()
     device._touch_possible = True
+    device._max_contacts = 10
     monkeypatch.setattr(
         native_engine,
         "parse_minitouch_log",
@@ -2572,9 +2926,11 @@ def test_native_device_release_waits_for_current_reset_execution(monkeypatch):
     assert diagnostics["reset_sent"] is True
     assert diagnostics["reset_executed"] is True
     assert diagnostics["reset_execution_latency_ms"] >= 20.0
-    assert diagnostics["release_proof"] == "current-reset-jlog-and-cleanup"
+    assert diagnostics["release_proof"] == "current-release-sequence-jlog-and-cleanup"
+    assert diagnostics["release_sequence_confirmed"] is True
+    assert diagnostics["release_contacts"] == list(range(10))
     assert diagnostics["forced_kill_used"] is False
-    assert events.index("ack:r") < events.index("close")
+    assert events.index("ack:release") < events.index("close")
 
 
 def test_native_backend_acknowledges_cancel_only_after_reset_execution():
@@ -2746,7 +3102,7 @@ def test_native_device_old_reset_ack_does_not_confirm_current_release(
         connected = True
 
         def publish(self, text):
-            return text == "r\n"
+            return True
 
         def close(self):
             self.connected = False
@@ -2760,6 +3116,7 @@ def test_native_device_old_reset_ack_does_not_confirm_current_release(
     device._pid = 9753
     device._client = Client()
     device._touch_possible = True
+    device._max_contacts = 10
     monkeypatch.setattr(
         native_engine,
         "parse_minitouch_log",
@@ -2797,6 +3154,12 @@ def test_native_device_without_possible_touch_needs_no_reset_ack(monkeypatch):
         "reset_execution_latency_ms": None,
         "release_proof": "no-touch-possible-and-cleanup",
         "forced_kill_used": False,
+        "release_sequence_confirmed": False,
+        "release_contacts": [],
+        "release_scope": "minitouch-protocol-and-cleanup",
+        "release_sequence_error": None,
+        "release_generation": 0,
+        "release_send_cursor": None,
     }
 
 
@@ -2813,7 +3176,7 @@ def test_native_device_stop_deadline_survives_blocked_reset_and_log_lock(
         def publish(self, text):
             self.publish_entered.set()
             self.release_publish.wait(timeout=2.0)
-            return text == "r\n"
+            return True
 
         def close(self):
             self.connected = False
@@ -2825,6 +3188,7 @@ def test_native_device_stop_deadline_survives_blocked_reset_and_log_lock(
     device._pid = 1234
     device._client = client
     device._touch_possible = True
+    device._max_contacts = 10
     monkeypatch.setattr(
         device,
         "_run_adb_cleanup",
@@ -2843,7 +3207,8 @@ def test_native_device_stop_deadline_survives_blocked_reset_and_log_lock(
     locked._log_lock.acquire()
     try:
         started = time.monotonic()
-        assert locked.stop_with_deadline(0.05) is False
+        # 没有建立触点时清理不需要等待诊断内存锁，更不能等待诊断磁盘。
+        assert locked.stop_with_deadline(0.05) is True
         elapsed = time.monotonic() - started
     finally:
         locked._log_lock.release()

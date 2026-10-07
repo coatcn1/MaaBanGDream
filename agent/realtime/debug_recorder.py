@@ -33,6 +33,16 @@ class _NativeLifeFrame:
     value: int | None
     visible: bool
     alive_confirmed: bool
+    metadata: dict[str, object]
+
+
+@dataclass(frozen=True)
+class _NativeFeedbackFrame:
+    image: np.ndarray
+    timestamp: float
+    metadata: dict[str, object]
+    window_index: int
+    index: int
 
 
 def append_lifecycle_event(
@@ -74,6 +84,7 @@ class RealtimeDebugRecorder:
     on a background worker, and MJPG encoding runs on a second thread, so
     debug recording must not compete with the 60 Hz detector.
     """
+    supports_frame_metadata = True
 
     def __init__(
         self,
@@ -127,6 +138,11 @@ class RealtimeDebugRecorder:
         self._native_life_triggered_at: float | None = None
         self._native_life_evidence_count = 0
         self._dropped_native_life_frames = 0
+        self._native_feedback_window = None
+        self._native_feedback_window_index = -1
+        self._native_feedback_count = 0
+        self._native_feedback_written = 0
+        self._dropped_native_feedback_frames = 0
         self._released_at: dict[int, float] = {}
         self._diagnostic_counts: dict[str, int] = {}
         self._phase_counts: dict[str, int] = {}
@@ -275,6 +291,7 @@ class RealtimeDebugRecorder:
         life_value: int | None = None,
         touch_state: dict[str, object] | None = None,
         phase: str = "engine",
+        frame_metadata: dict[str, object] | None = None,
     ) -> None:
         if self._closed or self._error is not None:
             self._dropped_trace_frames += 1
@@ -289,6 +306,7 @@ class RealtimeDebugRecorder:
                     image, timestamp, notes, actions, life_status,
                     diagnostics, timing_state, life_value, touch_state,
                     str(phase),
+                    dict(frame_metadata or {}),
                 )
             )
         except queue.Full:
@@ -299,6 +317,7 @@ class RealtimeDebugRecorder:
     def record_native_life(
         self, image: np.ndarray, timestamp: float, value: int | None,
         *, visible: bool, alive_confirmed: bool,
+        frame_metadata: dict[str, object] | None = None,
     ) -> None:
         """只入队已有监控截图；磁盘和回溯缓存均不占用演奏热路径。"""
         if self._closed or self._error is not None:
@@ -306,10 +325,38 @@ class RealtimeDebugRecorder:
             return
         try:
             self._record_queue.put_nowait(
-                _NativeLifeFrame(image, timestamp, value, visible, alive_confirmed)
+                _NativeLifeFrame(image, timestamp, value, visible, alive_confirmed,
+                                 dict(frame_metadata or {}))
             )
         except queue.Full:
             self._dropped_native_life_frames += 1
+
+    def record_native_feedback(self, image, timestamp, frame_metadata, window_start_s):
+        """仅保存现有新帧的判定 ROI，不增加截图或扩大采样窗口。"""
+        from .timing_feedback import TimingFeedbackDetector
+        if self._closed or self._error is not None:
+            self._dropped_native_feedback_frames += 1
+            return
+        if self._native_feedback_window != window_start_s:
+            self._native_feedback_window = window_start_s
+            self._native_feedback_window_index += 1
+            self._native_feedback_count = 0
+        if self._native_feedback_count >= 120:
+            return
+        index = self._native_feedback_count
+        self._native_feedback_count += 1
+        x1, y1, x2, y2 = TimingFeedbackDetector.ROI
+        if not isinstance(image, np.ndarray) or image.shape != (720, 1280, 3):
+            self._dropped_native_feedback_frames += 1
+            return
+        metadata = dict(frame_metadata, window_start_s=window_start_s,
+                        roi=[x1, y1, x2, y2])
+        try:
+            self._record_queue.put_nowait(_NativeFeedbackFrame(
+                image[y1:y2, x1:x2].copy(), timestamp, metadata,
+                self._native_feedback_window_index, index))
+        except queue.Full:
+            self._dropped_native_feedback_frames += 1
 
     def _process_native_life(self, frame: _NativeLifeFrame) -> None:
         history = self._native_life_history
@@ -340,6 +387,7 @@ class RealtimeDebugRecorder:
             frame.image, frame.timestamp, -1, f"native-life-drop-{index:02d}",
             f"life={frame.value}; visible={frame.visible}; "
             f"trigger_timestamp={self._native_life_triggered_at}", 0.0,
+            frame_metadata=frame.metadata,
         )
         self._native_life_evidence_count += 1
 
@@ -352,15 +400,24 @@ class RealtimeDebugRecorder:
                 if isinstance(item, _NativeLifeFrame):
                     self._process_native_life(item)
                     continue
+                if isinstance(item, _NativeFeedbackFrame):
+                    self._write_event(item.image, item.timestamp, -1,
+                                      f"native-feedback-{item.window_index:02d}-{item.index:03d}",
+                                      "existing-fresh-burst-roi", 0.0,
+                                      frame_metadata=item.metadata)
+                    self._native_feedback_written += 1
+                    continue
                 (
                     image, timestamp, notes, actions, life_status,
                     diagnostics, timing_state, life_value, touch_state,
                     phase,
+                    frame_metadata,
                 ) = item
                 self._process_record(
                     image, timestamp, notes, actions, life_status,
                     diagnostics, timing_state, life_value, touch_state,
                     phase,
+                    frame_metadata,
                 )
         except BaseException as exc:
             self._error = exc
@@ -409,6 +466,10 @@ class RealtimeDebugRecorder:
             "dropped_trace_frames": self._dropped_trace_frames,
             "native_life_evidence_frames": self._native_life_evidence_count,
             "dropped_native_life_frames": self._dropped_native_life_frames,
+            "native_feedback_evidence_frames": self._native_feedback_written,
+            "dropped_native_feedback_frames": self._dropped_native_feedback_frames,
+            "native_life_evidence_complete": self._dropped_native_life_frames == 0,
+            "native_feedback_evidence_complete": self._dropped_native_feedback_frames == 0,
             "video_frames": self._video_frames,
             "skipped_video_frames": self._skipped_video_frames,
             "dropped_video_frames": self._dropped_video_frames,
@@ -494,6 +555,8 @@ class RealtimeDebugRecorder:
                 return
             if isinstance(item, _NativeLifeFrame):
                 self._dropped_native_life_frames += 1
+            elif isinstance(item, _NativeFeedbackFrame):
+                self._dropped_native_feedback_frames += 1
             elif item is not _SENTINEL:
                 self._dropped_trace_frames += 1
 
@@ -519,6 +582,7 @@ class RealtimeDebugRecorder:
         life_value: int | None = None,
         touch_state: dict[str, object] | None = None,
         phase: str = "engine",
+        frame_metadata: dict[str, object] | None = None,
     ) -> None:
         diagnostics = diagnostics or []
         timing_state = timing_state or {}
@@ -536,6 +600,7 @@ class RealtimeDebugRecorder:
             "diagnostics": diagnostics,
             "timing_feedback": timing_state,
             "touch_state": touch_state or {},
+            "frame_metadata": frame_metadata or {},
         }, ensure_ascii=False, separators=(",", ":")) + "\n")
         for diagnostic in diagnostics:
             event = str(diagnostic.get("event", "unknown"))
@@ -550,6 +615,7 @@ class RealtimeDebugRecorder:
                     event,
                     str(diagnostic.get("reason", event)),
                     0.0,
+                    frame_metadata=frame_metadata,
                 )
         self._phase_counts[phase] = self._phase_counts.get(phase, 0) + 1
         if timing_state:
@@ -603,6 +669,7 @@ class RealtimeDebugRecorder:
         kind: str,
         reason: str,
         delay: float,
+        *, frame_metadata: dict[str, object] | None = None,
     ) -> None:
         event_dir = self.output_dir / "events"
         event_dir.mkdir(exist_ok=True)
@@ -619,6 +686,7 @@ class RealtimeDebugRecorder:
             "reason": reason,
             "delay_seconds": round(delay, 3),
             "screenshot": relative.as_posix(),
+            "frame_metadata": frame_metadata or {},
         }, ensure_ascii=False, separators=(",", ":")) + "\n")
         self._event_count += 1
 
