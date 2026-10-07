@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -32,6 +33,7 @@ struct PendingTouchEvent {
     uint64_t action_token = 0;
     double planned_engine_s = 0.0;
     bool emits_receipt = false;
+    ActionKind action_kind = ActionKind::Tap;
 };
 
 }  // namespace detail
@@ -49,6 +51,7 @@ struct TouchExecutionReceipt {
     double planned_engine_s = 0.0;
     uint64_t action_token = 0;
     TouchCommandKind command = TouchCommandKind::Down;
+    ActionKind action_kind = ActionKind::Tap;
 };
 
 // 分动作类型的延迟补偿，与参考仓库 autodori 的 up/down/move/wait/interval
@@ -119,6 +122,17 @@ public:
 
     // 设备已执行 panic reset 或新建会话后，清除跨切片触点状态。
     void reset_contacts() noexcept;
+
+    // 仅无逻辑触点、无跨块事件时允许改变未来时间轴；设备队列仍由会话门禁保护。
+    bool phase_boundary_safe() const noexcept {
+        return pending_events_.empty()
+            && std::none_of(active_contacts_.begin(), active_contacts_.end(),
+                [](bool active) { return active; });
+    }
+    double contact_available_s() const noexcept {
+        return static_cast<double>(*std::max_element(
+            contact_available_after_.begin(), contact_available_after_.end())) / 1e9;
+    }
 
     // 仅返回最近一次成功 compile() 中到达判定关键命令的高层动作；
     // TAP/普通 FLICK 记在 DOWN，尾部 FLICK 记在首个 MOVE，HOLD 生命周期

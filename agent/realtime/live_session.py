@@ -54,6 +54,8 @@ class LiveRunContext:
     # 这些对象只在本局内存中传递，不进入结果 JSON。
     startup_final_cover_image: object | None = None
     startup_final_cover_resolution: object | None = None
+    # 本局首次准备时冻结；延迟预武装和重建不得重新读取正在编辑的 UI。
+    native_runtime_options: dict | None = None
 
     def to_mapping(self) -> dict:
         return {

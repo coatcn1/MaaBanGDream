@@ -286,7 +286,9 @@ def test_profile_play_reuses_one_agent_controller_proxy(monkeypatch):
     assert engine_construction_options[0]["life_guard"] is not None
 
 
-def test_profile_play_uses_confirmed_expert_for_special_fallback(monkeypatch):
+def test_profile_play_uses_confirmed_expert_for_special_fallback(monkeypatch, tmp_path):
+    # 故意中断会保存失败报告，测试证据必须与真实演出目录隔离。
+    monkeypatch.setattr(profile_play_action, "PROJECT_ROOT", tmp_path)
     reset_live_run(
         mode="formal",
         difficulty="Expert",
@@ -1788,7 +1790,7 @@ def _completed_play_harness(
             self.debug_recorder = kwargs.get("debug_recorder")
 
         def run(self, _capture, _stopping, **_kwargs):
-            if startup_timed_out:
+            if startup_timed_out or life_failed or aborted_for_life:
                 _capture()
             if self.debug_recorder is not None:
                 self.debug_recorder.close()
@@ -1908,6 +1910,28 @@ def _life_failed_native_report():
     }
 
 
+@pytest.mark.parametrize("invalid", ["sequence", "sent", "execution", "contacts", "scope"])
+def test_real_native_release_gate_requires_complete_protocol_evidence(invalid):
+    report = _life_failed_native_report() | {
+        "reset_requested": True, "reset_sent": True,
+        "release_sequence_confirmed": True, "release_contacts": list(range(10)),
+        "release_scope": "minitouch-protocol-and-cleanup",
+        "release_proof": "current-release-sequence-jlog-and-cleanup",
+    }
+    assert profile_play_action._native_execution_gate_failures(report, expected_life_cancel=True) == []
+    if invalid == "sequence":
+        report["release_sequence_confirmed"] = False
+    elif invalid == "sent":
+        report["reset_sent"] = False
+    elif invalid == "execution":
+        report["reset_executed"] = False
+    elif invalid == "contacts":
+        report["release_contacts"] = [True, 1]
+    else:
+        report.pop("release_scope")
+    assert profile_play_action._native_execution_gate_failures(report, expected_life_cancel=True)
+
+
 @pytest.mark.parametrize("death_source", ["popup", "numeric"])
 @pytest.mark.parametrize("run_mode", ["challenge", "medley"])
 def test_native_life_failure_keeps_reason_and_exits_failed_live(
@@ -1936,8 +1960,12 @@ def test_native_life_failure_keeps_reason_and_exits_failed_live(
     assert payload["reason"] == "演出失败：生命值归零"
     assert payload["completed"] is False
     assert latest_failure_reason() == "演出失败：生命值归零"
-    assert len(exits) == (0 if run_mode == "medley" else 1)
-    assert writes == []
+    assert exits == []
+    if run_mode == "challenge":
+        assert len(writes) == 1
+        assert "realtime-life-failed-" in writes[0]
+    else:
+        assert writes == []
 
 
 @pytest.mark.parametrize("override", [
@@ -1953,8 +1981,7 @@ def test_native_life_failure_does_not_hide_unsafe_cleanup(tmp_path, monkeypatch,
     monkeypatch.setattr(
         profile_play_action, "exit_failed_live", lambda context: exits.append(context) or True,
     )
-    with pytest.raises(RuntimeError, match="Native 演奏未通过完整性门禁"):
-        _completed_play_harness(
+    root, _, _ = _completed_play_harness(
             monkeypatch, tmp_path,
             debug_recording=False,
             diagnostic_trace=False,
@@ -1963,6 +1990,9 @@ def test_native_life_failure_does_not_hide_unsafe_cleanup(tmp_path, monkeypatch,
             native_report=_life_failed_native_report() | override,
             expected_success=False,
         )
+    payload = json.loads(next((root / "screencap").glob("realtime-result-*.json")).read_text(encoding="utf-8"))
+    assert payload["reason"] == "演出失败：生命值归零"
+    assert payload["native_cleanup_warnings"]
     assert exits == []
 
 
@@ -1971,8 +2001,7 @@ def test_native_life_failure_keeps_engine_cleanup_failure_blocking(tmp_path, mon
         profile_play_action, "exit_failed_live",
         lambda context: pytest.fail("触点清理失败时不能继续导航"),
     )
-    with pytest.raises(RuntimeError, match="Native 演奏未通过完整性门禁"):
-        _completed_play_harness(
+    root, _, _ = _completed_play_harness(
             monkeypatch, tmp_path,
             debug_recording=False,
             diagnostic_trace=False,
@@ -1982,6 +2011,38 @@ def test_native_life_failure_keeps_engine_cleanup_failure_blocking(tmp_path, mon
             native_report=_life_failed_native_report(),
             expected_success=False,
         )
+    payload = json.loads(next((root / "screencap").glob("realtime-result-*.json")).read_text(encoding="utf-8"))
+    assert payload["reason"] == "演出失败：生命值归零"
+    assert payload["cleanup_failed"] is True
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("stopped", [False, True])
+def test_challenge_death_preserves_scene_and_stop_priority(tmp_path, monkeypatch, native, stopped):
+    monkeypatch.setattr(profile_play_action, "exit_failed_live", lambda *args: pytest.fail("挑战死亡不得导航"))
+    monkeypatch.setattr(profile_play_action, "collect_result", lambda *args, **kwargs: pytest.fail("挑战死亡不得结算"))
+    root, writes, _ = _completed_play_harness(
+        monkeypatch, tmp_path, debug_recording=False, diagnostic_trace=False,
+        run_mode="challenge", life_failed=True, engine_stopped=stopped,
+        native_report=_life_failed_native_report() if native else None, expected_success=stopped)
+    reports = list((root / "screencap").glob("realtime-result-*.json"))
+    if stopped:
+        assert reports == [] and writes == []
+    else:
+        assert len(reports) == 1 and len(writes) == 1
+
+
+@pytest.mark.parametrize("failure", ["png", "json"])
+def test_challenge_save_failure_retains_death_reason(tmp_path, monkeypatch, failure):
+    from agent.task_reporting import latest_failure_reason
+    monkeypatch.setattr(profile_play_action, "exit_failed_live", lambda *args: pytest.fail("保存失败不得导航"))
+    if failure == "json":
+        monkeypatch.setattr(profile_play_action, "_write_json_atomic",
+                            lambda *args: (_ for _ in ()).throw(OSError("test report failure")))
+    _completed_play_harness(
+        monkeypatch, tmp_path, debug_recording=False, diagnostic_trace=False,
+        run_mode="challenge", life_failed=True, screenshot_success=failure != "png", expected_success=False)
+    assert latest_failure_reason() == "演出失败：生命值归零"
 
 
 def test_completed_medley_play_defers_pggbm_collection(tmp_path, monkeypatch):

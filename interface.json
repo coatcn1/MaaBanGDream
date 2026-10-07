@@ -1032,6 +1032,7 @@
             },
             "RealtimeLiveFormalSettingsGate": {
               "custom_action_param": {
+                "run_mode": "formal",
                 "confirm_preparation_identity": true,
                 "difficulty": "Easy",
                 "require_profile": true,
@@ -1117,6 +1118,7 @@
             },
             "RealtimeLiveFormalSettingsGate": {
               "custom_action_param": {
+                "run_mode": "formal",
                 "confirm_preparation_identity": true,
                 "difficulty": "Normal",
                 "require_profile": true,
@@ -1202,6 +1204,7 @@
             },
             "RealtimeLiveFormalSettingsGate": {
               "custom_action_param": {
+                "run_mode": "formal",
                 "confirm_preparation_identity": true,
                 "difficulty": "Hard",
                 "require_profile": true,
@@ -1287,6 +1290,7 @@
             },
             "RealtimeLiveFormalSettingsGate": {
               "custom_action_param": {
+                "run_mode": "formal",
                 "confirm_preparation_identity": true,
                 "difficulty": "Expert",
                 "require_profile": true,
@@ -1375,6 +1379,7 @@
             },
             "RealtimeLiveFormalSettingsGate": {
               "custom_action_param": {
+                "run_mode": "formal",
                 "confirm_preparation_identity": true,
                 "difficulty": "Special",
                 "require_profile": true,

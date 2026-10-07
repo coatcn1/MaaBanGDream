@@ -80,6 +80,7 @@ from .native_prearm import (
     controller_adb_endpoint,
     discard_prearmed_backend,
     prepare_native_for_settings_gate,
+    frozen_native_runtime_options,
     resolve_confirmed_chart,
 )
 from .playfield_monitor import PlayfieldDetector, PlayfieldLifecycleMonitor
@@ -223,6 +224,27 @@ def _native_execution_gate_failures(
             failures.append(f"{field}={value}")
     if native_report.get("release_confirmed") is not True:
         failures.append("release_confirmed=false")
+    release_scope = native_report.get("release_scope")
+    no_touch_release = (native_report.get("release_proof") == "no-touch-possible-and-cleanup"
+                        and native_report.get("reset_requested") is False
+                        and native_report.get("reset_sent") is False
+                        and native_report.get("reset_executed") is False)
+    if release_scope != "injected-device-release" and (
+        release_scope == "minitouch-protocol-and-cleanup" or "reset_requested" in native_report
+    ) and not no_touch_release:
+        if release_scope != "minitouch-protocol-and-cleanup":
+            failures.append("release scope missing or invalid")
+        if native_report.get("release_sequence_confirmed") is not True:
+            failures.append("release_sequence_confirmed=false")
+        if native_report.get("reset_sent") is not True:
+            failures.append("release sequence send unconfirmed")
+        if native_report.get("reset_requested") is not True or native_report.get("reset_executed") is not True:
+            failures.append("release sequence request/execution unconfirmed")
+        contacts = native_report.get("release_contacts")
+        if (not isinstance(contacts, list) or not 1 <= len(contacts) <= 10
+            or any(type(contact) is not int for contact in contacts)
+            or contacts != list(range(len(contacts)))):
+            failures.append("release contacts invalid or missing")
     try:
         stop_latency_ms = float(native_report["stop_latency_ms"])
     except (KeyError, TypeError, ValueError):
@@ -610,6 +632,46 @@ class StallSafeCapture:
         self._last_image = None
         self._pending = None
         self.stall_count = 0
+        self._sequence = 0
+        self._last_consumed_sequence = 0
+        self._pending_request_s = None
+        self._image_request_s = None
+        self._reused = True
+        self._lazy_prefetch = False
+        self._prefetch_target_s = None
+
+    def enable_fresh_prefetch(self):
+        self._lazy_prefetch = True
+
+    def _post(self):
+        self._pending_request_s = time.perf_counter()
+        return self._controller.post_screencap()
+
+    def _accept(self, image):
+        if image is not None:
+            self._last_image = image
+            self._sequence += 1
+            self._image_request_s = self._pending_request_s
+
+    def prefetch_fresh(self, target_s):
+        """同一消费者提前请求，不等待截图完成；每个目标节拍最多发一次。"""
+        if not self._lazy_prefetch or self._prefetch_target_s == target_s:
+            return
+        if self._pending is not None:
+            if not self._job_done(self._pending):
+                return
+            try:
+                self._accept(self._pending.get())
+            except Exception:
+                pass
+            self._pending = None
+        self._pending = self._post()
+        self._prefetch_target_s = target_s
+
+    @property
+    def frame_metadata(self):
+        return {"sequence": self._sequence, "request_s": self._image_request_s,
+                "reused": self._reused}
 
     @staticmethod
     def _job_done(job) -> bool:
@@ -619,39 +681,51 @@ class StallSafeCapture:
             return True
 
     def __call__(self):
+        image = self._capture()
+        # 预取可能已接收新图；是否复用必须与消费者上一次实际返回的帧比较。
+        self._reused = self._sequence == self._last_consumed_sequence
+        self._last_consumed_sequence = self._sequence
+        return image
+
+    def _capture(self):
         if self._pending is not None and self._job_done(self._pending):
             try:
                 image = self._pending.get()
                 if image is not None:
-                    self._last_image = image
+                    self._accept(image)
             except Exception:
                 pass
             self._pending = None
-        if self._pending is None:
+        if self._pending is None and (not self._lazy_prefetch or self._last_image is None):
             # Start the next capture immediately so it overlaps the engine's
             # detection/planning work (true double buffering).
-            self._pending = self._controller.post_screencap()
+            self._pending = self._post()
+        if self._pending is None:
+            return self._last_image
         if self._last_image is None and not self._job_done(self._pending):
             # The very first frame must exist before the detector can run;
             # blocking once here is unavoidable and only happens at startup.
             self._pending.wait()
-            self._last_image = self._pending.get()
-            self._pending = self._controller.post_screencap()
+            self._accept(self._pending.get())
+            self._pending = None if self._lazy_prefetch else self._post()
             return self._last_image
         if self._job_done(self._pending):
             try:
                 image = self._pending.get()
             except Exception:
                 image = None
+            new_frame = image is not None
             if image is None:
                 if self._last_image is None:
                     # First frame must exist before the detector can run.
-                    image = self._controller.post_screencap().wait().get()
+                    image = self._post().wait().get()
+                    new_frame = image is not None
                 else:
                     image = self._last_image
-            self._last_image = image
+            if new_frame:
+                self._accept(image)
             # Pre-post the next capture for the following frame.
-            self._pending = self._controller.post_screencap()
+            self._pending = None if self._lazy_prefetch else self._post()
             return image
         # The in-flight capture has not finished: reuse the last completed
         # frame so the engine clock and chart rescues keep advancing.
@@ -673,6 +747,41 @@ def _run_mode(params: dict, *, is_rehearsal: bool) -> str:
     if params.get("ignore_note_speed"):
         return "continuous"
     return "rehearsal" if is_rehearsal else "formal"
+
+
+def _save_challenge_life_failure(capture, stats, live_run, timing_offset_ms):
+    reason = "演出失败：生命值归零"
+    record_failure_reason(reason)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S") + f"-{live_run.run_id[:8]}"
+    output = PROJECT_ROOT / "screencap"
+    payload = _result_report_payload(
+        None, stats, timing_offset_ms=timing_offset_ms,
+        suggested_timing_offset_ms=None, run_context=live_run,
+        result_status="life_failed", reason=reason)
+    if stats.native_report:
+        failures = _native_execution_gate_failures(stats.native_report, expected_life_cancel=True)
+        payload["native_cleanup_warnings"] = failures
+        if failures:
+            print(f"RealtimeProfilePlay life_failed_native_warning={failures}", flush=True)
+    # 引擎已停止并清理触点；仅保存现有缓存，保存失败不能替换真实死亡原因。
+    try:
+        image = capture.last_image
+        if image is not None:
+            path = output / f"realtime-life-failed-{stamp}.png"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not imwrite_unicode(path, image):
+                raise OSError("生命归零缓存截图保存失败")
+            payload["failure_screenshot"] = _relative_artifact_path(path)
+    except Exception as exc:
+        print(f"RealtimeProfilePlay life_failed_save_warning={type(exc).__name__}: {exc}", flush=True)
+    try:
+        output.mkdir(parents=True, exist_ok=True)
+        _write_json_atomic(output / f"realtime-result-{stamp}.json", payload)
+    except Exception as exc:
+        print(f"RealtimeProfilePlay life_failed_report_warning={type(exc).__name__}: {exc}", flush=True)
+    if stats.cleanup_failed:
+        print(f"RealtimeProfilePlay life_failed_cleanup_warning={stats.cleanup_errors}", flush=True)
+    print(f"[任务][实时演奏][演奏][ERROR] {reason}", flush=True)
 
 
 _RECORDING_KIND_BY_RUN_MODE = {
@@ -1965,6 +2074,9 @@ class RealtimeProfilePlay(CustomAction):
             runtime_options = RealtimeProfileStore(
                 PROJECT_ROOT / "profiles"
             ).runtime_options()
+            snapshot_run = current_live_run()
+            if snapshot_run is not None and snapshot_run.prepared_for_play:
+                runtime_options = frozen_native_runtime_options(snapshot_run, runtime_options)
             cooperative_member_loading_guard_enabled = params.get(
                 "cooperative_member_loading_guard_enabled",
                 runtime_options.get("cooperative_member_loading_guard_enabled", True),
@@ -2171,6 +2283,8 @@ class RealtimeProfilePlay(CustomAction):
                 debug_recording=debug_recording,
                 recording_path=None,
             )
+            runtime_options = frozen_native_runtime_options(live_run, runtime_options)
+            live_run = current_live_run()
             if debug_recording:
                 recorder = RealtimeDebugRecorder(
                     PROJECT_ROOT / "debug" / "recordings",
@@ -2789,6 +2903,13 @@ class RealtimeProfilePlay(CustomAction):
                 ),
                 startup_timeout_seconds=startup_timeout_seconds,
             )
+            if run_mode == "challenge":
+                if stats.stopped or context.tasker.stopping:
+                    return True
+                if stats.life_failed or stats.aborted_for_life:
+                    _save_challenge_life_failure(
+                        stall_safe_capture, stats, live_run, timing_offset_ms)
+                    return False
             if (
                 stats.completed and not stats.cleanup_failed
                 and not stats.aborted_for_life and not stats.life_failed
@@ -2862,6 +2983,14 @@ class RealtimeProfilePlay(CustomAction):
                     else:
                         raise native_error
         except Exception as exc:
+            error_stats = getattr(exc, "realtime_stats", None)
+            if run_mode == "challenge":
+                if context.tasker.stopping or (error_stats is not None and error_stats.stopped):
+                    return True
+                if error_stats is not None and (error_stats.life_failed or error_stats.aborted_for_life):
+                    _save_challenge_life_failure(
+                        stall_safe_capture, error_stats, live_run, timing_offset_ms)
+                    return False
             if (
                 recorder is not None
                 and "stall_safe_capture" in locals()

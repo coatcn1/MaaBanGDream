@@ -346,6 +346,7 @@ py::list execution_receipts_to_list(const TouchScriptCompiler& compiler) {
         item["planned_engine_s"] = receipt.planned_engine_s;
         item["action_token"] = receipt.action_token;
         item["command"] = touch_command_name(receipt.command);
+        item["action_kind"] = action_kind_name(receipt.action_kind);
         result.append(std::move(item));
     }
     return result;
@@ -554,6 +555,8 @@ PYBIND11_MODULE(maabangdream_realtime, module) {
         .def("add_residual_ms", &TouchScriptCompiler::add_residual_ms,
             py::arg("ms"))
         .def("reset_contacts", &TouchScriptCompiler::reset_contacts)
+        .def("phase_boundary_safe", &TouchScriptCompiler::phase_boundary_safe)
+        .def("contact_available_s", &TouchScriptCompiler::contact_available_s)
         .def("execution_receipts", &execution_receipts_to_list)
         .def("last_execution_receipts", &execution_receipts_to_list)
         .def("compile",
@@ -659,6 +662,10 @@ PYBIND11_MODULE(maabangdream_realtime, module) {
         .def("start", &PlaybackSession::start,
             py::arg("first_action_engine_s"))
         .def("publish", &PlaybackSession::publish)
+        .def("apply_future_phase", &PlaybackSession::apply_future_phase,
+            py::arg("delta_ms"), py::arg("contact_available_s"))
+        .def_property_readonly("future_phase_offset_ms",
+            &PlaybackSession::future_phase_offset_ms)
         .def("poll",
             [](PlaybackSession& self) {
                 return std::string(playback_state_name(self.poll()));

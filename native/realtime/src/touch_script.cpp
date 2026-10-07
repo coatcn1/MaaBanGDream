@@ -161,6 +161,7 @@ void expand_action(
     std::vector<LowEvent>& events,
     std::size_t& order) {
     const ScheduledAction& action = timed.action;
+    const std::size_t first_event = events.size();
     const int x = rounded_x(action.target_x, action.lane, config);
     const int y = static_cast<int>(std::lround(config.judgement_y));
     switch (action.kind) {
@@ -203,6 +204,9 @@ void expand_action(
             append_event(events, LowKind::Up, contact, 0, 0, timed.due,
                 order, timed.action_token, timed.due, true);
             break;
+    }
+    for (std::size_t index = first_event; index < events.size(); ++index) {
+        events[index].action_kind = action.kind;
     }
 }
 
@@ -607,6 +611,7 @@ std::vector<std::string> TouchScriptCompiler::compile(
                 event.planned_engine_s,
                 event.action_token,
                 command,
+                event.action_kind,
             });
         }
     };

@@ -63,9 +63,13 @@ class TimingFeedbackDetector:
             self._armed = True
             self.reports += 1
             return kind
-        if kind is None and not any(self._recent):
+        if kind is None and len(self._recent) == 3 and not any(self._recent):
             self._armed = False
         return None
+
+    def invalidate_history(self):
+        # 丢帧不能把相隔很久的孤立色块拼成持续信号；保留去重锁，避免旧条重算。
+        self._recent.clear()
 
 
 class AdaptiveTimingController:

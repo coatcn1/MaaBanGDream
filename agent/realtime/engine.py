@@ -14,6 +14,7 @@ from .life_monitor import LifeDetector, LifeGuard, LifeStatus, PlayfieldCompleti
 from .live_failed_detector import LiveFailedPopupDetector
 from .playfield_monitor import PlayfieldLifecycleMonitor
 from .timing_feedback import AdaptiveTimingController, TimingFeedbackDetector
+from .native_life_feedback import NativeLifeFeedback
 from .touch_planner import ActionKind, RealtimePlanner
 
 
@@ -306,6 +307,17 @@ class RealtimeEngine:
         scheduled_actions.clear()
         native_exclusive = self.native_backend_takeover()
         native_started = False
+        native_feedback = (NativeLifeFeedback(self.native_backend)
+                           if native_exclusive and getattr(
+                               self.native_backend, "life_feedback_enabled", False) else None)
+        native_monitor_due = started_at
+        frame_metadata: dict[str, object] = {}
+
+        def recorder_frame_kwargs():
+            if native_exclusive and getattr(self.debug_recorder, "supports_frame_metadata", False):
+                return {"frame_metadata": frame_metadata}
+            return {}
+
         life_monitor_diagnostics = (
             _LifeMonitorDiagnostics()
             if (
@@ -368,6 +380,7 @@ class RealtimeEngine:
                 timing_state,
                 life_value,
                 touch_state,
+                **recorder_frame_kwargs(),
             )
 
         def record_startup_timeout_frame(
@@ -402,6 +415,7 @@ class RealtimeEngine:
                 {},
                 None,
                 touch_state,
+                **recorder_frame_kwargs(),
             )
 
         def snapshot_stats(terminal_reason: str) -> EngineStats:
@@ -571,6 +585,10 @@ class RealtimeEngine:
                         ):
                             last_transient_action_at = now
                 if now < next_frame:
+                    if native_feedback is not None and native_started and next_frame - now <= .060:
+                        prefetch = getattr(capture, "prefetch_fresh", None)
+                        if callable(prefetch):
+                            prefetch(next_frame)
                     # Pace BEFORE capturing. Capturing first and then
                     # discarding the frame whenever the loop is early wastes
                     # a full screenshot; once per-frame work crosses the
@@ -586,7 +604,8 @@ class RealtimeEngine:
                     time.sleep(min(0.002, wait_target - now))
                     continue
                 capture_interval = (
-                    0.2 if native_exclusive and native_started else interval
+                    (1 / 60 if native_feedback is not None and native_feedback.active(now) else .2)
+                    if native_exclusive and native_started else interval
                 )
                 next_frame += capture_interval
                 if now - next_frame > capture_interval:
@@ -594,10 +613,19 @@ class RealtimeEngine:
                 stage_started = self.clock()
                 image = capture()
                 now = self.clock()
+                if native_exclusive:
+                    # 同一次 capture 返回的图和元数据绑定；请求时刻不能冒充游戏渲染时刻。
+                    frame_metadata = dict(getattr(capture, "frame_metadata", {}) or {})
+                    frame_metadata["observed_s"] = now
                 record_stage_sample("capture", (now - stage_started) * 1000)
                 if stopping():
                     was_stopped = True
                     break
+                fresh_feedback_frame = (native_feedback is not None and native_feedback.fresh(
+                    frame_metadata, now))
+                terminal_sample = native_feedback is None or not native_started or now >= native_monitor_due
+                if terminal_sample:
+                    native_monitor_due = now + .2
                 if native_exclusive and not native_started:
                     observe_start = getattr(
                         self.native_backend, "observe_start_frame", None
@@ -625,10 +653,15 @@ class RealtimeEngine:
                         raise RuntimeError("Native 后端缺少 start() 会话接口")
                     start_native(float(first_action_anchor))
                     native_started = True
+                    if native_feedback is not None:
+                        enable_prefetch = getattr(capture, "enable_fresh_prefetch", None)
+                        if callable(enable_prefetch):
+                            enable_prefetch()
                     if self.playfield_monitor is not None:
                         self.playfield_monitor.mark_active(now)
                     # 首拍之后截图只服务生命和终态识别，固定降到约 5Hz。
                     next_frame = now + 0.2
+                    native_monitor_due = now
                 # 死亡弹窗监控不依赖数值生命条；演奏场成立后以约 5Hz 检查
                 # “演出失败”弹窗，必须先于演奏场消失判定，否则弹窗遮挡会
                 # 被误判成“进入结算”。
@@ -638,6 +671,7 @@ class RealtimeEngine:
                 )
                 if (
                     self.live_failed_detector is not None
+                    and terminal_sample
                     and playfield_active
                     and self.live_failed_detector.observe(image, now)
                 ):
@@ -653,10 +687,13 @@ class RealtimeEngine:
                     break
                 if (
                     self.playfield_monitor is not None
+                    and terminal_sample
                     and (not native_exclusive or native_started)
                 ):
                     stage_started = self.clock()
                     playfield_state = self.playfield_monitor.observe(image, now)
+                    if native_feedback is not None and playfield_state != "active":
+                        native_feedback.close(now, "invalid-scene")
                     record_stage_sample(
                         "playfield_monitor",
                         (self.clock() - stage_started) * 1000,
@@ -700,10 +737,14 @@ class RealtimeEngine:
                 life_diagnostic_events: list[dict[str, object]] = []
                 stage_started = self.clock()
                 try:
-                    if self.life_detector is not None and self.life_guard is not None:
+                    if terminal_sample and self.life_detector is not None and self.life_guard is not None:
                         reading = self.life_detector.detect(image)
                         status = self.life_guard.update(reading)
                         life_status = status.value
+                        if fresh_feedback_frame and native_started:
+                            native_feedback.observe_life(reading.value, now, visible=reading.visible)
+                            if native_feedback.active(now):
+                                next_frame = min(next_frame, now + 1 / 60)
                         if native_exclusive and native_started:
                             record_native_life = getattr(
                                 self.debug_recorder, "record_native_life", None
@@ -713,6 +754,7 @@ class RealtimeEngine:
                                     image, now, reading.value,
                                     visible=reading.visible,
                                     alive_confirmed=self.life_guard.alive_confirmed,
+                                    **recorder_frame_kwargs(),
                                 )
                         if life_monitor_diagnostics is not None:
                             candidate = life_monitor_diagnostics.observe(
@@ -793,6 +835,12 @@ class RealtimeEngine:
                         "life", (self.clock() - stage_started) * 1000
                     )
                 if native_exclusive and native_started:
+                    if fresh_feedback_frame:
+                        native_feedback.observe_frame(image, now)
+                        record_feedback = getattr(self.debug_recorder, "record_native_feedback", None)
+                        if native_feedback.active(now) and callable(record_feedback):
+                            record_feedback(image, now, frame_metadata,
+                                            native_feedback.burst_until - 2.0)
                     poll_native = getattr(self.native_backend, "poll", None)
                     if poll_native is None:
                         raise RuntimeError("Native 后端缺少 poll() 会话接口")
@@ -1066,6 +1114,7 @@ class RealtimeEngine:
                     self.debug_recorder.record(
                         image, now, notes, recorded_actions, life_status,
                         diagnostics, timing_state, life_value, touch_state,
+                        **recorder_frame_kwargs(),
                     )
                 record_stage_sample(
                     "recorder_enqueue", (self.clock() - stage_started) * 1000
@@ -1157,6 +1206,10 @@ class RealtimeEngine:
                 f"{type(exc).__name__}: {exc}"
             )
         finally:
+            if native_feedback is not None:
+                native_feedback.close(self.clock(), "terminal")
+                self.native_backend._life_feedback_report = list(native_feedback.events)
+                self.native_backend._life_feedback_summary = dict(native_feedback.summary)
             if not native_exclusive:
                 try:
                     cleanup = self.planner.reset(self.clock())
