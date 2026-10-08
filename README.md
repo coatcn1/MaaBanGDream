@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.4.6-ff6f9f" alt="Version"></a>
+  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.4.7-ff6f9f" alt="Version"></a>
   <img src="https://img.shields.io/badge/MaaFramework-5.10.2-4c8bf5" alt="MaaFramework">
   <img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?logo=windows11&logoColor=white" alt="Windows">
@@ -37,6 +37,8 @@
 - [x] 📹 **手动流程录像** — 可在 MFA 中录制任意活动或界面操作，并生成可逐帧定位的 MKV 与首末帧
 
 ## 🚀 快速开始
+
+v1.4.7 加速通用截图刷新并加强最终封面身份确认，将 Native 回执与诊断写盘分离，完整确认全部合法触点的释放序列；修正新截图误标复用及单人正式模式分路，挑战生命归零后保存现场并明确失败。“Native 掉血判定纠偏（实验）”和“Native 等待抖动过滤（实验）”均默认关闭；纠偏仅调整未来安全切片，不改 Profile。最新同曲 Expert / Native 挑战完成 20/20、11 局 AP，合计仍有 24 GREAT、1 MISS；实际掉血纠偏、长条暂缓、低吞吐降级及其他模式仍待专项验收。
 
 v1.4.6 将协力成员加载页保护改为默认开启并提供持久化开关，新增 Bestdori 定时增量更新，以及缓存清理的实际删除量和占用反馈。定时更新默认 24 小时，可关闭或设置 1–720 小时，仅在全部实例没有执行或排队任务时联网；演出始终使用本地谱面。
 
@@ -195,7 +197,7 @@ Native 回执与诊断写盘分离，慢盘或诊断异常不阻塞派发及释�
 & '..\.tools\Miniconda3\envs\maabangdream\python.exe' `
   -m pip install -r .\requirements-release.txt
 
-.\scripts\build-windows-release.ps1 -Version 1.4.6
+.\scripts\build-windows-release.ps1 -Version 1.4.7
 ```
 
 发布包必须保持：
