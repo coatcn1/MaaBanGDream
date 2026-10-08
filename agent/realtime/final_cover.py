@@ -24,6 +24,8 @@ from .song_title_ocr import (
     FINAL_COVER_TITLE_ROI, recognize_song_title, title_similarity,
     is_final_score_layout, is_final_score_text,
     recognize_final_cover_title,
+    TitleReading, final_cover_wide_title_trial_enabled,
+    is_final_title_completion,
 )
 from .vision_io import imread_unicode
 
@@ -244,6 +246,7 @@ class FinalCoverResolver:
         if selection is None and repository is None:
             raise ValueError("缺少最终封面谱面解析器")
         self.reject_member_loading = bool(reject_member_loading)
+        self.wide_title_trial = final_cover_wide_title_trial_enabled()
         if self.reject_member_loading:
             member_loading_icon()
             print("FinalCover member_loading_guard=enabled", flush=True)
@@ -303,7 +306,7 @@ class FinalCoverResolver:
     def independent_final_title_enabled(self) -> bool:
         return bool(getattr(self.repository, "regional_level_drift_enabled", False))
 
-    def refresh_observed_title(self, text: str, confidence: float) -> bool:
+    def refresh_observed_title(self, text: str, confidence: float, *, identity_confirmed: bool = False) -> bool:
         """用最终封面页自身的标题 OCR 刷新准备页标题。
 
         协力房间准备页的标题行字体小且常被读乱；最终歌曲信息页封面下方
@@ -323,6 +326,7 @@ class FinalCoverResolver:
             )
             or (
                 (not self.independent_final_title_enabled or self._final_title_confirmed)
+                and not identity_confirmed
                 and float(confidence) <= self._observed_title_confidence
             )
         ):
@@ -345,6 +349,37 @@ class FinalCoverResolver:
         self._observed_title_confidence = float(confidence)
         self._final_title_confirmed = True
         return True
+
+    def _title_identity_status(self, song_id: str, reading: TitleReading) -> str:
+        """宽框只提供读数；身份仍经过原谱面、等级、共享封面与标题门禁。"""
+        assert self.repository is not None
+        identify_title = getattr(self.repository, "identify_by_cover_title", None)
+        catalog_identity = (
+            identify_title(song_id, reading.text).identity if callable(identify_title) else None
+        )
+        title_only = self.repository.resolve(
+            UNKNOWN_SONG_ID, self.difficulty, title=reading.text,
+            level=(None if self.independent_final_title_enabled else self.observed_level),
+        )
+        if title_only.selection is not None and not any(
+            same_song(song_id, fingerprint, max_distance=LOOSE_SAME_SONG_DISTANCE)
+            for fingerprint in title_only.selection.fingerprints
+        ):
+            return "conflict"
+        resolved = self.repository.resolve(
+            song_id, self.difficulty, title=reading.text, level=self.observed_level,
+        )
+        if resolved.selection is None:
+            return "conflict" if catalog_identity is not None else "missing"
+        if catalog_identity is not None and catalog_identity.bestdori_song_id != resolved.selection.bestdori_song_id:
+            # 同封面不同版本也是真实身份冲突，不能用宽框补成另一个 Special/FULL 版本。
+            return "conflict"
+        gate = FinalCoverGate(
+            resolved.selection, difficulty=self.difficulty, observed_level=self.observed_level,
+            observed_title=reading.text, allow_missing_level=self.allow_missing_level,
+            require_matching_title=True,
+        )
+        return "confirmed" if gate.evidence_reason() is None else "missing"
 
     def evidence_reason(self) -> str | None:
         if not self.difficulty:
@@ -418,12 +453,23 @@ class FinalCoverResolver:
         if (
             score_identity is None and refresh_title and self.repository is not None
             and not self.independent_final_title_enabled
-            and self.observed_title_confidence < 0.9
+            and (self.observed_title_confidence < 0.9 or self.wide_title_trial)
         ):
             # 标题 OCR 也必须在成员加载保护之后，不能把加载页文字当最终标题。
-            reading = (title_reader or recognize_song_title)(image, roi=FINAL_COVER_TITLE_ROI)
+            if self.wide_title_trial:
+                title_identity = identify_final_song(image)
+                reading = recognize_final_cover_title(
+                    image, reader=title_reader or recognize_song_title,
+                    diagnostics=self.last_title_diagnostic, wide_title_trial=True,
+                    identity_validator=lambda item: self._title_identity_status(title_identity.song_id, item),
+                )
+            else:
+                reading = (title_reader or recognize_song_title)(image, roi=FINAL_COVER_TITLE_ROI)
             if reading is not None:
-                self.refresh_observed_title(reading.text, reading.confidence)
+                self.refresh_observed_title(
+                    reading.text, reading.confidence,
+                    identity_confirmed=self.last_title_diagnostic.get("source") == "wide-roi",
+                )
         if self.gate is not None:
             confirmation = self.gate.observe(image)
             self.last_reason = self.gate.last_reason
@@ -441,12 +487,20 @@ class FinalCoverResolver:
         if score_identity is None and not self._observe_cover_candidate(identity.song_id):
             self.last_reason = "final cover jacket is not visible"
             return None
-        if self.independent_final_title_enabled and not self._final_title_confirmed:
+        title_needs_reading = not self._final_title_confirmed
+        if self.wide_title_trial and self._final_title_confirmed and self.repository is not None:
+            # 未确认身份的高置信截断缓存不能阻止后续帧取得较低置信的完整标题。
+            title_needs_reading = self._title_identity_status(
+                identity.song_id, TitleReading(self.observed_title or "", self.observed_title_confidence),
+            ) == "missing"
+        if self.independent_final_title_enabled and title_needs_reading and score_identity is None:
             # 第一张有效封面就实读标题，并绑定本次指纹候选；连续封面门禁
             # 仍需两帧，不能等到第二帧才读而错过短暂展示的标题。
             self.last_title_diagnostic = {"first_cover_frame": self._candidate_frames == 1}
             reading = recognize_final_cover_title(
                 image, reader=recognize_song_title, diagnostics=self.last_title_diagnostic,
+                wide_title_trial=self.wide_title_trial,
+                identity_validator=lambda reading: self._title_identity_status(identity.song_id, reading),
             )
             if str(self.last_title_diagnostic.get("status", "")).startswith("excluded-score"):
                 self.last_reason = "goal score page is not a song title"
@@ -456,7 +510,16 @@ class FinalCoverResolver:
                 self.last_reason = "goal score page is not a song title"
                 return None
             if reading is not None:
-                refreshed = self.refresh_observed_title(reading.text, reading.confidence)
+                if self.wide_title_trial and self._final_title_confirmed and not is_final_title_completion(
+                    TitleReading(self.observed_title or "", self.observed_title_confidence), reading,
+                ):
+                    # 换帧也不能把上一帧真实高置信冲突替换成无关宽框标题。
+                    reading = None
+            if reading is not None:
+                refreshed = self.refresh_observed_title(
+                    reading.text, reading.confidence,
+                    identity_confirmed=self.last_title_diagnostic.get("source") == "wide-roi",
+                )
                 if not refreshed and reading.confidence >= 0.9:
                     # 稳定封面上的高置信度实读即使不在曲库也保留，交给身份
                     # 交叉检查拒绝冲突，不能静默丢弃后继续使用准备页旧标题。

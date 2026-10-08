@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
+import pytest
 
 from agent.realtime.song_title_ocr import (
     CONFIG_PATH,
@@ -14,6 +15,7 @@ from agent.realtime.song_title_ocr import (
     final_cover_ink_roi,
     recognize_final_cover_title,
     FINAL_COVER_TITLE_ROI,
+    FINAL_COVER_WIDE_TITLE_ROI,
     TitleReading,
 )
 
@@ -125,3 +127,38 @@ def test_final_score_layout_is_excluded_before_ocr():
                                        diagnostics=diagnostic) is None
     assert not calls
     assert diagnostic["status"] == "excluded-score-layout"
+
+
+@pytest.mark.parametrize("narrow,wide,status,source", [
+    (TitleReading("Expected", .99), TitleReading("Long Song With Expected Ending", .8), "missing", "wide-roi"),
+    (TitleReading("Unknown Song", .99), TitleReading("Long Song With Expected Ending", .8), "missing", "fixed-roi"),
+    (TitleReading("Expected", .99), TitleReading("Long Song With Expected Ending", .69), "missing", "fixed-roi"),
+    (TitleReading("Expected", .99), TitleReading("Long Song With Expected Ending", .8), "conflict", "fixed-roi"),
+    (TitleReading("R", .99), TitleReading("Long Song With Expected Ending", .8), "missing", "fixed-roi"),
+    (TitleReading("Expected", .83), TitleReading("Long Song With Expected Ending", .8), "confirmed", "fixed-roi"),
+])
+def test_wide_title_requires_identity_and_safe_high_confidence_completion(narrow, wide, status, source):
+    image = np.full((720, 1280, 3), 220, dtype=np.uint8)
+    rois, diagnostic = [], {}
+    def reader(_image, *, roi):
+        rois.append(roi)
+        return narrow if roi == FINAL_COVER_TITLE_ROI else wide
+    result = recognize_final_cover_title(
+        image, reader=reader, diagnostics=diagnostic, wide_title_trial=True,
+        identity_validator=lambda reading: status if reading is narrow else "confirmed",
+    )
+    assert result is (wide if source == "wide-roi" else narrow)
+    assert diagnostic["source"] == source
+    assert rois == ([FINAL_COVER_TITLE_ROI] if status != "missing" else
+                    [FINAL_COVER_TITLE_ROI, FINAL_COVER_WIDE_TITLE_ROI])
+
+
+def test_wide_title_is_default_off_even_when_identity_is_missing():
+    rois = []
+    reading = TitleReading("Expected", .99)
+    assert recognize_final_cover_title(
+        np.full((720, 1280, 3), 220, dtype=np.uint8),
+        reader=lambda _image, *, roi: rois.append(roi) or reading,
+        identity_validator=lambda _reading: "missing",
+    ) is reading
+    assert rois == [FINAL_COVER_TITLE_ROI]

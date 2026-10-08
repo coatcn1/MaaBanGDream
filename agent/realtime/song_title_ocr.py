@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import os
 import unicodedata
 from dataclasses import dataclass
 from difflib import SequenceMatcher
@@ -26,6 +27,12 @@ SINGLE_LIVE_TITLE_ROI = (120, 260, 440, 90)
 # 开演前只展示两三秒，且字体比协力房间准备页清晰，适合作为谱面身份
 # 解析的补充证据（Little Busters! 实测置信度 0.93+）。
 FINAL_COVER_TITLE_ROI = (480, 485, 318, 70)
+FINAL_COVER_WIDE_TITLE_ROI = (300, 470, 680, 100)
+FINAL_COVER_WIDE_TITLE_TRIAL_ENV = "MAABANGDREAM_FINAL_COVER_WIDE_TITLE_TRIAL"
+
+
+def final_cover_wide_title_trial_enabled() -> bool:
+    return os.environ.get(FINAL_COVER_WIDE_TITLE_TRIAL_ENV) == "1"
 
 
 def is_final_score_layout(image) -> bool:
@@ -57,6 +64,14 @@ class TitleReading:
     confidence: float
 
 
+def is_final_title_completion(previous: TitleReading | None, reading: TitleReading) -> bool:
+    """高置信未知原文只能被包含至少四字的连续补全替换。"""
+    if previous is None or previous.confidence < 0.9:
+        return True
+    original = normalize_song_title(previous.text)
+    return len(original) >= 4 and original in normalize_song_title(reading.text)
+
+
 def final_cover_ink_roi(image) -> tuple[int, int, int, int] | None:
     """仅裁切最终标题条内完整的深色墨迹，触边长标题保持既有固定 ROI。"""
     x, y, width, height = FINAL_COVER_TITLE_ROI
@@ -75,10 +90,13 @@ def final_cover_ink_roi(image) -> tuple[int, int, int, int] | None:
     return x + left, y + top, right - left, bottom - top
 
 
-def recognize_final_cover_title(image, *, reader=None, diagnostics=None) -> TitleReading | None:
-    """最终页低置信度短标题最多追加一次同模型识读，保持既有确认阈值。"""
+def recognize_final_cover_title(
+    image, *, reader=None, diagnostics=None, identity_validator=None, wide_title_trial=False,
+) -> TitleReading | None:
+    """窄框优先；候选宽框只补身份未确认的标题，不能覆盖真实冲突。"""
     detail = diagnostics if diagnostics is not None else {}
-    detail.update({"source": "fixed-roi", "source_roi": FINAL_COVER_TITLE_ROI, "attempts": []})
+    detail.update({"source": "fixed-roi", "source_roi": FINAL_COVER_TITLE_ROI,
+                   "wide_title_trial": bool(wide_title_trial), "attempts": []})
     if is_final_score_layout(image):
         detail["status"] = "excluded-score-layout"
         return None
@@ -102,6 +120,25 @@ def recognize_final_cover_title(image, *, reader=None, diagnostics=None) -> Titl
                 reading = enhanced
                 detail["source"] = "ink-roi"
                 detail["source_roi"] = ink_roi
+    if wide_title_trial and identity_validator is not None:
+        identity_status = identity_validator(reading) if reading is not None and reading.confidence >= 0.7 else "missing"
+        detail["narrow_identity_status"] = identity_status
+        if identity_status == "missing":
+            wide = recognize(image, roi=FINAL_COVER_WIDE_TITLE_ROI)
+            detail["attempts"].append({"roi": FINAL_COVER_WIDE_TITLE_ROI,
+                                       "text": wide.text if wide else None,
+                                       "confidence": wide.confidence if wide else None})
+            if wide is not None and not is_final_score_text(wide.text) and wide.confidence >= 0.7:
+                wide_status = identity_validator(wide)
+                detail["wide_identity_status"] = wide_status
+                # 高置信未知读数只有连续原文补全才可替换；不同标题继续交给冲突门禁。
+                completes_narrow = is_final_title_completion(reading, wide)
+                if wide_status == "confirmed" and completes_narrow:
+                    reading = wide
+                    detail["source"] = "wide-roi"
+                    detail["source_roi"] = FINAL_COVER_WIDE_TITLE_ROI
+                elif not completes_narrow:
+                    detail["wide_rejection"] = "high-confidence-title-is-not-a-completion"
     detail.update({"status": "read" if reading else "missing", "text": reading.text if reading else None,
                    "confidence": reading.confidence if reading else None})
     return reading

@@ -36,6 +36,7 @@ from .profile_store import RealtimeProfileStore
 from .result_navigation import RESULT_ANIMATION_SKIP_POINT, STORY_NODES
 from .song_identity import (
     UNKNOWN_SONG_ID,
+    LOOSE_SAME_SONG_DISTANCE,
     detect_full_badge,
     identify_final_song,
     same_song,
@@ -43,6 +44,8 @@ from .song_identity import (
 from .song_title_ocr import (
     FINAL_COVER_TITLE_ROI,
     recognize_song_title,
+    recognize_final_cover_title, final_cover_wide_title_trial_enabled,
+    TitleReading, is_final_title_completion,
 )
 from .vision_io import imwrite_unicode
 
@@ -313,6 +316,7 @@ class ContinuousFinalCoverRecognizer:
         self.stable_frames = int(stable_frames)
         self._identify = identify
         self._title_reader = title_reader
+        self.wide_title_trial = final_cover_wide_title_trial_enabled()
         self.frames = 0
         self.last_reason = "尚未观察到开场歌曲封面"
         self.reset()
@@ -324,6 +328,7 @@ class ContinuousFinalCoverRecognizer:
         self._title = None
         self._title_confidence = 0.0
         self._full_badge_seen = False
+        self.last_title_diagnostic = {}
 
     def diagnostic_state(self) -> dict[str, object]:
         """返回当前门禁状态，供有界诊断记录使用。"""
@@ -335,7 +340,20 @@ class ContinuousFinalCoverRecognizer:
             "title": self._title,
             "title_confidence": self._title_confidence,
             "full_badge_seen": self._full_badge_seen,
+            "title_diagnostic": self.last_title_diagnostic,
         }
+
+    def _title_identity_status(self, song_id: str, reading) -> str:
+        identity = self.repository.identify_by_cover_title(song_id, reading.text)
+        if identity.identity is not None:
+            return "confirmed"
+        title_only = self.repository.resolve(UNKNOWN_SONG_ID, self.difficulty, title=reading.text)
+        if title_only.selection is not None and not any(
+            same_song(song_id, fingerprint, max_distance=LOOSE_SAME_SONG_DISTANCE)
+            for fingerprint in title_only.selection.fingerprints
+        ):
+            return "conflict"
+        return "missing"
 
     def observe(self, image: object) -> ContinuousSongEvidence | None:
         self.frames += 1
@@ -359,17 +377,37 @@ class ContinuousFinalCoverRecognizer:
             self._full_badge_seen or detect_full_badge(image)
         )
 
-        title = self._title_reader(image, roi=FINAL_COVER_TITLE_ROI)
+        self.last_title_diagnostic = {}
+        cached_status = (
+            self._title_identity_status(song_id, TitleReading(self._title, self._title_confidence))
+            if self.wide_title_trial and self._title is not None else None
+        )
+        if self.wide_title_trial:
+            title = None if cached_status == "conflict" else recognize_final_cover_title(
+                image, reader=self._title_reader, diagnostics=self.last_title_diagnostic,
+                wide_title_trial=True,
+                identity_validator=lambda reading: self._title_identity_status(song_id, reading),
+            )
+        else:
+            title = self._title_reader(image, roi=FINAL_COVER_TITLE_ROI)
+        cached_identity_missing = cached_status == "missing"
         if (
             title is not None
             and str(getattr(title, "text", "")).strip()
-            and float(getattr(title, "confidence", 0.0))
-            > self._title_confidence
+            and (not self.wide_title_trial or self._title is None or not cached_identity_missing
+                 or is_final_title_completion(TitleReading(self._title, self._title_confidence), title))
+            and (
+                float(getattr(title, "confidence", 0.0)) > self._title_confidence
+                or (cached_identity_missing and self.last_title_diagnostic.get("source") == "wide-roi")
+            )
         ):
             self._title = str(title.text).strip()
             self._title_confidence = float(title.confidence)
         if self._title is None:
             self.last_reason = "开场歌曲标题尚未识别"
+            return None
+        if self.wide_title_trial and self._title_confidence < 0.7:
+            self.last_reason = "开场歌曲标题置信度不足"
             return None
         if self._candidate_frames < self.stable_frames:
             self.last_reason = "等待开场歌曲封面稳定"
