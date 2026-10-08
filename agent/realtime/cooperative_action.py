@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 import traceback
@@ -131,6 +132,9 @@ COOPERATIVE_SONG_UNSPECIFIED_POINT = (780, 647)
 COOPERATIVE_SONG_CONFIRM_POINT = (1068, 647)
 COOPERATIVE_SONG_CHOICES = ("unspecified", "random", "current")
 COOPERATIVE_SONG_CHOICE_PAUSE_SECONDS = 10.0
+ROOM_RECOVERY_TRIAL_ENV = "MAABANGDREAM_COOPERATIVE_ROOM_RECOVERY_TRIAL"
+ROOM_CONFIRM_POINT = (1060, 650)
+ROOM_PREPARATION_RETRY_LIMIT = 2
 
 
 def _frame_is_black_transition(image: np.ndarray) -> bool:
@@ -244,6 +248,10 @@ class JumpOutUnavailable(RuntimeError):
     """协力局已安全跳车或无法继续自动恢复，应立即结束任务。"""
 
 
+class RoomPreparationTimeout(RuntimeError):
+    """准备页未在观察预算内送达，可执行有界主页恢复。"""
+
+
 def configure_cooperative_settings(params: dict[str, object]) -> dict[str, object]:
     with _SETTINGS_LOCK:
         candidate = (
@@ -351,6 +359,9 @@ class CooperativeLiveFlow:
     ) -> None:
         self.context = context
         self.settings = dict(settings)
+        # 本次进程候选只在任务入口读取，避免导航中途改变重试语义。
+        self.room_recovery_trial = os.environ.get(ROOM_RECOVERY_TRIAL_ENV) == "1"
+        print(f"CooperativeLive room_recovery_trial={self.room_recovery_trial}", flush=True)
         # 在导航输入前冻结本任务的保护开关，两条封面门禁共享，不逐帧读文件。
         if "cooperative_member_loading_guard_enabled" not in self.settings:
             self.settings["cooperative_member_loading_guard_enabled"] = RealtimeProfileStore(
@@ -708,20 +719,30 @@ class CooperativeLiveFlow:
             f"elapsed={time.monotonic() - started:.2f}s",
             flush=True,
         )
-        self.click((1060, 650))
-        self.verify_room_entry(
-            "点击所选协力房间后仍停留在房间选择页，未开始匹配"
-        )
+        self.click(ROOM_CONFIRM_POINT)
+        failure_reason = "点击所选协力房间后仍停留在房间选择页，未开始匹配"
+        if getattr(self, "room_recovery_trial", False):
+            self.verify_room_entry(failure_reason, confirm_point=ROOM_CONFIRM_POINT)
+        else:
+            self.verify_room_entry(failure_reason)
         print(
             "CooperativeLive select_room room_entry_confirmed "
             f"elapsed={time.monotonic() - started:.2f}s",
             flush=True,
         )
 
-    def verify_room_entry(self, failure_reason: str) -> None:
-        deadline = time.monotonic() + 30.0
+    def verify_room_entry(
+        self, failure_reason: str, *, confirm_point: tuple[int, int] | None = None,
+    ) -> None:
+        trial = getattr(self, "room_recovery_trial", False)
+        started = time.monotonic()
+        deadline = started + (45.0 if trial else 30.0)
+        next_reclick_at = started + 12.0
+        reclicks = 0
         departed_frames = 0
         while time.monotonic() < deadline:
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
             image = self.capture()
             if self.visible(image, "member_exit_title", 0.93):
                 raise MemberExited("协力成员退出房间")
@@ -736,6 +757,12 @@ class CooperativeLiveFlow:
                 return
             if self.visible(image, "room_search"):
                 departed_frames = 0
+                # 仅普通房间仍有选择页证据时重按，加载页不能复用该坐标。
+                if trial and confirm_point is not None and reclicks < 2 and time.monotonic() >= next_reclick_at:
+                    reclicks += 1
+                    next_reclick_at = time.monotonic() + 12.0
+                    print(f"CooperativeLive room_entry=reclick attempt={reclicks}/2", flush=True)
+                    self.click(confirm_point)
             else:
                 departed_frames += 1
                 if departed_frames >= 3:
@@ -875,6 +902,10 @@ class CooperativeLiveFlow:
                 raise RuntimeError(
                     "确认协力选曲后60秒内未进入演出准备页"
                 )
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
+        if getattr(self, "room_recovery_trial", False):
+            raise RoomPreparationTimeout("进入协力房间后180秒内未出现不指定歌曲或准备页")
         self.jump_after_startup_failure(
             "进入协力房间后180秒内未出现不指定歌曲或准备页，"
             "已退后台返回游戏"
@@ -1579,7 +1610,7 @@ class CooperativeLiveFlow:
         except InterruptedError:
             outcome = "stopped"
             raise
-        except (MemberExited, JumpOutUnavailable):
+        except (MemberExited, JumpOutUnavailable, RoomPreparationTimeout):
             outcome = "stopped" if self.stopped() else "startup-failed"
             raise
         except Exception as exc:
@@ -1603,8 +1634,10 @@ class CooperativeLiveFlow:
                     print(f"CooperativeStartup diagnostics_warning={type(exc).__name__}: {exc}", flush=True)
                 self._startup_recorder = None
 
-    def recover_after_play_failure(self, reason: str) -> None:
+    def recover_after_play_failure(self, reason: str, *, restart_limit: int = 2) -> None:
         """完整清理失败单局并从主页重新进入协力，禁止在旧会话中续跑。"""
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
         discard_prearmed_backend("cooperative-play-retry")
         recovery_params = {
             "home_node": "CooperativeHomeMarker",
@@ -1620,7 +1653,7 @@ class CooperativeLiveFlow:
             ],
             "escape_interval_ms": 1500,
             "escape_timeout_ms": 60000,
-            "restart_limit": 2,
+            "restart_limit": restart_limit,
             "restart_wait_ms": 5000,
             "startup_grace_ms": 12000,
             "login_start_node": "AutoLiveLoginScreenMarker",
@@ -1635,11 +1668,18 @@ class CooperativeLiveFlow:
                 ensure_ascii=False,
             )
         )
-        if not CommonRecover().run(self.context, argv):
+        recovered = CommonRecover().run(self.context, argv)
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
+        if not recovered:
             raise RuntimeError(
                 f"协力单局失败后无法恢复主页：{reason}"
             )
         self.navigate_to_cooperative_room_selection("home")
+
+    def recover_room_preparation_timeout(self, reason: str) -> None:
+        """候选路径最多重启一次；必须确认主页及房间选择页后才能重入。"""
+        self.recover_after_play_failure(reason, restart_limit=1)
 
     def handle_member_exit(self, reconnects: int) -> int | None:
         policy = str(self.settings["member_exit_policy"])
@@ -1694,6 +1734,7 @@ class CooperativeLiveFlow:
         reconnects = 0
         reuse_room = False
         play_failures = 0
+        room_timeouts = 0
         retry_count = max(
             0,
             min(99, int(self.settings.get("play_failure_retry_count", 0))),
@@ -1717,6 +1758,8 @@ class CooperativeLiveFlow:
             try:
                 success = self.run_attempt(reuse_room=reuse_room)
             except MemberExited:
+                if self.stopped():
+                    return True
                 next_reconnects = self.handle_member_exit(reconnects)
                 if next_reconnects is None:
                     return False
@@ -1724,6 +1767,8 @@ class CooperativeLiveFlow:
                 reuse_room = False
                 continue
             except JumpOutUnavailable as exc:
+                if self.stopped():
+                    return True
                 # 已执行安全跳车，或现有自动化无法继续处理时直接结束任务。
                 record_failure_reason(str(exc))
                 print(
@@ -1731,9 +1776,29 @@ class CooperativeLiveFlow:
                     flush=True,
                 )
                 return False
+            except RoomPreparationTimeout as exc:
+                # 停止先于业务预算；预算耗尽也不能把人工停止记录为失败。
+                if self.stopped():
+                    return True
+                if not getattr(self, "room_recovery_trial", False):
+                    raise
+                if room_timeouts >= ROOM_PREPARATION_RETRY_LIMIT:
+                    record_failure_reason(str(exc))
+                    print(f"CooperativeLive room_retry=exhausted reason={exc}", flush=True)
+                    return False
+                room_timeouts += 1
+                print(
+                    f"CooperativeLive room_retry=home-recovery attempt={room_timeouts}/"
+                    f"{ROOM_PREPARATION_RETRY_LIMIT} reason={exc}", flush=True,
+                )
+                self.recover_room_preparation_timeout(str(exc))
+                reuse_room = False
+                continue
             except InterruptedError:
                 raise
             except Exception as exc:
+                if self.stopped():
+                    return True
                 if play_failures >= retry_count:
                     raise
                 play_failures += 1
@@ -1802,6 +1867,10 @@ class CooperativeLiveFlow:
 
             completed += 1
             play_failures = 0
+            if getattr(self, "room_recovery_trial", False):
+                # 已完成一局证明重新入房有效，候选预算只约束连续失败。
+                reconnects = 0
+                room_timeouts = 0
             callback = getattr(self, "progress_callback", None)
             if callback is not None:
                 try:
