@@ -20,6 +20,7 @@ from agent.realtime.cooperative_action import (
     CooperativePlayfieldEntryEvidence,
     JumpOutUnavailable,
     MemberExited,
+    RoomPreparationTimeout,
     classify_room_tier,
     configure_cooperative_settings,
     cooperative_play_params,
@@ -41,6 +42,142 @@ def _bare_flow():
     # 绕过构造器的流程测试仍须提供正常任务已冻结的保护开关。
     flow.settings = {"cooperative_member_loading_guard_enabled": True}
     return flow
+
+
+@pytest.mark.parametrize("trial,expected_timeout,expected_clicks", [(False, 30, []), (True, 45, [12, 24])])
+def test_room_entry_reclick_has_bounded_selection_evidence(monkeypatch, trial, expected_timeout, expected_clicks):
+    clock = [0.0]
+    flow = _bare_flow()
+    flow.room_recovery_trial = trial
+    flow.capture = lambda: "selection"
+    flow.visible = lambda _image, name, *args: name == "room_search"
+    clicks = []
+    flow.click = lambda point: clicks.append((clock[0], point))
+    monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(cooperative_action.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    with pytest.raises(RuntimeError, match="entry timeout"):
+        flow.verify_room_entry("entry timeout", confirm_point=cooperative_action.ROOM_CONFIRM_POINT)
+    assert clock[0] == expected_timeout
+    assert clicks == [(second, cooperative_action.ROOM_CONFIRM_POINT) for second in expected_clicks]
+
+
+def test_room_entry_never_reclicks_after_selection_departure(monkeypatch):
+    clock = [0.0]
+    flow = _bare_flow()
+    flow.room_recovery_trial = True
+    flow.capture = lambda: "selection" if clock[0] < 11.75 else "loading"
+    flow.visible = lambda image, name, *args: image == "selection" and name == "room_search"
+    flow.click = lambda _point: pytest.fail("离开选择页后不能重按")
+    monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(cooperative_action.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    flow.verify_room_entry("timeout", confirm_point=cooperative_action.ROOM_CONFIRM_POINT)
+    assert clock[0] == 12.25
+
+
+def test_room_preparation_trial_raises_after_180_seconds_without_jump(monkeypatch):
+    clock = [0.0]
+    flow = _bare_flow()
+    flow.room_recovery_trial = True
+    flow.wait_for = lambda names, timeout: (clock.__setitem__(0, clock[0] + timeout) or (None, None))
+    flow.jump_after_startup_failure = lambda _reason: pytest.fail("候选超时必须走主页恢复")
+    monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: clock[0])
+    with pytest.raises(RoomPreparationTimeout, match="180秒"):
+        flow.wait_for_preparation()
+    assert clock[0] == 180
+
+
+@pytest.mark.parametrize("stop_at", [1, 3, None])
+def test_room_timeout_budget_checks_stop_before_failure(monkeypatch, stop_at):
+    flow = _bare_flow()
+    flow.room_recovery_trial = True
+    flow.settings.update(count=1)
+    attempts, recoveries, failures = [], [], []
+    def attempt(reuse_room=False):
+        attempts.append(reuse_room)
+        flow.context.tasker.stopping = len(attempts) == stop_at
+        raise RoomPreparationTimeout("preparation timeout")
+    flow.run_attempt = attempt
+    flow.recover_room_preparation_timeout = recoveries.append
+    monkeypatch.setattr(cooperative_action, "record_failure_reason", failures.append)
+    assert flow.run() is (stop_at is not None)
+    assert len(attempts) == (stop_at or 3)
+    assert len(recoveries) == (stop_at - 1 if stop_at else 2)
+    assert failures == ([] if stop_at else ["preparation timeout"])
+
+
+def test_completed_round_resets_room_and_member_exit_budgets(monkeypatch):
+    flow = _bare_flow()
+    flow.room_recovery_trial = True
+    flow.settings.update(count=2, entry_method="normal", member_exit_policy="reconnect", max_reconnects=1)
+    outcomes = iter([MemberExited("left"), RoomPreparationTimeout("wait"), RoomPreparationTimeout("wait"), True,
+                     MemberExited("left"), RoomPreparationTimeout("wait"), RoomPreparationTimeout("wait"), True])
+    flags, progress, reconnects = [], [], []
+    def attempt(reuse_room=False):
+        flags.append(reuse_room)
+        result = next(outcomes)
+        if isinstance(result, Exception):
+            raise result
+        return result
+    def handle(count):
+        reconnects.append(count)
+        assert count == 0
+        return count + 1
+    flow.run_attempt = attempt
+    flow.handle_member_exit = handle
+    flow.recover_room_preparation_timeout = lambda _reason: None
+    flow.return_to_room_selection = lambda: None
+    flow.progress_callback = lambda done, total: progress.append((done, total))
+    assert flow.run() is True
+    assert flags == [False] * 8
+    assert progress == [(1, 2), (2, 2)]
+    assert reconnects == [0, 0]
+
+
+@pytest.mark.parametrize("recovered,stop", [(True, False), (False, False), (True, True), (False, True)])
+def test_room_timeout_recovery_requires_home_then_selection(monkeypatch, recovered, stop):
+    flow = _bare_flow()
+    frames = iter(["home", "live", "selection"])
+    calls, clicks = [], []
+    def recover(_self, context, argv):
+        params = json.loads(argv.custom_action_param)
+        calls.append(params)
+        assert context is flow.context
+        context.tasker.stopping = stop
+        return recovered
+    monkeypatch.setattr(cooperative_action.CommonRecover, "run", recover)
+    monkeypatch.setattr(cooperative_action, "discard_prearmed_backend", lambda _reason: None)
+    monkeypatch.setattr(cooperative_action.time, "sleep", lambda _seconds: None)
+    flow.capture = lambda: next(frames)
+    flow.click = clicks.append
+    flow.visible = lambda image, name, *args: (image == "live" and name == "live_entry") or (image == "selection" and name == "room_search")
+    flow.pipeline_box = lambda image, node: object() if image == "home" and node == "CooperativeHomeMarker" else None
+    flow.template_box = lambda image, name, *args: (975, 448, 170, 78) if image == "live" else None
+    if stop:
+        with pytest.raises(InterruptedError):
+            flow.recover_room_preparation_timeout("wait")
+    elif not recovered:
+        with pytest.raises(RuntimeError, match="无法恢复主页"):
+            flow.recover_room_preparation_timeout("wait")
+    else:
+        flow.recover_room_preparation_timeout("wait")
+    assert calls[0]["restart_limit"] == 1
+    assert calls[0]["escape_timeout_ms"] == 60000
+    assert calls[0]["home_node"] == "CooperativeHomeMarker"
+    assert clicks == ([(1175, 645), (1060, 487)] if recovered and not stop else [])
+
+
+def test_room_timeout_recovery_failure_does_not_start_new_attempt():
+    flow = _bare_flow()
+    flow.room_recovery_trial = True
+    attempts = []
+    def attempt(reuse_room=False):
+        attempts.append(True)
+        raise RoomPreparationTimeout("wait")
+    flow.run_attempt = attempt
+    flow.recover_room_preparation_timeout = lambda _reason: (_ for _ in ()).throw(RuntimeError("recovery failed"))
+    with pytest.raises(RuntimeError, match="recovery failed"):
+        flow.run()
+    assert attempts == [True]
 
 
 @pytest.mark.parametrize("count", [0, 1, 100, 999])
