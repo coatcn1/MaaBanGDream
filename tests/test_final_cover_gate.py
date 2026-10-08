@@ -26,6 +26,7 @@ from agent.realtime.song_identity import (
 )
 from agent.realtime.song_title_ocr import (
     FINAL_COVER_TITLE_ROI,
+    FINAL_COVER_WIDE_TITLE_ROI,
     TitleReading,
 )
 
@@ -821,6 +822,82 @@ def _regional_drift_test_repository(tmp_path, *, fingerprint_mask=0):
         }],
     }), encoding="utf-8")
     return image, LocalChartRepository(tmp_path, regional_level_drift_enabled=True)
+
+
+def _wide_title_test_repository(tmp_path):
+    image, repository = _regional_drift_test_repository(tmp_path)
+    for path in (tmp_path / "manifest.json", tmp_path / "bestdori/571/expert.json"):
+        content = json.loads(path.read_text(encoding="utf-8"))
+        if "songs" in content:
+            content["songs"][0]["titles"] = ["Long Song With Expected Ending"]
+            content["songs"][0]["display_title"] = "Long Song With Expected Ending"
+        else:
+            content["song"]["titles"] = ["Long Song With Expected Ending"]
+        path.write_text(json.dumps(content), encoding="utf-8")
+    return image, repository
+
+
+def test_wide_title_can_replace_high_confidence_truncated_cache_next_frame(tmp_path, monkeypatch):
+    monkeypatch.setenv("MAABANGDREAM_FINAL_COVER_WIDE_TITLE_TRIAL", "1")
+    image, repository = _wide_title_test_repository(tmp_path)
+    resolver = FinalCoverResolver(difficulty="Expert", observed_level=26, observed_title=None, repository=repository)
+    calls = []
+    def reader(_image, *, roi):
+        calls.append(roi)
+        if roi == FINAL_COVER_TITLE_ROI:
+            return TitleReading("Expected", .99)
+        return TitleReading("Long Song With Expected Ending", .8) if resolver.frames >= 2 else None
+    monkeypatch.setattr(final_cover, "recognize_song_title", reader)
+    assert resolver.observe(image) is None
+    assert resolver.observed_title == "Expected"
+    outcome = resolver.observe(image)
+    assert outcome is not None
+    assert outcome.observed_title == "Long Song With Expected Ending"
+    assert outcome.observed_title_confidence == .8
+    assert calls == [FINAL_COVER_TITLE_ROI, FINAL_COVER_WIDE_TITLE_ROI] * 2
+    assert resolver.last_title_diagnostic["source"] == "wide-roi"
+
+
+def test_wide_title_env_is_frozen_at_resolver_entry(tmp_path, monkeypatch):
+    monkeypatch.delenv("MAABANGDREAM_FINAL_COVER_WIDE_TITLE_TRIAL", raising=False)
+    image, repository = _wide_title_test_repository(tmp_path)
+    resolver = FinalCoverResolver(difficulty="Expert", observed_level=26, observed_title=None, repository=repository)
+    monkeypatch.setenv("MAABANGDREAM_FINAL_COVER_WIDE_TITLE_TRIAL", "1")
+    calls = []
+    monkeypatch.setattr(final_cover, "recognize_song_title", lambda _image, *, roi: calls.append(roi) or TitleReading("Expected", .99))
+    assert resolver.observe(image) is None
+    assert calls == [FINAL_COVER_TITLE_ROI]
+
+
+def test_wide_title_cannot_promote_known_shared_cover_song_to_other_special(tmp_path, monkeypatch):
+    monkeypatch.setenv("MAABANGDREAM_FINAL_COVER_WIDE_TITLE_TRIAL", "1")
+    image, fingerprint = final_cover_frame()
+    chart = [{"type": "BPM", "beat": 0, "bpm": 120}, {"type": "Single", "beat": 1, "lane": 2}]
+    digest = hashlib.sha256(json.dumps(chart, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    songs = []
+    for song_id, title, level in ((304, "SENSENFUKOKU", 28), (596, "[New SPECIAL Difficulty] SENSENFUKOKU", 33)):
+        path = tmp_path / f"bestdori/{song_id}/special.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"schema_version": 1, "source": {"provider": "bestdori", "chart_sha256": digest},
+                                    "song": {"bestdori_id": song_id, "titles": [title]},
+                                    "difficulty": {"name": "special", "level": level}, "chart": chart}), encoding="utf-8")
+        songs.append({"bestdori_song_id": song_id, "display_title": title, "titles": [title], "fingerprints": [fingerprint],
+                      "difficulties": {"special": {"path": f"bestdori/{song_id}/special.json", "level": level, "chart_sha256": digest}}})
+    (tmp_path / "manifest.json").write_text(json.dumps({"schema_version": 1, "songs": songs}), encoding="utf-8")
+    repository = LocalChartRepository(tmp_path, regional_level_drift_enabled=True)
+    resolver = FinalCoverResolver(difficulty="Special", observed_level=33, observed_title=None, repository=repository)
+    rois = []
+    def reader(_image, *, roi):
+        rois.append(roi)
+        return TitleReading("SENSENFUKOKU", .97) if roi == FINAL_COVER_TITLE_ROI else TitleReading("[New SPECIAL Difficulty] SENSENFUKOKU", .9)
+    monkeypatch.setattr(final_cover, "recognize_song_title", reader)
+    assert resolver.observe(image) is None
+    assert resolver.last_title_diagnostic["narrow_identity_status"] == "conflict"
+    try:
+        assert resolver.observe(image) is None
+    except RuntimeError as exc:
+        assert "身份冲突" in str(exc)
+    assert rois == [FINAL_COVER_TITLE_ROI]
 
 
 def test_final_title_refresh_ignores_level_and_preparation_confidence(tmp_path, monkeypatch):

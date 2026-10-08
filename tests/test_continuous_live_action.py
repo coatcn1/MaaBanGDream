@@ -25,7 +25,7 @@ from agent.realtime.chart_repository import (
     ChartResolution,
 )
 from agent.realtime.song_identity import SongIdentity
-from agent.realtime.song_title_ocr import FINAL_COVER_TITLE_ROI, TitleReading
+from agent.realtime.song_title_ocr import FINAL_COVER_TITLE_ROI, FINAL_COVER_WIDE_TITLE_ROI, TitleReading
 
 
 class Recognizer:
@@ -38,6 +38,65 @@ class Recognizer:
 
     def reset(self):
         self.resets += 1
+
+
+@pytest.mark.parametrize("wide_confidence,expected", [(.8, True), (.69, False)])
+def test_continuous_wide_title_replaces_truncated_cache_only_with_trusted_identity(monkeypatch, wide_confidence, expected):
+    monkeypatch.setenv("MAABANGDREAM_FINAL_COVER_WIDE_TITLE_TRIAL", "1")
+    fingerprint = "song-jacket-phash-v2-0123456789abcdef"
+    full_title = "Long Song With Expected Ending"
+    catalog_song = CatalogSongIdentity(50, full_title, (full_title,), (fingerprint,))
+    selection = SimpleNamespace(bestdori_song_id=50, fingerprints=(fingerprint,))
+    class Repository:
+        def identify_by_cover_title(self, _fingerprint, title):
+            return CatalogSongResolution(catalog_song if title == full_title else None, "title missing")
+        def resolve(self, _fingerprint, _difficulty, *, title, **kwargs):
+            return ChartResolution(selection if title == full_title else None, "title missing")
+    calls = []
+    def reader(_image, *, roi):
+        calls.append(roi)
+        if roi == FINAL_COVER_TITLE_ROI:
+            return TitleReading("Expected", .99)
+        return TitleReading(full_title, wide_confidence) if len(calls) >= 4 else None
+    recognizer = ContinuousFinalCoverRecognizer(
+        Repository(), "Expert", identify=lambda _: SongIdentity(fingerprint, "test"), title_reader=reader,
+    )
+    monkeypatch.delenv("MAABANGDREAM_FINAL_COVER_WIDE_TITLE_TRIAL")
+    image = np.full((720, 1280, 3), 220, dtype=np.uint8)
+    assert recognizer.observe(image) is None
+    assert recognizer._title == "Expected"
+    outcome = recognizer.observe(image)
+    assert (outcome is not None) is expected
+    if expected:
+        assert outcome.observed_title == full_title
+        assert outcome.observed_title_confidence == .8
+        assert recognizer.diagnostic_state()["title_diagnostic"]["source"] == "wide-roi"
+    else:
+        assert recognizer._title == "Expected"
+    assert calls == [FINAL_COVER_TITLE_ROI, FINAL_COVER_WIDE_TITLE_ROI] * 2
+
+
+def test_continuous_known_conflicting_title_is_not_overwritten_next_frame(monkeypatch):
+    monkeypatch.setenv("MAABANGDREAM_FINAL_COVER_WIDE_TITLE_TRIAL", "1")
+    fingerprint = "song-jacket-phash-v2-0123456789abcdef"
+    other_fingerprint = "song-jacket-phash-v2-fedcba9876543210"
+    class Repository:
+        def identify_by_cover_title(self, _fingerprint, _title):
+            return CatalogSongResolution(None, "song title does not match final cover")
+        def resolve(self, _fingerprint, _difficulty, **kwargs):
+            return ChartResolution(SimpleNamespace(fingerprints=(other_fingerprint,)), "other known song")
+    calls = []
+    def reader(_image, *, roi):
+        calls.append(roi)
+        assert roi == FINAL_COVER_TITLE_ROI
+        return TitleReading("Known Other Song", .97)
+    recognizer = ContinuousFinalCoverRecognizer(
+        Repository(), "Expert", identify=lambda _: SongIdentity(fingerprint, "test"), title_reader=reader,
+    )
+    image = np.full((720, 1280, 3), 220, dtype=np.uint8)
+    assert recognizer.observe(image) is None
+    assert recognizer.observe(image) is None
+    assert calls == [FINAL_COVER_TITLE_ROI]
 
 
 def test_continuous_requires_recent_actual_speed_readback(monkeypatch):
