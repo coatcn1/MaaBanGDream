@@ -28,7 +28,8 @@ from .controller_touch import ControllerTouchDispatcher
 from .debug_recorder import RealtimeDebugRecorder, append_lifecycle_event
 from .engine import EngineStats, RealtimeEngine
 from .final_cover import (
-    FinalCoverResolution, FinalCoverResolver, is_member_loading_screen,
+    FinalCoverResolution, FinalCoverResolver, FinalCoverStartupFailure,
+    is_member_loading_screen,
 )
 from .life_monitor import LifeDetector, LifeGuard, PlayfieldCompletionGuard
 from .live_failed_detector import (
@@ -636,7 +637,7 @@ def wait_for_final_cover(
             )
         if not cooperative and playfield_streak >= 2 and now_mono >= black_burst_until:
             if require_observed_title:
-                fail(RuntimeError(
+                fail(FinalCoverStartupFailure(
                     "最终封面页标题未确认，已在发送演奏触控前停止："
                     f"{resolver.last_reason}"
                 ), image)
@@ -661,14 +662,14 @@ def wait_for_final_cover(
             time.sleep(float(poll_interval_seconds))
     if require_black_transition:
         stage = "全黑开演转场" if not black_seen else "黑场后的歌曲封面或完整演奏场"
-        fail(RuntimeError(f"启动阶段超时：{float(timeout_seconds):g} 秒内未确认{stage}；未启动输入或结算"), last_image)
+        fail(FinalCoverStartupFailure(f"启动阶段超时：{float(timeout_seconds):g} 秒内未确认{stage}；未启动输入或结算"), last_image)
     if cooperative:
-        fail(RuntimeError(
+        fail(FinalCoverStartupFailure(
             f"最终封面确认超时：{float(timeout_seconds):g} 秒内未确认本局歌曲封面与标题："
             f"{resolver.last_reason}；未启动演奏输入"
         ), last_image)
     if require_observed_title:
-        fail(RuntimeError(
+        fail(FinalCoverStartupFailure(
             "最终封面页标题未确认，已在发送演奏触控前停止："
             f"{resolver.last_reason}"
         ), last_image)
@@ -2090,6 +2091,10 @@ class RealtimeProfilePlay(CustomAction):
     def run(self, context: Context, argv: CustomAction.RunArg) -> bool:
         try:
             return self._run(context, argv)
+        except FinalCoverStartupFailure:
+            # 开演前的最终封面失败（身份冲突/标题未确认/封面超时）必须冒泡出去，
+            # 协力据此跳车；否则这里吞掉返回 False，机器人会留在演出里空转到血空。
+            raise
         except Exception as exc:
             record_failure_reason(f"{type(exc).__name__}: {exc}")
             traceback.print_exc()
