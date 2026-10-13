@@ -503,6 +503,38 @@ def test_repository_can_resolve_by_title_without_single_live_jacket(tmp_path):
     assert resolution.reason == "confirmed local chart by song title"
 
 
+@pytest.mark.parametrize(
+    "observed",
+    (
+        "灼熱 Bonfire!(平行歌曲)",
+        "灼熱Bonfirel(平行歌曲）",
+        "熱Bonfirl（平行歌由",
+    ),
+)
+def test_parallel_version_title_resolves_without_fingerprint(observed):
+    # 348「灼熱 Bonfire!」是 784「灼熱 Bonfire!(平行歌曲)」标题的真前缀。首尾裁剪
+    # 判据（title_similarity）会把较短者裁到满分，制造假歧义，使 784 在没有指纹的
+    # 标题路径永远确认不了（实测协力开局封面恒为 confirmed=false → 打空血）。用不做
+    # 裁剪的严格相似度复核后应唯一解析到更具体的平行版。
+    repository = LocalChartRepository(PROJECT_CHART_ROOT)
+
+    resolution = repository.resolve(UNKNOWN_SONG_ID, "Expert", title=observed)
+
+    assert resolution.selection is not None
+    assert resolution.selection.bestdori_song_id == 784
+    assert resolution.reason == "confirmed local chart by song title"
+
+
+def test_base_song_title_is_not_promoted_to_longer_parallel_version():
+    # 反向保护：读到基础版标题时不能被更长的平行版顶掉。
+    repository = LocalChartRepository(PROJECT_CHART_ROOT)
+
+    resolution = repository.resolve(UNKNOWN_SONG_ID, "Expert", title="灼熱 Bonfire!")
+
+    assert resolution.selection is not None
+    assert resolution.selection.bestdori_song_id == 348
+
+
 def test_repository_can_identify_song_without_requested_difficulty_chart(tmp_path):
     build_repository(tmp_path)
 

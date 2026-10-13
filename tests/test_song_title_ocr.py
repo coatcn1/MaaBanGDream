@@ -67,6 +67,18 @@ def test_score_page_requires_badge_and_separate_pink_digits():
     assert not is_final_score_layout(image)
 
 
+def test_score_page_layout_survives_dimmed_transition_frame():
+    # 开演前加载会经过压暗/淡入帧：实测目标得分帧数字区最大亮度只有 154（阈值
+    # 160）、黄色星章几乎被压没，旧实现的固定 V 阈值会漏判，把目标得分当成曲名
+    # 触发身份冲突。亮度归一化后仍应认出这是分数页。
+    image = np.zeros((720, 1280, 3), dtype=np.uint8)
+    cv2.putText(image, "5082000", (738, 530), cv2.FONT_HERSHEY_SIMPLEX, .9,
+                (180, 140, 250), 2)
+    cv2.circle(image, (382, 515), 26, (90, 200, 240), -1)
+    dimmed = np.clip(image.astype(np.float32) * 0.62, 0, 255).astype(np.uint8)
+    assert is_final_score_layout(dimmed)
+
+
 def test_score_text_exclusion_needs_label_and_digits():
     assert is_final_score_text("标得分'5''0''8'")
     assert is_final_score_text("目标得分 5082000")
@@ -136,6 +148,12 @@ def test_final_score_layout_is_excluded_before_ocr():
     (TitleReading("Expected", .99), TitleReading("Long Song With Expected Ending", .8), "conflict", "fixed-roi"),
     (TitleReading("R", .99), TitleReading("Long Song With Expected Ending", .8), "missing", "fixed-roi"),
     (TitleReading("Expected", .83), TitleReading("Long Song With Expected Ending", .8), "confirmed", "fixed-roi"),
+    # 片假名/平假名混淆不能改变「包含」判定：窄框是宽框的真子串，应采纳宽框
+    # （实测曲目 94「わちゃ・もちゃ・ぺったん行進曲」窄框读成「・もちゃ・ペったん」）。
+    (TitleReading("・もちゃ・ペったん", .93), TitleReading("わちゃ・もちゃ・ぺったん行進曲", .9), "missing", "wide-roi"),
+    # 封面淡入时只读到短原文「怪」，下一帧读全「怪獣」，应视为补全采纳
+    # （实测曲目 733「怪獣」；旧判据要求原文≥四字会把这次重读丢掉）。
+    (TitleReading("怪", .99), TitleReading("怪獣", .9), "missing", "wide-roi"),
 ])
 def test_wide_title_requires_identity_and_safe_high_confidence_completion(narrow, wide, status, source):
     image = np.full((720, 1280, 3), 220, dtype=np.uint8)

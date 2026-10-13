@@ -17,7 +17,7 @@ from .song_identity import (
     UNKNOWN_SONG_ID,
     same_song,
 )
-from .song_title_ocr import normalize_song_title, title_similarity
+from .song_title_ocr import normalize_song_title, strict_title_similarity, title_similarity
 
 
 REGIONAL_LEVEL_DRIFT_TRIAL_ENV = "MAABANGDREAM_REGIONAL_LEVEL_DRIFT_TRIAL"
@@ -531,30 +531,45 @@ def _difficulty_level_matches(
     )
 
 
+def _title_match_score(observed: str, song: dict[str, Any], scorer) -> float:
+    titles = song.get("titles", [])
+    if not isinstance(titles, list):
+        return 0.0
+    return max(
+        (
+            scorer(observed, candidate)
+            for title in titles
+            for candidate in _local_title_match_forms(title)
+        ),
+        default=0.0,
+    )
+
+
 def _unique_title_matches(
     songs: list[dict[str, Any]],
     observed: str,
 ) -> list[dict[str, Any]]:
-    ranked: list[tuple[float, dict[str, Any]]] = []
-    for song in songs:
-        titles = song.get("titles", [])
-        if not isinstance(titles, list):
-            continue
-        score = max(
-            (
-                title_similarity(observed, candidate)
-                for title in titles
-                for candidate in _local_title_match_forms(title)
-            ),
-            default=0.0,
-        )
-        ranked.append((score, song))
+    ranked: list[tuple[float, dict[str, Any]]] = [
+        (_title_match_score(observed, song, title_similarity), song)
+        for song in songs
+    ]
     ranked.sort(key=lambda item: item[0], reverse=True)
     if not ranked or ranked[0][0] < 0.68:
         return []
     if len(ranked) > 1 and ranked[0][0] - ranked[1][0] < 0.08:
         best = ranked[0][0]
-        return [song for score, song in ranked if best - score < 0.08]
+        band = [song for score, song in ranked if best - score < 0.08]
+        # 首尾裁剪判据容忍 OCR 噪声，代价是会把「灼熱 Bonfire!」这类较长标题的
+        # 真前缀也裁到满分（实测曲目 348「灼熱 Bonfire!」与 784
+        # 「灼熱 Bonfire!(平行歌曲)」），制造假歧义。用不做裁剪的严格相似度复核，
+        # 若存在唯一更优者就取之，否则维持歧义（交给指纹/等级消歧）。
+        strict = sorted(
+            ((_title_match_score(observed, song, strict_title_similarity), song) for song in band),
+            key=lambda item: item[0], reverse=True,
+        )
+        if len(strict) == 1 or strict[0][0] - strict[1][0] >= 0.08:
+            return [strict[0][1]]
+        return band
     return [ranked[0][1]]
 
 

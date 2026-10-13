@@ -39,7 +39,14 @@ def is_final_score_layout(image) -> bool:
     """仅接受目标得分条的黄色星章和右侧粉色数字共同出现的页面证据。"""
     if not isinstance(image, np.ndarray) or image.ndim != 3 or image.shape[0] < 550 or image.shape[1] < 960:
         return False
-    hsv = cv2.cvtColor(image[485:550, 350:960, :3], cv2.COLOR_BGR2HSV)
+    roi = image[485:550, 350:960, :3]
+    # 开演前加载会经过压暗/淡入帧：实测目标得分帧数字区最大亮度仅 154（阈值
+    # 160）、黄色星章几乎被压没，固定 V 阈值会漏判，把分数当曲名。先按 ROI 亮度
+    # 归一到峰值——缩放只改 V，不改色相/饱和度——把亮度门槛变成相对判据。
+    scale = 255.0 / max(1.0, float(np.percentile(roi.max(axis=2), 99)))
+    if scale > 1.0:
+        roi = np.clip(roi.astype(np.float32) * scale, 0, 255).astype(np.uint8)
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
     badge = hsv[:, :70]
     digits = hsv[:, 380:610]
     yellow = (badge[:, :, 0] > 10) & (badge[:, :, 0] < 45) & (badge[:, :, 1] > 35) & (badge[:, :, 2] > 140)
@@ -65,11 +72,16 @@ class TitleReading:
 
 
 def is_final_title_completion(previous: TitleReading | None, reading: TitleReading) -> bool:
-    """高置信未知原文只能被包含至少四字的连续补全替换。"""
+    """高置信未知原文只能被完整包含它的读数替换（补全或未截断的重读）。"""
     if previous is None or previous.confidence < 0.9:
         return True
     original = normalize_song_title(previous.text)
-    return len(original) >= 4 and original in normalize_song_title(reading.text)
+    if not original:
+        return True
+    # 不再要求原文至少四字：封面淡入时可能只读到 1~3 字的截断原文（实测曲目 733
+    # 「怪獣」首帧只读到「怪」，下一帧才读全），此时新读数完整包含原文就该允许替换；
+    # 不含原文的无关标题仍被挡住（如 "R" 不属于 "Long Song With Expected Ending"）。
+    return original in normalize_song_title(reading.text)
 
 
 def final_cover_ink_roi(image) -> tuple[int, int, int, int] | None:
@@ -131,9 +143,19 @@ def recognize_final_cover_title(
             if wide is not None and not is_final_score_text(wide.text) and wide.confidence >= 0.7:
                 wide_status = identity_validator(wide)
                 detail["wide_identity_status"] = wide_status
-                # 高置信未知读数只有连续原文补全才可替换；不同标题继续交给冲突门禁。
+                # 走到这里说明窄框读数匹配不到任何本地曲目（identity_status ==
+                # "missing"），它只是未被验证的候选。窄框比标题条窄，切掉首字是常见
+                # 成因：实测曲目 324「るんっ♪ていていー！」标题宽约 348px，窄框只有
+                # 318px，首个假名被切成半个读成「ら」。此时若宽框读数已通过完整身份
+                # 交叉校验，且与窄框读数高度相似（同一标题的单字误读），应当替换。
+                # 相似度门槛把「R 这类合法短标题被无关宽框读数顶掉」挡在外面：实测
+                # 324 误读对 0.857，而 "R" 对无关长标题是 0.000。
                 completes_narrow = is_final_title_completion(reading, wide)
-                if wide_status == "confirmed" and completes_narrow:
+                similar_narrow = (
+                    reading is not None
+                    and title_similarity(reading.text, wide.text) >= 0.75
+                )
+                if wide_status == "confirmed" and (completes_narrow or similar_narrow):
                     reading = wide
                     detail["source"] = "wide-roi"
                     detail["source_roi"] = FINAL_COVER_WIDE_TITLE_ROI
@@ -144,10 +166,19 @@ def recognize_final_cover_title(
     return reading
 
 
+def _fold_katakana(character: str) -> str:
+    """把片假名折成平假名，抵消 OCR 常见的假名混淆。"""
+    code = ord(character)
+    if 0x30A1 <= code <= 0x30F6:
+        return chr(code - 0x60)
+    return character
+
+
 def normalize_song_title(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", str(value)).casefold()
     return "".join(
-        character for character in normalized
+        _fold_katakana(character)
+        for character in normalized
         if unicodedata.category(character)[0] in {"L", "N"}
     )
 
@@ -178,6 +209,21 @@ def title_similarity(observed: str, expected: str) -> float:
             float(SequenceMatcher(None, left[start:], right).ratio()),
         )
     return best
+
+
+@lru_cache(maxsize=8192)
+def strict_title_similarity(observed: str, expected: str) -> float:
+    """不做首尾噪声裁剪的相似度。
+
+    title_similarity 会用裁剪容忍 OCR 噪声，代价是：当候选标题是较长标题的
+    真前缀时（如「灼熱 Bonfire!」之于「灼熱 Bonfire!(平行歌曲)」），它也能把
+    较短者裁到满分，制造假歧义。裁剪切歧义时改用本函数复核。
+    """
+    left = normalize_song_title(observed)
+    right = normalize_song_title(expected)
+    if not left or not right:
+        return 0.0
+    return float(SequenceMatcher(None, left, right).ratio())
 
 
 def _load_characters(path: Path) -> tuple[str, ...]:
