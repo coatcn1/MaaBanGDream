@@ -41,7 +41,7 @@ from .live_visual_gate import MODE_TOGGLE_POINT, live_performance_mode_is_off
 from .performance_settings_action import RealtimePerformanceSettingsGate
 from .playfield_monitor import PlayfieldDetector
 from .chart_repository import LocalChartRepository
-from .final_cover import FinalCoverResolver
+from .final_cover import FinalCoverResolver, FinalCoverStartupFailure
 from .startup_diagnostics import CooperativeStartupRecorder, cover_diagnostic
 from .profile_play_action import RealtimeProfilePlay
 from .profile_store import (
@@ -1800,6 +1800,24 @@ class CooperativeLiveFlow:
                 if self.stopped():
                     return True
                 if play_failures >= retry_count:
+                    if isinstance(exc, FinalCoverStartupFailure):
+                        # 最终封面阶段无法确认本局歌曲/身份（身份冲突、标题未确认、
+                        # 封面等待 60 秒超时等）会让机器人一直不出手、把血打空；重试
+                        # 预算耗尽后按启动失败跳车：退后台返回游戏并结束任务，由用户
+                        # 手动断网跳车，避免把机器人留在没法演奏的演出里。
+                        try:
+                            self.jump_after_startup_failure(
+                                "最终封面未确认本局歌曲/谱面，无法安全开始演奏，"
+                                "已跳车返回游戏；请手动断网跳车后重试"
+                            )
+                        except JumpOutUnavailable as jump_exc:
+                            if self.stopped():
+                                return True
+                            print(
+                                f"[任务][协力演出][流程][ERROR] {jump_exc}",
+                                flush=True,
+                            )
+                            return False
                     raise
                 play_failures += 1
                 reason = f"{type(exc).__name__}: {exc}"

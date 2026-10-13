@@ -29,6 +29,7 @@ from agent.realtime.cooperative_action import (
     DEFAULT_SETTINGS,
     should_stay_in_room,
 )
+from agent.realtime.final_cover import FinalCoverIdentityConflict
 from agent.realtime.life_monitor import LifeReading
 from agent.realtime.live_session import reset_live_run, update_live_run
 
@@ -1574,6 +1575,80 @@ def test_transient_play_exception_stops_after_retry_budget():
         flow.run()
     assert attempts == [False, False]
     assert len(recoveries) == 1
+
+
+def test_final_cover_identity_conflict_jumps_after_retry_budget():
+    flow = _bare_flow()
+    flow.settings = {
+        "entry_method": "normal",
+        "post_live_action": "exit",
+        "count": 1,
+        "member_exit_policy": "fail",
+        "max_reconnects": 3,
+        "play_failure_retry_count": 1,
+    }
+    attempts = []
+    recoveries = []
+    jumps = []
+    flow.progress_callback = None
+
+    def fail(reuse_room=False):
+        attempts.append(reuse_room)
+        raise FinalCoverIdentityConflict(
+            "最终封面歌曲身份冲突：final cover song title conflicts with selected chart"
+        )
+
+    flow.run_attempt = fail
+    flow.recover_after_play_failure = lambda reason: recoveries.append(reason)
+
+    def jump(reason):
+        jumps.append(reason)
+        raise JumpOutUnavailable(reason)
+
+    flow.jump_after_startup_failure = jump
+
+    assert flow.run() is False
+    assert attempts == [False, False]
+    assert len(recoveries) == 1
+    assert len(jumps) == 1
+    assert "最终封面" in jumps[0]
+
+
+def test_final_cover_timeout_jumps_after_retry_budget():
+    flow = _bare_flow()
+    flow.settings = {
+        "entry_method": "normal",
+        "post_live_action": "exit",
+        "count": 1,
+        "member_exit_policy": "fail",
+        "max_reconnects": 3,
+        "play_failure_retry_count": 1,
+    }
+    attempts = []
+    recoveries = []
+    jumps = []
+    flow.progress_callback = None
+
+    def fail(reuse_room=False):
+        attempts.append(reuse_room)
+        raise cooperative_action.FinalCoverStartupFailure(
+            "最终封面确认超时：60 秒内未确认本局歌曲封面与标题："
+            "waiting for stable final cover jacket；未启动演奏输入"
+        )
+
+    flow.run_attempt = fail
+    flow.recover_after_play_failure = lambda reason: recoveries.append(reason)
+
+    def jump(reason):
+        jumps.append(reason)
+        raise JumpOutUnavailable(reason)
+
+    flow.jump_after_startup_failure = jump
+
+    assert flow.run() is False
+    assert attempts == [False, False]
+    assert len(recoveries) == 1
+    assert len(jumps) == 1
 
 
 def test_download_timeout_invokes_jump_instead_of_starting_engine():

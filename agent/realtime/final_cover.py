@@ -61,6 +61,22 @@ def member_loading_score(image: Any) -> float:
     return float(cv2.minMaxLoc(result)[1])
 
 
+class FinalCoverStartupFailure(RuntimeError):
+    """最终封面阶段无法确认本局歌曲/身份，不能安全开始演奏。
+
+    含身份冲突、标题未确认、最终封面等待超时等。协力里这类失败会把机器人留在
+    正在开演的演出里空转，由 cooperative_action 统一跳车处理。
+    """
+
+
+class FinalCoverIdentityConflict(FinalCoverStartupFailure):
+    """最终封面实读标题与所选谱面硬冲突，无法确认本局身份。
+
+    与普通的身份未确认（返回 None、延迟兜底）不同，这是已读到高置信标题却与所选
+    谱面对不上的确定冲突，必须退出本局而不能静默按旧谱面演奏。协力流程据此跳车。
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class FinalCoverConfirmation:
     song_id: str
@@ -567,7 +583,7 @@ class FinalCoverResolver:
             ):
                 # 本页封面与本页可信标题冲突属于身份失败，不能退回视觉演奏。
                 self.last_reason = resolution.reason
-                raise RuntimeError(f"最终封面歌曲身份冲突：{resolution.reason}")
+                raise FinalCoverIdentityConflict(f"最终封面歌曲身份冲突：{resolution.reason}")
             if identity.song_id not in self._logged_fingerprints:
                 self._logged_fingerprints.add(identity.song_id)
                 print(
@@ -601,7 +617,7 @@ class FinalCoverResolver:
                 self._final_title_confirmed
                 and gate.last_reason == "final cover song title conflicts with selected chart"
             ):
-                raise RuntimeError(f"最终封面歌曲身份冲突：{gate.last_reason}")
+                raise FinalCoverIdentityConflict(f"最终封面歌曲身份冲突：{gate.last_reason}")
             if (
                 gate.last_reason == "final cover jacket does not match selected chart"
                 and identity.song_id not in self._logged_fingerprints
