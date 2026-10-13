@@ -53,6 +53,15 @@ class CooperativePreparePopupDetector:
     _MIN_BOX_CENTER_Y = 0.60
     _MAX_BOX_CENTER_Y = 0.70
 
+    # 弹窗主体是**实心**白色圆角矩形，白色像素占外接矩形的比例接近 1；判定线
+    # 附近的白底粉色双 FLICK 是「一条细白横线 + 两端各一个音符」，外接矩形里
+    # 大部分是空的。2026-10-04 曲目 125 实测：真实双 FLICK 帧的填充率 0.080，
+    # 成功局门控帧 0.072，而合成弹窗桩 0.966 —— 差一个数量级。
+    #
+    # 那一帧的宽度 0.667 与宽高比 9.49 本来就越界（上限 0.62 / 9.0），所以当时
+    # 并没有被误判；但它贴着边界，换个渲染或皮肤就可能越界，这条判据是纵深防御。
+    _MIN_BOX_FILL = 0.55
+
     # 弹窗左侧八分音符图标的粉红渐变是强特征。只在白色主体内部左三分之
     # 一统计粉色，避免把舞台角色身上的粉色当成弹窗图标。
     _MIN_PINK_PIXELS = 10
@@ -137,6 +146,11 @@ class CooperativePreparePopupDetector:
                 <= self._MAX_BOX_ASPECT
             )
         ):
+            return False
+        box_fill = float(
+            white[box_y : box_y + box_h, box_x : box_x + box_w].mean()
+        )
+        if box_fill < self._MIN_BOX_FILL:
             return False
         # 连通域坐标相对 ROI 左上角，比较前还原为全图坐标。
         center_x = left + box_x + box_w / 2

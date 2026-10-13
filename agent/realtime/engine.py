@@ -1100,6 +1100,24 @@ class RealtimeEngine:
                         }
                         if self.timing_controller is not None else {}
                     )
+                    # Native 下 timing_controller 是空的，逐动作漂移只有这一条
+                    # 通路：把本帧新增的异常漂移样本并进 trace。正常局一条都不会
+                    # 产生（阈值 60ms，正常整局 max 只有 20–35ms）。
+                    drift_source = (
+                        self.native_backend
+                        if self.native_backend is not None
+                        else self.touch
+                    )
+                    drain_drift = getattr(
+                        drift_source, "drain_execution_drift", None
+                    )
+                    if callable(drain_drift):
+                        drift_row = drain_drift()
+                        if drift_row:
+                            timing_state = {
+                                **timing_state,
+                                "native_drift": drift_row,
+                            }
                     trace_state = getattr(self.touch, "trace_state", None)
                     touch_state = trace_state() if trace_state is not None else {
                         "active_contacts": sorted(

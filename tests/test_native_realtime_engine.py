@@ -666,6 +666,362 @@ def test_native_start_photogate_ignores_prelude_during_grace():
     ]
 
 
+def _photogate_with_life(**overrides):
+    """协力首音门控：弹窗检测器换成确定性桩，生命检测器用真的。"""
+    kwargs = {
+        "stable_duration_ms": 120.0,
+        "grace_ms": 500.0,
+        "change_threshold": 3.0,
+        "latency_ms": 190.0,
+        "mode": "cooperative-playfield-confirmed",
+        "popup_detector": lambda _image: False,
+        "playfield_detector": lambda _image: True,
+    }
+    kwargs.update(overrides)
+    return NativeStartPhotogate(**kwargs)
+
+
+def _band_with_life(band_value: int, life: int | None = None) -> np.ndarray:
+    """判定带取 band_value，并在右上角画一条可读的生命条。
+
+    几何必须与 LifeDetector 一致：图标在 image[29:58, 936:970]，进度条在
+    image[32:53, 970:1182]，填充自左边缘起算。判定带（行 510-536）与生命条
+    （行 29-53）不重叠，所以画生命条不会影响 change_score。
+
+    life=None 表示这一帧没有生命条（转场画面），LifeDetector 会返回
+    visible=False；life=0 是空条，返回 visible=True / value=0。
+    """
+    image = np.full((720, 1280, 3), 30, dtype=np.uint8)
+    image[510:536, 600:750, :] = band_value
+    if life is None:
+        return image
+    fill_colour = (100, 255, 100)  # BGR：HSV 落在 LifeDetector 的绿色带内
+    image[29:58, 936:970] = fill_colour
+    filled = int(round(212 * max(0, min(1000, life)) / 1000))
+    if filled:
+        image[32:53, 970 : 970 + filled] = fill_colour
+    return image
+
+
+def test_photogate_refutes_grace_when_life_drops():
+    """宽限期内生命条下降 = 真实音符流已在判定带内，锚点回到变化流首帧。
+
+    门控阶段会话尚未启动、agent 不按压，只要游戏已经在放音符，每个音符都是
+    MISS，生命条必然下降；转场构件期间游戏还没开始漏音符，生命条稳在满值。
+    这正是 2026-10-02 18:32/18:47 与 10-03 20:16 的现场（曲目 125
+    天下トーイツA to Z☆：门控在宽限到点才开火，锚点后移约 483ms，前 33 个
+    下发全部落空、生命 2 秒归零）。
+    """
+    gate = _photogate_with_life()
+
+    for index in range(9):
+        assert gate.observe(_band_with_life(30, 1000), index / 60.0) is None
+    assert gate.frozen is True
+    assert gate.ignored_prelude_events == 0
+
+    anchor = None
+    for offset in range(30):
+        life = 1000 - 60 * (offset + 1)
+        frame = _band_with_life(45 if offset % 2 == 0 else 60, life)
+        result = gate.observe(frame, (9 + offset) / 60.0)
+        if result is not None:
+            anchor = result
+            break
+
+    assert anchor is not None
+    assert gate.trigger_source == "grace-life-drop"
+    # 锚点回到变化流首帧（帧 9 = 0.15s），而不是宽限到点（0.633s）。
+    assert gate.triggered_at_s == pytest.approx(9 / 60.0)
+    assert anchor == pytest.approx(9 / 60.0 + 0.190)
+    assert gate.ignored_prelude_events >= 1
+    assert gate.report()["photogate_trigger_source"] == "grace-life-drop"
+
+
+def test_photogate_refutes_grace_when_life_bar_is_unreadable_at_freeze():
+    """冻结帧读不到生命条时，判据仍必须在生命条出现后生效。
+
+    2026-10-04 04:49 曲目 125（天下トーイツA to Z☆）真机失败现场：门控在转场
+    里冻结（stable 帧 change_score=0.0），宽限期内 15 个 ignored-prelude 事件
+    贯穿整个 500ms，门控在宽限到点后 16.7ms 才以 direct-threshold 开火——正常
+    局 stable→trigger 是 3.5–4.0 秒，这一局只有 516.7ms，锚点后移约 316ms，
+    音符全 MISS，生命耗尽（截图 0/1000 +「生命值耗尽」），游戏继续播放，引擎
+    等「生命条确认存活」等到 60 秒才以 playfield_start_timeout 取消会话。
+
+    判据原先在冻结瞬间取参考值。转场帧读不到生命条（visible=False），参考值为
+    None 时 _grace_life_refutes 第一次调用就返回 False，整局再也不查生命——
+    而那正是判据唯一需要生效的场景。
+    """
+    gate = _photogate_with_life()
+
+    # 冻结阶段：画面还没有生命条（转场）。
+    for index in range(9):
+        assert gate.observe(_band_with_life(30, None), index / 60.0) is None
+    assert gate.frozen is True
+
+    anchor = None
+    for offset in range(30):
+        life = 1000 - 60 * (offset + 1)
+        frame = _band_with_life(45 if offset % 2 == 0 else 60, life)
+        result = gate.observe(frame, (9 + offset) / 60.0)
+        if result is not None:
+            anchor = result
+            break
+
+    assert anchor is not None
+    assert gate.trigger_source == "grace-life-drop"
+    assert gate.triggered_at_s == pytest.approx(9 / 60.0)
+    assert anchor == pytest.approx(9 / 60.0 + 0.190)
+    assert gate.report()["photogate_life_peak"] is not None
+
+
+def test_photogate_triggers_on_life_drop_before_freeze():
+    """门控还没冻结时生命条下降，就说明音符流已经开跑，锚点就是这一帧。
+
+    2026-10-04 05:11 曲目 125 真机失败现场：判定带从演奏场出现起就持续变化
+    （24 个 stability-reset），门控只能在音符流中间的 133ms 间隙里冻结，冻结时
+    生命已经从 1000 掉到 722——锚点晚了约 617ms，45 个下发全部落空、3 秒生命
+    归零。这条判据不看判定带是否安静，因此不受「前奏安静」这个前提影响。
+    """
+    gate = _photogate_with_life()
+
+    anchor = None
+    for offset in range(30):
+        life = 1000 if offset < 4 else 1000 - 40 * (offset - 3)
+        frame = _band_with_life(45 if offset % 2 == 0 else 60, life)
+        result = gate.observe(frame, offset / 60.0)
+        if result is not None:
+            anchor = result
+            break
+
+    assert anchor is not None
+    assert gate.frozen is False
+    assert gate.trigger_source == "life-drop"
+    # 生命第一次掉下来是 offset=4（1000 -> 960，跌 40 点 ≥ _LIFE_DROP_TRIGGER）。
+    assert gate.triggered_at_s == pytest.approx(4 / 60.0)
+    assert anchor == pytest.approx(4 / 60.0 + 0.190)
+    assert gate.report()["photogate_life_peak"] == 1000
+
+
+def test_photogate_skips_popup_fade_when_choosing_grace_anchor():
+    """弹窗消失后的淡出不得成为锚点候选，稳定窗口之后的变化才算。
+
+    2026-10-04 曲目 125 实测：弹窗 7710.7ms 消失，淡出持续到 7777.3ms
+    （change_score 222.74 → 123.47 → 49.14 → 10.00 递减），真正的第一个音符
+    进入判定带是 7845.0ms。锚点原先是 7729.1ms（淡出首帧），加 190ms latency
+    = 7919.1ms；跳过淡出后是 7845.0 + 190 = 8035ms，与生命第一次下降的
+    8044.8ms 只差 10ms。注意淡出帧相对**冻结基线**是「窄」的（画面已回到正常
+    演奏场），所以逐列宽窄判据单独拦不住它，必须靠这个稳定窗口。
+    """
+    popup = {"visible": False}
+    gate = NativeStartPhotogate(
+        stable_duration_ms=120.0,
+        grace_ms=500.0,
+        change_threshold=3.0,
+        latency_ms=190.0,
+        mode="cooperative-playfield-confirmed",
+        popup_detector=lambda _image: popup["visible"],
+        playfield_detector=lambda _image: True,
+    )
+
+    for index in range(9):
+        assert gate.observe(_band_with_life(30, 1000), index / 60.0) is None
+    assert gate.frozen is True
+
+    popup["visible"] = True
+    assert gate.observe(_band_with_life(200, 1000), 9 / 60.0) is None
+    popup["visible"] = False
+    assert gate.observe(_band_with_life(30, 1000), 10 / 60.0) is None
+    assert gate._grace_settle_until_s == pytest.approx(10 / 60.0 + 0.120)
+
+    # 稳定窗口内的变化（弹窗淡出）不得成为锚点候选。
+    assert gate.observe(_band_with_life(60, 1000), 11 / 60.0) is None
+    assert gate._grace_stream_since_s is None
+
+    # 窗口之外的变化才是锚点候选。
+    assert gate.observe(_band_with_life(30, 1000), 18 / 60.0) is None
+    assert gate._grace_stream_since_s == pytest.approx(18 / 60.0)
+
+
+def test_native_drift_trace_reports_worst_sample_and_advances_cursor():
+    """逐帧漂移诊断返回该窗口内最差的一条，且每次只消费增量。
+
+    刻意不设阈值：2026-10-04 实测一局 C++ 侧报 `drift_max=88.6ms`，而同局
+    Python 侧样本最大只有 40.6ms（0 条 ≥60ms）—— 两个口径不等价，按阈值筛会
+    一直抓不到东西。逐帧写最差值才能画出漂移轨迹、定位尖峰在哪一秒。
+    """
+    from agent.realtime.native_play import _ExecutionTimingTrace
+
+    backend = object.__new__(NativeMinitouchBackend)
+    backend._execution_timing = _ExecutionTimingTrace()
+    backend._drift_trace_cursor = 0
+    trace = backend._execution_timing
+
+    # observe(token, chunk, anchor_s, planned_s, actual_s, received_s)
+    trace.observe(1, 0, 0.0, 1.0, 1.01, 1.0)   # +10ms
+    trace.observe(2, 0, 0.0, 1.1, 1.35, 1.1)   # +250ms ← 窗口内最差
+    trace.observe(3, 0, 0.0, 1.2, 1.21, 1.2)   # +10ms
+
+    row = backend.drain_execution_drift()
+    assert row is not None
+    assert row["samples"] == 3
+    assert row["token"] == 2
+    assert row["signed_ms"] == pytest.approx(250.0, abs=1.0)
+    assert backend._drift_trace_cursor == 3
+
+    # 游标已推进：没有新样本时返回 None，不重复消费同一批。
+    assert backend.drain_execution_drift() is None
+
+    trace.observe(4, 0, 0.0, 1.3, 1.5, 1.3)    # +200ms
+    row = backend.drain_execution_drift()
+    assert row is not None
+    assert row["token"] == 4
+    assert row["samples"] == 1
+
+
+def test_gate_phase_frames_are_recorded_with_throttling():
+    """光门阶段必须进入诊断录制，且按 100ms 节流、关键事件强制补帧。
+
+    2026-10-04 曲目 125 的失败全部发生在光门阶段，但 trace 的 phase 只有
+    final-cover 和 engine，中间 8 秒一帧都没有，所有结论只能从事件时间戳反推。
+    """
+
+    class _Recorder:
+        def __init__(self):
+            self.calls = []
+
+        def record_phase(self, image, timestamp, phase, *, diagnostics=None):
+            self.calls.append((timestamp, phase, diagnostics))
+
+    recorder = _Recorder()
+    backend = object.__new__(NativeMinitouchBackend)
+    backend._recorder = recorder
+    backend._photogate = _photogate_with_life()
+    backend._gate_record_serial = -1
+    backend._gate_record_last_s = float("-inf")
+
+    frame = _band_with_life(30, 1000)
+    for index in range(9):
+        backend._record_gate_frame(frame, index / 60.0)
+
+    assert recorder.calls
+    assert all(phase == "first-note-gate" for _, phase, _ in recorder.calls)
+    # 9 帧只跨 133ms，节流后必须远少于逐帧（60fps 全记会撑爆有界队列）。
+    assert len(recorder.calls) < 9
+
+    # 门控产生关键事件时，即使还在节流窗口内也必须补一帧。
+    before = len(recorder.calls)
+    backend._record_gate_frame(frame, 9 / 60.0)
+    assert len(recorder.calls) == before
+    backend._photogate.event_serial += 1
+    backend._record_gate_frame(frame, 9 / 60.0)
+    assert len(recorder.calls) == before + 1
+
+    # 没有录制器时不做任何额外工作。
+    backend._recorder = None
+    backend._record_gate_frame(frame, 10 / 60.0)
+    assert len(recorder.calls) == before + 1
+
+
+def test_photogate_keeps_freeze_across_prepare_popup():
+    """协力准备弹窗不得清掉已经建立的冻结。
+
+    2026-10-04 曲目 125 协力实测：门控在演奏场出现后 133ms 就正确冻结（和单人
+    一样），7775ms「其他成员正在准备中」弹窗出现把它丢掉，此后音符流已经开始、
+    判定带持续变化，门控再也冻结不了，锚点晚 633ms；同一首歌单人没有这个弹窗，
+    锚点落在演奏场出现后 3133.5ms，与谱面首音 3137ms 吻合。这就是同一首歌
+    单人成功、协力大概率失败的原因。
+    """
+    popup = {"visible": False}
+    gate = NativeStartPhotogate(
+        stable_duration_ms=120.0,
+        grace_ms=500.0,
+        change_threshold=3.0,
+        latency_ms=190.0,
+        mode="cooperative-playfield-confirmed",
+        popup_detector=lambda _image: popup["visible"],
+        playfield_detector=lambda _image: True,
+    )
+
+    for index in range(9):
+        assert gate.observe(_band_with_life(30, 1000), index / 60.0) is None
+    assert gate.frozen is True
+
+    popup["visible"] = True
+    assert gate.observe(_band_with_life(200, 1000), 9 / 60.0) is None
+    assert gate.frozen is True
+
+    popup["visible"] = False
+    assert gate.observe(_band_with_life(30, 1000), 10 / 60.0) is None
+    assert gate.frozen is True
+    # 宽限期从弹窗消失那一帧重新起算，弹窗淡出不会被当成首音。
+    assert gate.frozen_at_s == pytest.approx(10 / 60.0)
+    assert gate.prepare_popup_blocked_events == 2
+
+
+def test_photogate_refutes_grace_when_life_bar_reads_empty_at_freeze():
+    """冻结帧把生命条读成空条的 0 时，判据也必须仍然生效。
+
+    空条的读数是 (visible=True, value=0)，代码原本把它当成可用基线，于是判据
+    要求 value <= 0 - 30，任何读数都无法满足。
+    """
+    gate = _photogate_with_life()
+
+    for index in range(9):
+        assert gate.observe(_band_with_life(30, 0), index / 60.0) is None
+    assert gate.frozen is True
+
+    anchor = None
+    for offset in range(30):
+        life = 1000 - 60 * (offset + 1)
+        frame = _band_with_life(45 if offset % 2 == 0 else 60, life)
+        result = gate.observe(frame, (9 + offset) / 60.0)
+        if result is not None:
+            anchor = result
+            break
+
+    assert anchor is not None
+    assert gate.trigger_source == "grace-life-drop"
+    assert gate.triggered_at_s == pytest.approx(9 / 60.0)
+    assert anchor == pytest.approx(9 / 60.0 + 0.190)
+
+
+def test_photogate_keeps_grace_when_life_stays_full():
+    """只有转场构件、游戏还没开始漏音符时生命条稳在满值，不得提前锚定。
+
+    2026-10-03 的教训：单看画面变化流（持续多久、间隙多小）无法区分转场与
+    音符流，曾据此在另一局把锚点钉在转场中段并丢掉一局。生命条是语义证据。
+    """
+    gate = _photogate_with_life()
+
+    for index in range(9):
+        assert gate.observe(_band_with_life(30, 1000), index / 60.0) is None
+    assert gate.frozen is True
+
+    for offset in range(10):
+        frame = _band_with_life(45 if offset % 2 == 0 else 60, 1000)
+        assert gate.observe(frame, (9 + offset) / 60.0) is None
+
+    assert gate.triggered is False
+    assert gate.ignored_prelude_events == 10
+    assert gate.trigger_source is None
+
+
+def test_photogate_does_not_refute_grace_without_band_change():
+    """生命条下降但判定带无过阈变化时不得触发：判据是「变化流 + 生命下降」。"""
+    gate = _photogate_with_life()
+
+    for index in range(9):
+        assert gate.observe(_band_with_life(30, 1000), index / 60.0) is None
+    assert gate.frozen is True
+
+    for offset in range(10):
+        frame = _band_with_life(30, 1000 - 60 * (offset + 1))
+        assert gate.observe(frame, (9 + offset) / 60.0) is None
+
+    assert gate.triggered is False
+    assert gate.ignored_prelude_events == 0
+
+
 def test_native_start_photogate_rejects_transition_before_playfield():
     gate = NativeStartPhotogate(
         stable_duration_ms=100.0,
@@ -833,9 +1189,12 @@ def test_cooperative_photogate_ignores_prepare_popup_transitions():
     assert gate.observe(playfield, 0.65) is None
 
     # 弹窗突然出现：必须拦截并重置基线，而不是当成第一颗音符。
+    # 冻结本身保留——丢掉它会让门控在音符流里再也冻不上（2026-10-04 曲目 125
+    # 协力实测锚点因此晚 633ms）；宽限期改为从弹窗这一帧重新起算。
     assert gate.observe(popup, 0.70) is None
     assert gate.triggered is False
-    assert gate.frozen is False
+    assert gate.frozen is True
+    assert gate.frozen_at_s == pytest.approx(0.70)
     assert gate.observe(popup, 0.80) is None
     assert gate.triggered is False
     # 弹窗消失同样只重置基线。
@@ -861,6 +1220,32 @@ def test_cooperative_photogate_ignores_prepare_popup_transitions():
     ]
     assert "prepare-popup-visible" in event_names
     assert "prepare-popup-gone" in event_names
+
+
+def _synthetic_sparse_popup_like_double_flick() -> np.ndarray:
+    """几何落在弹窗判据内、但主体是稀疏白线的双 FLICK 轮廓。
+
+    真实曲目 125 的首音是「最左 + 最右各一列的粉键双押」，中间连一条白横线。
+    2026-10-04 实测那一帧的外接矩形宽度 0.667、宽高比 9.49 本来就越界（上限
+    0.62 / 9.0），并没有被误判；但只超出一点点，换个渲染或皮肤就可能落进判据。
+    白色填充率只有 0.080，与实心弹窗的 0.966 差一个数量级，这才是稳定的区分
+    特征。这里把几何构造成完全合格、只有填充率低，用来钉住这条判据。
+    """
+    image = np.full((720, 1280, 3), 20, dtype=np.uint8)
+    white = (255, 255, 255)
+    image[468:472, 400:1040] = white          # 连接两个粉键的白横线
+    image[430:506, 400:410] = white           # 左端音符轮廓
+    image[430:506, 1030:1040] = white         # 右端音符轮廓
+    image[440:480, 420:470] = (150, 60, 220)  # 粉色图标，HSV 落在粉色带内
+    return image
+
+
+def test_prepare_popup_detector_rejects_sparse_double_flick_geometry():
+    """几何合格但主体稀疏的双 FLICK 不得被当成准备弹窗。"""
+    detector = CooperativePreparePopupDetector()
+    assert detector(_synthetic_sparse_popup_like_double_flick()) is False
+    # 对照组：实心白矩形仍必须被识别为弹窗。
+    assert detector(_synthetic_prepare_popup()) is True
 
 
 def test_popup_like_first_note_triggers_after_stable_baseline():
@@ -926,7 +1311,9 @@ def test_one_frame_popup_flash_finishes_before_first_note():
     assert gate.frozen is True
 
     assert gate.observe(popup, 0.20) is None
-    assert gate.frozen is False
+    # 冻结保留，只把宽限期重新起算（grace_ms=0 时等价于原行为）。
+    assert gate.frozen is True
+    assert gate.frozen_at_s == pytest.approx(0.20)
     assert gate.observe(playfield, 0.30) is None
     assert gate.observe(playfield, 0.41) is None
     assert gate.observe(playfield, 0.52) is None
