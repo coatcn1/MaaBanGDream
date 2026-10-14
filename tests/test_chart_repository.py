@@ -10,6 +10,7 @@ import pytest
 from agent.realtime import chart_repository
 from agent.realtime.chart_repository import LocalChartRepository
 from agent.realtime.song_identity import UNKNOWN_SONG_ID
+from agent.realtime.song_title_ocr import strict_title_similarity, title_similarity
 
 
 PROJECT_CHART_ROOT = Path(__file__).resolve().parents[1] / "resource/charts"
@@ -50,6 +51,83 @@ def test_determination_parallel_version_keeps_its_own_cover_identity(song_id):
         assert resolution.selection.bestdori_song_id == song_id
     identity = repository.identify_by_cover_title(song["fingerprints"][0], song["display_title"])
     assert identity.identity.bestdori_song_id == song_id
+
+
+@pytest.mark.parametrize("observed,song_id", [
+    ("灼熱 Bonfire!(平行歌曲)", 784),
+    ("灼熱Bonfirel(平行歌曲）", 784),
+    ("熱Bonfirl（平行歌由", 784),
+    ("灼熱 Bonfire!", 348),
+])
+def test_strict_title_disambiguation_resolves_actual_parallel_catalog(observed, song_id):
+    repository = LocalChartRepository(PROJECT_CHART_ROOT)
+    resolution = repository.resolve(UNKNOWN_SONG_ID, "Expert", title=observed)
+    assert resolution.selection is not None
+    assert resolution.selection.bestdori_song_id == song_id
+    assert resolution.reason == "confirmed local chart by song title"
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("observed,titles", [
+    ("ABCDEF", ["ABCDXYZ", "ABCXY"]),
+    ("ABCD", ["ABCD", "ABCD!"]),
+    ("FIRE BIRD", ["FIRE BIRD", "[FULL] FIRE BIRD"]),
+])
+def test_strict_title_disambiguation_keeps_low_score_ties_and_full_aliases(reverse, observed, titles):
+    songs = [{"bestdori_song_id": index, "titles": [title]} for index, title in enumerate(titles)]
+    if reverse:
+        songs.reverse()
+    matched = chart_repository._unique_title_matches(songs, observed)
+    assert {song["bestdori_song_id"] for song in matched} == {0, 1}
+    if observed == "ABCDEF":
+        # 次名略低于 .68 仍在原歧义带；不能过滤次名后绕过 strict 门槛。
+        assert title_similarity(observed, titles[0]) >= .68
+        assert title_similarity(observed, titles[1]) < .68
+        assert strict_title_similarity(observed, titles[0]) < .68
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_strict_title_winner_is_independent_of_candidate_order(reverse):
+    songs = [
+        {"bestdori_song_id": 348, "titles": ["灼熱 Bonfire!"]},
+        {"bestdori_song_id": 784, "titles": ["灼熱 Bonfire!(平行歌曲)"]},
+    ]
+    if reverse:
+        songs.reverse()
+    matched = chart_repository._unique_title_matches(songs, "灼熱Bonfirel(平行歌曲）")
+    assert [song["bestdori_song_id"] for song in matched] == [784]
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("strict_scores,expected_ids", [
+    ((.65, .55), {0, 1}),
+    ((.70, .63), {0, 1}),
+    ((.69, .60), {0}),
+])
+def test_strict_title_disambiguation_requires_absolute_score_and_margin(monkeypatch, reverse, strict_scores, expected_ids):
+    songs = [{"bestdori_song_id": index, "titles": [str(index)]} for index in range(2)]
+    monkeypatch.setattr(chart_repository, "title_similarity", lambda _observed, expected: (.70, .65)[int(expected)])
+    monkeypatch.setattr(chart_repository, "strict_title_similarity", lambda _observed, expected: strict_scores[int(expected)])
+    if reverse:
+        songs.reverse()
+    matched = chart_repository._unique_title_matches(songs, "observed")
+    assert {song["bestdori_song_id"] for song in matched} == expected_ids
+
+
+def test_kana_matching_does_not_coalesce_distinct_canonical_titles(tmp_path):
+    build_repository(tmp_path)
+    path = tmp_path / "manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    original = manifest["songs"][0]
+    original["titles"] = ["ハッピー"]
+    duplicate = json.loads(json.dumps(original))
+    duplicate.update(bestdori_song_id=100, titles=["はっぴー"])
+    manifest["songs"].append(duplicate)
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    assert len(chart_repository._coalesce_equivalent_songs(manifest["songs"])) == 2
+    resolution = LocalChartRepository(tmp_path).resolve(FINGERPRINT, "Hard", title="はっぴー")
+    assert resolution.selection is None
+    assert "ambiguous" in resolution.reason
 
 
 @pytest.mark.parametrize("changed", ("chart_sha256", "level", "expected_notes", "titles", "fingerprints"))

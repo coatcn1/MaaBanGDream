@@ -28,6 +28,7 @@ from agent.realtime.song_title_ocr import (
     FINAL_COVER_TITLE_ROI,
     FINAL_COVER_WIDE_TITLE_ROI,
     TitleReading,
+    title_similarity,
 )
 
 
@@ -837,6 +838,45 @@ def _wide_title_test_repository(tmp_path):
     return image, repository
 
 
+@pytest.mark.parametrize("wide_frame", [1, 2])
+@pytest.mark.parametrize("expected,narrow,wide", [
+    ("ABCDEFGH", "ABYXEYGH", "ABCXEXGH"),
+    ("怪獣", "怪", "怪獣"),
+    ("RING", "R", "RING"),
+])
+def test_real_resolver_keeps_high_confidence_unknown_without_safe_completion(tmp_path, monkeypatch, wide_frame, expected, narrow, wide):
+    monkeypatch.setenv("MAABANGDREAM_FINAL_COVER_WIDE_TITLE_TRIAL", "1")
+    image, repository = _regional_drift_test_repository(tmp_path)
+    for path in (tmp_path / "manifest.json", tmp_path / "bestdori/571/expert.json"):
+        content = json.loads(path.read_text(encoding="utf-8"))
+        song = content["songs"][0] if "songs" in content else content["song"]
+        song["titles"] = [expected]
+        if "songs" in content:
+            song["display_title"] = expected
+        path.write_text(json.dumps(content), encoding="utf-8")
+    resolver = FinalCoverResolver(
+        difficulty="Expert", observed_level=27, observed_title=None,
+        repository=repository, require_observed_title=True,
+    )
+    def reader(_image, *, roi):
+        if roi == FINAL_COVER_TITLE_ROI:
+            return TitleReading(narrow, .99)
+        return TitleReading(wide, .95) if resolver.frames >= wide_frame else None
+    monkeypatch.setattr(final_cover, "recognize_song_title", reader)
+    if expected == "ABCDEFGH":
+        # 两次 .75 模糊分数不能串联覆盖对真实候选只有 .625 的窄框原文。
+        assert title_similarity(narrow, expected) == .625
+        assert title_similarity(wide, expected) == .75
+        assert title_similarity(narrow, wide) == .75
+    assert resolver.observe(image) is None
+    assert resolver.observed_title == narrow
+    with pytest.raises(RuntimeError, match="final cover song title conflicts with selected chart"):
+        resolver.observe(image)
+    assert resolver.observed_title == narrow
+    assert resolver._candidate_frames == 2
+    assert resolver.last_title_diagnostic["wide_rejection"] == "high-confidence-title-is-not-a-completion"
+
+
 def test_wide_title_can_replace_high_confidence_truncated_cache_next_frame(tmp_path, monkeypatch):
     monkeypatch.setenv("MAABANGDREAM_FINAL_COVER_WIDE_TITLE_TRIAL", "1")
     image, repository = _wide_title_test_repository(tmp_path)
@@ -904,7 +944,8 @@ def test_default_final_title_reads_full_real_title_with_two_stable_frames(monkey
 
 @pytest.mark.parametrize("complete_frame", [1, 2])
 @pytest.mark.parametrize("trial_enabled", [False, True])
-def test_wide_title_completes_real_kana_title_with_two_stable_cover_frames(tmp_path, monkeypatch, complete_frame, trial_enabled):
+@pytest.mark.parametrize("narrow_text", ["わちゃ・もちゃ・ペっ", "もちゃ・ペっ"])
+def test_kana_matching_and_wide_completion_keep_two_stable_cover_frames(tmp_path, monkeypatch, complete_frame, trial_enabled, narrow_text):
     monkeypatch.setenv("MAABANGDREAM_FINAL_COVER_WIDE_TITLE_TRIAL", "1" if trial_enabled else "0")
     image, repository = _wide_title_test_repository(tmp_path)
     for path in (tmp_path / "manifest.json", tmp_path / "bestdori/571/expert.json"):
@@ -919,19 +960,27 @@ def test_wide_title_completes_real_kana_title_with_two_stable_cover_frames(tmp_p
             content["difficulty"]["level"] = 26
         path.write_text(json.dumps(content), encoding="utf-8")
     resolver = FinalCoverResolver(difficulty="Expert", observed_level=26, observed_title=None, repository=repository)
+    calls = []
     def reader(_image, *, roi):
+        calls.append(roi)
         if roi == FINAL_COVER_TITLE_ROI:
-            return TitleReading("わちゃ・もちゃ・ペっ", .96)
+            return TitleReading(narrow_text, .96)
         return TitleReading("わちゃ・もちゃ・ぺったん行進曲", .95) if resolver.frames >= complete_frame else None
     monkeypatch.setattr(final_cover, "recognize_song_title", reader)
     assert resolver.observe(image) is None
-    if not trial_enabled:
+    narrow_supported = title_similarity(narrow_text, "わちゃ・もちゃ・ぺったん行進曲") >= .68
+    if not narrow_supported and not trial_enabled:
         with pytest.raises(RuntimeError, match="final cover song title conflicts with selected chart"):
             resolver.observe(image)
         return
     outcome = resolver.observe(image)
     assert outcome is not None
-    assert outcome.observed_title == "わちゃ・もちゃ・ぺったん行進曲"
+    assert outcome.observed_title == (narrow_text if narrow_supported else "わちゃ・もちゃ・ぺったん行進曲")
+    if narrow_supported:
+        # 同音归一已支持窄框原文时保留实读缓存，不额外请求或改写为宽框。
+        assert calls == [FINAL_COVER_TITLE_ROI]
+    else:
+        assert calls == [FINAL_COVER_TITLE_ROI, FINAL_COVER_WIDE_TITLE_ROI] * complete_frame
     assert outcome.selection.bestdori_song_id == 94
     assert resolver._candidate_frames == 2
 
