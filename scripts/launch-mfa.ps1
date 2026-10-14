@@ -15,7 +15,8 @@ $ErrorActionPreference = 'Stop'
 # 未验收的有序开演候选仅显式启用；已验收的身份规则默认开启。
 
 $env:MAABANGDREAM_ORDERED_STARTUP = if ($OrderedStartupTrial) { '1' } else { '0' }
-$env:MFA_VERIFY_ADB_ENDPOINT = if ($VerifyAdbEndpoint) { '1' } else { '0' }
+# 端口身份核验默认启用；保留显式环境 0 回退，旧启用参数仍可强制开启。
+$env:MFA_VERIFY_ADB_ENDPOINT = if ($VerifyAdbEndpoint -or $env:MFA_VERIFY_ADB_ENDPOINT -ne '0') { '1' } else { '0' }
 # 已验收的等待成本与首命令启动补偿默认启用，仅保留显式关闭入口用于回归排查。
 
 $env:MAABANGDREAM_NATIVE_TIMING_TRIAL = if ($DisableNativeTimingCompensation) { '0' } else { '1' }
