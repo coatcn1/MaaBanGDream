@@ -13,7 +13,11 @@ from .note_detector import NoteDetector
 from .life_monitor import LifeDetector, LifeGuard, LifeStatus, PlayfieldCompletionGuard
 from .live_failed_detector import LiveFailedPopupDetector
 from .playfield_monitor import PlayfieldLifecycleMonitor
-from .timing_feedback import AdaptiveTimingController, TimingFeedbackDetector
+from .timing_feedback import (
+    AdaptiveTimingController,
+    TimingFeedbackDetector,
+    probe_judgement_feedback,
+)
 from .native_life_feedback import NativeLifeFeedback
 from .touch_planner import ActionKind, RealtimePlanner
 
@@ -459,12 +463,12 @@ class RealtimeEngine:
                 life_failed=life_failed,
                 jump_requested=jump_requested,
                 timing_feedback_fast=(
-                    native_feedback.summary["fast_votes"] if native_feedback is not None else
+                    native_feedback.summary["fast_reports"] if native_feedback is not None else
                     self.timing_controller.fast_samples
                     if self.timing_controller is not None else 0
                 ),
                 timing_feedback_slow=(
-                    native_feedback.summary["slow_votes"] if native_feedback is not None else
+                    native_feedback.summary["slow_reports"] if native_feedback is not None else
                     self.timing_controller.slow_samples
                     if self.timing_controller is not None else 0
                 ),
@@ -477,12 +481,12 @@ class RealtimeEngine:
                     else int(getattr(self.planner, "timing_offset_ms", 0))
                 ),
                 timing_feedback_valid=(
-                    native_feedback.summary["direction_votes"] if native_feedback is not None else
+                    native_feedback.summary["eligible_reports"] if native_feedback is not None else
                     self.timing_controller.valid_samples
                     if self.timing_controller is not None else 0
                 ),
                 timing_feedback_ignored=(
-                    native_feedback.summary["ignored_windows"] if native_feedback is not None else
+                    native_feedback.summary["ignored_reports"] if native_feedback is not None else
                     self.timing_controller.ignored_samples
                     if self.timing_controller is not None else 0
                 ),
@@ -496,7 +500,7 @@ class RealtimeEngine:
                     getattr(self.timing_feedback_detector, "sightings", 0)
                 ),
                 timing_feedback_reports=int(
-                    native_feedback.summary["debounced_reports"] if native_feedback is not None else
+                    native_feedback.summary["eligible_reports"] if native_feedback is not None else
                     getattr(self.timing_feedback_detector, "reports", 0)
                 ),
                 filtered_adjacent_artifacts=int(
@@ -849,17 +853,28 @@ class RealtimeEngine:
                     if native_feedback is not None:
                         native_feedback.refresh_phase_status(now)
                         fresh_feedback_frame = native_feedback.fresh(frame_metadata, now)
-                        # 结窗当帧已经复核场景、死亡与停止；新帧才允许提交本窗方向票。
+                        # 新帧才复核场景；判定条计数常开，不再有周期性窗口开关。
                         if fresh_feedback_frame or not native_feedback_scene_valid:
                             native_feedback.observe_scene(now, visible=native_feedback_scene_valid)
                         if native_feedback.active(now):
                             next_frame = min(next_frame, now + native_feedback.SAMPLE_INTERVAL_SECONDS)
                             if fresh_feedback_frame:
-                                native_feedback.observe_frame(image, now)
-                                record_feedback = getattr(self.debug_recorder, "record_native_feedback", None)
-                                if native_feedback.active(now) and callable(record_feedback):
-                                    record_feedback(image, now, frame_metadata,
-                                                    native_feedback.burst_started_at)
+                                # 常开判定条计数：判定条本身即触发源，与生命掉血窗解耦。
+                                kind, slow_px, fast_px = probe_judgement_feedback(image)
+                                decision = native_feedback.observe_judgement(
+                                    kind, now, source="steady"
+                                )
+                                record_sniff = getattr(
+                                    self.debug_recorder, "record_judgement_sniff", None
+                                )
+                                if callable(record_sniff):
+                                    record_sniff(
+                                        now, kind, slow_px, fast_px,
+                                        burst=False,
+                                        decision=decision,
+                                        streak=native_feedback.same_reports,
+                                        frame_metadata=frame_metadata,
+                                    )
                     poll_native = getattr(self.native_backend, "poll", None)
                     if poll_native is None:
                         raise RuntimeError("Native 后端缺少 poll() 会话接口")
@@ -1291,7 +1306,7 @@ class RealtimeEngine:
                 )
         final_stats = replace(
             base_stats,
-            timing_feedback_ignored=(native_feedback.summary["ignored_windows"]
+            timing_feedback_ignored=(native_feedback.summary["ignored_reports"]
                                      if native_feedback is not None else base_stats.timing_feedback_ignored),
             timing_feedback_ignored_reasons=(dict(native_feedback.ignored_reasons)
                                             if native_feedback is not None else base_stats.timing_feedback_ignored_reasons),

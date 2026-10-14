@@ -1,4 +1,4 @@
-"""单截图消费者的有界 Native 判定反馈窗口。"""
+"""常开判定条计数的有界 Native 相位反馈窗口。"""
 
 from collections import Counter, deque
 import math
@@ -9,10 +9,38 @@ from .timing_feedback import TimingFeedback, TimingFeedbackDetector
 
 
 class NativeLifeFeedback:
-    WINDOW_PERIOD_SECONDS = 3.0
-    WINDOW_SECONDS = .8
-    SAMPLE_INTERVAL_SECONDS = .05
-    TREND_SECONDS = 12.0
+    """把判定条的连续同向命中折算成未来相位纠偏请求。
+
+    上游（#90）以「每 3 秒开 0.8 秒窗、窗内 60Hz、3 票同向」的周期窗触发，
+    只覆盖约 27% 的时间；偏移在窗外出现时整段无人纠。这里改为**常开 5Hz 判定条
+    计数**：平均采样成本与周期窗相当（60Hz×27% ≈ 16Hz vs 5Hz，且 5Hz 覆盖整局），
+    但不再有 2.2 秒的盲区。判定条本身即触发源，与生命掉血解耦 —— 掉血的是
+    Bad/Miss，纯 Great 偏移局不掉血，上游的掉血窗因此永不触发（真机实测）。
+
+    保留 #90 的安全机制：相位状态轮询（终态/上限阻塞）、效果跟随门禁
+    （``_signal_follows_effect``，只对「上一效果已落到输入流之后」的信号继续纠偏）、
+    以及单槽信箱。只替换触发模型与边界值。
+    """
+
+    # 判定条持续约 1s，5Hz 采样足以命中；常开路径平均成本与上游周期窗相当。
+    SAMPLE_INTERVAL_SECONDS = .2
+    # 连续同向命中达到阈值即请求一次相位纠偏。真机（.local 分析）显示净偏移
+    # 「刚出窗」时判定条命中稀疏（间隔 5~16s），阈值 3 常凑不齐（run 213322 全程
+    # 只在 71.8s 凑够一次，前 50s 攒了 32 个 great 没人纠）；降到 2 把触发点提前
+    # 几十秒。正常局命中≈0，误触发风险低。
+    STREAK_THRESHOLD = 2
+    # 相邻同向命中允许的最大间隔，超过即视为新一段，计数清零，防止跨段拼接假连续。
+    STREAK_GAP_S = 1.0
+    # 两次请求之间的最小间隔；C++ 侧另有单步/累计夹取。真机大偏移局 74215edb
+    # （great=54）密集簇 4s 内 19 条同向命中，冷却 1.0s 把请求压到 1 次/秒 → 欠纠；
+    # 离线复算（.local/sim_cooldown.py，严格重放命中线）显示 1.0→0.3 把簇内累计从
+    # 45ms 提到 90ms。过冲风险低：请求后清零计数，纠过头时反向命中会重新累积并在
+    # 阈值内触发反向纠偏（闭环自愈）。
+    REQUEST_COOLDOWN_S = 0.3
+    # 单步纠偏量(ms)，须与 C++ playback_session 单步上限、native_play delta 白名单、
+    # C++ 累计上限保持一致。整体偏移（浏览器刷新类）实测可达上百 ms，2ms 步长在冷却
+    # 窗口内追不平。
+    PHASE_STEP_MS = 15.0
 
     def __init__(self, backend, *, detector=None):
         self.backend = backend
@@ -20,55 +48,50 @@ class NativeLifeFeedback:
         self.events = deque(maxlen=128)
         self.summary = Counter()
         self.ignored_reasons = Counter()
-        self.burst_started_at = None
-        self.burst_until = 0.0
-        self.next_window_at = 0.0
         self.last_sequence = -1
         self.last_fresh_at = None
         self.frame_evidence = {}
         self.life_evidence = {}
-        self.votes = deque(maxlen=3)
-        self._pending_frame_at = None
-        self._window_direction = None
-        self._window_directions = set()
-        self._last_signal_at = None
-        self._last_signal_evidence = {}
+        # 常开计数状态：连续同向命中数与方向，与生命掉血完全解耦。
+        self.same_direction = None
+        self.same_reports = 0
+        self.last_judgement_at = float("-inf")
+        self.last_request_at = float("-inf")
         self.mixed = False
-        self.qualified_direction = None
-        self.qualified_at = None
+        self.scene_valid = False
+        self._pending_frame_at = None
         self._expected_run_id = getattr(backend, "_run_id", None)
         self._phase_status = None
         self._pending_observed_s = None
         self._pending_sequence = None
         self._effect_status = None
-        self._last_submit_s = float("-inf")
         self._blocked_direction = None
+        self._request_direction = None
         self._terminal_phase_reason = None
         self._last_signal_input = None
+        self._last_signal_evidence = {}
         self._last_status_notice = None
 
     def active(self, now):
-        # 纯查询不得在终点或生命复核前提交第三票。
-        return self.burst_started_at is not None and now < self.burst_until
+        # 演奏场成立即常开；不再有周期性窗口开关。
+        return self.scene_valid
 
     def finish_due(self, now):
-        return self.burst_started_at is not None and now >= self.burst_until
+        # 常开模型没有「窗口到期」概念；保留接口供引擎终态采样判断调用。
+        return False
+
+    def _reset_streak(self):
+        self.same_direction = None
+        self.same_reports = 0
+        self.mixed = False
 
     def _clear_trend(self, reason):
-        self.votes.clear()
-        self.qualified_direction = None
-        self.qualified_at = None
+        self._reset_streak()
         self._pending_observed_s = None
         self._pending_sequence = None
         revoke = getattr(self.backend, "revoke_future_phase", None)
         if callable(revoke):
             revoke(reason)
-
-    def _expire_votes(self, now):
-        while self.votes and now - self.votes[0][1] > self.TREND_SECONDS:
-            self.votes.popleft()
-        if self.qualified_at is not None and now - self.qualified_at > self.TREND_SECONDS:
-            self._clear_trend("trend-expired")
 
     def refresh_phase_status(self, now):
         reader = getattr(self.backend, "phase_status_snapshot", None)
@@ -83,9 +106,10 @@ class NativeLifeFeedback:
             self._terminal_phase_reason = status.terminal_reason or "stopped"
         if status.state == "applied":
             # 只有真实反向应用释放了完整一步余量，才解除对应方向的上限阻塞。
+            # 上限 200ms、单步 15ms → 余量回到 185ms 以内即视为已释放。
             cumulative = status.cumulative_phase_ms
-            if (self._blocked_direction is TimingFeedback.FAST and cumulative <= 38
-                    or self._blocked_direction is TimingFeedback.SLOW and cumulative >= -38):
+            if (self._blocked_direction is TimingFeedback.FAST and cumulative <= 185
+                    or self._blocked_direction is TimingFeedback.SLOW and cumulative >= -185):
                 self._blocked_direction = None
         if self._pending_observed_s is not None:
             same = (status.original_observed_s == self._pending_observed_s
@@ -101,7 +125,7 @@ class NativeLifeFeedback:
                 self._pending_observed_s = None
                 self._pending_sequence = None
                 if status.terminal_reason == "phase-limit":
-                    self._blocked_direction = self.qualified_direction
+                    self._blocked_direction = self._request_direction
                 elif status.terminal_reason in {"no-future-actions", "not-running", "stopped", "invalid-clock", "invalid-request"}:
                     self._terminal_phase_reason = status.terminal_reason
         elif self._effect_status is not None and status.state == "applied" and (
@@ -140,118 +164,26 @@ class NativeLifeFeedback:
                 and request_s is not None and actual <= request_s
                 and 0 <= observed_s - actual <= .6)
 
-    def _finish_vote(self, now):
-        reason = None
-        if self.mixed:
-            reason = "mixed-feedback"
-        elif self.last_fresh_at is None or min(now, self.burst_until) - self.last_fresh_at > .080:
-            # 结窗新图不能覆盖窗内末帧时间，避免跨 deadline 的卡顿伪造完整窗口。
-            reason = "sampling-gap"
-            self.summary["sampling_gaps"] += 1
-        elif self._window_direction is None or self._last_signal_at is None:
-            reason = "no-feedback"
-        elif now - self.burst_started_at >= self.WINDOW_PERIOD_SECONDS:
-            reason = "stale-window"
-        elif not self.backend.feedback_input_eligible(now):
-            reason = "ineligible-input"
-        if reason is not None:
-            self.summary["ignored_windows"] += 1
-            self.ignored_reasons[reason] += 1
-            if reason == "no-feedback":
-                self._expire_votes(now)
-            else:
-                self._clear_trend(reason)
-            return reason
-        direction = self._window_direction
-        observed_s = self._last_signal_at
-        self._expire_votes(observed_s)
-        if self.votes and self.votes[-1][0] != direction:
-            self._clear_trend("direction-changed")
-        self.votes.append((direction, observed_s))
-        self.summary[direction.value + "_votes"] += 1
-        self.summary["direction_votes"] += 1
-        self.events.append({"event": "window-vote", "timestamp": now,
-                            "direction": direction.value, "signal_observed_s": observed_s,
-                            "window_start_s": self.burst_started_at,
-                            "trend_votes": len(self.votes), **self._last_signal_evidence})
-        if len(self.votes) == 3:
-            self.qualified_direction = direction
-        if self.qualified_direction == direction:
-            self.qualified_at = observed_s
-        status_ready = self.refresh_phase_status(now)
-        if (self.qualified_direction == direction and status_ready
-                and self._pending_observed_s is None and self._terminal_phase_reason is None
-                and self._phase_status.state not in {"requested", "waiting-touch-boundary", "waiting-gap"}
-                and self._blocked_direction != direction and now - self._last_submit_s >= 3
-                and self._signal_follows_effect(observed_s)):
-            # FAST 表示输入偏早，未来执行延后；SLOW 则提前，不改冻结的 Profile 偏移。
-            delta_ms = 2.0 if direction is TimingFeedback.FAST else -2.0
-            self._last_submit_s = now
-            # 结窗抖动不能让下一窗提前于节流边界，又白等一个三秒周期。
-            earliest_start = now + self.WINDOW_PERIOD_SECONDS - self.WINDOW_SECONDS
-            if earliest_start > self.next_window_at:
-                self.next_window_at = math.nextafter(earliest_start, math.inf)
-            self.summary["requests"] += 1
-            accepted = self.backend.request_future_phase(delta_ms, observed_s)
-            if accepted:
-                self._pending_observed_s = observed_s
-                self._pending_sequence = None
-                self.refresh_phase_status(now)
-            self.summary["accepted_requests" if accepted else "rejected_requests"] += 1
-            self.events.append({"event": "phase-request", "timestamp": now,
-                                "signal_observed_s": observed_s, "delta_ms": delta_ms,
-                                "accepted": accepted, **self._last_signal_evidence})
-        return "window-ended"
-
-    def close(self, now, reason):
-        if self.burst_started_at is not None:
-            if reason == "window-ended":
-                try:
-                    reason = self._finish_vote(now)
-                except Exception as exc:
-                    self.events.append({"event": "sampling-error", "timestamp": now,
-                                        "reason": type(exc).__name__})
-                    reason = "sampling-error"
-            else:
-                self.summary["ignored_windows"] += 1
-                self.ignored_reasons[reason] += 1
-            self.summary[reason] += 1
-            self.events.append({"event": reason, "timestamp": now,
-                                "window_start_s": self.burst_started_at,
-                                **self.frame_evidence, "observed_s": now})
-        if reason not in {"window-ended", "no-feedback"}:
-            self._clear_trend(reason)
-        self.burst_started_at = None
-        self.burst_until = 0.0
-        self._pending_frame_at = None
-        self.last_fresh_at = None
-
     def observe_scene(self, now, *, visible):
         """只由已开始的 Native 演奏场证据驱动，不消费生命值或掉血次数。"""
         if not visible:
             self.close(now, "invalid-scene")
             return
-        self._expire_votes(now)
-        if self.finish_due(now):
-            self.close(now, "window-ended")
-        if self.burst_started_at is not None or now < self.next_window_at:
-            return
-        self.burst_started_at = now
-        self.burst_until = now + self.WINDOW_SECONDS
-        # 以实际开始时刻安排下一窗，卡顿后不追补已经错过的窗口。
-        self.next_window_at = now + self.WINDOW_PERIOD_SECONDS
-        self.summary["windows"] += 1
+        self.scene_valid = True
+
+    def close(self, now, reason):
+        if self.scene_valid:
+            self.summary[reason] += 1
+            self.events.append({"event": reason, "timestamp": now,
+                                "window_start_s": self.last_judgement_at,
+                                **self.frame_evidence, "observed_s": now})
+        self.scene_valid = False
+        self._reset_streak()
+        if reason != "invalid-scene":
+            self._clear_trend(reason)
         self.last_fresh_at = None
-        self._window_direction = None
-        self._window_directions.clear()
-        self._last_signal_at = None
-        self._last_signal_evidence = {}
-        self._last_signal_input = None
-        self.mixed = False
+        self._pending_frame_at = None
         self.detector = TimingFeedbackDetector()
-        self.events.append({"event": "periodic-window", "timestamp": now,
-                            "window_start_s": now, "window_end_s": self.burst_until,
-                            **self.frame_evidence, "life": dict(self.life_evidence)})
 
     def fresh(self, metadata, now):
         sequence = metadata.get("sequence", -1)
@@ -270,21 +202,84 @@ class NativeLifeFeedback:
             self.last_sequence = max(sequence, self.last_sequence)
         if not valid:
             self.summary["invalid_frames"] += 1
-            if self.burst_started_at is not None:
+            if self.scene_valid:
                 self.close(now, "slow-or-reused-frames")
             return False
         self.summary["fresh_frames"] += 1
-        if self.active(now):
-            if self.last_fresh_at is not None and now - self.last_fresh_at > .080:
-                self.summary["sampling_gaps"] += 1
-                self.close(now, "sampling-gap")
-                return True
-            self.last_fresh_at = now
+        # 常开 5Hz 下相邻帧间隔约 200ms，不能用 60Hz 窗口的 80ms 判卡顿；
+        # 跨段保护由 STREAK_GAP_S 在计数时承担，这里只记一次长停顿诊断。
+        if (self.scene_valid and self.last_fresh_at is not None
+                and now - self.last_fresh_at > .5):
+            self.summary["sampling_gaps"] += 1
+        self.last_fresh_at = now
         self._pending_frame_at = now
         return True
 
     def observe_life(self, value, now, *, visible):
+        # 生命只保留诊断证据；常开计数的触发源是判定条，不是掉血。
         self.life_evidence = {"value": value, "visible": bool(visible), "observed_s": now}
+
+    def observe_judgement(self, feedback, now, *, source):
+        """常开判定条计数：与生命掉血解耦，连续同向达到阈值即请求相位纠偏。
+
+        判定条只对非 PERFECT 判定出现（PERFECT 不产生 FAST/SLOW 条），所以中间夹
+        PERFECT/MISS 时调用方直接不调用本函数，天然不打断累积。反向不再整段否决，
+        而是重锚到新方向（计数重置为 1），靠阈值兜底：真·交替（F/S/F/S）永远凑不齐
+        阈值，不会触发；``mixed`` 仅作诊断字段。
+        """
+        if feedback is None:
+            return None
+        self.summary["sightings"] += 1
+        self.summary[feedback.value + "_reports"] += 1
+        eligible = self.backend.feedback_input_eligible(now)
+        self.events.append({"event": "feedback", "timestamp": now, "source": source,
+                            "direction": feedback.value, "eligible": eligible,
+                            **self.frame_evidence})
+        if not eligible:
+            # 不合格只代表「此刻触点窗口不适合发请求」，不代表偏移消失；不清零，
+            # 保留已累的同向计数与方向。跨段保护仍由 STREAK_GAP_S 承担。
+            self.summary["ignored_reports"] += 1
+            self.ignored_reasons["ineligible-input"] += 1
+            return "ineligible"
+        self.summary["eligible_reports"] += 1
+        # 每次命中先刷新相位状态：效果边界、上限阻塞与终态都从缓存快照读取。
+        self.refresh_phase_status(now)
+        self._last_signal_input = self._phase_status
+        self._last_signal_evidence = dict(self.frame_evidence)
+        if now - self.last_judgement_at > self.STREAK_GAP_S:
+            self._reset_streak()
+        self.last_judgement_at = now
+        if self.same_direction is not None and feedback != self.same_direction:
+            self.mixed = True
+        self.same_reports = self.same_reports + 1 if feedback == self.same_direction else 1
+        self.same_direction = feedback
+        if (self.same_reports >= self.STREAK_THRESHOLD
+                and now - self.last_request_at >= self.REQUEST_COOLDOWN_S):
+            if (self._pending_observed_s is None
+                    and self._terminal_phase_reason is None
+                    and self._phase_status is not None
+                    and self._phase_status.state not in {"requested", "waiting-touch-boundary", "waiting-gap"}
+                    and self._blocked_direction != feedback
+                    and self._signal_follows_effect(now)):
+                # FAST 表示输入偏早，未来执行延后；SLOW 则提前，不改冻结的 Profile 偏移。
+                delta_ms = (self.PHASE_STEP_MS if feedback is TimingFeedback.FAST
+                            else -self.PHASE_STEP_MS)
+                self.last_request_at = now
+                self._request_direction = feedback
+                self.summary["requests"] += 1
+                accepted = self.backend.request_future_phase(delta_ms, now)
+                if accepted:
+                    self._pending_observed_s = now
+                    self._pending_sequence = None
+                    self.refresh_phase_status(now)
+                self.summary["accepted_requests" if accepted else "rejected_requests"] += 1
+                self.events.append({"event": "phase-request", "timestamp": now, "source": source,
+                                    "streak": self.same_reports, "delta_ms": delta_ms,
+                                    "accepted": accepted, **self.frame_evidence})
+                # 一次请求后重置同向计数：下一次需重新累积到阈值，避免同一簇连发。
+                self._reset_streak()
+                return "requested"
+        return "counted"
 
     def observe_frame(self, image, now):
         if not self.active(now) or self._pending_frame_at != now:
@@ -296,39 +291,13 @@ class NativeLifeFeedback:
                 return
             self.last_fresh_at = now
             if not self.backend.feedback_input_eligible(now):
-                # 释放保护只打断当前连续证据，不撤销此前已经取得的可信单向证据。
-                # 空白帧也检查资格，避免两侧孤立色块跨过不合格区间拼成 2/3。
+                # 释放保护只打断当前连续证据，不撤销此前已取得的可信单向证据。
                 self.summary["ineligible_frames"] += 1
                 self.detector = TimingFeedbackDetector()
                 return
             self.summary["sampling_frames"] += 1
             feedback = self.detector.detect(image)
-            signals = self.detector.last_raw_directions
-            if signals:
-                self.summary["sightings"] += 1
-            if feedback is not None:
-                self.summary["debounced_reports"] += 1
-                self.summary[feedback.value + "_reports"] += 1
-            if not signals:
-                return
-            if self.qualified_direction is not None and any(kind != self.qualified_direction for kind in signals):
-                # 反向的可信原始颜色当帧撤销旧请求，不等整窗结束，更不伪撤销已应用偏移。
-                self._clear_trend("direction-reversed")
-            elif self.votes and any(kind != self.votes[-1][0] for kind in signals):
-                self._clear_trend("direction-reversed")
-            self._window_directions.update(signals)
-            if len(self._window_directions) > 1:
-                if not self.mixed:
-                    self.mixed = True
-                    self._clear_trend("mixed-feedback")
-                return
-            if feedback is not None:
-                self._window_direction = feedback
-            if self._window_direction is not None:
-                self.refresh_phase_status(now)
-                self._last_signal_at = now
-                self._last_signal_evidence = dict(self.frame_evidence)
-                self._last_signal_input = self._phase_status
+            self.observe_judgement(feedback, now, source="steady")
         except Exception as exc:
             self.events.append({"event": "sampling-error", "reason": type(exc).__name__,
                                 "timestamp": now, **self.frame_evidence})

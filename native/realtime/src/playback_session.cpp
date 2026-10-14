@@ -381,10 +381,10 @@ std::string PlaybackSession::apply_future_phase(
     double delta_ms, double contact_available_s) {
     if (state_ != PlaybackState::Running) return "not-running";
     if (final_chunk_published_ || cursor_ == entries_.size()) return "no-future-actions";
-    if (!std::isfinite(delta_ms) || std::abs(delta_ms) > 2.0
+    if (!std::isfinite(delta_ms) || std::abs(delta_ms) > 15.0
         || !std::isfinite(contact_available_s)) return "invalid-request";
     const double candidate = future_phase_offset_s_ + delta_ms / kMillis;
-    if (std::abs(candidate) > 0.040 + kTimeEpsilon) return "phase-limit";
+    if (std::abs(candidate) > 0.200 + kTimeEpsilon) return "phase-limit";
     const double current_s = now();
     if (!clock_is_valid(current_s)) return "invalid-clock";
     const double first_due = entries_[cursor_].timed.engine_due_s + candidate;
