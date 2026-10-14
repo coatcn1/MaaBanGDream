@@ -42,12 +42,21 @@ def is_final_score_layout(image) -> bool:
     hsv = cv2.cvtColor(image[485:550, 350:960, :3], cv2.COLOR_BGR2HSV)
     badge = hsv[:, :70]
     digits = hsv[:, 380:610]
-    yellow = (badge[:, :, 0] > 10) & (badge[:, :, 0] < 45) & (badge[:, :, 1] > 35) & (badge[:, :, 2] > 140)
-    pink = (digits[:, :, 0] > 150) & (digits[:, :, 0] < 180) & (digits[:, :, 1] > 40) & (digits[:, :, 2] > 160)
-    if np.count_nonzero(yellow) < 200 or np.count_nonzero(pink) < 200:
-        return False
-    _, _, stats, _ = cv2.connectedComponentsWithStats(pink.astype(np.uint8))
-    return sum(int(area) >= 8 and int(height) >= 8 for _, _, _, height, area in stats[1:]) >= 3
+
+    def matches(brightness: float) -> bool:
+        yellow = (badge[:, :, 0] > 10) & (badge[:, :, 0] < 45) & (badge[:, :, 1] > 35) & (badge[:, :, 2] > 140 * brightness)
+        pink = (digits[:, :, 0] > 150) & (digits[:, :, 0] < 180) & (digits[:, :, 1] > 40) & (digits[:, :, 2] > 160 * brightness)
+        if np.count_nonzero(yellow) < 200 or np.count_nonzero(pink) < 200:
+            return False
+        _, _, stats, _ = cv2.connectedComponentsWithStats(pink.astype(np.uint8))
+        return sum(int(area) >= 8 and int(height) >= 8 for _, _, _, height, area in stats[1:]) >= 3
+
+    # 先保留原判据：降低 V 会把暗色连接纳入连通域，不能使旧已识别页回退。
+    if matches(1.0):
+        return True
+    # 淡入补偿仅降低 V 门槛，复用原 H/S，避免稀疏亮数字在 BGR 裁剪后失色。
+    brightness = max(1.0, float(np.percentile(hsv[:, :, 2], 99))) / 255.0
+    return matches(brightness)
 
 
 def is_final_score_text(text: str) -> bool:
@@ -68,13 +77,8 @@ def is_final_title_completion(previous: TitleReading | None, reading: TitleReadi
     """高置信未知原文只允许连续补全，局部容忍 OCR 的平片假名混读。"""
     if previous is None or previous.confidence < 0.9:
         return True
-    def completion_text(text: str) -> str:
-        # 只在补全证据中统一同音假名；保留浊音、半浊音与小假名差异，
-        # 不改变曲库标题匹配分数或真实错歌的身份门槛。
-        return "".join(chr(ord(char) - 0x60) if "ァ" <= char <= "ヶ" else char
-                       for char in normalize_song_title(text))
-    original = completion_text(previous.text)
-    return len(original) >= 4 and original in completion_text(reading.text)
+    original = normalize_song_title_for_matching(previous.text)
+    return len(original) >= 4 and original in normalize_song_title_for_matching(reading.text)
 
 
 def final_cover_ink_roi(image) -> tuple[int, int, int, int] | None:
@@ -157,10 +161,18 @@ def normalize_song_title(value: str) -> str:
     )
 
 
+def normalize_song_title_for_matching(value: str) -> str:
+    """匹配时统一同音假名，曲库 canonical 标题键仍保留平片假名区别。"""
+    return "".join(
+        chr(ord(character) - 0x60) if "ァ" <= character <= "ヶ" else character
+        for character in normalize_song_title(value)
+    )
+
+
 @lru_cache(maxsize=8192)
 def title_similarity(observed: str, expected: str) -> float:
-    left = normalize_song_title(observed)
-    right = normalize_song_title(expected)
+    left = normalize_song_title_for_matching(observed)
+    right = normalize_song_title_for_matching(expected)
     if not left or not right:
         return 0.0
     best = float(SequenceMatcher(None, left, right).ratio())
@@ -183,6 +195,16 @@ def title_similarity(observed: str, expected: str) -> float:
             float(SequenceMatcher(None, left[start:], right).ratio()),
         )
     return best
+
+
+@lru_cache(maxsize=8192)
+def strict_title_similarity(observed: str, expected: str) -> float:
+    """参考 PR #87：用不裁首尾的分数复核真前缀造成的标题歧义。"""
+    left = normalize_song_title_for_matching(observed)
+    right = normalize_song_title_for_matching(expected)
+    if not left or not right:
+        return 0.0
+    return float(SequenceMatcher(None, left, right).ratio())
 
 
 def _load_characters(path: Path) -> tuple[str, ...]:
