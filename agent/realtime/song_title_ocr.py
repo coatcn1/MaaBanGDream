@@ -25,8 +25,8 @@ CONFIG_PATH = MODEL_DIR / "inference.yml"
 SINGLE_LIVE_TITLE_ROI = (120, 260, 440, 90)
 # 开演前最终歌曲信息页里，封面下方浅灰长条内的标题文字。该页面在正式
 # 开演前只展示两三秒，且字体比协力房间准备页清晰，适合作为谱面身份
-# 解析的补充证据（Little Busters! 实测置信度 0.93+）。
-FINAL_COVER_TITLE_ROI = (480, 485, 318, 70)
+# 解析的补充证据。横向覆盖完整可见标题，保留标题条高度以避开下方乐队信息。
+FINAL_COVER_TITLE_ROI = (300, 485, 680, 70)
 FINAL_COVER_WIDE_TITLE_ROI = (300, 470, 680, 100)
 FINAL_COVER_WIDE_TITLE_TRIAL_ENV = "MAABANGDREAM_FINAL_COVER_WIDE_TITLE_TRIAL"
 
@@ -65,11 +65,16 @@ class TitleReading:
 
 
 def is_final_title_completion(previous: TitleReading | None, reading: TitleReading) -> bool:
-    """高置信未知原文只能被包含至少四字的连续补全替换。"""
+    """高置信未知原文只允许连续补全，局部容忍 OCR 的平片假名混读。"""
     if previous is None or previous.confidence < 0.9:
         return True
-    original = normalize_song_title(previous.text)
-    return len(original) >= 4 and original in normalize_song_title(reading.text)
+    def completion_text(text: str) -> str:
+        # 只在补全证据中统一同音假名；保留浊音、半浊音与小假名差异，
+        # 不改变曲库标题匹配分数或真实错歌的身份门槛。
+        return "".join(chr(ord(char) - 0x60) if "ァ" <= char <= "ヶ" else char
+                       for char in normalize_song_title(text))
+    original = completion_text(previous.text)
+    return len(original) >= 4 and original in completion_text(reading.text)
 
 
 def final_cover_ink_roi(image) -> tuple[int, int, int, int] | None:
@@ -93,7 +98,7 @@ def final_cover_ink_roi(image) -> tuple[int, int, int, int] | None:
 def recognize_final_cover_title(
     image, *, reader=None, diagnostics=None, identity_validator=None, wide_title_trial=False,
 ) -> TitleReading | None:
-    """窄框优先；候选宽框只补身份未确认的标题，不能覆盖真实冲突。"""
+    """固定标题条优先；候选宽框只补身份未确认的标题，不能覆盖真实冲突。"""
     detail = diagnostics if diagnostics is not None else {}
     detail.update({"source": "fixed-roi", "source_roi": FINAL_COVER_TITLE_ROI,
                    "wide_title_trial": bool(wide_title_trial), "attempts": []})

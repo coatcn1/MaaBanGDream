@@ -925,7 +925,7 @@ class CooperativeLiveFlow:
             "identity_retry_delay_seconds": 0.15,
             "difficulty_targets": COOPERATIVE_DIFFICULTY_TARGETS,
             "song_level_roi": (130, 580, 56, 38),
-            "song_title_roi": (105, 535, 290, 52),
+            "song_title_roi": (105, 535, 430, 52),
             "song_identity": False,
             "mode": "cooperative",
             "debug_recording": bool(self.settings["debug_recording"]),

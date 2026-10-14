@@ -323,6 +323,55 @@ def _frame_is_black(image) -> bool:
     return bool(float(gray.mean()) < 6.0 and float(gray.std()) < 6.0)
 
 
+def _final_cover_diagnostic(resolver) -> dict:
+    """保留缓存标题的实读来源，所有模式都能核对最终身份判定。"""
+    from .startup_diagnostics import cover_diagnostic
+    detail = cover_diagnostic(resolver)
+    detail["title_observation"] = {
+        **resolver.last_title_reading_diagnostic, **resolver.last_title_diagnostic,
+    }
+    return detail
+
+
+def _save_final_cover_failure(live_run, resolver, image, error) -> None:
+    """只保存导致失败的已有帧与小型判定记录，不增加截图或演奏热路径 IO。"""
+    reason = f"{type(error).__name__}: {error}"
+    current = current_live_run()
+    if current is not None and current.run_id == getattr(live_run, "run_id", None):
+        update_live_run(final_cover_confirmed=False, final_cover_status="error", final_cover_reason=reason)
+    detail = _final_cover_diagnostic(resolver)
+    selected = resolver.last_selection
+    detail.update({
+        "error": reason, "run_id": getattr(live_run, "run_id", None),
+        "mode": getattr(live_run, "mode", None), "difficulty": str(getattr(live_run, "difficulty", resolver.difficulty)),
+        "observed_level": resolver.observed_level,
+        "preparation_title": getattr(live_run, "song_title", None),
+        "candidate_bestdori_song_id": getattr(selected, "bestdori_song_id", None),
+        "candidate_title": getattr(selected, "title", None),
+        "candidate_level": getattr(selected, "level", None), "image": None,
+    })
+    try:
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        output = PROJECT_ROOT / "debug" / "recordings" / f"final-cover-failure-{stamp}"
+        output.mkdir(parents=True, exist_ok=False)
+        if image is not None:
+            try:
+                if not imwrite_unicode(output / "decision.png", image):
+                    raise OSError("最终封面失败原图写入未成功")
+                detail["image"] = "decision.png"
+            except InterruptedError:
+                raise
+            except Exception as exc:
+                # PNG 失败时仍保存读数与判定；诊断错误不能替换原始身份失败。
+                detail["image_error"] = f"{type(exc).__name__}: {exc}"
+        _write_json_atomic(output / "decision.json", detail)
+        print(f"RealtimeFinalCover failure_evidence={output}", flush=True)
+    except InterruptedError:
+        raise
+    except Exception as exc:
+        print(f"RealtimeFinalCover diagnostics_warning={type(exc).__name__}: {exc}", flush=True)
+
+
 def wait_for_final_cover(
     controller,
     live_run: LiveRunContext,
@@ -349,7 +398,7 @@ def wait_for_final_cover(
         raise ValueError("cooperative_member_loading_guard_enabled 必须是布尔值")
     cooperative = getattr(live_run, "mode", "") == "cooperative"
     if cooperative:
-        from .startup_diagnostics import startup_recorder, cover_diagnostic
+        from .startup_diagnostics import startup_recorder
         startup = startup_recorder(getattr(live_run, "run_id", None))
         previous_observer = observer
 
@@ -410,9 +459,27 @@ def wait_for_final_cover(
             and cooperative_member_loading_guard_enabled
         ),
     )
+    def save_failure(error, image):
+        try:
+            _save_final_cover_failure(live_run, resolver, image, error)
+        except InterruptedError:
+            raise
+        except Exception as diagnostic_error:
+            # 包括诊断构造与会话更新失败；证据缺失不能遮蔽原始身份异常。
+            print(f"RealtimeFinalCover diagnostics_warning={type(diagnostic_error).__name__}: {diagnostic_error}", flush=True)
+
+    def fail(error, image=None):
+        # 异常、超时与停止竞态中，停止必须先行且不能保存新的业务失败。
+        if stopping():
+            raise InterruptedError("用户已停止任务")
+        save_failure(error, image)
+        if stopping():
+            raise InterruptedError("用户已停止任务")
+        raise error
+
     evidence_reason = resolver.evidence_reason()
     if evidence_reason is not None:
-        raise RuntimeError(f"最终封面确认缺少准备页证据：{evidence_reason}")
+        fail(RuntimeError(f"最终封面确认缺少准备页证据：{evidence_reason}"), initial_image)
     if initial_resolution is not None:
         if initial_image is None:
             raise ValueError("预确认封面结果缺少对应画面")
@@ -499,14 +566,28 @@ def wait_for_final_cover(
                 image, refresh_title=not _frame_is_black(image),
                 title_reader=recognize_song_title,
             )
+        except InterruptedError:
+            raise
         except Exception as exc:
+            if stopping():
+                raise InterruptedError("用户已停止任务") from exc
+            save_failure(exc, image)
+            if stopping():
+                raise InterruptedError("用户已停止任务") from exc
             if observer is not None:
-                observer(image, now_mono, {
-                    "event": "final_cover_observation", "status": "error",
-                    "reason": f"{type(exc).__name__}: {exc}",
-                    **(cover_diagnostic(resolver) if cooperative else {}),
-                    "error": f"{type(exc).__name__}: {exc}",
-                })
+                try:
+                    observer(image, now_mono, {
+                        "event": "final_cover_observation", "status": "error",
+                        **_final_cover_diagnostic(resolver),
+                        "reason": f"{type(exc).__name__}: {exc}",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    })
+                except InterruptedError:
+                    raise
+                except Exception as diagnostic_error:
+                    print(f"RealtimeFinalCover diagnostics_warning={type(diagnostic_error).__name__}: {diagnostic_error}", flush=True)
+            if stopping():
+                raise InterruptedError("用户已停止任务") from exc
             raise
         resolver_ms = (time.monotonic() - resolve_started_at) * 1000
         playfield_visible = False
@@ -534,7 +615,7 @@ def wait_for_final_cover(
                     "resolver_ms": resolver_ms,
                     "playfield_visible": playfield_visible,
                     "black": _frame_is_black(image),
-                    **(cover_diagnostic(resolver) if cooperative else {}),
+                    **_final_cover_diagnostic(resolver),
                 },
             )
         if resolution is not None:
@@ -555,10 +636,10 @@ def wait_for_final_cover(
             )
         if not cooperative and playfield_streak >= 2 and now_mono >= black_burst_until:
             if require_observed_title:
-                raise RuntimeError(
+                fail(RuntimeError(
                     "最终封面页标题未确认，已在发送演奏触控前停止："
                     f"{resolver.last_reason}"
-                )
+                ), image)
             status = (
                 "degraded-selected-chart"
                 if can_keep_selection else "degraded-visual-legacy"
@@ -580,17 +661,17 @@ def wait_for_final_cover(
             time.sleep(float(poll_interval_seconds))
     if require_black_transition:
         stage = "全黑开演转场" if not black_seen else "黑场后的歌曲封面或完整演奏场"
-        raise RuntimeError(f"启动阶段超时：{float(timeout_seconds):g} 秒内未确认{stage}；未启动输入或结算")
+        fail(RuntimeError(f"启动阶段超时：{float(timeout_seconds):g} 秒内未确认{stage}；未启动输入或结算"), last_image)
     if cooperative:
-        raise RuntimeError(
+        fail(RuntimeError(
             f"最终封面确认超时：{float(timeout_seconds):g} 秒内未确认本局歌曲封面与标题："
             f"{resolver.last_reason}；未启动演奏输入"
-        )
+        ), last_image)
     if require_observed_title:
-        raise RuntimeError(
+        fail(RuntimeError(
             "最终封面页标题未确认，已在发送演奏触控前停止："
             f"{resolver.last_reason}"
-        )
+        ), last_image)
     status = (
         "degraded-selected-chart"
         if can_keep_selection else "degraded-visual-legacy"
@@ -2595,6 +2676,10 @@ class RealtimeProfilePlay(CustomAction):
                 )
             try:
                 if recorder is not None:
+                    latest_run = current_live_run()
+                    if latest_run is not None and latest_run.run_id == live_run.run_id:
+                        # 最终封面失败会更新本局状态；旧快照不能把 summary 写回未观察。
+                        live_run = latest_run
                     try:
                         _recorder_update_metadata(recorder, live_run)
                     except Exception:

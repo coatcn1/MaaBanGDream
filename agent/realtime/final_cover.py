@@ -294,6 +294,8 @@ class FinalCoverResolver:
         self.last_member_loading_detected = False
         self.last_member_loading_score = None
         self.last_title_diagnostic = {}
+        self.last_title_reading_diagnostic = {}
+        self.last_selection = selection
         self._final_title_observed_frame = None
         # 退化诊断：每个新指纹只打一条日志，避免逐帧刷屏。
         self._logged_fingerprints: set[str] = set()
@@ -402,6 +404,7 @@ class FinalCoverResolver:
             self._candidate_frames = 1
         # 任何未知或不同封面都先隔离标题缓存，得分页也不能绕过身份生命周期。
         self._final_title_confirmed = False
+        self.last_title_reading_diagnostic = {}
         if self.independent_final_title_enabled:
             self.observed_title = None
             self._observed_title_confidence = 0.0
@@ -425,6 +428,7 @@ class FinalCoverResolver:
             self._candidate_song_id = UNKNOWN_SONG_ID
             self._candidate_frames = 0
             self._final_title_confirmed = False
+            self.last_title_reading_diagnostic = {}
             if self.independent_final_title_enabled:
                 self.observed_title = None
                 self._observed_title_confidence = 0.0
@@ -465,6 +469,13 @@ class FinalCoverResolver:
                 )
             else:
                 reading = (title_reader or recognize_song_title)(image, roi=FINAL_COVER_TITLE_ROI)
+                self.last_title_diagnostic = {
+                    "source": "fixed-roi", "source_roi": FINAL_COVER_TITLE_ROI,
+                    "attempts": [{"roi": FINAL_COVER_TITLE_ROI,
+                                  "text": reading.text if reading else None,
+                                  "confidence": reading.confidence if reading else None}],
+                }
+            self.last_title_reading_diagnostic = dict(self.last_title_diagnostic)
             if reading is not None:
                 self.refresh_observed_title(
                     reading.text, reading.confidence,
@@ -502,6 +513,7 @@ class FinalCoverResolver:
                 wide_title_trial=self.wide_title_trial,
                 identity_validator=lambda reading: self._title_identity_status(identity.song_id, reading),
             )
+            self.last_title_reading_diagnostic = dict(self.last_title_diagnostic)
             if str(self.last_title_diagnostic.get("status", "")).startswith("excluded-score"):
                 self.last_reason = "goal score page is not a song title"
                 return None
@@ -547,12 +559,14 @@ class FinalCoverResolver:
             level=self.observed_level,
             title=self.observed_title,
         )
+        self.last_selection = resolution.selection
         if resolution.selection is None:
             if (
                 self._final_title_confirmed
                 and resolution.reason == "song title conflicts with regional level drift candidate"
             ):
                 # 本页封面与本页可信标题冲突属于身份失败，不能退回视觉演奏。
+                self.last_reason = resolution.reason
                 raise RuntimeError(f"最终封面歌曲身份冲突：{resolution.reason}")
             if identity.song_id not in self._logged_fingerprints:
                 self._logged_fingerprints.add(identity.song_id)

@@ -869,6 +869,73 @@ def test_wide_title_env_is_frozen_at_resolver_entry(tmp_path, monkeypatch):
     assert calls == [FINAL_COVER_TITLE_ROI]
 
 
+def test_default_final_title_reads_full_real_title_with_two_stable_frames(monkeypatch):
+    monkeypatch.delenv("MAABANGDREAM_FINAL_COVER_WIDE_TITLE_TRIAL", raising=False)
+    cover, song_id = final_cover_frame()
+    selected = selection(song_id)
+    selected.level = 26
+    selected.bestdori_song_id = 94
+    selected.title = "わちゃ・もちゃ・ぺったん行進曲"
+    selected.titles = (selected.title,)
+    calls = []
+    class Repository:
+        regional_level_drift_enabled = True
+        def resolve(self, fingerprint, _difficulty, **kwargs):
+            if fingerprint == "unknown" and kwargs.get("title") != selected.title:
+                return ChartResolution(None, "song title not found")
+            return ChartResolution(selected, "confirmed")
+    def reader(_image, *, roi):
+        calls.append(roi)
+        if roi == (480, 485, 318, 70):
+            return TitleReading("・もちゃ・ペったん", .928743)
+        assert roi == (300, 485, 680, 70)
+        return TitleReading(selected.title, .97)
+    monkeypatch.setattr(final_cover, "recognize_song_title", reader)
+    resolver = FinalCoverResolver(difficulty="Expert", observed_level=26,
+                                  observed_title=None, repository=Repository(), require_observed_title=True)
+    assert resolver.observe(cover) is None
+    outcome = resolver.observe(cover)
+    assert outcome.selection.bestdori_song_id == 94
+    assert outcome.observed_title == selected.title
+    assert resolver._candidate_frames == 2
+    assert calls == [(300, 485, 680, 70)]
+    assert resolver.wide_title_trial is False
+
+
+@pytest.mark.parametrize("complete_frame", [1, 2])
+@pytest.mark.parametrize("trial_enabled", [False, True])
+def test_wide_title_completes_real_kana_title_with_two_stable_cover_frames(tmp_path, monkeypatch, complete_frame, trial_enabled):
+    monkeypatch.setenv("MAABANGDREAM_FINAL_COVER_WIDE_TITLE_TRIAL", "1" if trial_enabled else "0")
+    image, repository = _wide_title_test_repository(tmp_path)
+    for path in (tmp_path / "manifest.json", tmp_path / "bestdori/571/expert.json"):
+        content = json.loads(path.read_text(encoding="utf-8"))
+        song = content["songs"][0] if "songs" in content else content["song"]
+        song["titles"] = ["わちゃ・もちゃ・ぺったん行進曲"]
+        if "songs" in content:
+            song["bestdori_song_id"] = 94
+            song["difficulties"]["expert"]["level"] = 26
+        else:
+            song["bestdori_id"] = 94
+            content["difficulty"]["level"] = 26
+        path.write_text(json.dumps(content), encoding="utf-8")
+    resolver = FinalCoverResolver(difficulty="Expert", observed_level=26, observed_title=None, repository=repository)
+    def reader(_image, *, roi):
+        if roi == FINAL_COVER_TITLE_ROI:
+            return TitleReading("わちゃ・もちゃ・ペっ", .96)
+        return TitleReading("わちゃ・もちゃ・ぺったん行進曲", .95) if resolver.frames >= complete_frame else None
+    monkeypatch.setattr(final_cover, "recognize_song_title", reader)
+    assert resolver.observe(image) is None
+    if not trial_enabled:
+        with pytest.raises(RuntimeError, match="final cover song title conflicts with selected chart"):
+            resolver.observe(image)
+        return
+    outcome = resolver.observe(image)
+    assert outcome is not None
+    assert outcome.observed_title == "わちゃ・もちゃ・ぺったん行進曲"
+    assert outcome.selection.bestdori_song_id == 94
+    assert resolver._candidate_frames == 2
+
+
 def test_wide_title_cannot_promote_known_shared_cover_song_to_other_special(tmp_path, monkeypatch):
     monkeypatch.setenv("MAABANGDREAM_FINAL_COVER_WIDE_TITLE_TRIAL", "1")
     image, fingerprint = final_cover_frame()
@@ -948,7 +1015,12 @@ def test_approximate_cover_with_conflicting_final_title_is_hard_failure(tmp_path
 
 
 def test_wait_for_final_cover_cannot_degrade_after_title_conflict(tmp_path, monkeypatch):
+    from agent.realtime.live_session import reset_live_run, update_live_run, current_live_run
     image, repository = _regional_drift_test_repository(tmp_path, fingerprint_mask=0xff)
+    artifact_root = tmp_path / "中文路径"
+    monkeypatch.setattr(profile_play_action, "PROJECT_ROOT", artifact_root)
+    reset_live_run(mode="single", difficulty="Expert", debug_recording=False)
+    run = update_live_run(song_level=26, song_title="グッド・バイ", song_title_confidence=.99)
     calls = []
     clock = [0.0]
 
@@ -963,12 +1035,130 @@ def test_wait_for_final_cover_cannot_degrade_after_title_conflict(tmp_path, monk
     monkeypatch.setattr(final_cover, "recognize_song_title", lambda *_args, **_kwargs: TitleReading("Completely Different Tune", 0.99))
     with pytest.raises(RuntimeError, match="最终封面歌曲身份冲突"):
         wait_for_final_cover(
-            Controller(), SimpleNamespace(song_level=26, song_title="グッド・バイ", song_title_confidence=0.99),
+            Controller(), run,
             None, "Expert", lambda: False, repository=repository,
             timeout_seconds=1, poll_interval_seconds=0,
             fallback_selection_available=True,
         )
     assert calls == ["capture", "capture"]
+    assert current_live_run().final_cover_status == "error"
+    assert "身份冲突" in current_live_run().final_cover_reason
+    records = list((artifact_root / "debug" / "recordings").glob("final-cover-failure-*"))
+    assert len(records) == 1
+    report = json.loads((records[0] / "decision.json").read_text(encoding="utf-8"))
+    assert report["observed_title"] == "Completely Different Tune"
+    assert report["title_confidence"] == .99
+    assert report["observed_level"] == 26
+    assert report["difficulty"] == "Expert"
+    assert report["stable_frames"] == 2
+    assert report["candidate_song_id"] != "unknown"
+    assert report["title_observation"]["cached_title_frame"] == 1
+    assert report["title_observation"]["attempts"][0]["text"] == "Completely Different Tune"
+    assert report["image"] == "decision.png"
+    assert (records[0] / "decision.png").is_file()
+
+
+def test_final_cover_error_stop_race_does_not_write_or_record_business_failure(tmp_path, monkeypatch):
+    from agent.realtime.live_session import reset_live_run, update_live_run, current_live_run
+    cover, song_id = final_cover_frame()
+    monkeypatch.setattr(profile_play_action, "PROJECT_ROOT", tmp_path)
+    reset_live_run(mode="single", difficulty="Expert")
+    run = update_live_run(song_level=28, song_title="SAVIOR OF SONG")
+    stopped = [False]
+    def observe(_self, _image, **_kwargs):
+        stopped[0] = True
+        raise RuntimeError("身份冲突")
+    monkeypatch.setattr(FinalCoverResolver, "observe", observe)
+    with pytest.raises(InterruptedError):
+        wait_for_final_cover(None, run, selection(song_id), "Expert", lambda: stopped[0], initial_image=cover)
+    assert current_live_run().final_cover_status == "not-observed"
+    assert not (tmp_path / "debug").exists()
+
+
+def test_final_cover_failure_image_write_error_preserves_original_error_and_json(tmp_path, monkeypatch):
+    cover, song_id = final_cover_frame()
+    monkeypatch.setattr(profile_play_action, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(profile_play_action, "imwrite_unicode", lambda *_args: False)
+    monkeypatch.setattr(FinalCoverResolver, "observe", lambda *_args, **_kwargs: (
+        _ for _ in ()
+    ).throw(RuntimeError("原始身份冲突")))
+    with pytest.raises(RuntimeError, match="原始身份冲突"):
+        wait_for_final_cover(None, SimpleNamespace(song_level=28, song_title="SAVIOR OF SONG"),
+                            selection(song_id), "Expert", lambda: False, initial_image=cover)
+    report_path = next((tmp_path / "debug" / "recordings").glob("*/decision.json"))
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["image"] is None
+    assert report["image_error"]
+    assert "原始身份冲突" in report["error"]
+
+
+def test_single_final_cover_observer_includes_actual_ocr_attempt_and_cached_source(tmp_path, monkeypatch):
+    image, repository = _regional_drift_test_repository(tmp_path)
+    monkeypatch.setattr(final_cover, "recognize_song_title", lambda *_args, **_kwargs: TitleReading("グッド・バイ", .8))
+    monkeypatch.setattr(profile_play_action, "PlayfieldDetector", lambda: lambda _image: False)
+    records = []
+    class Controller:
+        def post_screencap(self):
+            return SimpleNamespace(wait=lambda: SimpleNamespace(get=lambda: image))
+    outcome = wait_for_final_cover(
+        Controller(), SimpleNamespace(mode="single", song_level=26, song_title=None),
+        None, "Expert", lambda: False, repository=repository, poll_interval_seconds=0,
+        observer=lambda _image, _time, diagnostic: records.append(diagnostic),
+    )
+    assert outcome.status == "confirmed"
+    for record in records:
+        assert record["observed_title"] == "グッド・バイ"
+        assert record["title_confidence"] == .8
+        assert record["title_observation"]["source_roi"] == FINAL_COVER_TITLE_ROI
+        assert record["title_observation"]["attempts"][0]["text"] == "グッド・バイ"
+    assert records[-1]["stable_frames"] == 2
+    assert records[-1]["title_observation"]["cached_title_frame"] == 1
+
+
+@pytest.mark.parametrize("failure_stage", ["save", "diagnostic", "observer"])
+def test_final_cover_diagnostic_error_preserves_original_exception(tmp_path, monkeypatch, failure_stage):
+    cover, song_id = final_cover_frame()
+    monkeypatch.setattr(profile_play_action, "PROJECT_ROOT", tmp_path)
+    original = RuntimeError("原始最终封面身份冲突")
+    def resolve(*_args, **_kwargs):
+        raise original
+    def broken(*_args, **_kwargs):
+        raise OSError("checkpoint write failed")
+    monkeypatch.setattr(FinalCoverResolver, "observe", resolve)
+    if failure_stage == "save":
+        monkeypatch.setattr(profile_play_action, "_save_final_cover_failure", broken)
+    elif failure_stage == "diagnostic":
+        monkeypatch.setattr(profile_play_action, "_final_cover_diagnostic", broken)
+    with pytest.raises(RuntimeError) as caught:
+        wait_for_final_cover(None, SimpleNamespace(song_level=28, song_title="SAVIOR OF SONG"),
+                            selection(song_id), "Expert", lambda: False, initial_image=cover,
+                            observer=broken if failure_stage == "observer" else lambda *_args: None)
+    assert caught.value is original
+
+
+@pytest.mark.parametrize("failure_stage", ["resolve", "save", "diagnostic", "observer"])
+def test_final_cover_interrupt_is_neutral_even_with_false_stopping_flag(tmp_path, monkeypatch, failure_stage):
+    cover, song_id = final_cover_frame()
+    monkeypatch.setattr(profile_play_action, "PROJECT_ROOT", tmp_path)
+    interrupted = InterruptedError("用户已停止任务")
+    calls = []
+    def interrupt(*_args, **_kwargs):
+        raise interrupted
+    def resolve(*_args, **_kwargs):
+        raise RuntimeError("原始最终封面身份冲突")
+    monkeypatch.setattr(FinalCoverResolver, "observe", interrupt if failure_stage == "resolve" else resolve)
+    if failure_stage == "save":
+        monkeypatch.setattr(profile_play_action, "_save_final_cover_failure", interrupt)
+    elif failure_stage == "diagnostic":
+        monkeypatch.setattr(profile_play_action, "_final_cover_diagnostic", interrupt)
+    if failure_stage == "resolve":
+        monkeypatch.setattr(profile_play_action, "_save_final_cover_failure", lambda *_args: calls.append("save"))
+    with pytest.raises(InterruptedError) as caught:
+        wait_for_final_cover(None, SimpleNamespace(song_level=28, song_title="SAVIOR OF SONG"),
+                            selection(song_id), "Expert", lambda: False, initial_image=cover,
+                            observer=interrupt if failure_stage == "observer" else lambda *_args: calls.append("observer"))
+    assert caught.value is interrupted
+    assert not calls
 
 
 def test_drift_gate_rejects_loose_cover_after_level_was_tolerated(tmp_path):

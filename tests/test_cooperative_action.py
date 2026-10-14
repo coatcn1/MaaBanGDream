@@ -1222,6 +1222,7 @@ def test_cooperative_prepare_falls_back_special_to_effective_expert(monkeypatch)
     flow.prepare()
 
     assert difficulty_params[0]["fallback_difficulties"] == ["Expert"]
+    assert difficulty_params[0]["song_title_roi"] == [105, 535, 430, 52]
     assert performance_params[0]["difficulty"] == "Expert"
     assert performance_params[0]["cache_preparation_image"] is True
     assert flow.effective_difficulty == "Expert"
