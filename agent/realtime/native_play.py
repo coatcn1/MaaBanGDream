@@ -8,7 +8,7 @@ import uuid
 import queue
 import math
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from statistics import mean, median
 from typing import Any, Callable
@@ -19,6 +19,7 @@ from . import native_engine
 from .native_minitouch import NativeMinitouchDevice
 from .playfield_monitor import LANE_CENTERS, PlayfieldDetector
 from .prepare_popup import CooperativePreparePopupDetector
+from .native_start_evidence import shared_start_evidence_writer
 from .runtime_flags import (
     native_timing_compensation_enabled,
     native_wait_jitter_trial_enabled,
@@ -29,6 +30,27 @@ TOUCH_Y = 590.0
 PHOTOGATE_LATENCY_MS = 190.0
 _STARTUP_TIMING_MIN_MS = 8.0
 _STARTUP_TIMING_MAX_MS = 60.0
+
+
+@dataclass(frozen=True, slots=True)
+class NativePhaseStatus:
+    """单请求的不可变回执，截图消费者只读缓存，不访问 owner 队列。"""
+
+    run_id: str
+    request_sequence: int = 0
+    event_cursor: int = 0
+    state: str = "idle"
+    delta_ms: float = 0.0
+    original_observed_s: float | None = None
+    first_adjusted_due_s: float | None = None
+    first_affected_chunk_sequence: int | None = None
+    first_affected_action_token: int | None = None
+    cumulative_phase_ms: float = 0.0
+    terminal_reason: str | None = None
+    transient_planned_s: float | None = None
+    transient_actual_s: float | None = None
+    transient_action_token: int | None = None
+    transient_chunk_sequence: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,6 +353,64 @@ class NativeStartPhotogate:
         self.prepare_popup_frames = 0
         self.prepare_popup_blocked_events = 0
         self._significant_events: deque[dict[str, object]] = deque(maxlen=32)
+        self._diagnostic_metadata = None
+        self._diagnostic_pair = deque(maxlen=2)
+        self._diagnostic_warnings = deque(maxlen=2)
+        self._trigger_evidence = None
+
+    def set_frame_metadata(self, metadata):
+        self._diagnostic_metadata = dict(metadata)
+
+    def _diagnostic_observation(self, image, now):
+        height = image.shape[0]
+        start = max(0, min(height - 1, round(self._from_row * height / self._reference_height)))
+        end = max(start, min(height - 1, round(self._to_row * height / self._reference_height)))
+        roi = image[start:end + 1, :, :3].copy()
+        roi.flags.writeable = False
+        return roi, {**self._diagnostic_metadata, "observed_s": float(now),
+            "roi": [0, start, image.shape[1], end - start + 1],
+            "mean_bgr": roi.astype("float64").mean(axis=(0, 1)).tolist(),
+            "reference_mean_bgr": self._last_color.tolist() if self._last_color is not None else None,
+            "reference_observed_s": self._previous_frame_s,
+            "previous_change": self._previous_change,
+            "stable_since_s": self.stable_since_s, "frozen_at_s": self.frozen_at_s,
+            "frozen": self.frozen, "grace_s": self._grace_s}
+
+    def observe(self, image: Any, now: float) -> float | None:
+        observation = None
+        if self._diagnostic_metadata is not None and not self.triggered:
+            try:
+                observation = self._diagnostic_observation(image, now)
+            except Exception as exc:
+                self._diagnostic_warnings.append(type(exc).__name__)
+                self._diagnostic_pair.clear()
+        # 诊断异常不能改写或掩盖原门控返回值，Legacy 未开启元数据时不复制图像。
+        anchor = self._observe_control(image, now)
+        if observation is not None:
+            try:
+                roi, data = observation
+                data["current_change"] = (sum(abs(a - b) for a, b in zip(data["mean_bgr"],
+                    data["reference_mean_bgr"])) if data["reference_mean_bgr"] is not None else None)
+                self._diagnostic_pair.append((roi, data))
+                pair_matches = (len(self._diagnostic_pair) == 2
+                    and self._diagnostic_pair[0][1]["observed_s"] == data["reference_observed_s"]
+                    and self._diagnostic_pair[0][1]["mean_bgr"] == data["reference_mean_bgr"])
+                if anchor is not None and not pair_matches:
+                    self._diagnostic_warnings.append("missing-previous-roi")
+                if anchor is not None and pair_matches:
+                    prior_s = data["reference_observed_s"]
+                    crossing_s = anchor - self._latency_s
+                    self._trigger_evidence = {"observations": [item[1] for item in self._diagnostic_pair],
+                        "previous_change": data["previous_change"], "current_change": data["current_change"],
+                        "threshold": self._change_threshold, "crossing_s": crossing_s,
+                        "crossing_fraction": ((crossing_s - prior_s) / (float(now) - prior_s)
+                            if prior_s is not None and float(now) > prior_s else None),
+                        "latency_ms": self._latency_s * 1000, "stable_duration_s": self._stable_duration_s,
+                        "grace_s": self._grace_s, "trigger_source": self.trigger_source,
+                        "warnings": list(self._diagnostic_warnings)}
+            except Exception as exc:
+                self._diagnostic_warnings.append(type(exc).__name__)
+        return anchor
 
     def _reset_band_state(self) -> None:
         """演奏场尚未成立或短暂消失时，丢弃此前加载页颜色基线。"""
@@ -403,7 +483,7 @@ class NativeStartPhotogate:
             "photogate_events": list(self._significant_events),
         }
 
-    def observe(self, image: Any, now: float) -> float | None:
+    def _observe_control(self, image: Any, now: float) -> float | None:
         """返回第一颗音符的绝对执行时刻；未触发时返回 ``None``。"""
         if self.triggered:
             return None
@@ -610,6 +690,14 @@ class NativeMinitouchBackend:
         if not self._actions:
             raise RuntimeError("谱面没有可编译的动作")
         self._clock = clock
+        self._start_evidence_ticket = None
+        self._start_evidence_warning = None
+        try:
+            self._start_evidence_writer = shared_start_evidence_writer()
+        except Exception as exc:
+            self._start_evidence_writer = None
+            self._start_evidence_warning = "首音证据后台初始化失败：" + type(exc).__name__
+        self._start_frame_metadata = {}
         self._config = {
             "judgement_y": float(judgement_y),
             "press_bias_ms": int(press_bias_ms),
@@ -710,6 +798,8 @@ class NativeMinitouchBackend:
         self._phase_events: deque[dict[str, object]] = deque(maxlen=128)
         self._phase_receipts: deque[tuple[int, float, float]] = deque(maxlen=64)
         self._feedback_input_snapshot = (float("-inf"), float("-inf"))
+        self._feedback_transient_snapshot = (None, None, None, None)
+        self._phase_status = NativePhaseStatus(self._run_id)
         self._state = "idle"
         self._first_read_delay_s = 0.004
         self._first_action_anchor_s: float | None = None
@@ -1371,6 +1461,12 @@ class NativeMinitouchBackend:
                         kind = row.get("action_kind")
                         if kind in {"tap", "flick"}:
                             transient_at = actual_s
+                            if row.get("command") == "d":
+                                # 新切片归属只认瞬态 DOWN，旧队列迟执行不能冒充新效果。
+                                self._feedback_transient_snapshot = (
+                                    float(row["planned_engine_s"]), actual_s,
+                                    int(row["action_token"]), expected.chunk_sequence,
+                                )
                         if kind == "up" or (kind == "flick" and row.get("command") == "m"):
                             release_at = actual_s
                     self._feedback_input_snapshot = (transient_at, release_at)
@@ -1572,11 +1668,33 @@ class NativeMinitouchBackend:
         self._frozen_timing_offset_ms = value
         self._config["press_bias_ms"] = value
 
+    def observe_start_frame_metadata(self, metadata):
+        self._start_frame_metadata = dict(metadata)
+
     def observe_start_frame(self, image: Any, now: float) -> float | None:
         """只观察首拍门控；触发时设备未就绪则立即失败。"""
+        setter = getattr(self._photogate, "set_frame_metadata", None)
+        try:
+            if callable(setter):
+                setter(getattr(self, "_start_frame_metadata", {}))
+        except Exception as exc:
+            self._start_evidence_warning = "首音元数据诊断失败：" + type(exc).__name__
         anchor = self._photogate.observe(image, now)
         if anchor is None:
             return None
+        try:
+            packet = getattr(self._photogate, "_trigger_evidence", None)
+            if (packet is not None and getattr(self, "_start_evidence_ticket", None) is None
+                    and getattr(self, "_start_evidence_writer", None) is not None):
+                packet = {**packet, "schema_version": 1, "run_id": self._run_id,
+                    "profile_timing_offset_ms": self._frozen_timing_offset_ms,
+                    "probe_first_read_s": self._first_read_delay_s,
+                    "chart_first_due_s": self._actions[0]["due_s"],
+                    "final_anchor_s": float(anchor) - self._frozen_timing_offset_ms / 1000 - self._first_read_delay_s}
+                self._start_evidence_ticket = self._start_evidence_writer.submit(self._run_id,
+                    tuple(item[0] for item in self._photogate._diagnostic_pair), packet)
+        except Exception as exc:
+            self._start_evidence_warning = "首音证据入队失败：" + type(exc).__name__
         if self._device_error is not None:
             self._state = "failed"
             raise RuntimeError(f"minitouch 准备失败：{self._device_error}")
@@ -1780,6 +1898,15 @@ class NativeMinitouchBackend:
             if phase_event is not None and actions:
                 phase_event.update({"chunk_sequence": sequence,
                                     "first_adjusted_due_s": float(actions[0]["due_s"])})
+                with self._phase_lock:
+                    current = self.phase_status_snapshot()
+                    if current.request_sequence == phase_event["sequence"] and current.state == "applied":
+                        self._publish_phase_status(
+                            replace(current, first_adjusted_due_s=float(actions[0]["due_s"]),
+                                    first_affected_chunk_sequence=sequence,
+                                    first_affected_action_token=min(new_tokens) if new_tokens else None),
+                            "effect-published", applied_s=self._clock(),
+                        )
                 self._phase_applied_pending = None
             self._published_commands += len(records)
             self._published_action_tokens.update(new_tokens)
@@ -2096,6 +2223,34 @@ class NativeMinitouchBackend:
         transient_at, release_at = self._feedback_input_snapshot
         return 0 <= now - transient_at <= .6 and now - release_at >= .15
 
+    def phase_status_snapshot(self) -> NativePhaseStatus:
+        """纯缓存读取；没有锁等待、设备调用或并发 deque 遍历。"""
+        status = getattr(self, "_phase_status", NativePhaseStatus(str(getattr(self, "_run_id", "unknown"))))
+        planned, actual, token, chunk = getattr(self, "_feedback_transient_snapshot", (None, None, None, None))
+        return replace(status, transient_planned_s=planned, transient_actual_s=actual,
+                       transient_action_token=token, transient_chunk_sequence=chunk)
+
+    def _publish_phase_status(self, status: NativePhaseStatus, event: str, **details) -> None:
+        # 方向回执的 revision 不因独立到达的输入回执变化，避免 waiting 状态刷屏。
+        status = replace(status, transient_planned_s=None, transient_actual_s=None,
+                         transient_action_token=None, transient_chunk_sequence=None)
+        current = getattr(self, "_phase_status", None)
+        if current is not None and replace(status, event_cursor=current.event_cursor) == current:
+            return
+        cursor = (current.event_cursor if current is not None else 0) + 1
+        self._phase_status = replace(status, event_cursor=cursor)
+        if not hasattr(self, "_phase_events"):
+            self._phase_events = deque(maxlen=128)
+        self._phase_events.append({"event": event, "sequence": status.request_sequence,
+                                   "event_cursor": cursor, "state": status.state,
+                                   "observed_s": status.original_observed_s,
+                                   "delta_ms": status.delta_ms,
+                                   "cumulative_phase_ms": status.cumulative_phase_ms,
+                                   "first_adjusted_due_s": status.first_adjusted_due_s,
+                                   "first_affected_chunk_sequence": status.first_affected_chunk_sequence,
+                                   "first_affected_action_token": status.first_affected_action_token,
+                                   **details})
+
     def request_future_phase(self, delta_ms: float, observed_s: float) -> bool:
         """非阻塞单槽请求，不等待 owner，也不触碰 C++ 会话。"""
         if not self.life_feedback_enabled or not self._phase_lock.acquire(False):
@@ -2108,8 +2263,11 @@ class NativeMinitouchBackend:
             self._phase_sequence += 1
             self._phase_slot = (self._run_id, self._phase_sequence, observed_s,
                                 delta_ms, observed_s + 2.0)
-            self._phase_events.append({"event": "requested", "sequence": self._phase_sequence,
-                                       "observed_s": observed_s, "delta_ms": delta_ms})
+            self._publish_phase_status(NativePhaseStatus(
+                self._run_id, self._phase_sequence, state="requested", delta_ms=delta_ms,
+                original_observed_s=observed_s,
+                cumulative_phase_ms=self.phase_status_snapshot().cumulative_phase_ms,
+            ), "requested")
             return True
         finally:
             self._phase_lock.release()
@@ -2134,6 +2292,8 @@ class NativeMinitouchBackend:
                 reason = "expired"
             elif not self._compiler.phase_boundary_safe():
                 # HOLD 或隐式 FLICK 尚未完成时保留候选，正常补粮不能被阻断。
+                self._publish_phase_status(replace(self.phase_status_snapshot(), state="waiting-touch-boundary"),
+                                           "waiting-touch-boundary", applied_s=now)
                 return
             else:
                 recent = list({commit: error for commit, actual_s, error in self._phase_receipts
@@ -2147,15 +2307,21 @@ class NativeMinitouchBackend:
                     reason = str(self._session.apply_future_phase(
                         delta_ms, self._compiler.contact_available_s()))
                     if reason == "unsafe-gap":
+                        self._publish_phase_status(replace(self.phase_status_snapshot(), state="waiting-gap"),
+                                                   "waiting-gap", applied_s=now)
                         return
             self._phase_slot = None
             event = {"event": reason, "sequence": sequence,
                                        "applied_s": now, "delta_ms": delta_ms,
                                        "cumulative_phase_ms": float(getattr(
                                            self._session, "future_phase_offset_ms", 0.0))}
-            self._phase_events.append(event)
+            state = reason if reason in {"applied", "expired", "stopped"} else "rejected"
+            self._publish_phase_status(replace(self.phase_status_snapshot(), state=state,
+                                       terminal_reason=None if reason == "applied" else reason,
+                                       cumulative_phase_ms=event["cumulative_phase_ms"]), reason, applied_s=now)
+            # 原报告继续持有同一事件，由首个受影响切片补齐效果边界。
             if reason == "applied":
-                self._phase_applied_pending = event
+                self._phase_applied_pending = self._phase_events[-1]
 
     def revoke_future_phase(self, reason: str) -> None:
         # 标量失效标记不等待 owner；即使锁正在使用，下一次消费也会拒绝旧候选。
@@ -2164,9 +2330,9 @@ class NativeMinitouchBackend:
             return
         try:
             if self._phase_slot is not None:
-                self._phase_events.append({"event": "revoked", "reason": reason,
-                                           "sequence": self._phase_slot[1]})
                 self._phase_slot = None
+                self._publish_phase_status(replace(self.phase_status_snapshot(), state="revoked", terminal_reason=reason),
+                                           "revoked", reason=reason)
         finally:
             self._phase_lock.release()
 
@@ -2177,6 +2343,8 @@ class NativeMinitouchBackend:
             with self._phase_lock:
                 self._phase_closed = True
                 self._phase_slot = None
+                self._publish_phase_status(replace(self.phase_status_snapshot(), state="stopped", terminal_reason="stopped"),
+                                           "stopped")
         stop_started = time.monotonic()
         release_deadline = stop_started + 1.000
         release_errors: list[str] = []
@@ -2472,10 +2640,16 @@ class NativeMinitouchBackend:
             "life_feedback": {"enabled": getattr(self, "life_feedback_enabled", False),
                               "summary": getattr(self, "_life_feedback_summary", {}),
                               "sampling_events": getattr(self, "_life_feedback_report", []),
-                              "phase_events": list(getattr(self, "_phase_events", []))},
+                              "phase_events": list(getattr(self, "_phase_events", [])),
+                              "phase_status": asdict(self.phase_status_snapshot())},
             "state": self._state,
             "session_state": self._session_state,
             "first_action_anchor_s": self._first_action_anchor_s,
+            "start_evidence": (self._start_evidence_ticket.report()
+                if getattr(self, "_start_evidence_ticket", None) is not None else
+                {"state": "failed" if getattr(photogate, "triggered", False) else "not-triggered",
+                 "warnings": list(getattr(photogate, "_diagnostic_warnings", []))
+                    + ([self._start_evidence_warning] if getattr(self, "_start_evidence_warning", None) else [])}),
             "execution_timing": self._execution_timing.report(),
             "first_chunk_pipeline": self._first_chunk_pipeline_report(),
             "touch_y": float(
