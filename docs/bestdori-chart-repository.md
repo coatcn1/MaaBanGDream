@@ -1,21 +1,19 @@
 # Bestdori 本地谱面仓库
 
-本仓库把 Bestdori 当作开发/部署阶段的数据源，不把它当作实时演奏依赖。
-运行时只读取已经校验的本地 JSON；断网、Bestdori 暂时不可用或接口变化都
-不会让正在进行的演出发起网络请求。
+Bestdori 提供可同步到本机的谱面和封面。实时演奏只读取已经校验的本地 JSON，
+不会在演奏过程中联网请求谱面。
 
 ## 当前覆盖
 
-2026-08-30 全量快照包含 Bestdori 索引中的 809 首歌曲、1777 张谱面和
-867 个封面文件。每首只保存 Hard、Expert，以及确实存在的 Special；不再
-保存 Easy/Normal。封面优先使用 CN 资源，缺失时回退 JP，只有 5 首英语服
-独占歌曲最终使用 EN，因此所有 809 首均至少有一个本地封面。
+同步范围为 Bestdori 完整歌曲目录，每首保存 Hard、Expert 和确实存在的 Special。
+当前歌曲、谱面、封面与错误数量以本机 `manifest.json` 和“演出设置 → 谱面辅助”
+显示为准。封面优先使用 CN 资源，缺失时依次回退 JP、EN。
 
 ## 数据布局
 
 ```text
 resource/charts/
-  representative-songs.json      # 明确允许同步的歌曲集合
+  representative-songs.json      # 代表曲目同步与验证清单
   manifest.json                   # 本地运行时唯一索引
   bestdori/<song-id>/<difficulty>.json
   bestdori/<song-id>/jacket-<server>-<n>.png
@@ -31,14 +29,18 @@ SHA-256 和 `song-jacket-phash-v2`。当前 UI 封面 ROI 为 1280×720 坐标
 
 ## 更新命令
 
-日常使用可在 MFA 的“设置 → 演出设置 → 谱面辅助”点击“同步/更新全部谱面”。
-该入口显示本地歌曲、谱面、封面和错误数量，并逐行显示同步进度。同步属于显式
-维护操作，应先停止正在运行的 Maa 任务；实时演奏本身不会触发同步。
+在 MFA 的“设置 → 演出设置 → 谱面辅助”可查看数量、同步进度并手动同步。
+自动更新默认开启，间隔为 24 小时，可关闭或设置为 1–720 小时；按上次成功检查
+时间判断是否到期，只在所有实例没有执行或排队任务时联网。失败至少退避 15 分钟，
+界面显示上次成功、下次检查和最近错误。手动维护前也应停止正在运行的 Maa 任务。
 
-命令行维护方式如下，必须使用项目固定 Conda 环境：
+同步校验并复用有效资源，按需下载新增、缺失、损坏或索引音符数变化的资源；失败或
+中断保留旧清单引用的可用资源。同音符数的远端内容变更无法仅靠索引增量检查发现。
+
+在仓库根目录执行以下命令，使用项目固定 Conda 环境：
 
 ```powershell
-D:\Documents\workplace\.tools\Miniconda3\envs\maabangdream\python.exe `
+& ..\.tools\Miniconda3\envs\maabangdream\python.exe `
   scripts\sync_bestdori_catalog.py `
   --output-root resource\charts `
   --jacket-server cn `
@@ -47,34 +49,38 @@ D:\Documents\workplace\.tools\Miniconda3\envs\maabangdream\python.exe `
 ```
 
 同步器处理 Bestdori 当前完整歌曲索引，带并发上限、超时、重试、内容类型
-和谱面类型检查，并以临时文件 + 原子替换写入。已存在且通过哈希验证的文件
-会被复用，因此可在中断后续跑；单曲缺失会写入 manifest 错误清单而不阻断
-其余歌曲。接口新增未知音符类型时该谱面会被明确记录为失败。
+和谱面类型检查，以临时文件 + 原子替换写入，支持中断后续跑。单曲缺失或
+未知音符类型会写入 manifest 错误清单，不阻断其余歌曲。
 
 ## 运行时选择与回退
 
 ```text
-选歌/难度确认截图
-        ↓
-封面 pHash + 标题文字 + 难度等级
-        ↓
-manifest 唯一命中 ──否──→ 整局纯视觉（不降低难度）
-        ↓是
-本地哈希复核并加载谱面
-        ↓
-视觉动作校准时间相位
-        ↓
-谱面时序辅助 + 视觉闭环
-        ↓ 连续 8 次可信失配
-释放谱面独占触点并整局回退纯视觉
+准备页证据（封面 / 标题 / 实际难度与等级）
+        ↓ 身份缺失或冲突时隔离旧谱面，延迟预武装
+本局最终封面 + 实读标题（等级辅助）
+        ↓ 身份缺失则继续等待，冲突或超时则触控前停止
+确认本局歌曲与实际难度
+        ├─ Easy/Normal 无本地谱面 → 整局 Legacy
+        ↓ 其他需本地谱面的情况
+可信本地谱面校验（路径 / ID / 难度 / SHA-256）
+        ↓ 校验失败则触控前停止
+所选引擎演奏（Native 中途不切换 Legacy）
 ```
 
-封面仍是低成本的第一身份信号，但不再假定每首歌都有唯一封面。共享封面时，
-程序会在开演前用本地 PP-OCRv5 模型读取歌曲标题，并结合当前谱面等级消歧。
-标题识别器接受调用方提供的任意 ROI；后续多人演出可从其歌曲通知或加载界面
-提供标题区域，即使没有单人选歌页的封面位置，也能直接按标题匹配。所有 OCR
-与谱面解析均离线运行；标题置信度不足或仍有多个候选时保持纯视觉，不会回退
-到 Normal，也不会冒险加载不确定谱面。
+封面 pHash 只收窄候选，歌曲身份还需结合难度等级和实读标题；OCR 与谱面解析
+均离线运行。准备页身份缺失或冲突时，隔离旧谱面、延迟预武装，由本局开场的
+连续稳定最终封面和独立实读标题补全。身份仍不明确时不得启动纯视觉盲打。
+
+完整歌曲目录中封面唯一、最终实读标题一致时，默认允许观测等级与本地元数据
+相差 1 级。共享封面、无可信最终标题或相差超过 1 级时，不能使用此容差；共享
+封面仍需按标题与等级消歧。可用 Agent 参数 `--disable-regional-level-drift`，或
+环境变量 `MAABANGDREAM_REGIONAL_LEVEL_DRIFT_TRIAL=0` 关闭该规则；开发启动脚本
+也支持 `-DisableRegionalLevelDrift`。旧 `--regional-level-drift-trial` 启用参数保留兼容，
+显式关闭参数优先于旧启用参数。
+
+确认身份后，运行时复核本地谱面的路径、歌曲、难度和 SHA-256，再交给所选引擎。
+Native 必须有可信本地谱面，启动后禁止中途切换 Legacy。Easy/Normal 未保存在
+本地谱面库，可在身份确认后整局使用 Legacy；不能借此绕过身份门禁或降低难度。
 
 谱面解析支持分段 BPM、Long/Slide 完整 connection、显式 flick 和
 `Directional` 的 Left/Right 方向。紫色普通音符或 Slide 类型本身都不会被
@@ -83,10 +89,11 @@ manifest 唯一命中 ──否──→ 整局纯视觉（不降低难度）
 ## 验证
 
 ```powershell
-D:\Documents\workplace\.tools\Miniconda3\envs\maabangdream\python.exe `
+& ..\.tools\Miniconda3\envs\maabangdream\python.exe `
   -m pytest tests\test_sync_bestdori_charts.py `
   tests\test_sync_bestdori_catalog.py `
   tests\test_representative_chart_repository.py `
+  tests\test_chart_repository.py tests\test_final_cover_gate.py `
   tests\test_chart_timeline.py tests\test_chart_predictor.py -v
 
 .\scripts\verify.ps1
