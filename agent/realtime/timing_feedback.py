@@ -32,8 +32,11 @@ class TimingFeedbackDetector:
         # 持续帧数门禁后实际上报的次数。用于诊断实机检测覆盖率。
         self.sightings = 0
         self.reports = 0
+        # Native 独立窗口需识别 armed 之后的反色；Legacy 的去重返回契约保持不变。
+        self.last_raw_directions: frozenset[TimingFeedback] = frozenset()
 
     def detect(self, image: np.ndarray) -> TimingFeedback | None:
+        self.last_raw_directions = frozenset()
         if not isinstance(image, np.ndarray) or image.shape[:2] != (720, 1280):
             return None
         x1, y1, x2, y2 = self.ROI
@@ -44,6 +47,10 @@ class TimingFeedbackDetector:
         fast = int(np.count_nonzero(cv2.inRange(
             hsv, (95, 160, 160), (120, 255, 255),
         )))
+        self.last_raw_directions = frozenset(
+            direction for direction, pixels in ((TimingFeedback.FAST, fast), (TimingFeedback.SLOW, slow))
+            if pixels >= self.MIN_COLOURED_PIXELS
+        )
         kind: TimingFeedback | None = None
         if slow >= self.MIN_COLOURED_PIXELS and slow >= fast * 2:
             kind = TimingFeedback.SLOW
