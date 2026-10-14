@@ -665,15 +665,16 @@ static void test_future_phase_shifts_only_unpublished_groups_and_final_tail() {
 static void test_future_phase_limits_stop_and_reservations() {
     Fixture fixture;
     PlaybackSession session(fixture.callbacks());
-    CHECK(session.arm({tap(0), tap(.98), counted_action(ActionKind::Down, .865, 1, 7),
+    CHECK(session.arm({tap(0), tap(.98), counted_action(ActionKind::Down, 1.025, 1, 7),
                        counted_action(ActionKind::Up, 1.5, 1, 7)}, EngineConfig{}));
     CHECK_EQ(session.apply_future_phase(2, 0), std::string("not-running"));
     CHECK(session.start(0));
     CHECK(session.publish());
+    // 20 次 -10ms 恰好累计到新的 200ms 上限,第 21 次触顶。
     for (int index = 0; index < 20; ++index) {
-        CHECK_EQ(session.apply_future_phase(-2, 0), std::string("applied"));
+        CHECK_EQ(session.apply_future_phase(-10, 0), std::string("applied"));
     }
-    CHECK_EQ(session.apply_future_phase(-2, 0), std::string("phase-limit"));
+    CHECK_EQ(session.apply_future_phase(-10, 0), std::string("phase-limit"));
     fixture.now_s = .31;
     CHECK(session.publish());
     CHECK_EQ(fixture.chunks.back().future_down_reservations.size(), static_cast<std::size_t>(1));

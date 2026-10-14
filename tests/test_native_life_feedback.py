@@ -1,4 +1,4 @@
-from collections import deque
+from collections import Counter, deque
 from dataclasses import FrozenInstanceError, replace
 import threading
 from types import SimpleNamespace
@@ -13,7 +13,7 @@ from agent.realtime.native_prearm import frozen_native_runtime_options
 from agent.realtime.live_session import current_live_run, reset_live_run
 from agent.realtime.profile_play_action import StallSafeCapture
 from agent.realtime.profile_store import RealtimeProfileStore
-from agent.realtime.timing_feedback import TimingFeedback
+from agent.realtime.timing_feedback import TimingFeedback, probe_judgement_feedback
 
 
 @pytest.mark.parametrize("life", [False, True])
@@ -56,88 +56,20 @@ def _sampler():
         return True
     backend.request_future_phase = request
     backend.phase_status_snapshot = lambda: backend.status
+    backend.revoke_future_phase = lambda reason: None
     return NativeLifeFeedback(backend), requests
 
 
-def _trigger(sampler, start=0):
-    sampler.observe_scene(start, visible=True)
-    assert sampler.active(start)
+def _open(sampler, now=0):
+    sampler.observe_scene(now, visible=True)
+    assert sampler.active(now)
 
 
-def _sample(sampler, direction, now, *, sequence=None, reused=False, age=.01):
-    sequence = sampler.last_sequence + 1 if sequence is None else sequence
-    valid = sampler.fresh({"sequence": sequence, "request_s": now - age, "reused": reused}, now)
-    if valid:
-        sampler.observe_frame(_feedback_image(direction), now)
-    return valid
-
-
-def _window(sampler, direction, start, *, mixed=False):
-    _trigger(sampler, start)
-    for index in range(16):
-        kind = TimingFeedback.SLOW if mixed and index >= 8 else direction
-        assert _sample(sampler, kind, start + index * .05)
-    sampler.observe_scene(start + .8, visible=True)
-
-
-def test_window_source_frames_and_invalid_frame_close_keep_correct_metadata():
-    sampler, _ = _sampler()
-    _trigger(sampler)
-    event = sampler.events[-1]
-    assert event["event"] == "periodic-window"
-    assert event["window_start_s"] == 0
-    assert not sampler.fresh({"sequence": 3, "request_s": .4,
-                              "reused": True}, .5)
-    closed = sampler.events[-1]
-    assert closed["event"] == "slow-or-reused-frames"
-    assert closed["frame_sequence"] == 3
-    assert closed["request_s"] == .4
-    assert closed["reused"] is True
-    assert closed["observed_s"] == pytest.approx(.5)
-
-
-def test_periodic_windows_do_not_depend_on_life_and_never_catch_up_after_stall():
-    sampler, _ = _sampler()
-    sampler.observe_life(1000, 0, visible=True)
-    sampler.observe_life(800, .2, visible=True)
-    sampler.observe_life(900, .4, visible=True)
-    assert not sampler.active(.4)
-    _trigger(sampler, 1)
-    assert not sampler.active(1.8)
-    assert sampler.finish_due(1.8)
-    sampler.observe_scene(1.8, visible=True)
-    sampler.observe_scene(3.99, visible=True)
-    assert not sampler.active(3.99)
-    _trigger(sampler, 9)
-    assert sampler.burst_started_at == 9
-    assert sampler.next_window_at == 12
-    assert sampler.summary["windows"] == 2
-
-
-@pytest.mark.parametrize("direction,delta", [(TimingFeedback.FAST, 2), (TimingFeedback.SLOW, -2)])
-@pytest.mark.parametrize("life_values", [[1000, 1000, 1000], [1000, 920, 920]])
-def test_three_independent_windows_of_continuous_glyph_request_once(direction, delta, life_values):
-    sampler, requests = _sampler()
-    for start, value in zip([0, 3, 6], life_values):
-        sampler.observe_life(value, start, visible=True)
-        _window(sampler, direction, start)
-        assert len(requests) == (1 if start == 6 else 0)
-    assert requests == [(delta, pytest.approx(6.75))]
-    assert sampler.summary[direction.value + "_votes"] == 3
-    assert sampler.summary["sampling_frames"] == 48
-    assert sampler.summary["requests"] == 1
-    assert len(sampler.votes) == 3
-    assert sampler.qualified_direction is direction
-
-
-def test_mixed_ineligible_old_and_slow_frames_cannot_request():
-    sampler, requests = _sampler()
-    _window(sampler, TimingFeedback.FAST, 0)
-    _window(sampler, TimingFeedback.FAST, 3)
-    _window(sampler, TimingFeedback.FAST, 6, mixed=True)
-    assert requests == []
-    assert not sampler.votes
-    assert sampler.summary["mixed-feedback"] == 1
+def _hit(sampler, direction, now, *, age=.01):
+    # 与引擎同序：先确认新鲜帧（填 frame_evidence），再走常开计数。
+    assert sampler.fresh({"sequence": sampler.last_sequence + 1, "request_s": now - age,
+                          "reused": False}, now)
+    return sampler.observe_judgement(direction, now, source="steady")
 
 
 def _feedback_image(direction):
@@ -149,126 +81,104 @@ def _feedback_image(direction):
     return image
 
 
-def test_real_detector_dedup_and_invalid_gap():
-    sampler, requests = _sampler()
-    _trigger(sampler)
-    orange = _feedback_image(TimingFeedback.SLOW)
-    assert _sample(sampler, TimingFeedback.SLOW, .05)
-    assert _sample(sampler, TimingFeedback.SLOW, .10)
-    for _ in range(10):
-        sampler.observe_frame(orange, .10)
-    assert requests == []
-    assert sampler.summary["sampling_frames"] == 2
-    assert sampler.summary["debounced_reports"] == 1
-    assert not _sample(sampler, TimingFeedback.SLOW, .15, sequence=sampler.last_sequence, reused=True)
-    assert not sampler.active(.15)
-    assert not sampler.votes
-
-
-def test_real_detector_does_not_join_two_fresh_frames_across_unobserved_stall():
+def test_scene_open_marks_active_and_invalid_frame_closes_with_metadata():
     sampler, _ = _sampler()
-    _trigger(sampler)
-    for sequence, now in [(4, .05), (5, .366)]:
-        assert sampler.fresh({"sequence": sequence, "request_s": now - .01, "reused": False}, now)
-        sampler.observe_frame(_feedback_image(TimingFeedback.SLOW), now)
-    assert sampler.summary["slow_reports"] == 0
-    assert sampler.summary["sampling_gaps"] == 1
-    assert not sampler.votes
+    _open(sampler)
+    assert sampler.active(0)
+    assert not sampler.fresh({"sequence": 3, "request_s": .4, "reused": True}, .5)
+    closed = sampler.events[-1]
+    assert closed["event"] == "slow-or-reused-frames"
+    assert closed["frame_sequence"] == 3
+    assert closed["request_s"] == .4
+    assert closed["reused"] is True
+    assert closed["observed_s"] == pytest.approx(.5)
+    assert not sampler.active(.5)
 
 
-def test_early_glyph_then_blank_is_one_valid_vote_with_actual_source_time():
+def test_two_same_direction_hits_request_one_step():
     sampler, requests = _sampler()
-    for start in (0, 3, 6):
-        _trigger(sampler, start)
-        for index in range(16):
-            _sample(sampler, TimingFeedback.FAST if index < 2 else None, start + index * .05)
-        sampler.observe_scene(start + .8, visible=True)
-    assert requests == [(2, pytest.approx(6.05))]
-    assert sampler.summary["direction_votes"] == sampler.summary["debounced_reports"] == 3
+    _open(sampler)
+    assert _hit(sampler, TimingFeedback.FAST, 0) == "counted"
+    assert _hit(sampler, TimingFeedback.FAST, .05) == "requested"
+    assert requests == [(15.0, .05)]
+    assert sampler.summary["requests"] == 1
+    # 请求后清零同向计数，需重新累积。
+    assert sampler.same_reports == 0
+    assert _hit(sampler, TimingFeedback.FAST, .10) == "counted"
 
 
-@pytest.mark.parametrize("invalid", ["reused", "old-sequence", "old-request", "gap", "bad-shape", "scene", "stop"])
-def test_third_window_invalidity_clears_prior_votes_without_request(invalid):
+def test_slow_direction_requests_negative_step():
     sampler, requests = _sampler()
-    _window(sampler, TimingFeedback.FAST, 0)
-    _window(sampler, TimingFeedback.FAST, 3)
-    _trigger(sampler, 6)
-    _sample(sampler, TimingFeedback.FAST, 6)
-    _sample(sampler, TimingFeedback.FAST, 6.05)
-    if invalid == "reused":
-        _sample(sampler, TimingFeedback.FAST, 6.1, reused=True)
-    elif invalid == "old-sequence":
-        _sample(sampler, TimingFeedback.FAST, 6.1, sequence=sampler.last_sequence - 1)
-    elif invalid == "old-request":
-        _sample(sampler, TimingFeedback.FAST, 6.1, age=.081)
-    elif invalid == "gap":
-        _sample(sampler, TimingFeedback.FAST, 6.2)
-    elif invalid == "bad-shape":
-        assert sampler.fresh({"sequence": sampler.last_sequence + 1, "request_s": 6.09, "reused": False}, 6.1)
-        sampler.observe_frame(np.zeros((100, 100, 3), dtype=np.uint8), 6.1)
-    elif invalid == "scene":
-        sampler.observe_scene(6.8, visible=False)
-    else:
-        sampler.close(6.8, "terminal")
-    assert not sampler.votes
+    _open(sampler)
+    _hit(sampler, TimingFeedback.SLOW, 0)
+    _hit(sampler, TimingFeedback.SLOW, .05)
+    assert requests == [(-15.0, .05)]
+
+
+def test_reverse_hit_reanchors_instead_of_blocking_cluster():
+    sampler, requests = _sampler()
+    _open(sampler)
+    # 单条反向（leading edge）不再整段否决，而是重锚到新方向。
+    _hit(sampler, TimingFeedback.SLOW, 0)
+    _hit(sampler, TimingFeedback.FAST, .05)
+    assert requests == []
+    assert sampler.mixed is True
+    # 反向后的同向连续命中照样触发。
+    _hit(sampler, TimingFeedback.FAST, .10)
+    assert requests == [(15.0, .10)]
+
+
+def test_streak_gap_resets_count():
+    sampler, requests = _sampler()
+    _open(sampler)
+    _hit(sampler, TimingFeedback.FAST, 0)
+    # 超过 STREAK_GAP_S(1.0s) 视为新一段，计数清零。
+    _hit(sampler, TimingFeedback.FAST, 2.0)
     assert requests == []
 
 
-def test_no_evidence_window_keeps_live_trend_and_expired_votes_do_not_request():
+def test_ineligible_hit_does_not_reset_streak():
     sampler, requests = _sampler()
-    _window(sampler, TimingFeedback.FAST, 0)
-    _window(sampler, TimingFeedback.FAST, 3)
-    _window(sampler, None, 6)
-    assert len(sampler.votes) == 2
-    assert sampler.ignored_reasons["no-feedback"] == 1
-    _window(sampler, None, 9)
-    _window(sampler, None, 12)
-    _window(sampler, TimingFeedback.FAST, 25)
-    assert len(sampler.votes) == 1
-    assert requests == []
+    _open(sampler)
+    sampler.backend.feedback_input_eligible = lambda now: now >= .02
+    assert _hit(sampler, TimingFeedback.FAST, 0) == "ineligible"
+    sampler.backend.feedback_input_eligible = lambda now: True
+    assert _hit(sampler, TimingFeedback.FAST, .05) == "counted"
+    # 不合格命中不清零：第二条合格命中即凑满阈值。
+    assert _hit(sampler, TimingFeedback.FAST, .10) == "requested"
+    assert len(requests) == 1
 
 
-def test_window_finish_queries_do_not_submit_and_close_rechecks_recent_input():
+def test_request_cooldown_limits_rate():
     sampler, requests = _sampler()
-    for start in (0, 3):
-        _window(sampler, TimingFeedback.FAST, start)
-    _trigger(sampler, 6)
-    for index in range(16):
-        _sample(sampler, TimingFeedback.FAST, 6 + index * .05)
-    assert not sampler.active(6.8)
-    assert sampler.finish_due(6.8)
-    assert requests == []
-    sampler.backend.feedback_input_eligible = lambda _now: False
-    sampler.observe_scene(6.8, visible=True)
-    assert requests == []
-    assert not sampler.votes
+    _open(sampler)
+    for index in range(6):
+        _hit(sampler, TimingFeedback.FAST, index * .05)
+    # 冷却 0.3s：0.25s 内最多两次（0.05 与 0.20 附近的 0.25 不算）。
+    assert len(requests) <= 1
 
 
-def test_same_frame_both_colours_rejects_window_even_after_detector_armed():
+def test_probe_judgement_feedback_reads_bar_direction_and_pixels():
+    kind, slow_px, fast_px = probe_judgement_feedback(_feedback_image(TimingFeedback.FAST))
+    assert kind is TimingFeedback.FAST and fast_px > 0 and slow_px == 0
+    kind, slow_px, fast_px = probe_judgement_feedback(_feedback_image(TimingFeedback.SLOW))
+    assert kind is TimingFeedback.SLOW and slow_px > 0 and fast_px == 0
+    kind, slow_px, fast_px = probe_judgement_feedback(np.zeros((720, 1280, 3), dtype=np.uint8))
+    assert kind is None and slow_px == 0 and fast_px == 0
+
+
+def test_observe_frame_detects_bar_and_counts():
     sampler, requests = _sampler()
-    _trigger(sampler)
-    _sample(sampler, TimingFeedback.FAST, 0)
-    _sample(sampler, TimingFeedback.FAST, .05)
-    both = _feedback_image(TimingFeedback.FAST)
-    both[514:535, 570:710] = (0, 140, 255)
-    assert sampler.fresh({"sequence": 2, "request_s": .09, "reused": False}, .1)
-    sampler.observe_frame(both, .1)
-    sampler.observe_scene(.8, visible=True)
+    _open(sampler)
+    for index in range(3):
+        now = index * .05
+        assert sampler.fresh({"sequence": index, "request_s": now - .01, "reused": False}, now)
+        sampler.observe_frame(_feedback_image(TimingFeedback.FAST), now)
+    # 检测器每个判定条周期只上报一次（armed 去重）；常开计数因此只看到一次命中，
+    # 引擎主路径改用无去重的 probe_judgement_feedback。
+    assert sampler.summary["fast_reports"] == 1
+    assert sampler.same_reports == 1
     assert requests == []
-    assert sampler.ignored_reasons["mixed-feedback"] == 1
-
-
-@pytest.mark.parametrize("reason", ["invalid-scene", "slow-or-reused-frames", "sampling-error"])
-def test_invalid_window_revokes_pending_owner_candidate(reason):
-    backend, calls = _phase_backend()
-    sampler = NativeLifeFeedback(backend)
-    assert backend.request_future_phase(2, .95)
-    backend._compiler.phase_boundary_safe = lambda: False
-    backend._consume_phase_candidate()
-    sampler.close(1, reason)
-    backend._compiler.phase_boundary_safe = lambda: True
-    backend._consume_phase_candidate()
-    assert calls == []
 
 
 def _phase_backend():
@@ -280,6 +190,10 @@ def _phase_backend():
     backend._phase_sequence = 0
     backend._phase_events = deque(maxlen=128)
     backend._phase_receipts = deque([(1, .8, 2), (2, .85, 3), (3, .9, 4)])
+    backend._phase_holds = Counter()
+    backend._phase_slot_polls = 0
+    backend._phase_slot_holds = Counter()
+    backend._phase_receipt_medians = deque(maxlen=4096)
     backend._clock = lambda: 1.0
     backend._clock_basis = "probe-midpoint"
     backend._clock_uncertainty_ms = .5
@@ -292,22 +206,24 @@ def _phase_backend():
     return backend, calls
 
 
-def test_mailbox_is_nonblocking_single_slot_and_owner_only():
+def test_mailbox_replaces_single_slot_and_owner_only():
     backend, calls = _phase_backend()
-    assert backend.request_future_phase(2, .95)
-    assert not backend.request_future_phase(-2, .95)
+    assert backend.request_future_phase(15, .95)
+    # 信箱被占时新请求顶掉旧候选（不再直接丢弃）。
+    assert backend.request_future_phase(-15, .95)
     assert calls == []
     backend._consume_phase_candidate()
-    assert calls == [(2, .5)]
+    assert calls == [(-15, .5)]
     assert backend._phase_events[-1]["event"] == "applied"
+    assert backend._phase_holds["replaced-mailbox"] == 1
     backend._phase_lock.acquire()
-    assert not backend.request_future_phase(2, 1)
+    assert not backend.request_future_phase(15, 1)
     backend._phase_lock.release()
 
 
 def test_phase_snapshot_is_immutable_and_readable_while_owner_lock_is_held():
     backend, _ = _phase_backend()
-    assert backend.request_future_phase(2, .95)
+    assert backend.request_future_phase(15, .95)
     original = backend.phase_status_snapshot()
     backend._phase_lock.acquire()
     try:
@@ -332,11 +248,12 @@ def test_phase_snapshot_is_immutable_and_readable_while_owner_lock_is_held():
 
 def test_real_backend_revoke_records_one_state_transition_and_waiting_does_not_spam():
     backend, _ = _phase_backend()
-    assert backend.request_future_phase(2, .95)
+    assert backend.request_future_phase(15, .95)
     backend._compiler.phase_boundary_safe = lambda: False
     for _ in range(4):
         backend._consume_phase_candidate()
     assert [event["event"] for event in backend._phase_events] == ["requested", "waiting-touch-boundary"]
+    assert backend._phase_holds["boundary-unsafe"] == 4
     backend.revoke_future_phase("mixed-feedback")
     revoked = [event for event in backend._phase_events if event["event"] == "revoked"]
     assert len(revoked) == 1
@@ -347,7 +264,7 @@ def test_real_backend_revoke_records_one_state_transition_and_waiting_does_not_s
 @pytest.mark.parametrize("guard", ["hold", "expiry", "stop", "uncertain", "old", "few", "duplicate", "late"])
 def test_phase_guards_preserve_dispatch(guard):
     backend, calls = _phase_backend()
-    assert backend.request_future_phase(2, .95)
+    assert backend.request_future_phase(15, .95)
     if guard == "hold":
         backend._compiler.phase_boundary_safe = lambda: False
     elif guard == "expiry":
@@ -355,18 +272,43 @@ def test_phase_guards_preserve_dispatch(guard):
     elif guard == "stop":
         backend._phase_closed = True
     elif guard == "uncertain":
-        backend._clock_uncertainty_ms = 2
+        # 上界放宽到 20ms；25ms 仍视为不可信。
+        backend._clock_uncertainty_ms = 25
     elif guard == "old":
-        backend._phase_slot = ("old", 1, .95, 2, 2.95)
+        backend._phase_slot = ("old", 1, .95, 15, 2.95)
     elif guard == "few":
         backend._phase_receipts.pop()
     elif guard == "duplicate":
         backend._phase_receipts = deque([(1, .8, 2)] * 3)
     else:
+        # 回执窗口 1.5s：超过 1.5s 之前的回执不再计入，样本不足被拒。
+        backend._clock = lambda: 2.0
         backend._phase_receipts = deque([(1, .1, 2), (2, .2, 3), (3, .3, 4)])
     backend._consume_phase_candidate()
     assert calls == []
     assert (backend._phase_slot is not None) is (guard == "hold")
+
+
+def test_phase_gate_diagnostics_carry_receipt_numbers():
+    backend, calls = _phase_backend()
+    backend._clock_uncertainty_ms = 25
+    assert backend.request_future_phase(15, .95)
+    backend._consume_phase_candidate()
+    assert calls == []
+    event = backend._phase_events[-1]
+    assert event["event"] == "untrusted-execution-receipts"
+    assert event["gate"].startswith("n=3,med=")
+    assert "unc=25" in event["gate"]
+
+
+def test_phase_receipt_stats_summarizes_run_median():
+    backend, _ = _phase_backend()
+    for error in (2.0, 3.0, 4.0, 40.0):
+        backend._phase_receipt_medians.append(error)
+    stats = backend._phase_receipt_stats()
+    assert stats["samples"] == 4
+    assert stats["max_ms"] == 40.0
+    assert stats["last_ms"] == 40.0
 
 
 def test_fresh_capture_prefetch_is_five_hz_without_wait(monkeypatch):
@@ -425,7 +367,7 @@ def test_async_prefetch_accepts_new_frame_before_consumer_without_marking_reused
     capture._last_image = np.zeros((720, 1280, 3), dtype=np.uint8)
     capture.enable_fresh_prefetch()
     sampler, _ = _sampler()
-    _trigger(sampler)
+    _open(sampler)
     sampler.last_sequence = 0
     capture.prefetch_fresh(.0167)
     clock[0] = .0167
@@ -458,72 +400,12 @@ def test_old_binary_api_fails_before_input_and_environment_does_not_override_ui(
         NativeMinitouchBackend(chart, adb_path="adb", serial="test", life_feedback_enabled=True)
 
 
-def test_engine_keeps_terminal_five_hz_during_twenty_hz_periodic_window():
-    import time
-    from agent.realtime.engine import RealtimeEngine
-    from agent.realtime.life_monitor import LifeGuard, LifeReading
-    counts = {"captures": 0, "life": [], "terminal": [], "close": 0, "stop": 0}
-    class Capture:
-        def __call__(self):
-            counts["captures"] += 1
-            now = time.perf_counter()
-            self.frame_metadata = {"sequence": counts["captures"], "request_s": now - .01, "reused": False}
-            return _feedback_image(TimingFeedback.FAST)
-        def enable_fresh_prefetch(self):
-            pass
-        def prefetch_fresh(self, target):
-            pass
-    class Life:
-        def detect(self, image):
-            counts["life"].append(time.perf_counter())
-            return LifeReading(True, 1000)
-    class Backend:
-        exclusive = takeover = life_feedback_enabled = True
-        active = finished = False
-        def arm(self):
-            pass
-        def observe_start_frame(self, image, now):
-            return now
-        def start(self, anchor):
-            self.active = True
-        def poll(self, now):
-            pass
-        def stop(self):
-            counts["stop"] += 1
-        def report(self):
-            return {}
-        def feedback_input_eligible(self, now):
-            return True
-        def request_future_phase(self, delta, now):
-            return True
-    backend = Backend()
-    planner = SimpleNamespace(timing_offset_ms=0,
-                              update=lambda *args: pytest.fail("Native 不应调用 Legacy planner"))
-    touch = SimpleNamespace(close=lambda: counts.__setitem__("close", counts["close"] + 1))
-    monitor = SimpleNamespace(active=True, mark_active=lambda now: None,
-                              observe=lambda image, now: counts["terminal"].append(now) or "active")
-    engine = RealtimeEngine(SimpleNamespace(), planner, touch, native_backend=backend,
-                            life_detector=Life(), life_guard=LifeGuard(confirm_frames=1),
-                            playfield_monitor=monitor)
-    stats = engine.run(Capture(), lambda: False, duration_seconds=1.1, target_fps=60)
-    assert 16 <= counts["captures"] <= 23
-    for samples in (counts["life"], counts["terminal"]):
-        assert 4 <= len(samples) <= 7
-        # 每窗结束额外复核一次场景，其余生命与终点节拍保持约 5Hz。
-        assert sum(after - before < .18 for before, after in zip(samples, samples[1:])) <= 1
-    assert backend._life_feedback_summary["windows"] == 1
-    assert stats.timing_feedback_fast == stats.timing_feedback_valid == 1
-    assert stats.timing_feedback_sightings > 0
-    assert stats.timing_feedback_reports == 1
-    assert counts["stop"] == counts["close"] == 1
-
-
-def _virtual_feedback_engine(monkeypatch, *, terminal=None, enabled=True, early_glyph=False):
+def _virtual_feedback_engine(monkeypatch, *, terminal=None, enabled=True):
     from agent.realtime import engine as engine_module
     from agent.realtime.life_monitor import LifeGuard, LifeReading
     clock = [.007]
     stopping = [False]
-    data = {"captures": [], "life": [], "terminal": [], "requests": [], "windows": [], "finish_at": None}
+    data = {"captures": [], "life": [], "terminal": [], "requests": [], "finish_at": 6.0}
     monkeypatch.setattr(engine_module.time, "sleep", lambda duration: clock.__setitem__(0, clock[0] + duration))
     class Capture:
         def __call__(self):
@@ -531,12 +413,9 @@ def _virtual_feedback_engine(monkeypatch, *, terminal=None, enabled=True, early_
             now = clock[0]
             data["captures"].append(now)
             self.frame_metadata = {"sequence": len(data["captures"]), "request_s": now - .01, "reused": False}
-            if terminal == "stop" and data["finish_at"] is not None and now >= data["finish_at"]:
+            if terminal == "stop" and now >= data["finish_at"]:
                 stopping[0] = True
-            direction = TimingFeedback.FAST
-            if early_glyph and data["windows"] and now - data["windows"][-1] >= .15:
-                direction = None
-            return _feedback_image(direction)
+            return _feedback_image(TimingFeedback.FAST)
         def enable_fresh_prefetch(self):
             pass
         def prefetch_fresh(self, target):
@@ -551,7 +430,7 @@ def _virtual_feedback_engine(monkeypatch, *, terminal=None, enabled=True, early_
             self.active = True
         def observe(self, _image, now):
             data["terminal"].append(now)
-            if terminal == "completed" and data["finish_at"] is not None and now >= data["finish_at"]:
+            if terminal == "completed" and now >= data["finish_at"]:
                 return "completed"
             return "active"
     class Backend:
@@ -589,14 +468,11 @@ def _virtual_feedback_engine(monkeypatch, *, terminal=None, enabled=True, early_
             pass
         def close(self):
             pass
-        def record_native_feedback(self, image, now, metadata, window_start_s):
-            if not data["windows"] or data["windows"][-1] != window_start_s:
-                data["windows"].append(window_start_s)
-                if len(data["windows"]) == 3:
-                    data["finish_at"] = window_start_s + .8
+        def record_judgement_sniff(self, *_args, **_kwargs):
+            pass
     class Failed:
         def observe(self, image, now):
-            return terminal == "life-failed" and data["finish_at"] is not None and now >= data["finish_at"]
+            return terminal == "life-failed" and now >= data["finish_at"]
     backend = Backend()
     planner = SimpleNamespace(timing_offset_ms=13, update=lambda *_args: pytest.fail("Native 不使用 Legacy planner"))
     engine = engine_module.RealtimeEngine(SimpleNamespace(), planner, SimpleNamespace(close=lambda: None),
@@ -606,88 +482,27 @@ def _virtual_feedback_engine(monkeypatch, *, terminal=None, enabled=True, early_
     return stats, data, backend
 
 
+def test_engine_always_on_counts_judgement_and_freezes_profile_offset(monkeypatch):
+    stats, data, backend = _virtual_feedback_engine(monkeypatch)
+    # 常开 5Hz：整个演奏段都在采样，不再受 3 秒周期窗限制。
+    assert stats.timing_feedback_fast >= 10
+    assert stats.timing_feedback_valid >= 10
+    assert len(data["requests"]) >= 1
+    assert data["requests"][0][0] == 15
+    assert stats.initial_timing_offset_ms == stats.final_timing_offset_ms == 13
+
+
 @pytest.mark.parametrize("terminal", ["completed", "life-failed", "stop"])
-def test_engine_third_window_end_checks_terminal_before_request(monkeypatch, terminal):
+def test_engine_terminal_paths_keep_always_on_sampling(monkeypatch, terminal):
     stats, data, backend = _virtual_feedback_engine(monkeypatch, terminal=terminal)
-    assert len(data["windows"]) == 3
-    assert all(start >= data["anchor"] for start in data["windows"])
-    assert data["requests"] == []
-    assert stats.timing_feedback_valid == 2
     assert stats.completed is (terminal == "completed")
     assert stats.life_failed is (terminal == "life-failed")
     assert stats.stopped is (terminal == "stop")
-    assert backend._life_feedback_summary["direction_votes"] == 2
-
-
-def test_engine_periodic_sampling_has_real_counts_and_frozen_profile_offset(monkeypatch):
-    stats, data, backend = _virtual_feedback_engine(monkeypatch)
-    assert len(data["requests"]) == 1
-    assert data["requests"][0][0] == 2
-    assert data["requests"][0][1] < data["requests"][0][2]
-    assert stats.timing_feedback_fast == stats.timing_feedback_valid == 3
-    assert stats.timing_feedback_sightings == backend._life_feedback_summary["sampling_frames"]
-    assert stats.initial_timing_offset_ms == stats.final_timing_offset_ms == 13
-    assert 32 <= len(data["life"]) <= 41
-    assert 32 <= len(data["terminal"]) <= 41
-    assert backend._life_feedback_summary["sampling_frames"] <= 48
+    assert stats.timing_feedback_fast >= 10
 
 
 def test_engine_disabled_feedback_retains_native_five_hz_baseline(monkeypatch):
     stats, data, backend = _virtual_feedback_engine(monkeypatch, enabled=False)
-    assert not data["windows"] and not data["requests"]
+    assert not data["requests"]
     assert not hasattr(backend, "_life_feedback_summary")
     assert stats.timing_feedback_fast == stats.timing_feedback_valid == 0
-    assert len(data["captures"]) <= 43
-
-
-def test_window_close_does_not_hide_sampling_gap_with_a_new_frame_after_deadline():
-    sampler, requests = _sampler()
-    _window(sampler, TimingFeedback.FAST, 0)
-    _window(sampler, TimingFeedback.FAST, 3)
-    _trigger(sampler, 6)
-    for now in (6, 6.05, 6.1):
-        _sample(sampler, TimingFeedback.FAST, now)
-    assert sampler.fresh({"sequence": sampler.last_sequence + 1, "request_s": 6.99, "reused": False}, 7)
-    sampler.observe_scene(7, visible=True)
-    assert requests == []
-    assert not sampler.votes
-    assert sampler.ignored_reasons["sampling-gap"] == 1
-
-
-def test_window_early_release_guard_then_eligible_fast_can_vote():
-    sampler, requests = _sampler()
-    sampler.backend.feedback_input_eligible = lambda now: now % 3 >= .15
-    for start in (0, 3, 6):
-        _window(sampler, TimingFeedback.FAST, start)
-    assert len(requests) == 1
-    assert sampler.summary["fast_votes"] == 3
-    assert sampler.summary["ineligible_frames"] >= 9
-
-
-@pytest.mark.parametrize("ineligible_direction", [TimingFeedback.FAST, None])
-def test_ineligible_segment_cannot_join_isolated_fast_sightings(ineligible_direction):
-    sampler, requests = _sampler()
-    _trigger(sampler)
-    _sample(sampler, TimingFeedback.FAST, 0)
-    sampler.backend.feedback_input_eligible = lambda now: now != .05
-    _sample(sampler, ineligible_direction, .05)
-    _sample(sampler, TimingFeedback.FAST, .1)
-    for index in range(3, 16):
-        _sample(sampler, None, index * .05)
-    sampler.observe_scene(.8, visible=True)
-    assert sampler.summary["direction_votes"] == 0
-    assert requests == []
-
-
-def test_ineligible_opposite_colour_does_not_overwrite_prior_trusted_window_evidence():
-    sampler, requests = _sampler()
-    for start in (0, 3, 6):
-        _trigger(sampler, start)
-        sampler.backend.feedback_input_eligible = lambda now: not .1 <= round(now - start, 6) <= .25
-        for index in range(16):
-            kind = TimingFeedback.SLOW if 2 <= index <= 4 else TimingFeedback.FAST
-            _sample(sampler, kind, start + index * .05)
-        sampler.observe_scene(start + .8, visible=True)
-    assert len(requests) == 1
-    assert sampler.summary["direction_votes"] == 3
-    assert not sampler.summary["mixed-feedback"]
