@@ -313,3 +313,5 @@ git diff --check
   <strong>MaaBanGDream</strong><br>
   BanG Dream! automation powered by MaaFramework
 </p>
+
+最终封面读取完整标题条，协力准备页扩大标题范围；补全证据局部容忍假名混读，身份失败保留本局截图和诊断，停止优先。

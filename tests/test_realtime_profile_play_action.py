@@ -826,6 +826,56 @@ def test_pending_preparation_identity_requires_independent_final_cover(
     assert captured["ignore_level"] is True
 
 
+@pytest.mark.parametrize("replace_run", [False, True])
+def test_final_cover_error_recorder_refreshes_only_same_run_metadata(monkeypatch, tmp_path, replace_run):
+    reset_live_run(mode="formal", difficulty="Expert", prepared_for_play=True)
+    original_run = update_live_run(song_level=27, preparation_identity_pending_final_cover=True)
+    monkeypatch.setattr(profile_play_action, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(profile_play_action.RealtimeProfileStore, "runtime_options", lambda *_args, **_kwargs: {})
+    selected = _chart_selection("resource/charts/bestdori/55/expert.json")
+    monkeypatch.setattr(profile_play_action, "resolve_local_chart_for_run", lambda *_args, **_kwargs: SimpleNamespace(
+        selection=selected, reason="selected chart",
+    ))
+    metadata = []
+    class Recorder:
+        output_dir = tmp_path / "debug" / "recordings" / "test-final-cover"
+        def __init__(self, *_args, **_kwargs):
+            self.output_dir.mkdir(parents=True)
+            self.session = None
+        def set_session_metadata(self, value):
+            self.session = value
+        def update_session_metadata(self, value):
+            self.session = value
+        def close(self):
+            metadata.append(self.session)
+            (self.output_dir / "summary.json").write_text(json.dumps({"session": self.session}), encoding="utf-8")
+    monkeypatch.setattr(profile_play_action, "RealtimeDebugRecorder", Recorder)
+    def failed(*_args, **_kwargs):
+        if replace_run:
+            reset_live_run(mode="formal", difficulty="Expert")
+        update_live_run(final_cover_status="error", final_cover_reason="RuntimeError: 最终封面身份冲突")
+        raise RuntimeError("最终封面身份冲突")
+    monkeypatch.setattr(profile_play_action, "wait_for_final_cover", failed)
+    context = SimpleNamespace(tasker=SimpleNamespace(stopping=False, controller=Controller()))
+    argv = SimpleNamespace(custom_action_param=json.dumps({
+        "difficulty": "Expert", "require_profile": False,
+        "confirm_final_cover": True, "diagnostic_trace": True, "debug_recording": False,
+        "run_mode": "formal", "rehearsal_mode": False,
+    }))
+    with pytest.raises(RuntimeError, match="最终封面身份冲突"):
+        RealtimeProfilePlay()._run(context, argv)
+    summary = metadata[-1]
+    assert summary["run_id"] == original_run.run_id
+    if replace_run:
+        assert summary["final_cover"]["status"] == "not-observed"
+        assert summary["final_cover"]["reason"] is None
+    else:
+        report_path = next((tmp_path / "screencap").glob("realtime-result-*.json"))
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        assert summary["final_cover"]["status"] == "error"
+        assert summary["final_cover"] == report["session"]["final_cover"]
+
+
 def test_explicit_native_requires_controller_adb_endpoint():
     with pytest.raises(RuntimeError, match="adb_path.*adb_serial"):
         profile_play_action._native_adb_endpoint(Controller())

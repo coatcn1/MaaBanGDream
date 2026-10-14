@@ -17,6 +17,7 @@ from agent.realtime.song_title_ocr import (
     FINAL_COVER_TITLE_ROI,
     FINAL_COVER_WIDE_TITLE_ROI,
     TitleReading,
+    is_final_title_completion,
 )
 
 
@@ -96,7 +97,8 @@ def test_final_short_title_uses_bounded_ink_padding_after_low_confidence():
 
 def test_final_long_title_touching_band_edge_keeps_fixed_roi():
     image = np.full((720, 1280, 3), 220, dtype=np.uint8)
-    image[500:530, 480:798] = 100
+    x, _y, width, _height = FINAL_COVER_TITLE_ROI
+    image[500:530, x:x + width] = 100
     assert final_cover_ink_roi(image) is None
     rois = []
     def reader(_image, *, roi):
@@ -127,6 +129,23 @@ def test_final_score_layout_is_excluded_before_ocr():
                                        diagnostics=diagnostic) is None
     assert not calls
     assert diagnostic["status"] == "excluded-score-layout"
+
+
+def test_default_final_title_frame_contains_complete_real_long_title_without_trial():
+    image = np.full((720, 1280, 3), 220, dtype=np.uint8)
+    calls, diagnostic = [], {}
+    def reader(_image, *, roi):
+        calls.append(roi)
+        if roi == (480, 485, 318, 70):
+            return TitleReading("・もちゃ・ペったん", .928743)
+        if roi == (300, 485, 680, 70):
+            return TitleReading("わちゃ・もちゃ・ぺったん行進曲", .97)
+        pytest.fail("默认标题条不能请求试验宽框或下方乐队信息")
+    reading = recognize_final_cover_title(image, reader=reader, diagnostics=diagnostic)
+    assert reading.text == "わちゃ・もちゃ・ぺったん行進曲"
+    assert calls == [(300, 485, 680, 70)]
+    assert diagnostic["source"] == "fixed-roi"
+    assert diagnostic["wide_title_trial"] is False
 
 
 @pytest.mark.parametrize("narrow,wide,status,source", [
@@ -162,3 +181,23 @@ def test_wide_title_is_default_off_even_when_identity_is_missing():
         identity_validator=lambda _reading: "missing",
     ) is reading
     assert rois == [FINAL_COVER_TITLE_ROI]
+
+
+def test_wide_title_completes_real_kana_truncation_without_changing_global_matching():
+    narrow = TitleReading("わちゃ・もちゃ・ペっ", .96)
+    wide = TitleReading("わちゃ・もちゃ・ぺったん行進曲", .974853754)
+    diagnostic = {}
+    result = recognize_final_cover_title(
+        np.full((720, 1280, 3), 220, dtype=np.uint8),
+        reader=lambda _image, *, roi: narrow if roi == FINAL_COVER_TITLE_ROI else wide,
+        diagnostics=diagnostic, wide_title_trial=True,
+        identity_validator=lambda reading: "missing" if reading is narrow else "confirmed",
+    )
+    assert result is wide
+    assert diagnostic["source"] == "wide-roi"
+    assert title_similarity(narrow.text, wide.text) < .68
+
+
+@pytest.mark.parametrize("text", ["別の曲わちゃもちゃ", "わちゃ・もちゃ・べったん行進曲"])
+def test_kana_completion_cannot_replace_different_text_or_voicing(text):
+    assert not is_final_title_completion(TitleReading("わちゃ・もちゃ・ペっ", .96), TitleReading(text, .99))
