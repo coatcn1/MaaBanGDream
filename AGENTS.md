@@ -56,10 +56,15 @@ MFA 不直接读取源码目录。修改 `agent/`、`resource/` 或 `interface.j
 仅在任务边界清楚时委派；主 Agent 负责需求、证据链、作用域和最终结论。同一批文件只能由
 一个写入 Agent 修改。
 
-- `mbd_log_scanner`：只读扫描 MFA 日志、`summary.json`、结果 JSON。
-- `mbd_trace_scanner`：只读扫描 checkpoints、events、lifecycle、trace 的有限窗口。
-- `mbd_replay_runner`：离线 replay 和基线对比，只能在 `.local/` 生成临时产物。
-- `mbd_implementer`：在已有有界证据、最小假设和验收标准后实施代码与测试修改。
+所有 Subagent 只允许使用 `gpt-6-luna` 或 `gpt-6.1-sol`，禁止创建任何 GPT-5.6 系列
+Subagent。通用角色必须显式指定允许的模型；自定义角色必须核对实际绑定模型。如果当前
+会话仍加载旧型号，改用显式指定允许模型的通用角色并转交同等职责与约束，不得调用旧角色
+或回退到 5.6 系列。
+
+- `mbd_log_scanner`（`gpt-6-luna`）：只读扫描 MFA 日志、`summary.json`、结果 JSON。
+- `mbd_trace_scanner`（`gpt-6-luna`）：只读扫描 checkpoints、events、lifecycle、trace 的有限窗口。
+- `mbd_replay_runner`（`gpt-6.1-sol`）：离线 replay 和基线对比，只能在 `.local/` 生成临时产物。
+- `mbd_implementer`（`gpt-6.1-sol`）：在已有有界证据、最小假设和验收标准后实施代码与测试修改。
 
 Realtime 闭环固定为：证据提取 → 必要的独立审查 → 最小实现 → 定向测试 → 离线 replay →
 修改后复核 → 用户真机验收。离线结果不能替代真机验收。
