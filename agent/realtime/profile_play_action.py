@@ -397,7 +397,7 @@ def wait_for_final_cover(
         raise ValueError("final_cover_timeout_seconds 必须在 1..180 之间")
     if not isinstance(cooperative_member_loading_guard_enabled, bool):
         raise ValueError("cooperative_member_loading_guard_enabled 必须是布尔值")
-    cooperative = getattr(live_run, "mode", "") == "cooperative"
+    cooperative = getattr(live_run, "mode", "") in ("cooperative", "versus")
     if cooperative:
         from .startup_diagnostics import startup_recorder
         startup = startup_recorder(getattr(live_run, "run_id", None))
@@ -456,7 +456,7 @@ def wait_for_final_cover(
         require_observed_title=require_observed_title,
         allow_missing_level=ignore_preparation_level,
         reject_member_loading=(
-            getattr(live_run, "mode", "") == "cooperative"
+            getattr(live_run, "mode", "") in ("cooperative", "versus")
             and cooperative_member_loading_guard_enabled
         ),
     )
@@ -868,6 +868,7 @@ def _save_challenge_life_failure(capture, stats, live_run, timing_offset_ms):
 
 _RECORDING_KIND_BY_RUN_MODE = {
     "cooperative": "coop",
+    "versus": "versus",
     "challenge": "challenge",
     "formal": "single-formal",
     "rehearsal": "single-rehearsal",
@@ -2075,7 +2076,7 @@ def _continue_after_completed_play(method):
                 flush=True,
             )
             params = json.loads(argv.custom_action_param or "{}")
-            if params.get("run_mode") != "cooperative" and not params.get("defer_result_collection"):
+            if params.get("run_mode") not in ("cooperative", "versus") and not params.get("defer_result_collection"):
                 try:
                     _recover_completed_result(context)
                 except Exception as recovery_error:
@@ -2165,11 +2166,14 @@ class RealtimeProfilePlay(CustomAction):
                 runtime_options = frozen_native_runtime_options(snapshot_run, runtime_options)
             cooperative_member_loading_guard_enabled = params.get(
                 "cooperative_member_loading_guard_enabled",
-                runtime_options.get("cooperative_member_loading_guard_enabled", True),
+                params.get(
+                    "versus_member_loading_guard_enabled",
+                    runtime_options.get("cooperative_member_loading_guard_enabled", True),
+                ),
             )
             if not isinstance(cooperative_member_loading_guard_enabled, bool):
                 raise ValueError("cooperative_member_loading_guard_enabled 必须是布尔值")
-            if params.get("run_mode") == "cooperative":
+            if params.get("run_mode") in ("cooperative", "versus"):
                 print(
                     "RealtimeProfilePlay cooperative_member_loading_guard_enabled="
                     f"{cooperative_member_loading_guard_enabled} source=task_snapshot",
@@ -2461,7 +2465,7 @@ class RealtimeProfilePlay(CustomAction):
                 cover_selection = (
                     None
                     if (
-                        live_run.mode == "cooperative"
+                        live_run.mode in ("cooperative", "versus")
                         or require_final_cover_title
                         or preparation_identity_pending_final_cover
                     )
@@ -2853,7 +2857,7 @@ class RealtimeProfilePlay(CustomAction):
                     # 相位被排除后会在周期性段落锁到假相位。单人/挑战等
                     # 模式演奏场与歌曲几乎同时开始，保持默认 12 秒。
                     chart_prelude_window_s=(
-                        60.0 if run_mode == "cooperative" else 12.0
+                        60.0 if run_mode in ("cooperative", "versus") else 12.0
                     ),
                 ),
                 touch,
@@ -3208,7 +3212,7 @@ class RealtimeProfilePlay(CustomAction):
             # 跳过数字检查不推进未知页面，由各模式外层继续必要的结算导航。
             save_result = False
             print("RealtimeProfilePlay result_check=skipped", flush=True)
-            if run_mode != "cooperative" and stats.completed and not stats.cleanup_failed:
+            if run_mode not in ("cooperative", "versus") and stats.completed and not stats.cleanup_failed:
                 _recover_completed_result(context)
         deferred_report_value = str(
             params.get("deferred_result_report") or ""
@@ -3429,7 +3433,7 @@ class RealtimeProfilePlay(CustomAction):
                         selected_chart.expected_notes
                         if selected_chart is not None else None
                     ),
-                    cooperative_mode=(run_mode == "cooperative"),
+                    cooperative_mode=(run_mode in ("cooperative", "versus")),
                     robust_navigation=True,
                     handle_intermediate=lambda image: handle_story_page(
                         image, recognise=recognise_story, click=click_story,
@@ -3554,7 +3558,7 @@ class RealtimeProfilePlay(CustomAction):
                     f"[任务][实时演奏][结算][WARNING] {failure_reason}；演出已结束，继续后续步骤",
                     flush=True,
                 )
-                if not params.get("calibration_report") and run_mode != "cooperative":
+                if not params.get("calibration_report") and run_mode not in ("cooperative", "versus"):
                     _recover_completed_result(context)
                 return True
             result_data = outcome.result

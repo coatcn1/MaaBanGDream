@@ -2,6 +2,16 @@
 
 本页保留近期版本和开发记录。日期候选条目描述当时状态，发行说明以对应版本为准；更早记录见 [v1.4.3 及之前的历史档案](docs/history/changelog-through-v1.4.3.md)。
 
+## 2026-10-16（竞演演出 VersusLive 新模式）
+
+- 新增第四个多人演出任务「⚔️ 竞演演出（VersusLive）」，仿协力实现：主页 → 演出选择 → 竞演演出 → 房间选择页 → 入房 → 房间页等人满自动开演 → 选曲页 → 准备页 → 演奏 → 结算。与协力的差异：房间选择页只有两张卡（活动歌曲房间 / 自由选歌房间，可配置），选好房型卡后点右下「确定」自己建房（不是加入随机房，也不是「创建房间」——后者是手动建带房间号的房、会卡在设置弹窗）；**不点「立刻开始」——满 5 人自动开始**，非房主时与协力一致，房间 180 秒未开始就回主页重进；竞演结算比协力多 EXP 页、活动分数（贡献分数）页与剧情，由既有「安全像素 → BACK → 安全像素」节拍推进到底。
+- 复用协力整套机制：`run_mode="versus"` 贯穿 `RealtimeProfilePlay`、Native 光门策略（`cooperative-playfield-confirmed` 短稳定窗 +「其他成员正在准备中」弹窗门控）、常开判定条纠偏白名单；**并启用协力的漏键抖动**（`native_prearm.resolve_confirmed_chart` 的 mode 门控由 `"cooperative"` 扩到 `{"cooperative", "versus"}`）。
+- 新增 `agent/realtime/versus_action.py`（Configure / Flow / Finalize 三件套与 `run_mode="versus"`）、`resource/pipeline/versus_live.json`、`resource/image/versus/`（11 张按 2026-10-16 MuMu 截图/录像标定的模板）、`interface.json` 任务条目与 6 个选项（竞演房型 / 难度 / 次数 / 歌曲选择 / 诊断 / 断网跳车）、`server.py` 注册。
+- 房型判定改为两张整卡模板匹配（居中卡分数更高者胜出），不再用色相分类；`classify_room_type` 在轮播动画中途返回 None 由调用方重试。
+- 依赖 #88 的 `FinalCoverStartupFailure`：重试预算耗尽后的最终封面失败（身份冲突 / 标题未确认 / 封面超时）按启动失败跳车。
+- 竞演与协力共用一组运行时开关（成员加载页保护等）与 `LiveRunContext` 字段；新增 `test_versus_action_only_references_existing_live_run_fields` 静态核对 `run.<attr>` 必须是真实字段，防止机械改名误伤共享符号。
+- 测试：新增 `tests/test_versus_action.py`（interface 选项、pipeline 结构、`custom_action` 字符串、模板集、server 注册、设置校验、房型分类），并把竞演补进任务生命周期契约（次数 / `LiveSelectFind` / 失败可见性 / 入口日志）与漏键抖动 mode 门控用例。**已真机验收：连续数十局竞演演出无失败。**
+
 ## 2026-10-15（PR #87 封面与标题匹配拆分候选）
 
 - 从贡献者 @suwayun1 的 [PR #87](https://github.com/coatcn1/MaaBanGDream/pull/87) 分别吸收得分页亮度补偿、匹配用同音假名归一和标题严格消歧。亮度补偿仅改变 HSV V 阈值，保留原绝对门槛的通过结果及黄色星章、粉色数字数量与布局要求，避免 BGR 裁剪使稀疏亮数字失色或暗色连接使旧页面回退。

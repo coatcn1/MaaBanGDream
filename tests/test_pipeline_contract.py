@@ -80,7 +80,8 @@ def test_interface_references_existing_entry_and_resource():
     assert interface["github"] == "https://github.com/coatcn1/MaaBanGDream"
     assert "mirrorchyan_rid" not in interface
     assert [task["name"] for task in interface["task"]] == [
-        "AutoLive", "RealtimeLive", "CooperativeLive", "ContinuousRealtimeLive",
+        "AutoLive", "RealtimeLive", "CooperativeLive", "VersusLive",
+        "ContinuousRealtimeLive",
         "RealtimeCalibration", "DailyFreeGacha", "ChallengeLive",
         "MedleyLive", "ManualFlowRecording",
     ]
@@ -90,6 +91,7 @@ def test_interface_references_existing_entry_and_resource():
         "AutoLive": "🎶 自动演出",
         "RealtimeLive": "🎹 单人实时演奏",
         "CooperativeLive": "🤝 协力演出",
+        "VersusLive": "⚔️ 竞演演出",
         "ContinuousRealtimeLive": "⚡ 一键实时演奏",
         "RealtimeCalibration": "🎯 实时演奏校准",
         "DailyFreeGacha": "🎁 每日免费抽卡",
