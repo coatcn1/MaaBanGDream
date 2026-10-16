@@ -48,11 +48,22 @@ def test_cooperative_count_is_owned_by_the_cooperative_flow():
     }
 
 
+def test_versus_count_is_owned_by_the_versus_flow():
+    interface = load(ROOT / "interface.json")
+    count = interface["option"]["VersusCount"]
+    assert count["pipeline_override"] == {
+        "VersusCountConfigure": {
+            "custom_action_param": {"count": "{Count}"}
+        }
+    }
+
+
 def test_live_select_actions_wait_for_loading_without_fixed_targets():
     for filename in (
         "auto_live.json",
         "realtime_multi_live.json",
         "cooperative_live.json",
+        "versus_live.json",
         "challenge_live.json",
     ):
         nodes = load(ROOT / "resource" / "pipeline" / filename)
@@ -79,6 +90,7 @@ def test_failure_visibility_is_single_source_and_framework_failure_is_preserved(
         "realtime_calibration.json": ("RealtimeCalibrationFailure",),
         "realtime_multi_live.json": ("RealtimeLiveFailure",),
         "cooperative_live.json": ("CooperativeFailure",),
+        "versus_live.json": ("VersusFailure",),
     }
     for filename, node_names in names.items():
         nodes = load(ROOT / "resource" / "pipeline" / filename)
@@ -98,6 +110,7 @@ def test_task_entries_and_navigation_emit_visible_stage_logs():
         "auto_live.json": ("AutoLive", "AutoLiveHomeLive"),
         "realtime_multi_live.json": ("RealtimeMultiLive", "RealtimeLiveHomeLive"),
         "cooperative_live.json": ("CooperativeLive", "CooperativeHomeLive"),
+        "versus_live.json": ("VersusLive", "VersusHomeLive"),
         "challenge_live.json": ("ChallengeLive", "ChallengeHomeLive"),
     }
     for filename, (entry_name, live_name) in expected.items():

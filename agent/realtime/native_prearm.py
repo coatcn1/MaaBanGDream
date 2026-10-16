@@ -280,7 +280,8 @@ def resolve_confirmed_chart(
     )
     selection = resolution.selection
     mode = str(getattr(live_run, "mode", "") or "").lower()
-    if selection is not None and mode == "cooperative":
+    # 协力与竞演都是多人演出：按 run 生成确定性的漏键副本，避免整局全 P。
+    if selection is not None and mode in ("cooperative", "versus"):
         from .profile_store import RealtimeProfileStore
 
         runtime_options = RealtimeProfileStore(
@@ -399,7 +400,7 @@ def prepare_native_for_settings_gate(
         wait_jitter_trial_enabled=bool(runtime_options.get("native_wait_jitter_filter_enabled", False)),
         life_feedback_enabled=(bool(runtime_options.get("native_life_feedback_enabled", False))
                                and str(getattr(live_run, "mode", "")) in {
-                                   "formal", "challenge", "cooperative", "continuous", "medley"}),
+                                   "formal", "challenge", "cooperative", "versus", "continuous", "medley"}),
     )
     try:
         backend.arm()

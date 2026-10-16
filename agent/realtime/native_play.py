@@ -63,9 +63,9 @@ class NativeStartGatePolicy:
 
 
 def resolve_native_start_gate_policy(run_mode: str | None) -> NativeStartGatePolicy:
-    """协力已确认生命条出现，因此只需要更短的基线稳定窗口。"""
+    """协力/竞演已确认生命条出现，因此只需要更短的基线稳定窗口。"""
     normalized = str(run_mode or "realtime").strip().lower()
-    if normalized == "cooperative":
+    if normalized in ("cooperative", "versus"):
         return NativeStartGatePolicy(
             mode="cooperative-playfield-confirmed",
             stable_duration_ms=120.0,
@@ -314,11 +314,11 @@ class NativeStartPhotogate:
         else:
             self._playfield_detector = playfield_detector
         self.mode = str(mode)
-        # 协力进入演奏场后可能出现“其他成员正在准备中”弹窗；其出现/消失
+        # 协力/竞演进入演奏场后可能出现“其他成员正在准备中”弹窗；其出现/消失
         # 会让整行颜色发生大变化，被首拍门控误判成第一颗音符。默认仅对
-        # 协力策略启用弹窗门控，单人/校准/挑战保持原有行为。
+        # 协力/竞演策略启用弹窗门控，单人/校准/挑战保持原有行为。
         if suppress_prepare_popup is None:
-            suppress_prepare_popup = str(mode).startswith("cooperative")
+            suppress_prepare_popup = str(mode).startswith(("cooperative", "versus"))
         self._popup_gate_enabled = bool(suppress_prepare_popup)
         self._popup_detector = (
             popup_detector
