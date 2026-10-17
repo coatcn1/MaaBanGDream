@@ -3,6 +3,12 @@
 本页保留近期版本和开发记录。日期候选条目描述当时状态，发行说明以对应版本为准；更早记录见 [v1.4.3 及之前的历史档案](docs/history/changelog-through-v1.4.3.md)。
 
 
+## 2026-10-17（清理缓存白名单路径修正）
+
+- 修复 v1.4.9 发布包“关于我们 → 清理缓存”报“缓存目录末级布局不匹配白名单”：发布脚本把 sidecar 的 `maafw_debug` 指向 `debug\maafw`，而定制 MFA 的白名单按**末级目录名**匹配，只接受名为 `debug` 的目录，导致整次清理在规划阶段失败。现改为与开发启动脚本一致，指向 `debug` 根；`realtime_recordings` 等子目录仍由父子去重覆盖，不重复统计删除量。
+- 开发启动脚本的 `maafw_debug` 同步指向 Agent 实际写入的源码仓库 `debug` 根，避免开发部署下清理漏掉 `native-jlog`、`jittered-charts` 与录制；MFA 自身的 `debug`（`maafw.log`）仍由清理逻辑固定的 `<DataRoot>\debug` 目标覆盖。
+- 新增回归测试锁定两个脚本的 sidecar 路径必须落在定制 MFA 白名单内；已验证修正后的 sidecar 通过白名单校验，原 `debug\maafw` 复现“末级布局不匹配”失败。
+
 ## 2026-10-17（v1.4.9 发布整合）
 
 - 整合 @suwayun1 的 PR #94、#88、#95 及维护者已验证修正，保留整合分支原始作者和最终 squash 的核验 Co-authored-by；PR #87 仅沿用已经 PR #93 合入的安全子集，未采纳单字符补全及模糊覆盖。PR #86 与 Draft #64 不在发布范围。
