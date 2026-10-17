@@ -12,6 +12,23 @@ class TimingFeedback(str, Enum):
     SLOW = "slow"
 
 
+def probe_judgement_feedback(image: np.ndarray) -> tuple[TimingFeedback | None, int, int]:
+    """只读判定 ROI 的颜色计数；原始命中不等于独立判定事件。"""
+    if not isinstance(image, np.ndarray) or image.shape[:2] != (720, 1280):
+        return None, 0, 0
+    x1, y1, x2, y2 = TimingFeedbackDetector.ROI
+    hsv = cv2.cvtColor(image[y1:y2, x1:x2], cv2.COLOR_BGR2HSV)
+    slow = int(np.count_nonzero(cv2.inRange(hsv, (0, 140, 160), (25, 255, 255))))
+    fast = int(np.count_nonzero(cv2.inRange(hsv, (95, 160, 160), (120, 255, 255))))
+    minimum = TimingFeedbackDetector.MIN_COLOURED_PIXELS
+    kind = None
+    if slow >= minimum and slow >= fast * 2:
+        kind = TimingFeedback.SLOW
+    elif fast >= minimum and fast >= slow * 2:
+        kind = TimingFeedback.FAST
+    return kind, slow, fast
+
+
 class TimingFeedbackDetector:
     """Read the coloured FAST/SLOW bar below the centred judgement text."""
 
@@ -39,23 +56,11 @@ class TimingFeedbackDetector:
         self.last_raw_directions = frozenset()
         if not isinstance(image, np.ndarray) or image.shape[:2] != (720, 1280):
             return None
-        x1, y1, x2, y2 = self.ROI
-        hsv = cv2.cvtColor(image[y1:y2, x1:x2], cv2.COLOR_BGR2HSV)
-        slow = int(np.count_nonzero(cv2.inRange(
-            hsv, (0, 140, 160), (25, 255, 255),
-        )))
-        fast = int(np.count_nonzero(cv2.inRange(
-            hsv, (95, 160, 160), (120, 255, 255),
-        )))
+        kind, slow, fast = probe_judgement_feedback(image)
         self.last_raw_directions = frozenset(
             direction for direction, pixels in ((TimingFeedback.FAST, fast), (TimingFeedback.SLOW, slow))
             if pixels >= self.MIN_COLOURED_PIXELS
         )
-        kind: TimingFeedback | None = None
-        if slow >= self.MIN_COLOURED_PIXELS and slow >= fast * 2:
-            kind = TimingFeedback.SLOW
-        elif fast >= self.MIN_COLOURED_PIXELS and fast >= slow * 2:
-            kind = TimingFeedback.FAST
         self._recent.append(kind)
         if kind is not None:
             self.sightings += 1

@@ -3,7 +3,7 @@
   "interface_version": 2,
   "name": "MaaBanGDream",
   "label": "BanG Dream! 自动化（MaaFramework）",
-  "version": "1.4.8",
+  "version": "1.4.9",
   "description": "docs/about.md",
   "about_icon": "docs/assets/maabangdream-logo-v1.png",
   "contact": "docs/contact.md",
@@ -74,6 +74,20 @@
         "CooperativeSongChoice",
         "CooperativeDebug",
         "CooperativeDisconnectJump"
+      ]
+    },
+    {
+      "name": "VersusLive",
+      "label": "⚔️ 竞演演出",
+      "description": "按指定次数完成竞演演出（自己对战房间，满员自动开演）；可选活动歌曲房间或自由选歌房间。",
+      "entry": "VersusLive",
+      "option": [
+        "VersusRoomType",
+        "VersusDifficulty",
+        "VersusCount",
+        "VersusSongChoice",
+        "VersusDebug",
+        "VersusDisconnectJump"
       ]
     },
     {
@@ -634,7 +648,7 @@
     },
     "CooperativeDisconnectJump": {
       "type": "select",
-      "label": "断网跳车",
+      "label": "跳车",
       "default_case": "Off",
       "cases": [
         {
@@ -650,7 +664,7 @@
         },
         {
           "name": "On",
-          "label": "生命归零断网跳车",
+          "label": "生命归零后手动跳车",
           "pipeline_override": {
             "CooperativeDisconnectJumpConfigure": {
               "custom_action_param": {
@@ -659,7 +673,203 @@
             }
           }
         }
+      ],
+      "description": "开启后生命归零将停止输入，返回桌面再切回游戏并结束任务；请手动跳车。关闭时继续演奏和结算。"
+    },
+    "VersusRoomType": {
+      "type": "select",
+      "label": "竞演房型",
+      "description": "竞演房间选择页的两张卡：活动歌曲房间计入活动分数排行，自由选歌房间可自由选曲。",
+      "default_case": "Free",
+      "cases": [
+        {
+          "name": "Free",
+          "label": "自由选歌房间",
+          "pipeline_override": {
+            "VersusRoomTypeConfigure": {"custom_action_param": {"room_type": "free"}}
+          }
+        },
+        {
+          "name": "Activity",
+          "label": "活动歌曲房间",
+          "pipeline_override": {
+            "VersusRoomTypeConfigure": {"custom_action_param": {"room_type": "activity"}}
+          }
+        }
       ]
+    },
+    "VersusDifficulty": {
+      "type": "select",
+      "label": "竞演难度",
+      "default_case": "Expert",
+      "cases": [
+        {
+          "name": "Easy",
+          "label": "Easy",
+          "pipeline_override": {
+            "VersusDifficultyConfigure": {"custom_action_param": {"difficulty": "Easy"}},
+            "VersusSpeedSettingsGate": {"custom_action_param": {"entry_mode": "home", "difficulty": "Easy", "require_profile": true, "dpi": 240, "game_fps": 60, "render_quality": "standard"}}
+          }
+        },
+        {
+          "name": "Normal",
+          "label": "Normal",
+          "pipeline_override": {
+            "VersusDifficultyConfigure": {"custom_action_param": {"difficulty": "Normal"}},
+            "VersusSpeedSettingsGate": {"custom_action_param": {"entry_mode": "home", "difficulty": "Normal", "require_profile": true, "dpi": 240, "game_fps": 60, "render_quality": "standard"}}
+          }
+        },
+        {
+          "name": "Hard",
+          "label": "Hard",
+          "pipeline_override": {
+            "VersusDifficultyConfigure": {"custom_action_param": {"difficulty": "Hard"}},
+            "VersusSpeedSettingsGate": {"custom_action_param": {"entry_mode": "home", "difficulty": "Hard", "require_profile": true, "dpi": 240, "game_fps": 60, "render_quality": "standard"}}
+          }
+        },
+        {
+          "name": "Expert",
+          "label": "Expert",
+          "pipeline_override": {
+            "VersusDifficultyConfigure": {"custom_action_param": {"difficulty": "Expert"}},
+            "VersusSpeedSettingsGate": {"custom_action_param": {"entry_mode": "home", "difficulty": "Expert", "require_profile": true, "dpi": 240, "game_fps": 60, "render_quality": "standard"}}
+          }
+        },
+        {
+          "name": "Special",
+          "label": "Special",
+          "pipeline_override": {
+            "VersusDifficultyConfigure": {"custom_action_param": {"difficulty": "Special"}},
+            "VersusSpeedSettingsGate": {"custom_action_param": {"entry_mode": "home", "difficulty": "Special", "require_profile": true, "dpi": 240, "game_fps": 60, "render_quality": "standard"}}
+          }
+        }
+      ]
+    },
+    "VersusCount": {
+      "type": "input",
+      "label": "竞演演出次数",
+      "inputs": [
+        {
+          "name": "Count",
+          "label": "演出次数",
+          "default": "1",
+          "pipeline_type": "int",
+          "verify": "^(?:0|[1-9][0-9]{0,2})$",
+          "pattern_msg": "请输入 0 到 999 的整数；0 表示无限演出。"
+        }
+      ],
+      "pipeline_override": {
+        "VersusCountConfigure": {
+          "custom_action_param": {"count": "{Count}"}
+        }
+      }
+    },
+    "VersusSongChoice": {
+      "type": "select",
+      "label": "歌曲选择",
+      "default_case": "Unspecified",
+      "cases": [
+        {
+          "name": "Unspecified",
+          "label": "不指定歌曲",
+          "pipeline_override": {
+            "VersusSongChoiceConfigure": {
+              "custom_action_param": {"song_choice": "unspecified"}
+            }
+          }
+        },
+        {
+          "name": "Random",
+          "label": "随机选曲（第一轮留 10 秒筛歌）",
+          "pipeline_override": {
+            "VersusSongChoiceConfigure": {
+              "custom_action_param": {"song_choice": "random"}
+            }
+          }
+        },
+        {
+          "name": "Current",
+          "label": "当前曲目（第一轮留 10 秒筛歌）",
+          "pipeline_override": {
+            "VersusSongChoiceConfigure": {
+              "custom_action_param": {"song_choice": "current"}
+            }
+          }
+        }
+      ]
+    },
+    "VersusDebug": {
+      "type": "select",
+      "label": "诊断记录",
+      "default_case": "Light",
+      "cases": [
+        {
+          "name": "Light",
+          "label": "轻量 Trace（推荐）",
+          "pipeline_override": {
+            "VersusDebugConfigure": {
+              "custom_action_param": {
+                "debug_recording": false,
+                "diagnostic_trace": true
+              }
+            }
+          }
+        },
+        {
+          "name": "Off",
+          "label": "完全关闭（只保存结果）",
+          "pipeline_override": {
+            "VersusDebugConfigure": {
+              "custom_action_param": {
+                "debug_recording": false,
+                "diagnostic_trace": false
+              }
+            }
+          }
+        },
+        {
+          "name": "Full",
+          "label": "完整录像（MKV + Trace，大文件）",
+          "pipeline_override": {
+            "VersusDebugConfigure": {
+              "custom_action_param": {
+                "debug_recording": true,
+                "diagnostic_trace": true
+              }
+            }
+          }
+        }
+      ]
+    },
+    "VersusDisconnectJump": {
+      "type": "select",
+      "label": "跳车",
+      "default_case": "Off",
+      "cases": [
+        {
+          "name": "Off",
+          "label": "关闭（推荐）",
+          "pipeline_override": {
+            "VersusDisconnectJumpConfigure": {
+              "custom_action_param": {
+                "disconnect_jump_enabled": false
+              }
+            }
+          }
+        },
+        {
+          "name": "On",
+          "label": "生命归零后手动跳车",
+          "pipeline_override": {
+            "VersusDisconnectJumpConfigure": {
+              "custom_action_param": {
+                "disconnect_jump_enabled": true
+              }
+            }
+          }
+        }
+      ],
+      "description": "开启后生命归零将停止输入，返回桌面再切回游戏并结束任务；请手动跳车。关闭时继续演奏和结算。"
     },
     "ManualFlowRecordingQuality": {
       "type": "select",

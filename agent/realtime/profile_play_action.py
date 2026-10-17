@@ -28,7 +28,8 @@ from .controller_touch import ControllerTouchDispatcher
 from .debug_recorder import RealtimeDebugRecorder, append_lifecycle_event
 from .engine import EngineStats, RealtimeEngine
 from .final_cover import (
-    FinalCoverResolution, FinalCoverResolver, is_member_loading_screen,
+    FinalCoverResolution, FinalCoverResolver, FinalCoverStartupFailure,
+    is_member_loading_screen,
 )
 from .life_monitor import LifeDetector, LifeGuard, PlayfieldCompletionGuard
 from .live_failed_detector import (
@@ -396,7 +397,7 @@ def wait_for_final_cover(
         raise ValueError("final_cover_timeout_seconds 必须在 1..180 之间")
     if not isinstance(cooperative_member_loading_guard_enabled, bool):
         raise ValueError("cooperative_member_loading_guard_enabled 必须是布尔值")
-    cooperative = getattr(live_run, "mode", "") == "cooperative"
+    cooperative = getattr(live_run, "mode", "") in ("cooperative", "versus")
     if cooperative:
         from .startup_diagnostics import startup_recorder
         startup = startup_recorder(getattr(live_run, "run_id", None))
@@ -455,7 +456,7 @@ def wait_for_final_cover(
         require_observed_title=require_observed_title,
         allow_missing_level=ignore_preparation_level,
         reject_member_loading=(
-            getattr(live_run, "mode", "") == "cooperative"
+            getattr(live_run, "mode", "") in ("cooperative", "versus")
             and cooperative_member_loading_guard_enabled
         ),
     )
@@ -636,7 +637,7 @@ def wait_for_final_cover(
             )
         if not cooperative and playfield_streak >= 2 and now_mono >= black_burst_until:
             if require_observed_title:
-                fail(RuntimeError(
+                fail(FinalCoverStartupFailure(
                     "最终封面页标题未确认，已在发送演奏触控前停止："
                     f"{resolver.last_reason}"
                 ), image)
@@ -661,14 +662,14 @@ def wait_for_final_cover(
             time.sleep(float(poll_interval_seconds))
     if require_black_transition:
         stage = "全黑开演转场" if not black_seen else "黑场后的歌曲封面或完整演奏场"
-        fail(RuntimeError(f"启动阶段超时：{float(timeout_seconds):g} 秒内未确认{stage}；未启动输入或结算"), last_image)
+        fail(FinalCoverStartupFailure(f"启动阶段超时：{float(timeout_seconds):g} 秒内未确认{stage}；未启动输入或结算"), last_image)
     if cooperative:
-        fail(RuntimeError(
+        fail(FinalCoverStartupFailure(
             f"最终封面确认超时：{float(timeout_seconds):g} 秒内未确认本局歌曲封面与标题："
             f"{resolver.last_reason}；未启动演奏输入"
         ), last_image)
     if require_observed_title:
-        fail(RuntimeError(
+        fail(FinalCoverStartupFailure(
             "最终封面页标题未确认，已在发送演奏触控前停止："
             f"{resolver.last_reason}"
         ), last_image)
@@ -867,6 +868,7 @@ def _save_challenge_life_failure(capture, stats, live_run, timing_offset_ms):
 
 _RECORDING_KIND_BY_RUN_MODE = {
     "cooperative": "coop",
+    "versus": "versus",
     "challenge": "challenge",
     "formal": "single-formal",
     "rehearsal": "single-rehearsal",
@@ -2074,7 +2076,7 @@ def _continue_after_completed_play(method):
                 flush=True,
             )
             params = json.loads(argv.custom_action_param or "{}")
-            if params.get("run_mode") != "cooperative" and not params.get("defer_result_collection"):
+            if params.get("run_mode") not in ("cooperative", "versus") and not params.get("defer_result_collection"):
                 try:
                     _recover_completed_result(context)
                 except Exception as recovery_error:
@@ -2088,9 +2090,21 @@ class RealtimeProfilePlay(CustomAction):
     """Run a bounded rehearsal using only a matching accepted local profile."""
 
     def run(self, context: Context, argv: CustomAction.RunArg) -> bool:
+        # MaaFramework 的 ctypes 回调必须得到布尔结果，不能让 Python 异常越过边界。
+        return self._run_guarded(context, argv, propagate_startup_failure=False)
+
+    def run_for_flow(self, context: Context, argv: CustomAction.RunArg) -> bool:
+        # 仅供协力和竞演的 Python 外层调用，让类型化启动失败进入本局恢复策略。
+        return self._run_guarded(context, argv, propagate_startup_failure=True)
+
+    def _run_guarded(self, context, argv, *, propagate_startup_failure: bool) -> bool:
         try:
             return self._run(context, argv)
         except Exception as exc:
+            if context.tasker.stopping:
+                return True
+            if propagate_startup_failure and isinstance(exc, FinalCoverStartupFailure):
+                raise
             record_failure_reason(f"{type(exc).__name__}: {exc}")
             traceback.print_exc()
             print(f"RealtimeProfilePlay failed={type(exc).__name__}: {exc}", flush=True)
@@ -2160,11 +2174,14 @@ class RealtimeProfilePlay(CustomAction):
                 runtime_options = frozen_native_runtime_options(snapshot_run, runtime_options)
             cooperative_member_loading_guard_enabled = params.get(
                 "cooperative_member_loading_guard_enabled",
-                runtime_options.get("cooperative_member_loading_guard_enabled", True),
+                params.get(
+                    "versus_member_loading_guard_enabled",
+                    runtime_options.get("cooperative_member_loading_guard_enabled", True),
+                ),
             )
             if not isinstance(cooperative_member_loading_guard_enabled, bool):
                 raise ValueError("cooperative_member_loading_guard_enabled 必须是布尔值")
-            if params.get("run_mode") == "cooperative":
+            if params.get("run_mode") in ("cooperative", "versus"):
                 print(
                     "RealtimeProfilePlay cooperative_member_loading_guard_enabled="
                     f"{cooperative_member_loading_guard_enabled} source=task_snapshot",
@@ -2311,7 +2328,7 @@ class RealtimeProfilePlay(CustomAction):
                         )
             is_rehearsal, continue_after_depleted = resolve_life_policy(params)
             numeric_life_monitor_enabled = resolve_life_monitor_enabled(params)
-            # 协力“断网跳车”必须保留数值生命监视，让引擎在生命归零帧
+            # 联机“跳车”必须保留数值生命监视，让引擎在生命归零帧
             # 发出一次性跳车信号。
             disconnect_jump_request = bool(
                 params.get("life_depleted_jump_request", False)
@@ -2456,7 +2473,7 @@ class RealtimeProfilePlay(CustomAction):
                 cover_selection = (
                     None
                     if (
-                        live_run.mode == "cooperative"
+                        live_run.mode in ("cooperative", "versus")
                         or require_final_cover_title
                         or preparation_identity_pending_final_cover
                     )
@@ -2848,7 +2865,7 @@ class RealtimeProfilePlay(CustomAction):
                     # 相位被排除后会在周期性段落锁到假相位。单人/挑战等
                     # 模式演奏场与歌曲几乎同时开始，保持默认 12 秒。
                     chart_prelude_window_s=(
-                        60.0 if run_mode == "cooperative" else 12.0
+                        60.0 if run_mode in ("cooperative", "versus") else 12.0
                     ),
                 ),
                 touch,
@@ -3203,7 +3220,7 @@ class RealtimeProfilePlay(CustomAction):
             # 跳过数字检查不推进未知页面，由各模式外层继续必要的结算导航。
             save_result = False
             print("RealtimeProfilePlay result_check=skipped", flush=True)
-            if run_mode != "cooperative" and stats.completed and not stats.cleanup_failed:
+            if run_mode not in ("cooperative", "versus") and stats.completed and not stats.cleanup_failed:
                 _recover_completed_result(context)
         deferred_report_value = str(
             params.get("deferred_result_report") or ""
@@ -3242,7 +3259,7 @@ class RealtimeProfilePlay(CustomAction):
             })
 
         if stats.jump_requested:
-            # 协力“断网跳车”：本局以“请求跳车”结束，不做结算解析与退出
+            # 联机“跳车”：本局以“请求跳车”结束，不做结算解析与退出
             # 导航；跳车流程由外层协力流程读取 live run 信号后执行。
             print(
                 "RealtimeProfilePlay disconnect_jump_requested=true "
@@ -3259,7 +3276,7 @@ class RealtimeProfilePlay(CustomAction):
                         suggested_timing_offset_ms=None,
                         run_context=live_run,
                         result_status="disconnect_jump_requested",
-                        reason="生命归零请求断网跳车",
+                        reason="生命归零，请手动跳车",
                     ),
                 )
             return True
@@ -3424,7 +3441,9 @@ class RealtimeProfilePlay(CustomAction):
                         selected_chart.expected_notes
                         if selected_chart is not None else None
                     ),
-                    cooperative_mode=(run_mode == "cooperative"),
+                    # 竞演沿用协力导航和短读取预算，数字面板使用单人布局。
+                    parser=ResultParser() if run_mode == "versus" else None,
+                    cooperative_mode=(run_mode in ("cooperative", "versus")),
                     robust_navigation=True,
                     handle_intermediate=lambda image: handle_story_page(
                         image, recognise=recognise_story, click=click_story,
@@ -3549,7 +3568,7 @@ class RealtimeProfilePlay(CustomAction):
                     f"[任务][实时演奏][结算][WARNING] {failure_reason}；演出已结束，继续后续步骤",
                     flush=True,
                 )
-                if not params.get("calibration_report") and run_mode != "cooperative":
+                if not params.get("calibration_report") and run_mode not in ("cooperative", "versus"):
                     _recover_completed_result(context)
                 return True
             result_data = outcome.result

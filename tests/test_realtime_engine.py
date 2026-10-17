@@ -957,7 +957,7 @@ def test_engine_requests_disconnect_jump_once_on_zero_life():
     assert stats.life_depleted
     assert not stats.aborted_for_life
     assert calls == [0]
-    assert stats.terminal_reason == "生命归零请求断网跳车"
+    assert stats.terminal_reason == "生命归零，请手动跳车"
     assert planner.resets == 1
     assert touch.closed == 1
 

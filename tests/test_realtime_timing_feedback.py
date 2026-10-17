@@ -9,6 +9,7 @@ from agent.realtime.timing_feedback import (
     AdaptiveTimingController,
     TimingFeedback,
     TimingFeedbackDetector,
+    probe_judgement_feedback,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -38,6 +39,16 @@ def test_detector_distinguishes_fast_slow_and_no_feedback():
     assert sight(TimingFeedback.FAST) is TimingFeedback.FAST
     assert sight(TimingFeedback.SLOW) is TimingFeedback.SLOW
     assert sight(None) is None
+
+
+def test_legacy_detector_preserves_bgr_and_bgra_colour_contract():
+    for kind in (TimingFeedback.FAST, TimingFeedback.SLOW, None):
+        bgr = feedback_frame(kind)
+        bgra = cv2.cvtColor(bgr, cv2.COLOR_BGR2BGRA)
+        assert probe_judgement_feedback(bgra) == probe_judgement_feedback(bgr)
+        original, with_alpha = TimingFeedbackDetector(), TimingFeedbackDetector()
+        for _ in range(3):
+            assert with_alpha.detect(bgra) == original.detect(bgr)
 
 
 def test_detector_rejects_transient_note_flicker():

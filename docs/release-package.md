@@ -51,7 +51,7 @@ Windows 10/11 x64 完整运行包包含定制 MFAAvalonia、MaaFramework、Pytho
 ## 源码与许可证
 
 - MaaBanGDream：<https://github.com/coatcn1/MaaBanGDream>
-- 定制 MFAAvalonia：<https://github.com/coatcn1/MFAAvalonia/tree/fix/speed-only-settings>
+- 定制 MFAAvalonia：<https://github.com/coatcn1/MFAAvalonia/tree/fix/native-feedback-pr94-description>
 - 精确源码提交见随包 `BUILD-INFO.json`。
 
 v1.4.0 起，项目自有部分按 `LICENSE-MaaBanGDream.txt` 中的 PolyForm Noncommercial 1.0.0 许可，仅限非商业用途；收费软件、分发、部署维护、商业服务和商业产品集成不在许可范围内。

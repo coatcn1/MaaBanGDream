@@ -482,7 +482,7 @@ class RealtimeEngine:
                     if self.timing_controller is not None else 0
                 ),
                 timing_feedback_ignored=(
-                    native_feedback.summary["ignored_windows"] if native_feedback is not None else
+                    native_feedback.summary["ignored_events"] if native_feedback is not None else
                     self.timing_controller.ignored_samples
                     if self.timing_controller is not None else 0
                 ),
@@ -786,7 +786,7 @@ class RealtimeEngine:
                         if status is LifeStatus.DEAD:
                             life_depleted = True
                             if on_life_depleted is not None:
-                                # 协力“断网跳车”：生命归零立即请求跳出演奏
+                                # 联机“跳车”：生命归零立即请求跳出演奏
                                 # 循环，由外层执行跳车流程。回调只触发一次，
                                 # 随后终止本局，绝不继续向判定线发送按压。
                                 if not jump_requested:
@@ -849,17 +849,18 @@ class RealtimeEngine:
                     if native_feedback is not None:
                         native_feedback.refresh_phase_status(now)
                         fresh_feedback_frame = native_feedback.fresh(frame_metadata, now)
-                        # 结窗当帧已经复核场景、死亡与停止；新帧才允许提交本窗方向票。
+                        # 先复核场景、死亡与停止；基础新帧和候选加密帧共用独立事件入口。
                         if fresh_feedback_frame or not native_feedback_scene_valid:
                             native_feedback.observe_scene(now, visible=native_feedback_scene_valid)
+                        if fresh_feedback_frame and native_feedback.scene_valid:
+                            native_feedback.observe_frame(image, now)
+                            record_feedback = getattr(self.debug_recorder, "record_native_feedback", None)
+                            if native_feedback.roi_worthy and callable(record_feedback):
+                                record_feedback(image, now,
+                                    dict(frame_metadata, feedback_sniff=native_feedback.last_sniff),
+                                    native_feedback.burst_started_at if native_feedback.burst_started_at is not None else now)
                         if native_feedback.active(now):
                             next_frame = min(next_frame, now + native_feedback.SAMPLE_INTERVAL_SECONDS)
-                            if fresh_feedback_frame:
-                                native_feedback.observe_frame(image, now)
-                                record_feedback = getattr(self.debug_recorder, "record_native_feedback", None)
-                                if native_feedback.active(now) and callable(record_feedback):
-                                    record_feedback(image, now, frame_metadata,
-                                                    native_feedback.burst_started_at)
                     poll_native = getattr(self.native_backend, "poll", None)
                     if poll_native is None:
                         raise RuntimeError("Native 后端缺少 poll() 会话接口")
@@ -1197,7 +1198,7 @@ class RealtimeEngine:
             if was_stopped:
                 terminal_reason = "用户已停止任务"
             elif jump_requested:
-                terminal_reason = "生命归零请求断网跳车"
+                terminal_reason = "生命归零，请手动跳车"
             elif aborted_for_life:
                 terminal_reason = "演出失败：生命值归零"
             elif life_failed:
@@ -1229,6 +1230,7 @@ class RealtimeEngine:
                 native_feedback.close(self.clock(), "terminal")
                 self.native_backend._life_feedback_report = list(native_feedback.events)
                 self.native_backend._life_feedback_summary = dict(native_feedback.summary)
+                self.native_backend._life_feedback_sniff = native_feedback.sniff_report()
             if not native_exclusive:
                 try:
                     cleanup = self.planner.reset(self.clock())
@@ -1291,7 +1293,7 @@ class RealtimeEngine:
                 )
         final_stats = replace(
             base_stats,
-            timing_feedback_ignored=(native_feedback.summary["ignored_windows"]
+            timing_feedback_ignored=(native_feedback.summary["ignored_events"]
                                      if native_feedback is not None else base_stats.timing_feedback_ignored),
             timing_feedback_ignored_reasons=(dict(native_feedback.ignored_reasons)
                                             if native_feedback is not None else base_stats.timing_feedback_ignored_reasons),

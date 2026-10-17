@@ -1,39 +1,36 @@
-"""单截图消费者的有界 Native 判定反馈窗口。"""
+"""Native 常开基础观测、有界候选加密及独立判定事件反馈。"""
 
 from collections import Counter, deque
+from dataclasses import asdict
 import math
 
 import numpy as np
 
-from .timing_feedback import TimingFeedback, TimingFeedbackDetector
+from .timing_feedback import TimingFeedback, TimingFeedbackDetector, probe_judgement_feedback
 
 
 class NativeLifeFeedback:
-    WINDOW_PERIOD_SECONDS = 3.0
     WINDOW_SECONDS = .8
     SAMPLE_INTERVAL_SECONDS = .05
-    TREND_SECONDS = 12.0
+    TREND_SECONDS = 1.0
+    SNIFF_CAPACITY = 4096
 
     def __init__(self, backend, *, detector=None):
         self.backend = backend
-        self.detector = detector or TimingFeedbackDetector()
         self.events = deque(maxlen=128)
+        self.sniff_records = deque(maxlen=self.SNIFF_CAPACITY)
+        self.sniff_dropped = 0
         self.summary = Counter()
         self.ignored_reasons = Counter()
         self.burst_started_at = None
         self.burst_until = 0.0
-        self.next_window_at = 0.0
+        self.scene_valid = False
         self.last_sequence = -1
         self.last_fresh_at = None
         self.frame_evidence = {}
         self.life_evidence = {}
-        self.votes = deque(maxlen=3)
+        self.votes = deque(maxlen=2)
         self._pending_frame_at = None
-        self._window_direction = None
-        self._window_directions = set()
-        self._last_signal_at = None
-        self._last_signal_evidence = {}
-        self.mixed = False
         self.qualified_direction = None
         self.qualified_at = None
         self._expected_run_id = getattr(backend, "_run_id", None)
@@ -41,15 +38,27 @@ class NativeLifeFeedback:
         self._pending_observed_s = None
         self._pending_sequence = None
         self._effect_status = None
-        self._last_submit_s = float("-inf")
+        self._seen_effect_sequence = None
+        self._post_effect_blank_sequence = None
+        self._effect_blank_count = 0
         self._blocked_direction = None
         self._terminal_phase_reason = None
-        self._last_signal_input = None
         self._last_status_notice = None
+        self._visible_direction = None
+        self._event_locked = False
+        self._candidate_direction = None
+        self._candidate_at = None
+        self._blank_count = 0
+        self._last_blank_at = None
+        self._last_event_token = None
+        self._last_submit_s = float("-inf")
+        self._owned_sequences = deque(maxlen=64)
+        self._last_applied_sequence = None
+        self.last_sniff = None
+        self.roi_worthy = False
 
     def active(self, now):
-        # 纯查询不得在终点或生命复核前提交第三票。
-        return self.burst_started_at is not None and now < self.burst_until
+        return self.scene_valid and self.burst_started_at is not None and now < self.burst_until
 
     def finish_due(self, now):
         return self.burst_started_at is not None and now >= self.burst_until
@@ -64,11 +73,219 @@ class NativeLifeFeedback:
         if callable(revoke):
             revoke(reason)
 
-    def _expire_votes(self, now):
-        while self.votes and now - self.votes[0][1] > self.TREND_SECONDS:
-            self.votes.popleft()
-        if self.qualified_at is not None and now - self.qualified_at > self.TREND_SECONDS:
-            self._clear_trend("trend-expired")
+    def _event(self, record):
+        if len(self.events) == self.events.maxlen:
+            self.summary["events_dropped"] += 1
+        self.events.append(record)
+
+    def close(self, now, reason):
+        self._clear_trend(reason)
+        self.scene_valid = False
+        self.burst_started_at = None
+        self.burst_until = 0.0
+        self._pending_frame_at = None
+        self._candidate_direction = None
+        self._candidate_at = None
+        self._blank_count = self._effect_blank_count = 0
+        self._post_effect_blank_sequence = None
+        # 场景或帧失效不能把仍未消退的旧字样重新计数，恢复后仍需可信分离。
+        self._event_locked = self._event_locked or self._visible_direction is not None
+        self.ignored_reasons[reason] += 1
+        self.summary["ignored_events"] += 1
+        self._event({"event": reason, "timestamp": now, **self.frame_evidence})
+
+    def observe_scene(self, now, *, visible):
+        if not visible:
+            self.close(now, "invalid-scene")
+            return
+        self.scene_valid = True
+        if self.finish_due(now):
+            self.burst_started_at = None
+        if self.votes and now - self.votes[-1][1] > self.TREND_SECONDS:
+            self.votes.clear()
+            self.qualified_direction = None
+
+    def fresh(self, metadata, now):
+        sequence = metadata.get("sequence", -1)
+        request_s = metadata.get("request_s")
+        self._pending_frame_at = None
+        self.frame_evidence = {"frame_sequence": sequence, "request_s": request_s,
+            "reused": metadata.get("reused", True), "observed_s": now,
+            "request_age_ms": (now - request_s) * 1000 if type(request_s) in {int, float} else None}
+        valid = (type(sequence) is int and sequence > self.last_sequence
+                 and not metadata.get("reused", True)
+                 and type(request_s) in {int, float} and math.isfinite(request_s)
+                 and 0 <= now - request_s <= .080)
+        if type(sequence) is int:
+            self.last_sequence = max(sequence, self.last_sequence)
+        if not valid:
+            self.summary["invalid_frames"] += 1
+            self.close(now, "slow-or-reused-frames")
+            self._sniff(now, None, None, None, "slow-or-reused-frames", None)
+            return False
+        if self.last_fresh_at is not None and now - self.last_fresh_at > .5:
+            self.close(now, "sampling-gap")
+        self.last_fresh_at = now
+        self.summary["fresh_frames"] += 1
+        self._pending_frame_at = now
+        return True
+
+    def observe_life(self, value, now, *, visible):
+        self.life_evidence = {"value": value, "visible": bool(visible), "observed_s": now}
+
+    def _source_follows_effect(self, source):
+        effect = self._effect_status
+        if effect is None:
+            return True
+        if source is None or effect.first_adjusted_due_s is None or effect.first_affected_chunk_sequence is None:
+            return False
+        return (source.chunk_sequence >= effect.first_affected_chunk_sequence
+                and (effect.first_affected_action_token is None or source.action_token >= effect.first_affected_action_token)
+                and source.planned_s >= effect.first_adjusted_due_s
+                and source.actual_s - source.clock_uncertainty_ms / 1000.0 >= effect.first_adjusted_due_s)
+
+    def _sniff(self, now, kind, slow, fast, decision, source):
+        evidence = (asdict(source) if hasattr(source, "__dataclass_fields__") else vars(source).copy()) if source is not None else None
+        record = {"timestamp": now, **self.frame_evidence, "scene_valid": self.scene_valid,
+            "slow_px": slow, "fast_px": fast, "kind": kind.value if kind else None,
+            "decision": decision, "input": evidence,
+            "request_sequence": self._phase_status.request_sequence if self._phase_status else None,
+            "phase_state": self._phase_status.state if self._phase_status else None,
+            "phase_reason": self._phase_status.terminal_reason if self._phase_status else None,
+            "cumulative_phase_ms": self._phase_status.cumulative_phase_ms if self._phase_status else None,
+            "effect_sequence": self._effect_status.request_sequence if self._effect_status else None,
+            "post_effect_blank_sequence": self._post_effect_blank_sequence}
+        record.update({key: self.summary[key] for key in
+                       ("sampling_frames", "raw_sightings", "distinct_events", "eligible_events")})
+        if len(self.sniff_records) == self.SNIFF_CAPACITY:
+            self.sniff_dropped += 1
+        self.sniff_records.append(record)
+        self.last_sniff = record
+
+    def sniff_report(self):
+        return {"schema_version": 2, "capacity": self.SNIFF_CAPACITY,
+                "dropped": self.sniff_dropped, "raw_roi_included": False,
+                "records": list(self.sniff_records)}
+
+    def observe_frame(self, image, now):
+        self.roi_worthy = False
+        if self._pending_frame_at != now:
+            return
+        self._pending_frame_at = None
+        if not self.scene_valid or not isinstance(image, np.ndarray) or image.shape != (720, 1280, 3):
+            self.close(now, "invalid-scene" if not self.scene_valid else "sampling-error")
+            return
+        self.summary["sampling_frames"] += 1
+        kind, slow, fast = probe_judgement_feedback(image)
+        minimum = TimingFeedbackDetector.MIN_COLOURED_PIXELS
+        signals = {direction for direction, pixels in ((TimingFeedback.FAST, fast), (TimingFeedback.SLOW, slow)) if pixels >= minimum}
+        if signals:
+            self.summary["raw_sightings"] += 1
+            self.summary["sightings"] += 1
+            for direction in signals:
+                self.summary[direction.value + "_sightings"] += 1
+        # 视觉失效处理先于输入资格；HOLD/释放不能让被反色否定的旧请求落地。
+        direction = self.qualified_direction or (self.votes[-1][0] if self.votes else self._visible_direction)
+        if len(signals) > 1:
+            self._clear_trend("mixed-feedback")
+            self._event_locked = True
+            self._visible_direction = None
+            self._candidate_at = self._candidate_direction = None
+            self._blank_count = self._effect_blank_count = 0
+            self.roi_worthy = True
+            self.ignored_reasons["mixed-feedback"] += 1
+            self._sniff(now, kind, slow, fast, "mixed-feedback", None)
+            return
+        if signals and direction is not None and any(value != direction for value in signals):
+            self._clear_trend("direction-reversed")
+            self._event_locked = False
+            self._candidate_at = self._candidate_direction = None
+            self.roi_worthy = True
+        self.refresh_phase_status(now)
+        reader = getattr(self.backend, "feedback_input_snapshot", None)
+        source = reader(self.frame_evidence["request_s"], now) if callable(reader) else None
+        decision = self._observe_signal(kind, signals, source, now)
+        self._sniff(now, kind, slow, fast, decision, source)
+
+    def _observe_signal(self, kind, signals, source, now):
+        if not signals:
+            self._candidate_direction = self._candidate_at = None
+            contiguous = self._last_blank_at is not None and now - self._last_blank_at <= .25
+            self._blank_count = self._blank_count + 1 if contiguous else 1
+            self._last_blank_at = now
+            if self._effect_status is not None and source is not None and self._source_follows_effect(source):
+                self._effect_blank_count = self._effect_blank_count + 1 if contiguous else 1
+            else:
+                self._effect_blank_count = 0
+            if self._blank_count >= 2:
+                self._event_locked = False
+                self._visible_direction = None
+            if self._effect_status is not None and self._effect_blank_count >= 2:
+                self._post_effect_blank_sequence = self._effect_status.request_sequence
+            return "blank"
+        self._blank_count = self._effect_blank_count = 0
+        self._last_blank_at = None
+        if kind is None:
+            return "ambiguous-colour"
+        self._visible_direction = kind
+        if self._event_locked:
+            return "sustained-glyph"
+        if self._candidate_direction != kind or self._candidate_at is None or now - self._candidate_at > .080:
+            self._candidate_direction, self._candidate_at = kind, now
+            if not self.active(now):
+                self.burst_started_at = now
+                self.burst_until = now + self.WINDOW_SECONDS
+                self.summary["candidate_bursts"] += 1
+            self.roi_worthy = True
+            return "candidate"
+        self._event_locked = True
+        self._candidate_at = None
+        self.summary["distinct_events"] += 1
+        self.summary["debounced_reports"] += 1
+        self.summary[kind.value + "_events"] += 1
+        self.roi_worthy = True
+        if source is None:
+            self.ignored_reasons["ineligible-input"] += 1
+            self.summary["ignored_events"] += 1
+            return "ineligible-input"
+        if source.action_token == self._last_event_token:
+            self.ignored_reasons["duplicate-input-token"] += 1
+            return "duplicate-input-token"
+        self._last_event_token = source.action_token
+        if (not self._source_follows_effect(source) or self._effect_status is not None
+                and self._post_effect_blank_sequence != self._effect_status.request_sequence):
+            self.ignored_reasons["before-effect-blank"] += 1
+            return "before-effect-blank"
+        self.summary["eligible_events"] += 1
+        self.summary[kind.value + "_eligible_events"] += 1
+        # 兼容字段明确映射到合格独立事件，不再是窗口票或 fresh 帧数。
+        self.summary[kind.value + "_votes"] += 1
+        self.summary["direction_votes"] += 1
+        if self.votes and (self.votes[-1][0] != kind or now - self.votes[-1][1] > self.TREND_SECONDS):
+            self.votes.clear()
+        self.votes.append((kind, now))
+        if len(self.votes) < 2:
+            return "eligible-event"
+        self.qualified_direction, self.qualified_at = kind, now
+        if (self._pending_observed_s is not None or self._phase_status is None
+                or self._phase_status.state in {"requested", "waiting-touch-boundary", "waiting-gap"}
+                or self._terminal_phase_reason is not None or self._blocked_direction == kind):
+            return "pending-or-blocked"
+        if now - self._last_submit_s < .3:
+            return "request-cooldown"
+        delta = 15.0 if kind is TimingFeedback.FAST else -15.0
+        self._last_submit_s = now
+        self.summary["requests"] += 1
+        accepted = self.backend.request_future_phase(delta, now)
+        self.summary["accepted_requests" if accepted else "rejected_requests"] += 1
+        self._event({"event": "phase-request", "timestamp": now,
+                            "delta_ms": delta, "accepted": accepted, **self.frame_evidence})
+        self.votes.clear()
+        if accepted:
+            self._pending_observed_s = now
+            self._pending_sequence = None
+            self.refresh_phase_status(now)
+        return "requested" if accepted else "request-rejected"
 
     def refresh_phase_status(self, now):
         reader = getattr(self.backend, "phase_status_snapshot", None)
@@ -84,15 +301,23 @@ class NativeLifeFeedback:
         if status.state == "applied":
             # 只有真实反向应用释放了完整一步余量，才解除对应方向的上限阻塞。
             cumulative = status.cumulative_phase_ms
-            if (self._blocked_direction is TimingFeedback.FAST and cumulative <= 38
-                    or self._blocked_direction is TimingFeedback.SLOW and cumulative >= -38):
+            if (self._blocked_direction is TimingFeedback.FAST and cumulative <= 185
+                    or self._blocked_direction is TimingFeedback.SLOW and cumulative >= -185):
                 self._blocked_direction = None
+            if status.request_sequence in self._owned_sequences:
+                # revoke 与 owner 应用交错时仍保留真实已应用相位，不能遗失效果边界。
+                self._effect_status = status
+                if self._last_applied_sequence != status.request_sequence:
+                    self._last_applied_sequence = status.request_sequence
+                    self.summary["applied_requests"] += 1
         if self._pending_observed_s is not None:
             same = (status.original_observed_s == self._pending_observed_s
                     and (self._pending_sequence is None or status.request_sequence == self._pending_sequence))
             if not same:
                 return False
             self._pending_sequence = status.request_sequence
+            if status.request_sequence not in self._owned_sequences:
+                self._owned_sequences.append(status.request_sequence)
             if status.state == "applied":
                 self._effect_status = status
                 self._pending_observed_s = None
@@ -112,224 +337,13 @@ class NativeLifeFeedback:
         notice = (status.run_id, status.request_sequence, status.event_cursor, status.state)
         if notice != self._last_status_notice:
             self._last_status_notice = notice
-            self.events.append({"event": "phase-status", "timestamp": now,
+            self._event({"event": "phase-status", "timestamp": now,
                                 "request_sequence": status.request_sequence, "state": status.state,
                                 "event_cursor": status.event_cursor, "reason": status.terminal_reason,
                                 "first_adjusted_due_s": status.first_adjusted_due_s})
+        if self._effect_status is not None and self._seen_effect_sequence != self._effect_status.request_sequence:
+            self._seen_effect_sequence = self._effect_status.request_sequence
+            self._post_effect_blank_sequence = None
+            self._effect_blank_count = 0
+            self.votes.clear()
         return True
-
-    def _signal_follows_effect(self, observed_s):
-        effect = self._effect_status
-        if effect is None:
-            return True
-        source = self._last_signal_input
-        due = effect.first_adjusted_due_s
-        chunk = effect.first_affected_chunk_sequence
-        token = effect.first_affected_action_token
-        if due is None or chunk is None or source is None:
-            return False
-        planned = source.transient_planned_s
-        actual = source.transient_actual_s
-        request_s = self._last_signal_evidence.get("request_s")
-        return (planned is not None and actual is not None
-                and source.transient_chunk_sequence is not None
-                and source.transient_action_token is not None
-                and source.transient_chunk_sequence >= chunk
-                and (token is None or source.transient_action_token >= token)
-                and planned >= due and actual >= due
-                and request_s is not None and actual <= request_s
-                and 0 <= observed_s - actual <= .6)
-
-    def _finish_vote(self, now):
-        reason = None
-        if self.mixed:
-            reason = "mixed-feedback"
-        elif self.last_fresh_at is None or min(now, self.burst_until) - self.last_fresh_at > .080:
-            # 结窗新图不能覆盖窗内末帧时间，避免跨 deadline 的卡顿伪造完整窗口。
-            reason = "sampling-gap"
-            self.summary["sampling_gaps"] += 1
-        elif self._window_direction is None or self._last_signal_at is None:
-            reason = "no-feedback"
-        elif now - self.burst_started_at >= self.WINDOW_PERIOD_SECONDS:
-            reason = "stale-window"
-        elif not self.backend.feedback_input_eligible(now):
-            reason = "ineligible-input"
-        if reason is not None:
-            self.summary["ignored_windows"] += 1
-            self.ignored_reasons[reason] += 1
-            if reason == "no-feedback":
-                self._expire_votes(now)
-            else:
-                self._clear_trend(reason)
-            return reason
-        direction = self._window_direction
-        observed_s = self._last_signal_at
-        self._expire_votes(observed_s)
-        if self.votes and self.votes[-1][0] != direction:
-            self._clear_trend("direction-changed")
-        self.votes.append((direction, observed_s))
-        self.summary[direction.value + "_votes"] += 1
-        self.summary["direction_votes"] += 1
-        self.events.append({"event": "window-vote", "timestamp": now,
-                            "direction": direction.value, "signal_observed_s": observed_s,
-                            "window_start_s": self.burst_started_at,
-                            "trend_votes": len(self.votes), **self._last_signal_evidence})
-        if len(self.votes) == 3:
-            self.qualified_direction = direction
-        if self.qualified_direction == direction:
-            self.qualified_at = observed_s
-        status_ready = self.refresh_phase_status(now)
-        if (self.qualified_direction == direction and status_ready
-                and self._pending_observed_s is None and self._terminal_phase_reason is None
-                and self._phase_status.state not in {"requested", "waiting-touch-boundary", "waiting-gap"}
-                and self._blocked_direction != direction and now - self._last_submit_s >= 3
-                and self._signal_follows_effect(observed_s)):
-            # FAST 表示输入偏早，未来执行延后；SLOW 则提前，不改冻结的 Profile 偏移。
-            delta_ms = 2.0 if direction is TimingFeedback.FAST else -2.0
-            self._last_submit_s = now
-            # 结窗抖动不能让下一窗提前于节流边界，又白等一个三秒周期。
-            earliest_start = now + self.WINDOW_PERIOD_SECONDS - self.WINDOW_SECONDS
-            if earliest_start > self.next_window_at:
-                self.next_window_at = math.nextafter(earliest_start, math.inf)
-            self.summary["requests"] += 1
-            accepted = self.backend.request_future_phase(delta_ms, observed_s)
-            if accepted:
-                self._pending_observed_s = observed_s
-                self._pending_sequence = None
-                self.refresh_phase_status(now)
-            self.summary["accepted_requests" if accepted else "rejected_requests"] += 1
-            self.events.append({"event": "phase-request", "timestamp": now,
-                                "signal_observed_s": observed_s, "delta_ms": delta_ms,
-                                "accepted": accepted, **self._last_signal_evidence})
-        return "window-ended"
-
-    def close(self, now, reason):
-        if self.burst_started_at is not None:
-            if reason == "window-ended":
-                try:
-                    reason = self._finish_vote(now)
-                except Exception as exc:
-                    self.events.append({"event": "sampling-error", "timestamp": now,
-                                        "reason": type(exc).__name__})
-                    reason = "sampling-error"
-            else:
-                self.summary["ignored_windows"] += 1
-                self.ignored_reasons[reason] += 1
-            self.summary[reason] += 1
-            self.events.append({"event": reason, "timestamp": now,
-                                "window_start_s": self.burst_started_at,
-                                **self.frame_evidence, "observed_s": now})
-        if reason not in {"window-ended", "no-feedback"}:
-            self._clear_trend(reason)
-        self.burst_started_at = None
-        self.burst_until = 0.0
-        self._pending_frame_at = None
-        self.last_fresh_at = None
-
-    def observe_scene(self, now, *, visible):
-        """只由已开始的 Native 演奏场证据驱动，不消费生命值或掉血次数。"""
-        if not visible:
-            self.close(now, "invalid-scene")
-            return
-        self._expire_votes(now)
-        if self.finish_due(now):
-            self.close(now, "window-ended")
-        if self.burst_started_at is not None or now < self.next_window_at:
-            return
-        self.burst_started_at = now
-        self.burst_until = now + self.WINDOW_SECONDS
-        # 以实际开始时刻安排下一窗，卡顿后不追补已经错过的窗口。
-        self.next_window_at = now + self.WINDOW_PERIOD_SECONDS
-        self.summary["windows"] += 1
-        self.last_fresh_at = None
-        self._window_direction = None
-        self._window_directions.clear()
-        self._last_signal_at = None
-        self._last_signal_evidence = {}
-        self._last_signal_input = None
-        self.mixed = False
-        self.detector = TimingFeedbackDetector()
-        self.events.append({"event": "periodic-window", "timestamp": now,
-                            "window_start_s": now, "window_end_s": self.burst_until,
-                            **self.frame_evidence, "life": dict(self.life_evidence)})
-
-    def fresh(self, metadata, now):
-        sequence = metadata.get("sequence", -1)
-        request_s = metadata.get("request_s")
-        self._pending_frame_at = None
-        # 两个时间都在既有 monotonic 域内，request_s 仍不代表游戏渲染时刻。
-        self.frame_evidence = {"frame_sequence": sequence, "request_s": request_s,
-                               "reused": metadata.get("reused", True), "observed_s": now,
-                               "request_age_ms": ((now - request_s) * 1000
-                               if isinstance(request_s, (int, float)) else None)}
-        valid = (type(sequence) is int and sequence > self.last_sequence
-                 and not metadata.get("reused", True)
-                 and type(request_s) in {int, float} and math.isfinite(request_s)
-                 and 0 <= now - request_s <= .080)
-        if type(sequence) is int:
-            self.last_sequence = max(sequence, self.last_sequence)
-        if not valid:
-            self.summary["invalid_frames"] += 1
-            if self.burst_started_at is not None:
-                self.close(now, "slow-or-reused-frames")
-            return False
-        self.summary["fresh_frames"] += 1
-        if self.active(now):
-            if self.last_fresh_at is not None and now - self.last_fresh_at > .080:
-                self.summary["sampling_gaps"] += 1
-                self.close(now, "sampling-gap")
-                return True
-            self.last_fresh_at = now
-        self._pending_frame_at = now
-        return True
-
-    def observe_life(self, value, now, *, visible):
-        self.life_evidence = {"value": value, "visible": bool(visible), "observed_s": now}
-
-    def observe_frame(self, image, now):
-        if not self.active(now) or self._pending_frame_at != now:
-            return
-        self._pending_frame_at = None
-        try:
-            if not isinstance(image, np.ndarray) or image.shape != (720, 1280, 3):
-                self.close(now, "sampling-error")
-                return
-            self.last_fresh_at = now
-            if not self.backend.feedback_input_eligible(now):
-                # 释放保护只打断当前连续证据，不撤销此前已经取得的可信单向证据。
-                # 空白帧也检查资格，避免两侧孤立色块跨过不合格区间拼成 2/3。
-                self.summary["ineligible_frames"] += 1
-                self.detector = TimingFeedbackDetector()
-                return
-            self.summary["sampling_frames"] += 1
-            feedback = self.detector.detect(image)
-            signals = self.detector.last_raw_directions
-            if signals:
-                self.summary["sightings"] += 1
-            if feedback is not None:
-                self.summary["debounced_reports"] += 1
-                self.summary[feedback.value + "_reports"] += 1
-            if not signals:
-                return
-            if self.qualified_direction is not None and any(kind != self.qualified_direction for kind in signals):
-                # 反向的可信原始颜色当帧撤销旧请求，不等整窗结束，更不伪撤销已应用偏移。
-                self._clear_trend("direction-reversed")
-            elif self.votes and any(kind != self.votes[-1][0] for kind in signals):
-                self._clear_trend("direction-reversed")
-            self._window_directions.update(signals)
-            if len(self._window_directions) > 1:
-                if not self.mixed:
-                    self.mixed = True
-                    self._clear_trend("mixed-feedback")
-                return
-            if feedback is not None:
-                self._window_direction = feedback
-            if self._window_direction is not None:
-                self.refresh_phase_status(now)
-                self._last_signal_at = now
-                self._last_signal_evidence = dict(self.frame_evidence)
-                self._last_signal_input = self._phase_status
-        except Exception as exc:
-            self.events.append({"event": "sampling-error", "reason": type(exc).__name__,
-                                "timestamp": now, **self.frame_evidence})
-            self.close(now, "sampling-error")

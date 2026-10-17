@@ -54,6 +54,18 @@ class NativePhaseStatus:
 
 
 @dataclass(frozen=True, slots=True)
+class NativeFeedbackInput:
+    """已执行瞬态 DOWN 的不可变证据，时刻均处于本局 monotonic 域。"""
+
+    run_id: str
+    planned_s: float
+    actual_s: float
+    action_token: int
+    chunk_sequence: int
+    clock_uncertainty_ms: float | None
+
+
+@dataclass(frozen=True, slots=True)
 class NativeStartGatePolicy:
     """首音门控只区分进入阶段，不引入按模式变化的歌曲偏移。"""
 
@@ -63,9 +75,9 @@ class NativeStartGatePolicy:
 
 
 def resolve_native_start_gate_policy(run_mode: str | None) -> NativeStartGatePolicy:
-    """协力已确认生命条出现，因此只需要更短的基线稳定窗口。"""
+    """协力/竞演已确认生命条出现，因此只需要更短的基线稳定窗口。"""
     normalized = str(run_mode or "realtime").strip().lower()
-    if normalized == "cooperative":
+    if normalized in ("cooperative", "versus"):
         return NativeStartGatePolicy(
             mode="cooperative-playfield-confirmed",
             stable_duration_ms=120.0,
@@ -314,11 +326,11 @@ class NativeStartPhotogate:
         else:
             self._playfield_detector = playfield_detector
         self.mode = str(mode)
-        # 协力进入演奏场后可能出现“其他成员正在准备中”弹窗；其出现/消失
+        # 协力/竞演进入演奏场后可能出现“其他成员正在准备中”弹窗；其出现/消失
         # 会让整行颜色发生大变化，被首拍门控误判成第一颗音符。默认仅对
-        # 协力策略启用弹窗门控，单人/校准/挑战保持原有行为。
+        # 协力/竞演策略启用弹窗门控，单人/校准/挑战保持原有行为。
         if suppress_prepare_popup is None:
-            suppress_prepare_popup = str(mode).startswith("cooperative")
+            suppress_prepare_popup = str(mode).startswith(("cooperative", "versus"))
         self._popup_gate_enabled = bool(suppress_prepare_popup)
         self._popup_detector = (
             popup_detector
@@ -788,7 +800,7 @@ class NativeMinitouchBackend:
             getattr(self._compiler, "contact_available_s", None),
         )):
             raise RuntimeError("Native 模块缺少掉血反馈安全相位接口，请重新构建 Native")
-        # 主截图消费者只覆盖单槽候选；唯一 owner 才能验证并移动未来切片。
+        # 主截图消费者只提交空闲单槽；唯一 owner 才能验证并移动未来切片。
         self._phase_lock = threading.Lock()
         self._phase_closed = False
         self._phase_slot: tuple[str, int, float, float, float] | None = None
@@ -796,7 +808,13 @@ class NativeMinitouchBackend:
         self._phase_invalidated_sequence = 0
         self._phase_applied_pending = None
         self._phase_events: deque[dict[str, object]] = deque(maxlen=128)
-        self._phase_receipts: deque[tuple[int, float, float]] = deque(maxlen=64)
+        self._phase_receipts: deque[tuple[int, float, float, float, float, float | None]] = deque(maxlen=64)
+        # 每项是一份 commit，不能用截图频率或分块数推断回执数量。
+        self._phase_receipt_diagnostics = deque(maxlen=128)
+        self._phase_receipts_dropped = 0
+        self._phase_receipt_diagnostics_dropped = 0
+        self._feedback_input_history_dropped = 0
+        self._feedback_input_history: tuple[NativeFeedbackInput, ...] = ()
         self._feedback_input_snapshot = (float("-inf"), float("-inf"))
         self._feedback_transient_snapshot = (None, None, None, None)
         self._phase_status = NativePhaseStatus(self._run_id)
@@ -1451,11 +1469,15 @@ class NativeMinitouchBackend:
                     self._clock_basis = "first-action-relative"
                 actual_s = device_commit_s + self._device_clock_offset_s
                 if self.life_feedback_enabled:
-                    errors = [abs(actual_s - float(row["planned_engine_s"])) * 1000
+                    signed = [(actual_s - float(row["planned_engine_s"])) * 1000
                               for row in expected.receipts]
                     # 一个 commit 只算一个可信样本；双押不能凑足三份证据。
                     if self._clock_basis != "first-action-relative":
-                        self._phase_receipts.append((self._observed_commands, actual_s, median(errors)))
+                        if len(self._phase_receipts) == self._phase_receipts.maxlen:
+                            self._phase_receipts_dropped += 1
+                        self._phase_receipts.append((self._observed_commands, actual_s,
+                            median([abs(error) for error in signed]), median(signed),
+                            float(expected.receipts[0]["planned_engine_s"]), self._clock_uncertainty_ms))
                     transient_at, release_at = self._feedback_input_snapshot
                     for row in expected.receipts:
                         kind = row.get("action_kind")
@@ -1488,6 +1510,15 @@ class NativeMinitouchBackend:
                         self._first_action_anchor_s,
                         planned_s, actual_s, float(received_s),
                     )
+                    if (self.life_feedback_enabled and self._clock_basis == "probe-midpoint"
+                            and receipt.get("action_kind") in {"tap", "flick"}
+                            and receipt.get("command") == "d"):
+                        # 只发布已被会话接受的执行回执，消费者不遍历 owner 的可变 deque。
+                        source = NativeFeedbackInput(self._run_id, planned_s, actual_s,
+                            token, expected.chunk_sequence, self._clock_uncertainty_ms)
+                        if len(self._feedback_input_history) == 64:
+                            self._feedback_input_history_dropped += 1
+                        self._feedback_input_history = (*self._feedback_input_history, source)[-64:]
                     if self._drift_rate_estimator is not None:
                         self._chunk_drift_points.setdefault(
                             int(expected.chunk_sequence), []
@@ -2223,6 +2254,27 @@ class NativeMinitouchBackend:
         transient_at, release_at = self._feedback_input_snapshot
         return 0 <= now - transient_at <= .6 and now - release_at >= .15
 
+    def feedback_input_snapshot(self, request_s: float, now: float) -> NativeFeedbackInput | None:
+        """仅取截图开始前已执行的最近 DOWN；缺证据时不借用 latest 状态兜底。"""
+        uncertainty = self._clock_uncertainty_ms
+        if (self._clock_basis != "probe-midpoint" or uncertainty is None
+                or not math.isfinite(uncertainty) or not 0 <= uncertainty <= 1.0
+                or not math.isfinite(request_s)
+                or not math.isfinite(now) or not self.feedback_input_eligible(now)):
+            return None
+        history = getattr(self, "_feedback_input_history", ())
+        for source in reversed(history):
+            uncertainty = source.clock_uncertainty_ms
+            if (source.run_id != self._run_id or uncertainty is None
+                    or not math.isfinite(uncertainty) or not 0 <= uncertainty <= 1.0):
+                continue
+            bound = uncertainty / 1000.0
+            if source.actual_s + bound > request_s:
+                continue
+            if 0 <= now - (source.actual_s - bound) <= .6:
+                return source
+        return None
+
     def phase_status_snapshot(self) -> NativePhaseStatus:
         """纯缓存读取；没有锁等待、设备调用或并发 deque 遍历。"""
         status = getattr(self, "_phase_status", NativePhaseStatus(str(getattr(self, "_run_id", "unknown"))))
@@ -2258,7 +2310,7 @@ class NativeMinitouchBackend:
         try:
             if self._phase_closed or self._state != "running" or self._phase_slot is not None:
                 return False
-            if delta_ms not in {-2.0, 2.0} or not math.isfinite(observed_s):
+            if delta_ms not in {-15.0, 15.0} or not math.isfinite(observed_s):
                 return False
             self._phase_sequence += 1
             self._phase_slot = (self._run_id, self._phase_sequence, observed_s,
@@ -2296,12 +2348,29 @@ class NativeMinitouchBackend:
                                            "waiting-touch-boundary", applied_s=now)
                 return
             else:
-                recent = list({commit: error for commit, actual_s, error in self._phase_receipts
-                               if 0 <= now - actual_s <= .5}.values())
+                # 稀疏谱面允许跨 1.5 秒收集，但整个时钟误差区间须落在窗口内。
+                recent = {row[0]: row for row in self._phase_receipts
+                          if len(row) == 6 and row[5] is not None
+                          and math.isfinite(row[5]) and 0 <= row[5] <= 1.0
+                          and now - 1.5 <= row[1] - row[5] / 1000.0
+                          and row[1] + row[5] / 1000.0 <= now}
+                tail_age = min((now - (row[1] - row[5] / 1000.0) for row in recent.values()), default=None)
+                absolute_median = median([row[2] for row in recent.values()]) if recent else None
+                diagnostic = {"observed_s": now, "request_sequence": sequence,
+                    "window_seconds": 1.5, "unique_commits": len(recent), "tail_age_s": tail_age,
+                    "abs_execution_residual_median_ms": absolute_median,
+                    "signed_execution_residual_median_ms": median([row[3] for row in recent.values()]) if recent else None,
+                    "clock_uncertainty_ms": self._clock_uncertainty_ms}
+                if not hasattr(self, "_phase_receipt_diagnostics"):
+                    self._phase_receipt_diagnostics = deque(maxlen=128)
+                if len(self._phase_receipt_diagnostics) == self._phase_receipt_diagnostics.maxlen:
+                    self._phase_receipt_diagnostics_dropped = getattr(self, "_phase_receipt_diagnostics_dropped", 0) + 1
+                self._phase_receipt_diagnostics.append(diagnostic)
                 uncertainty = self._clock_uncertainty_ms
                 if (self._clock_basis != "probe-midpoint" or uncertainty is None
                     or not math.isfinite(uncertainty) or not 0 <= uncertainty <= 1.0
-                    or len(recent) < 3 or median(recent) > 40.0):
+                    or len(recent) < 3 or tail_age is None or tail_age > .5
+                    or absolute_median is None or absolute_median > 40.0):
                     reason = "untrusted-execution-receipts"
                 else:
                     reason = str(self._session.apply_future_phase(
@@ -2639,6 +2708,25 @@ class NativeMinitouchBackend:
             "run_id": self._run_id,
             "life_feedback": {"enabled": getattr(self, "life_feedback_enabled", False),
                               "summary": getattr(self, "_life_feedback_summary", {}),
+                              "model": "distinct-judgement-events-v2",
+                              "stat_units": {"sightings": "fresh-frames-with-colour",
+                                  "debounced_reports": "distinct-visual-events",
+                                  "fast_votes": "eligible-fast-events", "slow_votes": "eligible-slow-events",
+                                  "direction_votes": "eligible-events"},
+                              "sampling_events_capacity": 128,
+                              "sampling_events_dropped": getattr(self, "_life_feedback_summary", {}).get("events_dropped", 0),
+                              "sniff": getattr(self, "_life_feedback_sniff", {}),
+                              "receipt_windows": list(getattr(self, "_phase_receipt_diagnostics", [])),
+                              "receipt_windows_capacity": 128,
+                              "receipt_windows_dropped": getattr(self, "_phase_receipt_diagnostics_dropped", 0),
+                              "commit_receipts_capacity": 64,
+                              "commit_receipts_dropped": getattr(self, "_phase_receipts_dropped", 0),
+                              "input_history_capacity": 64,
+                              "input_history_dropped": getattr(self, "_feedback_input_history_dropped", 0),
+                              "commit_receipts": [dict(commit=row[0], actual_s=row[1],
+                                  abs_execution_residual_ms=row[2], signed_execution_residual_ms=row[3],
+                                  planned_s=row[4], clock_uncertainty_ms=row[5])
+                                  for row in getattr(self, "_phase_receipts", ()) if len(row) == 6],
                               "sampling_events": getattr(self, "_life_feedback_report", []),
                               "phase_events": list(getattr(self, "_phase_events", [])),
                               "phase_status": asdict(self.phase_status_snapshot())},

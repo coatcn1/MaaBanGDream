@@ -29,6 +29,7 @@ from agent.realtime.cooperative_action import (
     DEFAULT_SETTINGS,
     should_stay_in_room,
 )
+from agent.realtime.final_cover import FinalCoverIdentityConflict
 from agent.realtime.life_monitor import LifeReading
 from agent.realtime.live_session import reset_live_run, update_live_run
 
@@ -237,7 +238,7 @@ def _fake_jump_flow(
     visible_results,
     gate_block,
 ):
-    """构造只含断网跳车所需成员的 CooperativeLiveFlow 与假控制器。"""
+    """构造只含历史跳车实现所需成员的 CooperativeLiveFlow 与假控制器。"""
     class Job:
         def __init__(self, value):
             self._value = value
@@ -400,7 +401,7 @@ class _FakeJob:
 
 def _make_play_flow(monkeypatch, *, jump_requested):
     class Play:
-        def run(self, context, params):
+        def run_for_flow(self, context, params):
             return False
 
     monkeypatch.setattr(cooperative_action, "RealtimeProfilePlay", Play)
@@ -463,7 +464,7 @@ def test_startup_failure_jump_homes_reopens_and_records_reason(monkeypatch):
 
     assert keys == [3]
     assert started == [cooperative_action.GAME_PACKAGE]
-    assert failures == ["startup failed"]
+    assert failures == ["startup failed；请手动跳车"]
 
 
 def test_run_attempt_propagates_startup_jump_without_failure_capture():
@@ -1576,6 +1577,79 @@ def test_transient_play_exception_stops_after_retry_budget():
     assert len(recoveries) == 1
 
 
+def test_final_cover_identity_conflict_stops_without_retry():
+    flow = _bare_flow()
+    flow.settings = {
+        "entry_method": "normal",
+        "post_live_action": "exit",
+        "count": 1,
+        "member_exit_policy": "fail",
+        "max_reconnects": 3,
+        "play_failure_retry_count": 1,
+    }
+    attempts = []
+    recoveries = []
+    jumps = []
+    flow.progress_callback = None
+
+    def fail(reuse_room=False):
+        attempts.append(reuse_room)
+        raise FinalCoverIdentityConflict(
+            "最终封面歌曲身份冲突：final cover song title conflicts with selected chart"
+        )
+
+    flow.run_attempt = fail
+    flow.recover_after_play_failure = lambda reason: recoveries.append(reason)
+
+    def jump(reason):
+        jumps.append(reason)
+        raise JumpOutUnavailable(reason)
+
+    flow.jump_after_startup_failure = jump
+
+    assert flow.run() is False
+    assert attempts == [False]
+    assert recoveries == []
+    assert jumps == []
+
+
+def test_final_cover_timeout_jumps_after_retry_budget():
+    flow = _bare_flow()
+    flow.settings = {
+        "entry_method": "normal",
+        "post_live_action": "exit",
+        "count": 1,
+        "member_exit_policy": "fail",
+        "max_reconnects": 3,
+        "play_failure_retry_count": 1,
+    }
+    attempts = []
+    recoveries = []
+    jumps = []
+    flow.progress_callback = None
+
+    def fail(reuse_room=False):
+        attempts.append(reuse_room)
+        raise cooperative_action.FinalCoverStartupFailure(
+            "最终封面确认超时：60 秒内未确认本局歌曲封面与标题："
+            "waiting for stable final cover jacket；未启动演奏输入"
+        )
+
+    flow.run_attempt = fail
+    flow.recover_after_play_failure = lambda reason: recoveries.append(reason)
+
+    def jump(reason):
+        jumps.append(reason)
+        raise JumpOutUnavailable(reason)
+
+    flow.jump_after_startup_failure = jump
+
+    assert flow.run() is False
+    assert attempts == [False, False]
+    assert len(recoveries) == 1
+    assert len(jumps) == 1
+
+
 def test_download_timeout_invokes_jump_instead_of_starting_engine():
     flow = _bare_flow()
     flow.wait_for = lambda names, timeout, interval: (None, np.zeros((1, 1, 3)))
@@ -1697,7 +1771,7 @@ def test_play_uses_realtime_result_navigator_without_a_second_pggbm_wait(monkeyp
     calls = []
 
     class Play:
-        def run(self, _context, _argv):
+        def run_for_flow(self, _context, _argv):
             calls.append("realtime")
             return True
 

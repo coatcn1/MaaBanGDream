@@ -37,7 +37,7 @@ class LiveRunContext:
     final_cover_song_id: str | None = None
     final_cover_status: str = "not-observed"
     final_cover_reason: str | None = None
-    # 本局生命归零并已请求“断网跳车”；仅作为 Play 与外层协力流程之间的
+    # 本局生命归零并已请求“手动跳车”；仅作为 Play 与外层联机流程之间的
     # 一次性信号，不进入序列化会话元数据。
     disconnect_jump_requested: bool = False
     # 仅在当前局确认结束且触点清理完成后置位，不代替成绩或校准验收。

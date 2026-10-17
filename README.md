@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.4.8-ff6f9f" alt="Version"></a>
+  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.4.9-ff6f9f" alt="Version"></a>
   <img src="https://img.shields.io/badge/MaaFramework-5.10.2-4c8bf5" alt="MaaFramework">
   <img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?logo=windows11&logoColor=white" alt="Windows">
@@ -22,13 +22,14 @@
 
 ---
 
-v1.4.8 纳入已合并修复与 PR #82 / #83 修正版：Native 掉血判定纠偏和等待抖动过滤提供默认关闭的实验开关，诊断写盘与输入回执隔离，挑战生命归零后保留现场。验证范围与限制见[本版本发行说明](docs/release-notes-v1.4.8.md)。
+v1.4.9 纳入竞演演出、最终封面启动失败处理及独立判定事件微调修正版，感谢 @suwayun1 的 PR #88、#94、#95。协力与竞演统一手动跳车提示，竞演使用正确的成绩坐标；Native 实验开关保持默认关闭。验证范围与限制见[本版本发行说明](docs/release-notes-v1.4.9.md)。
 
 ## ✨ 功能
 
 - [x] 🎮 **自动演出** — 当前曲目 / 随机选曲，五档难度，连续运行
 - [x] 🎹 **单人实时演奏** — TAP、FLICK、HOLD / Slide、双押与 Special 方向音符
 - [x] 👥 **协力演出** — 普通房、好友邀请、私人房间，支持筛歌与同房续演
+- [x] ⚔️ **竞演演出** — 按普通协力任务选择和启动，支持活动/自由房型、满员开演及竞演结算；沿用协力的 Profile、停止、生命归零跳车选项与错误恢复流程，无额外实验开关或验收前置。
 - [x] 🎼 **Bestdori 本地谱面辅助** — Hard / Expert / Special 谱面提供歌曲结构与时序
 - [x] 🔄 **MFA 谱面同步** — 定时增量更新或手动同步，空闲时维护本地曲库
 - [x] 🎯 **实时演奏校准** — 一次排练、一次正式验证，生成并选择匹配的 Profile
@@ -38,14 +39,19 @@ v1.4.8 纳入已合并修复与 PR #82 / #83 修正版：Native 掉血判定纠�
 - [x] 🧪 **调试记录** — 轻度 Trace 或完整记录，关联开演、输入、结算与清理证据
 - [x] 📹 **手动流程录像** — 录制界面操作，生成可逐帧定位的 MKV 与首末帧
 
+协力与竞演的“跳车”选项默认关闭；开启“生命归零后手动跳车”后停止输入，切回游戏并结束任务，提示“请手动跳车”。关闭时继续演奏及结算。
+
 “演出设置 → Native”提供默认关闭的**判定反馈微调**和**等待抖动过滤**实验开关，下局生效。
-正式演奏开始后，微调每 3 秒以 20Hz 采样 0.8 秒，无需掉血；12 秒内三个可信同向窗口建立趋势，
-确认生效后按新反馈继续请求每次 2ms 的未来输入调整。生命与终点平时保持约 5Hz，窗口结束额外复核一次；
-排练、校准与 Legacy 不使用，本次续调机制仍待真机复验。
+正式演奏开始后，微调常开约 5Hz 观测，发现可信判定候选时最多以 20Hz 加密 0.8 秒，无需掉血。
+一秒内两次独立同向字样请求 ±15ms 调整，未来未发布输入累计限 ±200ms；持续字样只计一次，
+生效后需受影响输入之后的可信空白与新字样才能续调。生命与终点保持约 5Hz；排练、校准与 Legacy 不使用。
+这些从 [PR #94](https://github.com/coatcn1/MaaBanGDream/pull/94) 拆分吸收并补充保护的候选仍待真机验收。
 Native 停止会确认完整触点释放序列；凌晨 20 局协议释放均完整，已有遗留触点仍需重启模拟器清除。
 Native jlog 诊断异步批写，慢盘或写入失败只报告证据缺失；生命截图与短窗判定区域保留帧时序，
 便于区分取帧陈旧与游戏判定变化，最新死亡原因仍待真实游戏复验。首音触发时独立保存两帧判定带与门控计算证据，
 不依赖调试或微调开关；后台保存失败只报告证据警告，不改变首音锚点。
+
+最终封面启动失败候选：硬身份冲突直接停止并保留原因；其他启动失败在有限预算后结束任务，退后台并尝试返回游戏后仍需按提示手动跳车。公共任务回调保留布尔失败，不改变 Profile timing offset、流速与结算口径。
 
 ## 🚀 快速开始
 
@@ -154,7 +160,7 @@ Special 只有确认不可选时才允许显式回退 Expert；实时校准要�
 .\scripts\setup.ps1
 & '..\.tools\Miniconda3\envs\maabangdream\python.exe' `
   -m pip install -r .\requirements-release.txt
-.\scripts\build-windows-release.ps1 -Version 1.4.8
+.\scripts\build-windows-release.ps1 -Version 1.4.9
 ```
 
 发布包须保持定制 MFA 与 Core 一致、依赖完整、路径可迁移，并排除本机用户配置。

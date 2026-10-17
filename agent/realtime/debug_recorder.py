@@ -141,6 +141,7 @@ class RealtimeDebugRecorder:
         self._native_feedback_window = None
         self._native_feedback_window_index = -1
         self._native_feedback_count = 0
+        self._native_feedback_total = 0
         self._native_feedback_written = 0
         self._dropped_native_feedback_frames = 0
         self._released_at: dict[int, float] = {}
@@ -341,10 +342,13 @@ class RealtimeDebugRecorder:
             self._native_feedback_window = window_start_s
             self._native_feedback_window_index += 1
             self._native_feedback_count = 0
-        if self._native_feedback_count >= 120:
+        # 常开观测只留候选/反向/混色 ROI；每窗和整局均有上限，不全程存图。
+        if self._native_feedback_count >= 20 or self._native_feedback_total >= 256:
+            self._dropped_native_feedback_frames += 1
             return
         index = self._native_feedback_count
         self._native_feedback_count += 1
+        self._native_feedback_total += 1
         x1, y1, x2, y2 = TimingFeedbackDetector.ROI
         if not isinstance(image, np.ndarray) or image.shape != (720, 1280, 3):
             self._dropped_native_feedback_frames += 1
@@ -403,7 +407,7 @@ class RealtimeDebugRecorder:
                 if isinstance(item, _NativeFeedbackFrame):
                     self._write_event(item.image, item.timestamp, -1,
                                       f"native-feedback-{item.window_index:02d}-{item.index:03d}",
-                                      "existing-fresh-burst-roi", 0.0,
+                                      "existing-fresh-candidate-roi", 0.0,
                                       frame_metadata=item.metadata)
                     self._native_feedback_written += 1
                     continue

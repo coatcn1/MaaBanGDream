@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from types import SimpleNamespace
 
+from agent.realtime.chart_repository import ChartResolution, ChartSelection
 from agent.realtime.native_prearm import _cooperative_jittered_chart
 
 
@@ -92,3 +95,57 @@ def test_jitter_falls_back_on_malformed_chart(tmp_path):
     source = tmp_path / "chart.json"
     source.write_text("not json", encoding="utf-8")
     assert _cooperative_jittered_chart(source, "run-1", tmp_path) == source
+
+
+def _selection(path: Path) -> ChartSelection:
+    return ChartSelection(
+        bestdori_song_id=306,
+        title="EXIST",
+        difficulty="Expert",
+        path=path,
+        timeline=None,
+    )
+
+
+def test_mode_gate_applies_jitter_to_cooperative_and_versus_only(tmp_path, monkeypatch):
+    from agent.realtime import native_prearm
+
+    source = tmp_path / "chart.json"
+    source.write_text(json.dumps(_payload(12)), encoding="utf-8")
+    (tmp_path / "profiles").mkdir()
+    jittered = tmp_path / "debug" / "jittered-charts" / "run-x.json"
+    calls = []
+
+    def fake_jitter(chart_path, run_id, root):
+        calls.append((Path(chart_path), str(run_id)))
+        return jittered
+
+    monkeypatch.setattr(native_prearm, "_cooperative_jittered_chart", fake_jitter)
+
+    class Repo:
+        def resolve(self, *_args, **_kwargs):
+            return ChartResolution(_selection(source), "ok")
+
+    def resolve(mode):
+        calls.clear()
+        live = SimpleNamespace(
+            prepared_for_play=True,
+            difficulty="Expert",
+            song_id=306,
+            song_level=26,
+            song_title="EXIST",
+            mode=mode,
+            run_id="run-x",
+        )
+        return native_prearm.resolve_confirmed_chart(
+            live, "Expert", repository=Repo(), project_root=tmp_path
+        )
+
+    # 竞演与协力都按 run 生成漏键副本。
+    assert resolve("versus").selection.path == jittered
+    assert calls == [(source, "run-x")]
+    assert resolve("cooperative").selection.path == jittered
+    assert calls == [(source, "run-x")]
+    # 单人正式不抖动，保持 canonical 谱面。
+    assert resolve("formal").selection.path == source
+    assert calls == []
