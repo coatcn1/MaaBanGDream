@@ -98,7 +98,10 @@ if ($LASTEXITCODE -ne 0) {
 $profiles = Join-Path $packageRoot 'profiles'
 $recordings = Join-Path $packageRoot 'debug\recordings'
 $captures = Join-Path $packageRoot 'screencap'
-$maafwDebug = Join-Path $packageRoot 'debug\maafw'
+# 定制 MFA 的“清理缓存”白名单按末级目录名匹配（maafw_debug 必须落在名为
+# debug 的目录）。指向 debug\maafw 会被 ValidateTarget 拒绝并让整个清理失败，
+# 因此与开发启动脚本保持一致，指向 debug 根；父目录会与 recordings 去重。
+$maafwDebug = Join-Path $packageRoot 'debug'
 $mfaLogs = Join-Path $packageRoot 'logs'
 $instanceConfigDirectory = Join-Path $packageRoot 'config\instances'
 foreach ($directory in @(

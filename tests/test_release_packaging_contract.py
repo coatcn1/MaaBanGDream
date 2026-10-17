@@ -42,6 +42,21 @@ def test_release_launcher_generates_machine_local_paths_at_first_run():
     assert "MAABANGDREAM_ORDERED_STARTUP" in launcher
 
 
+def test_cache_cleanup_artifact_paths_match_custom_mfa_whitelist():
+    """定制 MFA 只按末级目录名匹配白名单，sidecar 路径必须落在允许的布局内。"""
+    release_launcher = read("scripts/start-release.ps1")
+    developer_launcher = read("scripts/launch-mfa.ps1")
+
+    # maafw_debug 必须指向名为 debug 的目录；debug\maafw 会被 ValidateTarget 拒绝，
+    # 并让整次“清理缓存”在规划阶段失败。
+    assert "$maafwDebug = Join-Path $packageRoot 'debug'" in release_launcher
+    assert "'debug\\maafw'" not in release_launcher
+    # 开发部署下 Agent 的调试产物写在源码仓库的 debug 根，而不是 MFA 目录。
+    assert "$maafwDebugDirectory = Join-Path $projectRoot 'debug'" in developer_launcher
+    for script in (release_launcher, developer_launcher):
+        assert "maafw_debug = $maafw" in script
+
+
 def test_launchers_write_json_without_bom_and_check_tolerates_bom():
     launcher = read("scripts/start-release.ps1")
     developer_launcher = read("scripts/launch-mfa.ps1")
