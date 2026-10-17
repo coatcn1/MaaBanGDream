@@ -12,39 +12,21 @@ class TimingFeedback(str, Enum):
     SLOW = "slow"
 
 
-def _classify_judgement_roi(image: np.ndarray) -> tuple[TimingFeedback | None, int, int]:
-    """把判定条 ROI 的像素统计折算成方向；纯函数、无副作用。
-
-    与 :meth:`TimingFeedbackDetector.detect` 共用同一套颜色判据。抽出来是为了让
-    常开 5Hz 判定条计数（与掉血窗解耦）能复用同一判据，而**不触碰**检测器的历史
-    窗口与去重锁——常开路径只记录方向，不参与检测器的上报节流。
-    """
+def probe_judgement_feedback(image: np.ndarray) -> tuple[TimingFeedback | None, int, int]:
+    """只读判定 ROI 的颜色计数；原始命中不等于独立判定事件。"""
     if not isinstance(image, np.ndarray) or image.shape[:2] != (720, 1280):
         return None, 0, 0
     x1, y1, x2, y2 = TimingFeedbackDetector.ROI
     hsv = cv2.cvtColor(image[y1:y2, x1:x2], cv2.COLOR_BGR2HSV)
-    slow = int(np.count_nonzero(cv2.inRange(
-        hsv, (0, 140, 160), (25, 255, 255),
-    )))
-    fast = int(np.count_nonzero(cv2.inRange(
-        hsv, (95, 160, 160), (120, 255, 255),
-    )))
-    kind: TimingFeedback | None = None
-    if slow >= TimingFeedbackDetector.MIN_COLOURED_PIXELS and slow >= fast * 2:
+    slow = int(np.count_nonzero(cv2.inRange(hsv, (0, 140, 160), (25, 255, 255))))
+    fast = int(np.count_nonzero(cv2.inRange(hsv, (95, 160, 160), (120, 255, 255))))
+    minimum = TimingFeedbackDetector.MIN_COLOURED_PIXELS
+    kind = None
+    if slow >= minimum and slow >= fast * 2:
         kind = TimingFeedback.SLOW
-    elif fast >= TimingFeedbackDetector.MIN_COLOURED_PIXELS and fast >= slow * 2:
+    elif fast >= minimum and fast >= slow * 2:
         kind = TimingFeedback.FAST
     return kind, slow, fast
-
-
-def probe_judgement_feedback(image: np.ndarray) -> tuple[TimingFeedback | None, int, int]:
-    """只读探测当前帧的判定条方向与原始像素计数。
-
-    返回 ``(方向, slow 像素数, fast 像素数)``。不维护任何状态，供常开 5Hz 判定条
-    计数记录证据；与 ``detect`` 的连续帧数门禁/去重锁无关，因此可以任意频率调用。
-    原始像素计数一并返回，便于离线复盘时重新标定颜色阈值。
-    """
-    return _classify_judgement_roi(image)
 
 
 class TimingFeedbackDetector:
@@ -74,7 +56,7 @@ class TimingFeedbackDetector:
         self.last_raw_directions = frozenset()
         if not isinstance(image, np.ndarray) or image.shape[:2] != (720, 1280):
             return None
-        kind, slow, fast = _classify_judgement_roi(image)
+        kind, slow, fast = probe_judgement_feedback(image)
         self.last_raw_directions = frozenset(
             direction for direction, pixels in ((TimingFeedback.FAST, fast), (TimingFeedback.SLOW, slow))
             if pixels >= self.MIN_COLOURED_PIXELS

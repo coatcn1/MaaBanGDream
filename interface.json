@@ -648,7 +648,7 @@
     },
     "CooperativeDisconnectJump": {
       "type": "select",
-      "label": "断网跳车",
+      "label": "跳车",
       "default_case": "Off",
       "cases": [
         {
@@ -664,7 +664,7 @@
         },
         {
           "name": "On",
-          "label": "生命归零断网跳车",
+          "label": "生命归零后手动跳车",
           "pipeline_override": {
             "CooperativeDisconnectJumpConfigure": {
               "custom_action_param": {
@@ -673,7 +673,8 @@
             }
           }
         }
-      ]
+      ],
+      "description": "开启后生命归零将停止输入，返回桌面再切回游戏并结束任务；请手动跳车。关闭时继续演奏和结算。"
     },
     "VersusRoomType": {
       "type": "select",
@@ -842,7 +843,7 @@
     },
     "VersusDisconnectJump": {
       "type": "select",
-      "label": "断网跳车",
+      "label": "跳车",
       "default_case": "Off",
       "cases": [
         {
@@ -858,7 +859,7 @@
         },
         {
           "name": "On",
-          "label": "生命归零断网跳车",
+          "label": "生命归零后手动跳车",
           "pipeline_override": {
             "VersusDisconnectJumpConfigure": {
               "custom_action_param": {
@@ -867,7 +868,8 @@
             }
           }
         }
-      ]
+      ],
+      "description": "开启后生命归零将停止输入，返回桌面再切回游戏并结束任务；请手动跳车。关闭时继续演奏和结算。"
     },
     "ManualFlowRecordingQuality": {
       "type": "select",

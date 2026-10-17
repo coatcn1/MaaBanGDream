@@ -2090,13 +2090,21 @@ class RealtimeProfilePlay(CustomAction):
     """Run a bounded rehearsal using only a matching accepted local profile."""
 
     def run(self, context: Context, argv: CustomAction.RunArg) -> bool:
+        # MaaFramework 的 ctypes 回调必须得到布尔结果，不能让 Python 异常越过边界。
+        return self._run_guarded(context, argv, propagate_startup_failure=False)
+
+    def run_for_flow(self, context: Context, argv: CustomAction.RunArg) -> bool:
+        # 仅供协力和竞演的 Python 外层调用，让类型化启动失败进入本局恢复策略。
+        return self._run_guarded(context, argv, propagate_startup_failure=True)
+
+    def _run_guarded(self, context, argv, *, propagate_startup_failure: bool) -> bool:
         try:
             return self._run(context, argv)
-        except FinalCoverStartupFailure:
-            # 开演前的最终封面失败（身份冲突/标题未确认/封面超时）必须冒泡出去，
-            # 协力据此跳车；否则这里吞掉返回 False，机器人会留在演出里空转到血空。
-            raise
         except Exception as exc:
+            if context.tasker.stopping:
+                return True
+            if propagate_startup_failure and isinstance(exc, FinalCoverStartupFailure):
+                raise
             record_failure_reason(f"{type(exc).__name__}: {exc}")
             traceback.print_exc()
             print(f"RealtimeProfilePlay failed={type(exc).__name__}: {exc}", flush=True)
@@ -2320,7 +2328,7 @@ class RealtimeProfilePlay(CustomAction):
                         )
             is_rehearsal, continue_after_depleted = resolve_life_policy(params)
             numeric_life_monitor_enabled = resolve_life_monitor_enabled(params)
-            # 协力“断网跳车”必须保留数值生命监视，让引擎在生命归零帧
+            # 联机“跳车”必须保留数值生命监视，让引擎在生命归零帧
             # 发出一次性跳车信号。
             disconnect_jump_request = bool(
                 params.get("life_depleted_jump_request", False)
@@ -3251,7 +3259,7 @@ class RealtimeProfilePlay(CustomAction):
             })
 
         if stats.jump_requested:
-            # 协力“断网跳车”：本局以“请求跳车”结束，不做结算解析与退出
+            # 联机“跳车”：本局以“请求跳车”结束，不做结算解析与退出
             # 导航；跳车流程由外层协力流程读取 live run 信号后执行。
             print(
                 "RealtimeProfilePlay disconnect_jump_requested=true "
@@ -3268,7 +3276,7 @@ class RealtimeProfilePlay(CustomAction):
                         suggested_timing_offset_ms=None,
                         run_context=live_run,
                         result_status="disconnect_jump_requested",
-                        reason="生命归零请求断网跳车",
+                        reason="生命归零，请手动跳车",
                     ),
                 )
             return True
@@ -3433,6 +3441,8 @@ class RealtimeProfilePlay(CustomAction):
                         selected_chart.expected_notes
                         if selected_chart is not None else None
                     ),
+                    # 竞演沿用协力导航和短读取预算，数字面板使用单人布局。
+                    parser=ResultParser() if run_mode == "versus" else None,
                     cooperative_mode=(run_mode in ("cooperative", "versus")),
                     robust_navigation=True,
                     handle_intermediate=lambda image: handle_story_page(

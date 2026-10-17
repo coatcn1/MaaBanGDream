@@ -69,9 +69,9 @@ def test_native_feedback_roi_is_bounded_and_keeps_image_metadata(tmp_path):
     recorder._record_queue = queue.Queue(maxsize=200)
     for index in range(200):
         recorder.record_native_feedback(frame, index / 60, metadata, 1.0)
-    assert recorder._record_queue.qsize() == 119
+    assert recorder._record_queue.qsize() == 19
     recorder._discard_pending_records()
-    assert recorder._dropped_native_feedback_frames == 119
+    assert recorder._dropped_native_feedback_frames == 200
     recorder._closed = True
     recorder.record_native_feedback(frame, 9, metadata, 1.0)
     assert recorder._record_queue.empty()

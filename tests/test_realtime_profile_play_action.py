@@ -637,7 +637,7 @@ def test_profile_jump_cancellation_reaches_disconnect_branch(monkeypatch):
                 life_depleted=True,
                 jump_requested=True,
                 completed=False,
-                terminal_reason="生命归零请求断网跳车",
+                terminal_reason="生命归零，请手动跳车",
                 engine_mode="native",
                 native_report={
                     "planned": 2764,
@@ -1738,6 +1738,7 @@ def _completed_play_harness(
     engine_cleanup_failed=False,
     native_report=None,
     collected_result=None,
+    collect_callback=None,
 ):
     reset_live_run(
         mode="pending",
@@ -1883,11 +1884,13 @@ def _completed_play_harness(
 
     def fake_collect(*args, **kwargs):
         assert not (life_failed or aborted_for_life), "死亡局不能采集成功结算"
-        assert kwargs["cooperative_mode"] is (run_mode == "cooperative")
+        assert kwargs["cooperative_mode"] is (run_mode in ("cooperative", "versus"))
         assert kwargs["robust_navigation"] is True
         assert kwargs["timeout_seconds"] == 180.0
         if collection_exception is not None:
             raise collection_exception
+        if collect_callback is not None:
+            return collect_callback(*args, **kwargs)
         return ResultCollectionOutcome(
             collection_status,
             result=(
@@ -2194,6 +2197,55 @@ def test_completed_without_video_writes_json_and_trace_only(tmp_path, monkeypatc
         (recorder.output_dir / "summary.json").read_text(encoding="utf-8")
     )
     assert summary["recording_mode"] == "trace-only"
+
+
+@pytest.mark.parametrize("run_mode", ["cooperative", "versus"])
+def test_multiplayer_play_reads_its_own_layout_with_shared_navigation(tmp_path, monkeypatch, run_mode):
+    import base64
+    import zlib
+    from agent.realtime.result_parser import CooperativeResultParser, ResultParser
+    from agent.realtime.result_samples_v2 import RESULT_CROPS_V2_ZLIB_BASE64
+    from agent.realtime.result_navigation import ResultNavigationOutcome, ResultNavigationStatus
+
+    # 两种模式共用导航，但竞演的真实 PGGBM 数字位置与单人一致。
+    parser_type = CooperativeResultParser if run_mode == "cooperative" else ResultParser
+    crops = np.frombuffer(
+        zlib.decompress(base64.b64decode(RESULT_CROPS_V2_ZLIB_BASE64)), dtype=np.uint8,
+    ).reshape(7, 32, 60)
+    image = np.full((720, 1280, 3), 255, dtype=np.uint8)
+    for crop, (x1, y1, x2, y2) in zip(crops, parser_type.FIELDS.values()):
+        image[y1:y2, x1:x2] = (255 - crop[:, :x2-x1])[:, :, None]
+    reading = LiveResult(117, 11, 0, 0, 8, 4, 7, confidence=1.0)
+    now, advances = [0.0], []
+    real_collect = profile_play_action.collect_result
+    class Controller:
+        def post_screencap(self):
+            return SimpleNamespace(wait=lambda: SimpleNamespace(get=lambda: image))
+    monkeypatch.setattr(profile_play_action, "navigate_result_pages", lambda *a, **k: ResultNavigationOutcome(
+        ResultNavigationStatus.IDENTIFIED, image=image, page_state="pggbm",
+    ))
+    monkeypatch.setattr(profile_play_action, "_template_click_point", lambda *a, **k: (100, 100))
+    monkeypatch.setattr(profile_play_action, "accelerated_back", lambda *a, **k: advances.append(now[0]))
+    def collect(_controller, stopping, **kwargs):
+        assert kwargs["cooperative_mode"] is True
+        return real_collect(
+            Controller(), stopping, **dict(kwargs, expected_notes=reading.total),
+            clock=lambda: now[0], sleeper=lambda seconds: now.__setitem__(0, now[0] + seconds),
+        )
+    root, _, _ = _completed_play_harness(
+        monkeypatch, tmp_path, debug_recording=False,
+        run_mode=run_mode, collect_callback=collect,
+    )
+    payload = json.loads(next((root / "screencap").glob("realtime-result-*.json")).read_text(encoding="utf-8"))
+    assert payload["result_status"] == "cooperative_result_advanced"
+    assert payload["cooperative_judgements_status"] == "stable"
+    # 沿用多人结果不自动接受 Profile 的既有语义。
+    assert payload["valid"] is False
+    assert payload["eligible_for_profile_acceptance"] is False
+    for name in ("perfect", "great", "good", "bad", "miss", "fast", "slow"):
+        assert payload[name] == getattr(reading, name)
+    assert sum(payload[name] for name in ("perfect", "great", "good", "bad", "miss")) == reading.total
+    assert advances == [1.0]
 
 
 def test_completed_cooperative_play_advances_when_judgements_are_unreadable(

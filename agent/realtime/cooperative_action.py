@@ -41,7 +41,9 @@ from .live_visual_gate import MODE_TOGGLE_POINT, live_performance_mode_is_off
 from .performance_settings_action import RealtimePerformanceSettingsGate
 from .playfield_monitor import PlayfieldDetector
 from .chart_repository import LocalChartRepository
-from .final_cover import FinalCoverResolver, FinalCoverStartupFailure
+from .final_cover import (
+    FinalCoverResolver, FinalCoverStartupFailure, FinalCoverIdentityConflict,
+)
 from .startup_diagnostics import CooperativeStartupRecorder, cover_diagnostic
 from .profile_play_action import RealtimeProfilePlay
 from .profile_store import (
@@ -81,7 +83,7 @@ TEMPLATE_POSITIONS = {
     "connect_failed_body": (580, 345),
     "repeat_room_title": (393, 225),
     "sss_guide_close": (856, 610),
-    # 断网跳车：真实弹窗正文（2026-09-07 雷电录像提取）。
+    # 跳车：真实弹窗正文（2026-09-07 雷电录像提取）。
     "disconnect_continue_body": (488, 313),
     "disconnect_confirm_body": (495, 307),
 }
@@ -121,7 +123,7 @@ ROOM_SONG_CHOICE_TIMEOUT_SECONDS = 180.0
 SONG_CHOICE_TO_READY_TIMEOUT_SECONDS = 60.0
 POST_SCORE_NAVIGATION_TIMEOUT_SECONDS = 60.0
 HOME_LIVE_POINT = (1175, 645)
-# 断网跳车按钮点击点：弹窗1“通信已中断。是否继续演出？”点左侧“中断”；
+# 跳车按钮点击点：弹窗1“通信已中断。是否继续演出？”点左侧“中断”；
 # 弹窗2“确认中断当前演出返回主页吗？”点右侧粉色“中断”。
 DISCONNECT_CONTINUE_INTERRUPT_POINT = (508, 447)
 DISCONNECT_CONFIRM_INTERRUPT_POINT = (754, 439)
@@ -571,13 +573,13 @@ class CooperativeLiveFlow:
         return False
 
     def disconnect_jump_out(self, *, popup_timeout_s: float = 25.0) -> bool:
-        """生命归零后的断网跳车流程（AGENTS 第 22 条）。
+        """历史按游戏 UID 隔离网络的跳车实现；当前联机流程不调用。
 
         真实弹窗顺序（2026-09-07 雷电录像）：按游戏 UID 屏蔽出口流量 → 游戏
         退后台再切回 → 弹窗1“通信已中断。是否继续演出？”点左侧“中断” →
         弹窗2“确认中断当前演出返回主页吗？”点右侧“中断” → 恢复网络 →
         “连接失败。”弹窗有界点“重试”直到回主页。任何一步失败都在 finally
-        恢复网络（fail-closed），绝不把模拟器留在断网状态。
+        恢复网络（fail-closed），绝不把模拟器留在网络隔离状态。
         """
         gate = GameNetworkGate(self._adb_shell)
         try:
@@ -599,7 +601,7 @@ class CooperativeLiveFlow:
                     flush=True,
                 )
                 return False
-            # 退后台再切回；断网状态下切回会触发“是否切换到单人演奏”弹窗。
+            # 退后台再切回；网络隔离状态下切回会触发“是否切换到单人演奏”弹窗。
             self.controller.post_click_key(3).wait()
             time.sleep(0.6)
             self.controller.post_start_app(GAME_PACKAGE).wait()
@@ -623,7 +625,7 @@ class CooperativeLiveFlow:
                     flush=True,
                 )
                 return False
-            # 先恢复网络，再对“连接失败。”做有界重试；断网状态下点重试
+            # 先恢复网络，再对“连接失败。”做有界重试；网络隔离状态下点重试
             # 无效是游戏正常表现。
             if not gate.restore():
                 print(
@@ -1274,9 +1276,15 @@ class CooperativeLiveFlow:
 
     def jump_after_startup_failure(self, reason: str) -> None:
         """从无法安全启动演奏的协力局退后台并返回游戏，然后停止任务。"""
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
         require_game_foreground(self.controller)
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
         self.controller.post_click_key(3).wait()
         time.sleep(0.6)
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
         self.controller.post_start_app(GAME_PACKAGE).wait()
         deadline = time.monotonic() + 12.0
         foreground_confirmed = False
@@ -1287,6 +1295,9 @@ class CooperativeLiveFlow:
                 foreground_confirmed = True
                 break
             time.sleep(0.5)
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
+        reason = f"{reason}；请手动跳车"
         record_failure_reason(reason)
         print(
             "CooperativeLive startup_jump "
@@ -1297,7 +1308,7 @@ class CooperativeLiveFlow:
         raise JumpOutUnavailable(reason)
 
     def jump_after_download_timeout(self) -> None:
-        reason = "成员下载超过60秒仍未进入演出，已主动跳车并返回游戏"
+        reason = "成员下载超过60秒仍未进入演出，已退后台并尝试返回游戏"
         self.jump_after_startup_failure(reason)
 
     def wait_for_playfield(self) -> None:
@@ -1319,18 +1330,24 @@ class CooperativeLiveFlow:
                 str(self.settings.get("difficulty", "Expert")),
             ),
         )
-        success = RealtimeProfilePlay().run(
+        success = RealtimeProfilePlay().run_for_flow(
             self.context, self.action_argv(params)
         )
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
         run = current_live_run()
         if run is not None and bool(run.disconnect_jump_requested):
-            # 生命归零：不再自动断网跳车（门禁/弹窗在不同设备上不可靠）。
-            # 回主页 → 切回游戏 → 直接结束任务，由用户手动断网跳车。
+            # 生命归零：不再自动跳车（门禁/弹窗在不同设备上不可靠）。
+            # 回主页 → 切回游戏 → 直接结束任务，提示用户手动跳车。
             self.controller.post_click_key(3).wait()
             time.sleep(0.6)
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
             self.controller.post_start_app(GAME_PACKAGE).wait()
             time.sleep(0.8)
-            raise JumpOutUnavailable("生命归零，请手动断网跳车后重试")
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
+            raise JumpOutUnavailable("生命归零，请手动跳车后重试")
         if not success:
             return False
         return True
@@ -1613,6 +1630,12 @@ class CooperativeLiveFlow:
         except (MemberExited, JumpOutUnavailable, RoomPreparationTimeout):
             outcome = "stopped" if self.stopped() else "startup-failed"
             raise
+        except FinalCoverStartupFailure:
+            # 已定性的启动失败不能再凭另一张弹窗截图转换成成员退出或重连。
+            if self.stopped():
+                outcome = "stopped"
+                raise InterruptedError("用户已停止任务")
+            raise
         except Exception as exc:
             if isinstance(exc, OSError) and "access violation" in str(exc).lower():
                 # 二次访问反向控制器会用新的访问冲突掩盖最初的句柄失效。
@@ -1796,6 +1819,12 @@ class CooperativeLiveFlow:
                 continue
             except InterruptedError:
                 raise
+            except FinalCoverIdentityConflict as exc:
+                if self.stopped():
+                    return True
+                # 实读身份硬冲突不是瞬时故障；保留现场，不消耗预算重新开局。
+                record_failure_reason(f"{type(exc).__name__}: {exc}")
+                return False
             except Exception as exc:
                 if self.stopped():
                     return True
@@ -1804,11 +1833,11 @@ class CooperativeLiveFlow:
                         # 最终封面阶段无法确认本局歌曲/身份（身份冲突、标题未确认、
                         # 封面等待 60 秒超时等）会让机器人一直不出手、把血打空；重试
                         # 预算耗尽后按启动失败跳车：退后台返回游戏并结束任务，由用户
-                        # 手动断网跳车，避免把机器人留在没法演奏的演出里。
+                        # 手动跳车，避免把机器人留在没法演奏的演出里。
                         try:
                             self.jump_after_startup_failure(
-                                "最终封面未确认本局歌曲/谱面，无法安全开始演奏，"
-                                "已跳车返回游戏；请手动断网跳车后重试"
+                                f"{type(exc).__name__}: {exc}；"
+                                "已退后台并尝试返回游戏，任务结束"
                             )
                         except JumpOutUnavailable as jump_exc:
                             if self.stopped():

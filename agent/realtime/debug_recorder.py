@@ -45,14 +45,6 @@ class _NativeFeedbackFrame:
     index: int
 
 
-@dataclass(frozen=True)
-class _JudgementSniffFrame:
-    """只带一条小记录、不带图像的判定条嗅探证据帧。"""
-
-    timestamp: float
-    record: dict[str, object]
-
-
 def append_lifecycle_event(
     output_dir: Path,
     phase: str,
@@ -116,13 +108,6 @@ class RealtimeDebugRecorder:
         self.close_timeout_seconds = max(0.01, float(close_timeout_seconds))
         self._trace = (self.output_dir / "trace.jsonl").open("w", encoding="utf-8")
         self._events = (self.output_dir / "events.jsonl").open("w", encoding="utf-8")
-        # 常开判定条嗅探：每帧一条小记录，供离线复盘 5Hz 下判定条的可检出率。
-        # 只写文本、不存图，因此可以一直开着而不显著增加磁盘/带宽。
-        self._judgement_sniff = (
-            self.output_dir / "judgement-sniff.jsonl"
-        ).open("w", encoding="utf-8")
-        self._judgement_sniff_frames = 0
-        self._dropped_judgement_sniff_frames = 0
         self._record_queue: queue.Queue = queue.Queue(
             maxsize=_RECORD_QUEUE_CAPACITY
         )
@@ -156,6 +141,7 @@ class RealtimeDebugRecorder:
         self._native_feedback_window = None
         self._native_feedback_window_index = -1
         self._native_feedback_count = 0
+        self._native_feedback_total = 0
         self._native_feedback_written = 0
         self._dropped_native_feedback_frames = 0
         self._released_at: dict[int, float] = {}
@@ -356,10 +342,13 @@ class RealtimeDebugRecorder:
             self._native_feedback_window = window_start_s
             self._native_feedback_window_index += 1
             self._native_feedback_count = 0
-        if self._native_feedback_count >= 120:
+        # 常开观测只留候选/反向/混色 ROI；每窗和整局均有上限，不全程存图。
+        if self._native_feedback_count >= 20 or self._native_feedback_total >= 256:
+            self._dropped_native_feedback_frames += 1
             return
         index = self._native_feedback_count
         self._native_feedback_count += 1
+        self._native_feedback_total += 1
         x1, y1, x2, y2 = TimingFeedbackDetector.ROI
         if not isinstance(image, np.ndarray) or image.shape != (720, 1280, 3):
             self._dropped_native_feedback_frames += 1
@@ -372,63 +361,6 @@ class RealtimeDebugRecorder:
                 self._native_feedback_window_index, index))
         except queue.Full:
             self._dropped_native_feedback_frames += 1
-
-    def record_judgement_sniff(
-        self,
-        timestamp: float,
-        kind: object,
-        slow_px: int,
-        fast_px: int,
-        *,
-        burst: bool,
-        decision: object = None,
-        streak: int = 0,
-        frame_metadata: dict[str, object] | None = None,
-    ) -> None:
-        """常开记录一次判定条嗅探结果（不存图、不参与纠偏）。
-
-        目的是让几十局才出现一次的偏移坏局自行留证：由主循环在每张新鲜演奏帧上
-        调用一次，只入队一条小记录，交给后台 worker 顺序落盘，因此不阻塞演奏
-        热路径。``decision``/``streak`` 记录常开计数路径对该帧的处置
-        （ineligible/counted/requested）与累计同向数，用于离线定位「命中很多却从不
-        纠偏」这类问题。
-        """
-        if self._closed or self._error is not None:
-            self._dropped_judgement_sniff_frames += 1
-            return
-        metadata = frame_metadata or {}
-        request_s = metadata.get("request_s")
-        record = {
-            "timestamp": timestamp,
-            "sequence": metadata.get("sequence"),
-            "burst": bool(burst),
-            "kind": None if kind is None else str(getattr(kind, "value", kind)),
-            "slow_px": int(slow_px),
-            "fast_px": int(fast_px),
-            "decision": None if decision is None else str(decision),
-            "streak": int(streak),
-            "request_age_ms": (
-                (timestamp - request_s) * 1000
-                if isinstance(request_s, (int, float))
-                else None
-            ),
-        }
-        try:
-            self._record_queue.put_nowait(_JudgementSniffFrame(timestamp, record))
-        except queue.Full:
-            self._dropped_judgement_sniff_frames += 1
-
-    def _process_judgement_sniff(self, frame: _JudgementSniffFrame) -> None:
-        elapsed_ms = (
-            None
-            if self._first_timestamp is None
-            else round((frame.timestamp - self._first_timestamp) * 1000, 3)
-        )
-        self._judgement_sniff.write(json.dumps(
-            {"elapsed_ms": elapsed_ms, **frame.record},
-            ensure_ascii=False, separators=(",", ":"),
-        ) + "\n")
-        self._judgement_sniff_frames += 1
 
     def _process_native_life(self, frame: _NativeLifeFrame) -> None:
         history = self._native_life_history
@@ -475,12 +407,9 @@ class RealtimeDebugRecorder:
                 if isinstance(item, _NativeFeedbackFrame):
                     self._write_event(item.image, item.timestamp, -1,
                                       f"native-feedback-{item.window_index:02d}-{item.index:03d}",
-                                      "existing-fresh-burst-roi", 0.0,
+                                      "existing-fresh-candidate-roi", 0.0,
                                       frame_metadata=item.metadata)
                     self._native_feedback_written += 1
-                    continue
-                if isinstance(item, _JudgementSniffFrame):
-                    self._process_judgement_sniff(item)
                     continue
                 (
                     image, timestamp, notes, actions, life_status,
@@ -503,8 +432,6 @@ class RealtimeDebugRecorder:
                 self._trace.close()
                 self._events.flush()
                 self._events.close()
-                self._judgement_sniff.flush()
-                self._judgement_sniff.close()
             except BaseException as exc:
                 if self._error is None:
                     self._error = exc
@@ -545,8 +472,6 @@ class RealtimeDebugRecorder:
             "dropped_native_life_frames": self._dropped_native_life_frames,
             "native_feedback_evidence_frames": self._native_feedback_written,
             "dropped_native_feedback_frames": self._dropped_native_feedback_frames,
-            "judgement_sniff_frames": self._judgement_sniff_frames,
-            "dropped_judgement_sniff_frames": self._dropped_judgement_sniff_frames,
             "native_life_evidence_complete": self._dropped_native_life_frames == 0,
             "native_feedback_evidence_complete": self._dropped_native_feedback_frames == 0,
             "video_frames": self._video_frames,
@@ -636,8 +561,6 @@ class RealtimeDebugRecorder:
                 self._dropped_native_life_frames += 1
             elif isinstance(item, _NativeFeedbackFrame):
                 self._dropped_native_feedback_frames += 1
-            elif isinstance(item, _JudgementSniffFrame):
-                self._dropped_judgement_sniff_frames += 1
             elif item is not _SENTINEL:
                 self._dropped_trace_frames += 1
 

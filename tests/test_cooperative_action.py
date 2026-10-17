@@ -238,7 +238,7 @@ def _fake_jump_flow(
     visible_results,
     gate_block,
 ):
-    """构造只含断网跳车所需成员的 CooperativeLiveFlow 与假控制器。"""
+    """构造只含历史跳车实现所需成员的 CooperativeLiveFlow 与假控制器。"""
     class Job:
         def __init__(self, value):
             self._value = value
@@ -401,7 +401,7 @@ class _FakeJob:
 
 def _make_play_flow(monkeypatch, *, jump_requested):
     class Play:
-        def run(self, context, params):
+        def run_for_flow(self, context, params):
             return False
 
     monkeypatch.setattr(cooperative_action, "RealtimeProfilePlay", Play)
@@ -464,7 +464,7 @@ def test_startup_failure_jump_homes_reopens_and_records_reason(monkeypatch):
 
     assert keys == [3]
     assert started == [cooperative_action.GAME_PACKAGE]
-    assert failures == ["startup failed"]
+    assert failures == ["startup failed；请手动跳车"]
 
 
 def test_run_attempt_propagates_startup_jump_without_failure_capture():
@@ -1577,7 +1577,7 @@ def test_transient_play_exception_stops_after_retry_budget():
     assert len(recoveries) == 1
 
 
-def test_final_cover_identity_conflict_jumps_after_retry_budget():
+def test_final_cover_identity_conflict_stops_without_retry():
     flow = _bare_flow()
     flow.settings = {
         "entry_method": "normal",
@@ -1608,10 +1608,9 @@ def test_final_cover_identity_conflict_jumps_after_retry_budget():
     flow.jump_after_startup_failure = jump
 
     assert flow.run() is False
-    assert attempts == [False, False]
-    assert len(recoveries) == 1
-    assert len(jumps) == 1
-    assert "最终封面" in jumps[0]
+    assert attempts == [False]
+    assert recoveries == []
+    assert jumps == []
 
 
 def test_final_cover_timeout_jumps_after_retry_budget():
@@ -1772,7 +1771,7 @@ def test_play_uses_realtime_result_navigator_without_a_second_pggbm_wait(monkeyp
     calls = []
 
     class Play:
-        def run(self, _context, _argv):
+        def run_for_flow(self, _context, _argv):
             calls.append("realtime")
             return True
 

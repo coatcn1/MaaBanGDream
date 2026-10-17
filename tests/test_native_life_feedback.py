@@ -1,4 +1,4 @@
-from collections import Counter, deque
+from collections import deque
 from dataclasses import FrozenInstanceError, replace
 import threading
 from types import SimpleNamespace
@@ -13,7 +13,7 @@ from agent.realtime.native_prearm import frozen_native_runtime_options
 from agent.realtime.live_session import current_live_run, reset_live_run
 from agent.realtime.profile_play_action import StallSafeCapture
 from agent.realtime.profile_store import RealtimeProfileStore
-from agent.realtime.timing_feedback import TimingFeedback, probe_judgement_feedback
+from agent.realtime.timing_feedback import TimingFeedback
 
 
 @pytest.mark.parametrize("life", [False, True])
@@ -45,33 +45,6 @@ def test_new_options_are_strict_booleans(tmp_path, key, value):
         store.update_runtime_options({key: value})
 
 
-def _sampler():
-    requests = []
-    backend = SimpleNamespace(_run_id="test", feedback_input_eligible=lambda now: True,
-                              status=NativePhaseStatus("test"))
-    def request(delta, observed):
-        requests.append((delta, observed))
-        backend.status = replace(backend.status, state="requested", request_sequence=1,
-                                 original_observed_s=observed, delta_ms=delta)
-        return True
-    backend.request_future_phase = request
-    backend.phase_status_snapshot = lambda: backend.status
-    backend.revoke_future_phase = lambda reason: None
-    return NativeLifeFeedback(backend), requests
-
-
-def _open(sampler, now=0):
-    sampler.observe_scene(now, visible=True)
-    assert sampler.active(now)
-
-
-def _hit(sampler, direction, now, *, age=.01):
-    # 与引擎同序：先确认新鲜帧（填 frame_evidence），再走常开计数。
-    assert sampler.fresh({"sequence": sampler.last_sequence + 1, "request_s": now - age,
-                          "reused": False}, now)
-    return sampler.observe_judgement(direction, now, source="steady")
-
-
 def _feedback_image(direction):
     image = np.zeros((720, 1280, 3), dtype=np.uint8)
     if direction is TimingFeedback.SLOW:
@@ -79,106 +52,6 @@ def _feedback_image(direction):
     elif direction is TimingFeedback.FAST:
         image[514:556, 570:710] = (255, 180, 0)
     return image
-
-
-def test_scene_open_marks_active_and_invalid_frame_closes_with_metadata():
-    sampler, _ = _sampler()
-    _open(sampler)
-    assert sampler.active(0)
-    assert not sampler.fresh({"sequence": 3, "request_s": .4, "reused": True}, .5)
-    closed = sampler.events[-1]
-    assert closed["event"] == "slow-or-reused-frames"
-    assert closed["frame_sequence"] == 3
-    assert closed["request_s"] == .4
-    assert closed["reused"] is True
-    assert closed["observed_s"] == pytest.approx(.5)
-    assert not sampler.active(.5)
-
-
-def test_two_same_direction_hits_request_one_step():
-    sampler, requests = _sampler()
-    _open(sampler)
-    assert _hit(sampler, TimingFeedback.FAST, 0) == "counted"
-    assert _hit(sampler, TimingFeedback.FAST, .05) == "requested"
-    assert requests == [(15.0, .05)]
-    assert sampler.summary["requests"] == 1
-    # 请求后清零同向计数，需重新累积。
-    assert sampler.same_reports == 0
-    assert _hit(sampler, TimingFeedback.FAST, .10) == "counted"
-
-
-def test_slow_direction_requests_negative_step():
-    sampler, requests = _sampler()
-    _open(sampler)
-    _hit(sampler, TimingFeedback.SLOW, 0)
-    _hit(sampler, TimingFeedback.SLOW, .05)
-    assert requests == [(-15.0, .05)]
-
-
-def test_reverse_hit_reanchors_instead_of_blocking_cluster():
-    sampler, requests = _sampler()
-    _open(sampler)
-    # 单条反向（leading edge）不再整段否决，而是重锚到新方向。
-    _hit(sampler, TimingFeedback.SLOW, 0)
-    _hit(sampler, TimingFeedback.FAST, .05)
-    assert requests == []
-    assert sampler.mixed is True
-    # 反向后的同向连续命中照样触发。
-    _hit(sampler, TimingFeedback.FAST, .10)
-    assert requests == [(15.0, .10)]
-
-
-def test_streak_gap_resets_count():
-    sampler, requests = _sampler()
-    _open(sampler)
-    _hit(sampler, TimingFeedback.FAST, 0)
-    # 超过 STREAK_GAP_S(1.0s) 视为新一段，计数清零。
-    _hit(sampler, TimingFeedback.FAST, 2.0)
-    assert requests == []
-
-
-def test_ineligible_hit_does_not_reset_streak():
-    sampler, requests = _sampler()
-    _open(sampler)
-    sampler.backend.feedback_input_eligible = lambda now: now >= .02
-    assert _hit(sampler, TimingFeedback.FAST, 0) == "ineligible"
-    sampler.backend.feedback_input_eligible = lambda now: True
-    assert _hit(sampler, TimingFeedback.FAST, .05) == "counted"
-    # 不合格命中不清零：第二条合格命中即凑满阈值。
-    assert _hit(sampler, TimingFeedback.FAST, .10) == "requested"
-    assert len(requests) == 1
-
-
-def test_request_cooldown_limits_rate():
-    sampler, requests = _sampler()
-    _open(sampler)
-    for index in range(6):
-        _hit(sampler, TimingFeedback.FAST, index * .05)
-    # 冷却 0.3s：0.25s 内最多两次（0.05 与 0.20 附近的 0.25 不算）。
-    assert len(requests) <= 1
-
-
-def test_probe_judgement_feedback_reads_bar_direction_and_pixels():
-    kind, slow_px, fast_px = probe_judgement_feedback(_feedback_image(TimingFeedback.FAST))
-    assert kind is TimingFeedback.FAST and fast_px > 0 and slow_px == 0
-    kind, slow_px, fast_px = probe_judgement_feedback(_feedback_image(TimingFeedback.SLOW))
-    assert kind is TimingFeedback.SLOW and slow_px > 0 and fast_px == 0
-    kind, slow_px, fast_px = probe_judgement_feedback(np.zeros((720, 1280, 3), dtype=np.uint8))
-    assert kind is None and slow_px == 0 and fast_px == 0
-
-
-def test_observe_frame_detects_bar_and_counts():
-    sampler, requests = _sampler()
-    _open(sampler)
-    for index in range(3):
-        now = index * .05
-        assert sampler.fresh({"sequence": index, "request_s": now - .01, "reused": False}, now)
-        sampler.observe_frame(_feedback_image(TimingFeedback.FAST), now)
-    # 检测器每个判定条周期只上报一次（armed 去重）；常开计数因此只看到一次命中，
-    # 引擎主路径改用无去重的 probe_judgement_feedback。
-    assert sampler.summary["fast_reports"] == 1
-    assert sampler.same_reports == 1
-    assert requests == []
 
 
 def _phase_backend():
@@ -189,11 +62,7 @@ def _phase_backend():
     backend._phase_slot = None
     backend._phase_sequence = 0
     backend._phase_events = deque(maxlen=128)
-    backend._phase_receipts = deque([(1, .8, 2), (2, .85, 3), (3, .9, 4)])
-    backend._phase_holds = Counter()
-    backend._phase_slot_polls = 0
-    backend._phase_slot_holds = Counter()
-    backend._phase_receipt_medians = deque(maxlen=4096)
+    backend._phase_receipts = deque([(1, .8, 2, 2, .8, .5), (2, .85, 3, 3, .85, .5), (3, .9, 4, 4, .9, .5)])
     backend._clock = lambda: 1.0
     backend._clock_basis = "probe-midpoint"
     backend._clock_uncertainty_ms = .5
@@ -202,20 +71,18 @@ def _phase_backend():
     backend._compiler = SimpleNamespace(phase_boundary_safe=lambda: True, contact_available_s=lambda: .5)
     calls = []
     backend._session = SimpleNamespace(apply_future_phase=lambda *args: calls.append(args) or "applied",
-                                       future_phase_offset_ms=2)
+                                       future_phase_offset_ms=15)
     return backend, calls
 
 
-def test_mailbox_replaces_single_slot_and_owner_only():
+def test_mailbox_is_nonblocking_single_slot_and_owner_only():
     backend, calls = _phase_backend()
     assert backend.request_future_phase(15, .95)
-    # 信箱被占时新请求顶掉旧候选（不再直接丢弃）。
-    assert backend.request_future_phase(-15, .95)
+    assert not backend.request_future_phase(-15, .95)
     assert calls == []
     backend._consume_phase_candidate()
-    assert calls == [(-15, .5)]
+    assert calls == [(15, .5)]
     assert backend._phase_events[-1]["event"] == "applied"
-    assert backend._phase_holds["replaced-mailbox"] == 1
     backend._phase_lock.acquire()
     assert not backend.request_future_phase(15, 1)
     backend._phase_lock.release()
@@ -253,7 +120,6 @@ def test_real_backend_revoke_records_one_state_transition_and_waiting_does_not_s
     for _ in range(4):
         backend._consume_phase_candidate()
     assert [event["event"] for event in backend._phase_events] == ["requested", "waiting-touch-boundary"]
-    assert backend._phase_holds["boundary-unsafe"] == 4
     backend.revoke_future_phase("mixed-feedback")
     revoked = [event for event in backend._phase_events if event["event"] == "revoked"]
     assert len(revoked) == 1
@@ -272,43 +138,18 @@ def test_phase_guards_preserve_dispatch(guard):
     elif guard == "stop":
         backend._phase_closed = True
     elif guard == "uncertain":
-        # 上界放宽到 20ms；25ms 仍视为不可信。
-        backend._clock_uncertainty_ms = 25
+        backend._clock_uncertainty_ms = 2
     elif guard == "old":
         backend._phase_slot = ("old", 1, .95, 15, 2.95)
     elif guard == "few":
         backend._phase_receipts.pop()
     elif guard == "duplicate":
-        backend._phase_receipts = deque([(1, .8, 2)] * 3)
+        backend._phase_receipts = deque([(1, .8, 2, 2, .8, .5)] * 3)
     else:
-        # 回执窗口 1.5s：超过 1.5s 之前的回执不再计入，样本不足被拒。
-        backend._clock = lambda: 2.0
-        backend._phase_receipts = deque([(1, .1, 2), (2, .2, 3), (3, .3, 4)])
+        backend._phase_receipts = deque([(1, .1, 2, 2, .1, .5), (2, .2, 3, 3, .2, .5), (3, .3, 4, 4, .3, .5)])
     backend._consume_phase_candidate()
     assert calls == []
     assert (backend._phase_slot is not None) is (guard == "hold")
-
-
-def test_phase_gate_diagnostics_carry_receipt_numbers():
-    backend, calls = _phase_backend()
-    backend._clock_uncertainty_ms = 25
-    assert backend.request_future_phase(15, .95)
-    backend._consume_phase_candidate()
-    assert calls == []
-    event = backend._phase_events[-1]
-    assert event["event"] == "untrusted-execution-receipts"
-    assert event["gate"].startswith("n=3,med=")
-    assert "unc=25" in event["gate"]
-
-
-def test_phase_receipt_stats_summarizes_run_median():
-    backend, _ = _phase_backend()
-    for error in (2.0, 3.0, 4.0, 40.0):
-        backend._phase_receipt_medians.append(error)
-    stats = backend._phase_receipt_stats()
-    assert stats["samples"] == 4
-    assert stats["max_ms"] == 40.0
-    assert stats["last_ms"] == 40.0
 
 
 def test_fresh_capture_prefetch_is_five_hz_without_wait(monkeypatch):
@@ -366,8 +207,8 @@ def test_async_prefetch_accepts_new_frame_before_consumer_without_marking_reused
     capture = StallSafeCapture(SimpleNamespace(post_screencap=post))
     capture._last_image = np.zeros((720, 1280, 3), dtype=np.uint8)
     capture.enable_fresh_prefetch()
-    sampler, _ = _sampler()
-    _open(sampler)
+    sampler = NativeLifeFeedback(_phase_backend()[0])
+    sampler.observe_scene(0, visible=True)
     sampler.last_sequence = 0
     capture.prefetch_fresh(.0167)
     clock[0] = .0167
@@ -385,7 +226,7 @@ def test_async_prefetch_accepts_new_frame_before_consumer_without_marking_reused
         assert sampler.fresh(metadata, target_s)
         assert capture() is image
         assert capture.frame_metadata["reused"] is True
-    assert sampler.active(.0668)
+    assert sampler.scene_valid
 
 
 @pytest.mark.skipif(not native_engine.available(), reason="Native 未构建")
@@ -400,12 +241,12 @@ def test_old_binary_api_fails_before_input_and_environment_does_not_override_ui(
         NativeMinitouchBackend(chart, adb_path="adb", serial="test", life_feedback_enabled=True)
 
 
-def _virtual_feedback_engine(monkeypatch, *, terminal=None, enabled=True):
+def _virtual_feedback_engine(monkeypatch, *, terminal=None, enabled=True, early_glyph=False, glyph_mode="static", recording=True):
     from agent.realtime import engine as engine_module
     from agent.realtime.life_monitor import LifeGuard, LifeReading
     clock = [.007]
     stopping = [False]
-    data = {"captures": [], "life": [], "terminal": [], "requests": [], "finish_at": 6.0}
+    data = {"captures": [], "life": [], "terminal": [], "requests": [], "windows": [], "finish_at": .5 if terminal else None}
     monkeypatch.setattr(engine_module.time, "sleep", lambda duration: clock.__setitem__(0, clock[0] + duration))
     class Capture:
         def __call__(self):
@@ -413,9 +254,14 @@ def _virtual_feedback_engine(monkeypatch, *, terminal=None, enabled=True):
             now = clock[0]
             data["captures"].append(now)
             self.frame_metadata = {"sequence": len(data["captures"]), "request_s": now - .01, "reused": False}
-            if terminal == "stop" and now >= data["finish_at"]:
+            if terminal == "stop" and data["finish_at"] is not None and now >= data["finish_at"]:
                 stopping[0] = True
-            return _feedback_image(TimingFeedback.FAST)
+            direction = TimingFeedback.FAST
+            if glyph_mode == "events":
+                direction = TimingFeedback.FAST if .1 <= now < .27 or .5 <= now < .67 else None
+            if early_glyph and data["windows"] and now - data["windows"][-1] >= .15:
+                direction = None
+            return _feedback_image(direction)
         def enable_fresh_prefetch(self):
             pass
         def prefetch_fresh(self, target):
@@ -430,7 +276,7 @@ def _virtual_feedback_engine(monkeypatch, *, terminal=None, enabled=True):
             self.active = True
         def observe(self, _image, now):
             data["terminal"].append(now)
-            if terminal == "completed" and now >= data["finish_at"]:
+            if terminal == "completed" and data["finish_at"] is not None and now >= data["finish_at"]:
                 return "completed"
             return "active"
     class Backend:
@@ -454,6 +300,10 @@ def _virtual_feedback_engine(monkeypatch, *, terminal=None, enabled=True):
             pass
         def report(self):
             return {}
+        def feedback_input_snapshot(self, request_s, now):
+            from agent.realtime.native_play import NativeFeedbackInput
+            return NativeFeedbackInput("test", request_s - .02, request_s - .02,
+                                       len(data["captures"]), 1, .5)
         def feedback_input_eligible(self, now):
             return True
         def request_future_phase(self, delta, source):
@@ -468,41 +318,60 @@ def _virtual_feedback_engine(monkeypatch, *, terminal=None, enabled=True):
             pass
         def close(self):
             pass
-        def record_judgement_sniff(self, *_args, **_kwargs):
-            pass
+        def record_native_feedback(self, image, now, metadata, window_start_s):
+            if not data["windows"] or data["windows"][-1] != window_start_s:
+                data["windows"].append(window_start_s)
     class Failed:
         def observe(self, image, now):
-            return terminal == "life-failed" and now >= data["finish_at"]
+            return terminal == "life-failed" and data["finish_at"] is not None and now >= data["finish_at"]
     backend = Backend()
     planner = SimpleNamespace(timing_offset_ms=13, update=lambda *_args: pytest.fail("Native 不使用 Legacy planner"))
     engine = engine_module.RealtimeEngine(SimpleNamespace(), planner, SimpleNamespace(close=lambda: None),
         clock=lambda: clock[0], native_backend=backend, life_detector=Life(), life_guard=LifeGuard(confirm_frames=1),
-        playfield_monitor=Monitor(), live_failed_detector=Failed(), debug_recorder=Recorder())
+        playfield_monitor=Monitor(), live_failed_detector=Failed(), debug_recorder=Recorder() if recording else None)
     stats = engine.run(Capture(), lambda: stopping[0], duration_seconds=7.3, target_fps=60)
     return stats, data, backend
 
 
-def test_engine_always_on_counts_judgement_and_freezes_profile_offset(monkeypatch):
-    stats, data, backend = _virtual_feedback_engine(monkeypatch)
-    # 常开 5Hz：整个演奏段都在采样，不再受 3 秒周期窗限制。
-    assert stats.timing_feedback_fast >= 10
-    assert stats.timing_feedback_valid >= 10
-    assert len(data["requests"]) >= 1
-    assert data["requests"][0][0] == 15
-    assert stats.initial_timing_offset_ms == stats.final_timing_offset_ms == 13
-
 
 @pytest.mark.parametrize("terminal", ["completed", "life-failed", "stop"])
-def test_engine_terminal_paths_keep_always_on_sampling(monkeypatch, terminal):
-    stats, data, backend = _virtual_feedback_engine(monkeypatch, terminal=terminal)
+def test_engine_terminal_checks_precede_second_independent_event(monkeypatch, terminal):
+    stats, data, backend = _virtual_feedback_engine(monkeypatch, terminal=terminal, glyph_mode="events")
+    assert data["requests"] == []
     assert stats.completed is (terminal == "completed")
     assert stats.life_failed is (terminal == "life-failed")
     assert stats.stopped is (terminal == "stop")
-    assert stats.timing_feedback_fast >= 10
+    assert backend._life_feedback_summary["distinct_events"] == 1
+    assert backend._life_feedback_sniff["records"]
+
+
+def test_actual_engine_sustained_glyph_never_becomes_two_events(monkeypatch):
+    stats, data, backend = _virtual_feedback_engine(monkeypatch)
+    assert data["requests"] == []
+    assert backend._life_feedback_summary["distinct_events"] == 1
+    assert stats.timing_feedback_fast == stats.timing_feedback_valid == 1
+    assert stats.timing_feedback_reports == 1
+    assert stats.initial_timing_offset_ms == stats.final_timing_offset_ms == 13
+    assert len(data["captures"]) < 60
+    assert 32 <= len(data["life"]) <= 41
+    assert 32 <= len(data["terminal"]) <= 41
+
+
+def test_actual_engine_two_events_request_and_sniff_survives_without_recorder(monkeypatch):
+    stats, data, backend = _virtual_feedback_engine(monkeypatch, glyph_mode="events", recording=False)
+    assert len(data["requests"]) == 1
+    assert data["requests"][0][0] == 15
+    assert stats.timing_feedback_valid == stats.timing_feedback_fast == 2
+    assert stats.timing_feedback_reports == backend._life_feedback_summary["distinct_events"] == 2
+    sniff = backend._life_feedback_sniff
+    assert sniff["capacity"] == 4096 and sniff["dropped"] == 0
+    assert any(record["decision"] == "requested" for record in sniff["records"])
+    assert any(record["input"] is not None for record in sniff["records"])
 
 
 def test_engine_disabled_feedback_retains_native_five_hz_baseline(monkeypatch):
     stats, data, backend = _virtual_feedback_engine(monkeypatch, enabled=False)
-    assert not data["requests"]
+    assert not data["windows"] and not data["requests"]
     assert not hasattr(backend, "_life_feedback_summary")
     assert stats.timing_feedback_fast == stats.timing_feedback_valid == 0
+    assert len(data["captures"]) <= 43
