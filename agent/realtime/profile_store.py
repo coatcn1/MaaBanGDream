@@ -132,6 +132,7 @@ class RealtimeProfileStore:
         "chart_predict_presses": True,
         "native_realtime_enabled": False,
         "native_life_feedback_enabled": False,
+        "native_early_start_enabled": False,
         "native_wait_jitter_filter_enabled": False,
         "cooperative_jitter_enabled": True,
         "cooperative_member_loading_guard_enabled": True,
@@ -264,7 +265,7 @@ class RealtimeProfileStore:
         if not isinstance(native_realtime_enabled, bool):
             raise ValueError("native_realtime_enabled 必须是布尔值")
         native_options = {}
-        for key in ("native_life_feedback_enabled", "native_wait_jitter_filter_enabled"):
+        for key in ("native_life_feedback_enabled", "native_wait_jitter_filter_enabled", "native_early_start_enabled"):
             value = options.get(key, False)
             if not isinstance(value, bool):
                 raise ValueError(f"{key} 必须是布尔值")

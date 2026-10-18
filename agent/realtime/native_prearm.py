@@ -327,7 +327,8 @@ def frozen_native_runtime_options(live_run, runtime_options):
     if snapshot is not None:
         return dict(runtime_options) | snapshot
     snapshot = {key: bool(runtime_options.get(key, False)) for key in (
-        "native_realtime_enabled", "native_life_feedback_enabled", "native_wait_jitter_filter_enabled")}
+        "native_realtime_enabled", "native_life_feedback_enabled", "native_wait_jitter_filter_enabled",
+        "native_early_start_enabled")}
     if current is not None and current.run_id == live_run.run_id:
         update_live_run(native_runtime_options=dict(snapshot))
     return dict(runtime_options) | snapshot
@@ -398,6 +399,7 @@ def prepare_native_for_settings_gate(
             "MAABANGDREAM_NATIVE_DRIFT_RATE_CORRECTION"
         ),
         wait_jitter_trial_enabled=bool(runtime_options.get("native_wait_jitter_filter_enabled", False)),
+        early_start_enabled=bool(runtime_options.get("native_early_start_enabled", False)),
         life_feedback_enabled=(bool(runtime_options.get("native_life_feedback_enabled", False))
                                and str(getattr(live_run, "mode", "")) in {
                                    "formal", "challenge", "cooperative", "versus", "continuous", "medley"}),

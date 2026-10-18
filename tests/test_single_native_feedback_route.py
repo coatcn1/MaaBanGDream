@@ -261,17 +261,18 @@ def test_deferred_and_rebuilt_prearm_keeps_formal_frozen_options(monkeypatch, tm
     route = effective["Expert"]
     env = setup_route(monkeypatch, tmp_path, route["RealtimeLiveDifficulty"], {
         "native_realtime_enabled": True, "native_life_feedback_enabled": life,
-        "native_wait_jitter_filter_enabled": True,
+        "native_wait_jitter_filter_enabled": True, "native_early_start_enabled": life,
     })
     update_live_run(preparation_identity_pending_final_cover=True)
     monkeypatch.setattr(performance_settings_action, "discard_prearmed_backend", lambda _: None)
     assert performance_settings_action.RealtimePerformanceSettingsGate()._run(env.context, route["RealtimeLiveFormalSettingsGate"])
     assert env.backends == []
     assert current_live_run().mode == "formal"
-    env.options.update(native_life_feedback_enabled=not life, native_wait_jitter_filter_enabled=False)
+    env.options.update(native_life_feedback_enabled=not life, native_wait_jitter_filter_enabled=False, native_early_start_enabled=not life)
     update_live_run(preparation_identity_pending_final_cover=False)
     for _ in range(2):
         env.prepare(controller=env.controller, live_run=current_live_run(), difficulty="Expert",
                     project_root=tmp_path, runtime_options=env.options)
     assert [backend.options["life_feedback_enabled"] for backend in env.backends] == [life, life]
     assert all(backend.options["wait_jitter_trial_enabled"] for backend in env.backends)
+    assert [backend.options["early_start_enabled"] for backend in env.backends] == [life, life]

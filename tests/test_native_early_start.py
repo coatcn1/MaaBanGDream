@@ -349,12 +349,13 @@ def test_real_frame_resolution_disables_life_and_restores_original_shape_policy(
     assert gate._early_gate.rejected_reason == "frame-resolution-mismatch"
 
 
+@pytest.mark.parametrize("selected", [None, False, True])
 @pytest.mark.parametrize(
     "mode,enabled",
     [("cooperative", True), ("versus", True), ("realtime", False), ("formal", False)],
 )
 def test_real_backend_configuration_wires_new_trial_only_in_cooperative_modes(
-    monkeypatch, mode, enabled
+    monkeypatch, mode, enabled, selected
 ):
     import agent.realtime.native_play as module
 
@@ -381,10 +382,11 @@ def test_real_backend_configuration_wires_new_trial_only_in_cooperative_modes(
         device=SimpleNamespace(request_reset=lambda: None),
         session_factory=lambda **_: SimpleNamespace(),
         timing_trial_enabled=False,
+        **({} if selected is None else {"early_start_enabled": selected}),
     )
     backend.configure_early_start(CALIBRATED_ENVIRONMENT)
-    assert (backend._photogate._early_gate is not None) is enabled
-    assert backend._photogate._life_fallback_enabled is enabled
+    assert (backend._photogate._early_gate is not None) is (enabled and selected is True)
+    assert backend._photogate._life_fallback_enabled is (enabled and selected is True)
 
 
 def test_after_grace_trusted_life_drop_takes_over_with_explicit_low_confidence():

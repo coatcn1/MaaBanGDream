@@ -68,7 +68,7 @@ def native_start_shape_trial_enabled() -> bool:
 
 
 def native_early_start_trial_enabled() -> bool:
-    """上段首头与低置信生命兜底独立候选，默认关闭。"""
+    """仅保留旧环境变量诊断；生产后端只接受本局冻结的持久选项。"""
     return os.environ.get(NATIVE_EARLY_START_TRIAL_ENV) == "1"
 
 
