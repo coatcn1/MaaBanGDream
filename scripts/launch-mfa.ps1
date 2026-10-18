@@ -50,7 +50,10 @@ $chartManifest = Join-Path $chartRoot 'manifest.json'
 $profileDirectory = Join-Path $projectRoot 'profiles'
 $recordingDirectory = Join-Path $projectRoot 'debug\recordings'
 $captureDirectory = Join-Path $projectRoot 'screencap'
-$maafwDebugDirectory = Join-Path $MfaRoot 'debug'
+# 开发部署下 Agent 的 PROJECT_ROOT 是源码仓库，native-jlog、jittered-charts
+# 和录制都写在 $projectRoot\debug；白名单只认末级目录名 debug，因此指向该根目录。
+# MFA 自身的 debug（maafw.log）由清理逻辑固定的 <DataRoot>\debug 目标覆盖。
+$maafwDebugDirectory = Join-Path $projectRoot 'debug'
 $mfaLogDirectory = Join-Path $MfaRoot 'logs'
 $instanceConfigDirectory = Join-Path $MfaRoot 'config\instances'
 $mfaStopStatusPatch = Join-Path $PSScriptRoot 'patch-mfa-stop-status.ps1'
