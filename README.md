@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.4.9-ff6f9f" alt="Version"></a>
+  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.4.10-ff6f9f" alt="Version"></a>
   <img src="https://img.shields.io/badge/MaaFramework-5.10.2-4c8bf5" alt="MaaFramework">
   <img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?logo=windows11&logoColor=white" alt="Windows">
@@ -22,7 +22,7 @@
 
 ---
 
-v1.4.9 纳入竞演演出、最终封面启动失败处理及独立判定事件微调修正版，感谢 @suwayun1 的 PR #88、#94、#95。协力与竞演统一手动跳车提示，竞演使用正确的成绩坐标；Native 实验开关保持默认关闭。验证范围与限制见[本版本发行说明](docs/release-notes-v1.4.9.md)。
+v1.4.10 整理演出设置与独立谱面更新入口，新增默认关闭、持久保存的 Native 协力上段首音实验开关，并纳入演出前体力复核、双模拟器 ADB 重连与缓存清理修正。感谢 @suwayun1 在 PR #86 提供的首音门控证据思路，本版采用独立实现，未整包合并该 PR。最新 7 局 Native 竞演完整执行并释放触点；上段首音仍限已匹配环境与首组外轨双 FLICK，不代表双端普遍验收。详见[本版本发行说明](docs/release-notes-v1.4.10.md)。
 
 ## ✨ 功能
 
@@ -45,9 +45,11 @@ v1.4.9 纳入竞演演出、最终封面启动失败处理及独立判定事件�
 
 协力与竞演的“跳车”选项默认关闭；开启“生命归零后手动跳车”后停止输入，切回游戏并结束任务，提示“请手动跳车”。关闭时继续演奏及结算。
 
-“演出设置 → 体力消耗”可设置目标消耗 0–3，默认 3。单人、自动、协力、竞演和巡回任务进入演出选择页时核对 LIVE BOOST，不一致则修正，关闭后重开读回复核；无法识别或保存失败会停止任务。测试时选择 0，恢复日常任务前改回 3。挑战点数独立，一键实时和组曲中途续跑不离开现场修改体力；双设备测试脚本仅将隔离副本固定为 0。非零自动切换已完成离线状态机验证，尚待真实游戏复核。
+设置侧栏前两项为“演出设置、谱面更新”。演出设置使用顶部“常用、Profile、流速、Native、任务安全、Legacy、调试目录”标签页；常用提供 Native 总开关和体力消耗，其他选项直接在对应页展开。谱面下载与定时维护位于独立的“设置 → 谱面更新”。
 
-“演出设置 → Native”提供默认关闭的**判定反馈微调**和**等待抖动过滤**实验开关，下局生效。
+“演出设置 → 常用”的目标体力消耗为 0–3，默认 3。单人、自动、协力、竞演和巡回任务进入演出选择页时核对 LIVE BOOST，不一致则修正，关闭后重开读回复核；无法识别或保存失败会停止任务。测试时选择 0，恢复日常任务前改回 3。挑战点数独立，一键实时和组曲中途续跑不离开现场修改体力；双设备测试脚本仅将隔离副本固定为 0。非零自动切换已完成离线状态机验证，尚待真实游戏复核。
+
+“演出设置 → Native”提供默认关闭的**判定反馈微调**和**等待抖动过滤**开关，下局生效。
 正式演奏开始后，微调常开约 5Hz 观测，发现可信判定候选时最多以 20Hz 加密 0.8 秒，无需掉血。
 一秒内两次独立同向字样请求 ±15ms 调整，未来未发布输入累计限 ±200ms；持续字样只计一次，
 生效后需受影响输入之后的可信空白与新字样才能续调。生命与终点保持约 5Hz；排练、校准与 Legacy 不使用。
@@ -62,7 +64,7 @@ Native jlog 诊断异步批写，慢盘或写入失败只报告证据缺失；�
 并要求等待弹窗具有实心白色面板；已有 A to Z 双端录像离线对照，尚未完成候选实战验收。
 关闭该环境变量可恢复原策略，不更改 Profile timing offset 或 190ms 光门延迟。
 
-针对慢截图漏过首双 FLICK，另有默认关闭的 `MAABANGDREAM_NATIVE_EARLY_START_TRIAL=1` 本地候选。
+针对慢截图漏过首双 FLICK，可在“演出设置 → Native”开启默认关闭的“Native 协力上段首音检测（实验）”，仅适用于 Native 协力/竞演，Legacy 不使用。选项自动保存并在下一局生效；普通启动脚本即可使用已保存的选择，旧环境变量不再控制生产演奏的这项开关。
 仅在已测 Profile 环境（1280×720、DPI 240、60fps、standard、流速 5.0）及谱面首组为外轨普通双 FLICK（非 Left/Right）时，
 跟踪中上段音符头穿过 y=200，按校准延迟提前排首键；延迟已包含旧 190ms 的映射，Profile 偏移和首读延迟仍只计算一次。
 生命下降可作低置信接管，报告区分视觉穿线与掉血兜底；掉血接管不能证明首音相位正确。
@@ -127,7 +129,7 @@ MuMu 与雷电双开后连接失效时，可在任务停止后重新连接或刷
 | 协力成员加载页保护 | 默认开启；表情图标仍在时继续等待最终封面 |
 | 结算与调试 | 安全推进结算，保存 PGGBM、Trace 和录像证据 |
 
-“演出设置 → 实时演奏 Profile”中，单击行查看和编辑，双击设为当前任务难度的 Profile。
+“演出设置 → Profile”中，单击行查看，双击设为当前任务难度的 Profile；参数编辑和校准记录在同页下方直接展开。
 Special 只有确认不可选时才允许显式回退 Expert；实时校准要求精确选择 Special。
 实际 Special 缺少可信本地谱面时，不发送演奏触控。
 
@@ -163,7 +165,7 @@ Special 只有确认不可选时才允许显式回退 Expert；实时校准要�
 
 ## ⚙️ 谱面同步
 
-进入 `设置 → 演出设置 → 谱面辅助`，可查看清单、手动同步或设置定时增量更新。
+进入 `设置 → 谱面更新`，可查看清单、手动同步或设置定时增量更新。
 自动更新默认每 **24 小时**检查，可关闭或设为 **1–720 小时**；失败至少退避 15 分钟，失败或中断保留旧资源。
 关闭自动更新不影响手动同步；同音符数的远端谱面修订无法仅靠索引检查发现。
 
@@ -179,7 +181,7 @@ Special 只有确认不可选时才允许显式回退 Expert；实时校准要�
 .\scripts\setup.ps1
 & '..\.tools\Miniconda3\envs\maabangdream\python.exe' `
   -m pip install -r .\requirements-release.txt
-.\scripts\build-windows-release.ps1 -Version 1.4.9
+.\scripts\build-windows-release.ps1 -Version 1.4.10
 ```
 
 发布包须保持定制 MFA 与 Core 一致、依赖完整、路径可迁移，并排除本机用户配置。
