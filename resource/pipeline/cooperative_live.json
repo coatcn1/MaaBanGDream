@@ -190,7 +190,7 @@
   },
   "CooperativeLiveEntryTemplate": {
     "recognition": "TemplateMatch",
-    "template": "cooperative/live_entry.png",
+    "template": ["cooperative/live_entry.png", "cooperative/live_entry_compact.png"],
     "threshold": 0.88,
     "action": "DoNothing"
   },
@@ -210,6 +210,13 @@
     "next": ["CooperativeEnterLive"],
     "on_error": ["CooperativeFailure"]
   },
+  "CooperativeRoomSelectMarker": {
+    "recognition": "TemplateMatch",
+    "template": "cooperative/room_search.png",
+    "roi": [557, 612, 216, 76],
+    "threshold": 0.9,
+    "action": "DoNothing"
+  },
   "CooperativeEnterLive": {
     "recognition": "DirectHit",
     "action": "Custom",
@@ -219,6 +226,10 @@
       "template_node": "CooperativeLiveEntryTemplate",
       "roi": [0, 100, 1280, 620],
       "click": true,
+      "delivery_node": "CooperativeRoomSelectMarker",
+      "delivery_timeout_ms": 12000,
+      "delivery_retry_interval_ms": 1500,
+      "delivery_max_clicks": 3,
       "timeout_ms": 10000,
       "interval_ms": 500
     },

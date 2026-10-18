@@ -363,6 +363,7 @@
     "CooperativeEntryMethod": {
       "type": "select",
       "label": "入房方式",
+      "description": "房主创建私人房间并单次邀请全部好友，等待至少一位好友加入；好友入房等待唯一有效邀请。",
       "default_case": "Normal",
       "cases": [
         {
@@ -376,8 +377,20 @@
           }
         },
         {
+          "name": "HostInviteAll",
+          "label": "创建房间并邀请全部好友",
+          "description": "创建私人房间，每个任务在同一房间仅邀请一次全部好友；等待至少一位好友加入后开始。留在房间时后续演出复用房间。",
+          "option": ["CooperativePostLiveAction"],
+          "pipeline_override": {
+            "CooperativeEntryConfigure": {
+              "custom_action_param": {"reset": true, "entry_method": "host_invite_all"}
+            }
+          }
+        },
+        {
           "name": "Friend",
           "label": "好友邀请房间",
+          "description": "等待唯一有效的好友邀请，并确认进入私人房间；多条有效邀请时停止，避免误入。",
           "option": ["CooperativePostLiveAction"],
           "pipeline_override": {
             "CooperativeEntryConfigure": {
@@ -521,7 +534,7 @@
     "CooperativePostLiveAction": {
       "type": "select",
       "label": "演出结束后",
-      "description": "留在房间仅适用于好友邀请房间和房间号入房。",
+      "description": "留在房间适用于创建并邀请好友、好友邀请和房间号入房；房主后续演出复用房间，不重复邀请。",
       "default_case": "Exit",
       "cases": [
         {
@@ -574,6 +587,16 @@
       "label": "歌曲选择",
       "default_case": "Unspecified",
       "cases": [
+        {
+          "name": "Manual",
+          "label": "手动选歌并确认",
+          "description": "等待玩家自行选择歌曲并点击确认，最多等待180秒；到达准备页后继续自动演出。",
+          "pipeline_override": {
+            "CooperativeSongChoiceConfigure": {
+              "custom_action_param": {"song_choice": "manual"}
+            }
+          }
+        },
         {
           "name": "Unspecified",
           "label": "不指定歌曲",

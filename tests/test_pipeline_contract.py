@@ -50,6 +50,7 @@ print(json.dumps(effective))
         "Unspecified": {"song_choice": "unspecified"},
         "Random": {"song_choice": "random"},
         "Current": {"song_choice": "current"},
+        "Manual": {"song_choice": "manual"},
     }
 
 
@@ -226,8 +227,13 @@ def test_templates_exist_and_are_lossless_png():
     for pipeline in (ROOT / "resource/pipeline").glob("*.json"):
         for node in load(pipeline).values():
             template = node.get("template")
-            if template:
-                image = ROOT / "resource/image" / template
+            if template is None:
+                continue
+            templates = [template] if isinstance(template, str) else template
+            assert isinstance(templates, list) and templates, pipeline.name
+            for name in templates:
+                assert isinstance(name, str) and name, pipeline.name
+                image = ROOT / "resource/image" / name
                 assert image.is_file(), f"missing {image}"
                 assert image.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
 

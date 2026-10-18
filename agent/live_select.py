@@ -180,6 +180,87 @@ def _roi(value: Any) -> tuple[int, int, int, int]:
     return DEFAULT_ROI
 
 
+def _click_entry(context: Context, box: Any, *, deadline: float | None = None) -> bool:
+    """取消时返回 False；输入任务失败时保留明确错误。"""
+    if context.tasker.stopping:
+        return False
+    require_game_foreground(context.tasker.controller)
+    if context.tasker.stopping:
+        return False
+    if deadline is not None and time.monotonic() >= deadline:
+        raise TimeoutError("演出入口送达确认已超时，停止重试点击")
+    # 前台保护也可能使远程 Controller 代理失效，输入前必须重新取得。
+    job = context.tasker.controller.post_click(
+        box.x + box.w // 2,
+        box.y + box.h // 2,
+    ).wait()
+    if context.tasker.stopping:
+        return False
+    if not job.succeeded:
+        raise RuntimeError("演出入口点击失败：控制器未确认输入成功")
+    return True
+
+
+def _same_source_box(context, image, params, expected, template_node, source):
+    """仅使用原识别来源重新定位当前帧的入口。"""
+    if source == "模板":
+        result = context.run_recognition(template_node, image)
+        return result.box if result and result.hit and result.box else None
+    if source == "OCR":
+        result = context.run_recognition_direct(
+            JRecognitionType.OCR,
+            JOCR(
+                expected=[expected],
+                roi=_roi(params.get("roi")),
+                threshold=float(params.get("threshold", 0.3)),
+            ),
+            image,
+        )
+        return result.box if result and result.hit and result.box else None
+    finder = {
+        "自由演出": _find_free_live_card,
+        "协力演出": _find_cooperative_live_card,
+        "巡回演出": _find_tour_live_card,
+    }.get(expected)
+    return finder(image) if finder else None
+
+
+def _confirm_delivery(context, params, expected, template_node, source, delivery_node):
+    timeout = max(0, int(params.get("delivery_timeout_ms", 12000))) / 1000
+    retry_interval = max(1000, int(params.get("delivery_retry_interval_ms", 1500))) / 1000
+    max_clicks = min(3, max(1, int(params.get("delivery_max_clicks", 3))))
+    poll_interval = max(0.05, int(params.get("interval_ms", 500)) / 1000)
+    deadline = time.monotonic() + timeout
+    next_click = time.monotonic() + retry_interval
+    clicks = 1
+    while True:
+        if context.tasker.stopping:
+            return True
+        image = capture_image(context)
+        if context.tasker.stopping:
+            return True
+        delivered = context.run_recognition(delivery_node, image)
+        if context.tasker.stopping:
+            return True
+        if delivered and delivered.hit:
+            log_task("界面导航", "选择演出", "INFO", f"已确认进入“{expected}”房间选择页（点击 {clicks} 次）")
+            return True
+        now = time.monotonic()
+        if now >= deadline:
+            log_task("界面导航", "选择演出", "ERROR", f"点击“{expected}”入口后未确认房间选择页（点击 {clicks} 次，等待 {timeout:g} 秒）")
+            return False
+        if clicks < max_clicks and now >= next_click:
+            box = _same_source_box(context, image, params, expected, template_node, source)
+            if context.tasker.stopping:
+                return True
+            if box is not None and time.monotonic() < deadline:
+                if not _click_entry(context, box, deadline=deadline):
+                    return True
+                clicks += 1
+                next_click = time.monotonic() + retry_interval
+        time.sleep(min(poll_interval, max(0, deadline - time.monotonic())))
+
+
 @AgentServer.custom_action("LiveSelectFind")
 class LiveSelectFind(CustomAction):
     """Find a live-select entry by template, then exact OCR."""
@@ -196,7 +277,6 @@ class LiveSelectFind(CustomAction):
             timeout = max(0, int(params.get("timeout_ms", 0))) / 1000
             interval = max(0, int(params.get("interval_ms", 500))) / 1000
             deadline = time.monotonic() + timeout
-            controller = context.tasker.controller
 
             box = None
             source = ""
@@ -204,8 +284,6 @@ class LiveSelectFind(CustomAction):
                 if context.tasker.stopping:
                     return True
                 image = capture_image(context)
-                # run_task() may replace/invalidate the remote Controller proxy.
-                controller = context.tasker.controller
 
                 if template_node:
                     template_result = context.run_recognition(
@@ -267,13 +345,13 @@ class LiveSelectFind(CustomAction):
             if not should_click:
                 return True
 
-            if context.tasker.stopping:
+            if not _click_entry(context, box):
                 return True
-            require_game_foreground(controller)
-            controller.post_click(
-                box.x + box.w // 2,
-                box.y + box.h // 2,
-            ).wait()
+            delivery_node = str(params.get("delivery_node", "")).strip()
+            if delivery_node:
+                return _confirm_delivery(
+                    context, params, expected, template_node, source, delivery_node,
+                )
             return True
         except ScreenRefreshCancelled:
             return True
