@@ -99,4 +99,3 @@ def test_fresh_popup_and_playfield_transitions_still_reset_gate():
     observe(b, lost, 10.45, sequence=7)
     assert not b._photogate.frozen
     assert b._photogate.playfield_loss_events == 1
-
