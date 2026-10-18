@@ -17,10 +17,12 @@ try:
     from .foreground_guard import require_game_foreground
     from .screen_refresh import ScreenRefreshCancelled, capture_image
     from .task_reporting import log_task
+    from .realtime.live_boost_gate import ensure_live_boost
 except ImportError:  # AgentServer loads modules from the agent directory.
     from foreground_guard import require_game_foreground
     from screen_refresh import ScreenRefreshCancelled, capture_image
     from task_reporting import log_task
+    from realtime.live_boost_gate import ensure_live_boost
 
 
 DEFAULT_ROI = (0, 100, 1280, 620)
@@ -345,6 +347,15 @@ class LiveSelectFind(CustomAction):
             if not should_click:
                 return True
 
+            if expected in {"自由演出", "协力演出", "竞演演出", "巡回演出"}:
+                ensure_live_boost(context)
+                if context.tasker.stopping:
+                    return True
+                # 设置弹窗会改变页面及代理；禁止复用门禁前的入口坐标。
+                image = capture_image(context)
+                box = _same_source_box(context, image, params, expected, template_node, source)
+                if box is None:
+                    raise RuntimeError("体力设置完成后未能重新确认演出入口")
             if not _click_entry(context, box):
                 return True
             delivery_node = str(params.get("delivery_node", "")).strip()

@@ -126,6 +126,7 @@ class RealtimeProfileStore:
     DEFAULT_RUNTIME_OPTIONS = {
         "skip_process_conflict_cleanup": False,
         "skip_result_check": False,
+        "live_boost_target": 3,
         "note_speed_settings_enabled": True,
         "chart_prediction_enabled": True,
         "chart_predict_presses": True,
@@ -242,6 +243,9 @@ class RealtimeProfileStore:
         skip_result_check = options.get("skip_result_check", False)
         if not isinstance(skip_result_check, bool):
             raise ValueError("skip_result_check 必须是布尔值")
+        live_boost_target = options.get("live_boost_target", 3)
+        if type(live_boost_target) is not int or not 0 <= live_boost_target <= 3:
+            raise ValueError("live_boost_target 必须是 0..3 的整数")
         speed_settings_enabled = options.get(
             "note_speed_settings_enabled",
             options.get("game_effect_settings_enabled", True),
@@ -318,6 +322,7 @@ class RealtimeProfileStore:
         return {
             "skip_process_conflict_cleanup": skip_conflict_cleanup,
             "skip_result_check": skip_result_check,
+            "live_boost_target": live_boost_target,
             "note_speed_settings_enabled": speed_settings_enabled,
             "chart_prediction_enabled": chart_prediction_enabled,
             "chart_predict_presses": chart_predict_presses,

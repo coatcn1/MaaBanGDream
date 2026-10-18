@@ -9,6 +9,12 @@ import pytest
 from agent import live_select
 
 
+@pytest.fixture(autouse=True)
+def isolate_live_boost_gate(monkeypatch):
+    # 本文件验证入口导航；体力门禁另用真实模板与保存状态机回归。
+    monkeypatch.setattr(live_select, "ensure_live_boost", lambda _: True)
+
+
 class Job:
     def __init__(self, result=None, *, succeeded=True):
         self.result = result
@@ -213,7 +219,7 @@ def delivery_clock(monkeypatch):
 class DeliveryContext(Context):
     def __init__(self, frames):
         super().__init__()
-        self.frames = frames
+        self.frames = [frames[0], *frames]
         self.frame = -1
         self.requests = []
 
@@ -263,7 +269,7 @@ def test_delivery_retries_ignored_click_using_current_box(delivery_clock):
     context = DeliveryContext([(100, 200), (200, 300), (300, 300), (400, 400), "delivered"])
     assert live_select.LiveSelectFind().run(context, delivery_argv())
     assert context.tasker.controller.clicks == [(140, 220), (440, 420)]
-    assert context.requests == [(0, "EntryTemplate"), (1, "RoomMarker"), (2, "RoomMarker"), (3, "RoomMarker"), (3, "EntryTemplate"), (4, "RoomMarker")]
+    assert context.requests == [(0, "EntryTemplate"), (1, "EntryTemplate"), (2, "RoomMarker"), (3, "RoomMarker"), (4, "RoomMarker"), (4, "EntryTemplate"), (5, "RoomMarker")]
 
 
 def test_delivery_unknown_loading_never_repeats_old_click(delivery_clock):
@@ -313,12 +319,36 @@ def test_delivery_stop_has_priority_over_next_input(monkeypatch, delivery_clock,
             return result
         context.run_recognition = stop_during_recognition
     assert live_select.LiveSelectFind().run(context, delivery_argv())
-    assert len(controller.clicks) == (0 if stage in {"before", "guard"} else 1)
+    assert len(controller.clicks) == (0 if stage in {"before", "guard", "retry_source"} else 1)
 
 
 def test_failed_initial_click_fails_before_delivery(monkeypatch, delivery_clock, capsys):
     context = DeliveryContext([(100, 200), "delivered"])
     context.tasker.controller.post_click = lambda *_: Job(succeeded=False)
     assert not live_select.LiveSelectFind().run(context, delivery_argv())
-    assert context.requests == [(0, "EntryTemplate")]
+    assert context.requests == [(0, "EntryTemplate"), (1, "EntryTemplate")]
     assert "控制器未确认输入成功" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("expected,click,should_check",[("自由演出",True,True),("协力演出",True,True),
+    ("竞演演出",True,True),("巡回演出",True,True),("自由演出",False,False),("挑战演出",True,False)])
+def test_live_boost_hook_scope_and_fresh_entry_box(monkeypatch,expected,click,should_check):
+    context=Context(template_hit=True)
+    checked=[]
+    def boost(_):checked.append(True)
+    monkeypatch.setattr(live_select,"ensure_live_boost",boost)
+    def recognize(node,image):
+        x=400 if checked else 100
+        return SimpleNamespace(hit=True,box=SimpleNamespace(x=x,y=200,w=80,h=40))
+    context.run_recognition=recognize
+    assert live_select.LiveSelectFind().run(context,argv(expected=expected,click=click,template_node="EntryTemplate"))
+    assert bool(checked) is should_check
+    assert context.tasker.controller.clicks==([] if not click else [(440 if should_check else 140,220)])
+
+
+def test_live_boost_failure_prevents_entry_click(monkeypatch):
+    context=Context(template_hit=True)
+    def fail(_):raise RuntimeError("体力未知")
+    monkeypatch.setattr(live_select,"ensure_live_boost",fail)
+    assert not live_select.LiveSelectFind().run(context,argv(expected="自由演出",template_node="EntryTemplate"))
+    assert not context.tasker.controller.clicks
