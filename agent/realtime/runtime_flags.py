@@ -12,6 +12,8 @@ NATIVE_TIMING_TRIAL_ARG = "--native-timing-trial"
 DISABLE_NATIVE_TIMING_COMPENSATION_ARG = "--disable-native-timing-compensation"
 NATIVE_TIMING_TRIAL_ENV = "MAABANGDREAM_NATIVE_TIMING_TRIAL"
 NATIVE_WAIT_JITTER_TRIAL_ENV = "MAABANGDREAM_NATIVE_WAIT_JITTER_TRIAL"
+NATIVE_START_SHAPE_TRIAL_ENV = "MAABANGDREAM_NATIVE_START_SHAPE_TRIAL"
+NATIVE_EARLY_START_TRIAL_ENV = "MAABANGDREAM_NATIVE_EARLY_START_TRIAL"
 REGIONAL_LEVEL_DRIFT_TRIAL_ARG = "--regional-level-drift-trial"
 DISABLE_REGIONAL_LEVEL_DRIFT_ARG = "--disable-regional-level-drift"
 COOPERATIVE_MEMBER_LOADING_GUARD_TRIAL_ARG = "--cooperative-member-loading-guard-trial"
@@ -58,6 +60,16 @@ def native_timing_compensation_enabled() -> bool:
 def native_wait_jitter_trial_enabled() -> bool:
     """等待成本异常值候选未经过真机验收，仅由本次进程显式启用。"""
     return os.environ.get(NATIVE_WAIT_JITTER_TRIAL_ENV) == "1"
+
+
+def native_start_shape_trial_enabled() -> bool:
+    """首音二维转场候选默认关闭，仅允许本进程显式离线或真机验收。"""
+    return os.environ.get(NATIVE_START_SHAPE_TRIAL_ENV) == "1"
+
+
+def native_early_start_trial_enabled() -> bool:
+    """上段首头与低置信生命兜底独立候选，默认关闭。"""
+    return os.environ.get(NATIVE_EARLY_START_TRIAL_ENV) == "1"
 
 
 def cooperative_member_loading_guard_enabled() -> bool:

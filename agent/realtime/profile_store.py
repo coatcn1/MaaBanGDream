@@ -112,6 +112,7 @@ class RuntimeSettings:
     playfield_timeout_ms: int
     profile_path: Path
     note_speed: float
+    environment: EnvironmentSignature | None = None
 
 
 class RealtimeProfileStore:
@@ -399,6 +400,7 @@ class RealtimeProfileStore:
             **settings,
             profile_path=profile["_path"],
             note_speed=saved.note_speed,
+            environment=current_signature,
         )
 
     def resolve_latest(self, *, difficulty: str, current_signature: EnvironmentSignature) -> RuntimeSettings:

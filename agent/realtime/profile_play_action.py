@@ -722,6 +722,8 @@ class StallSafeCapture:
         self._pending_request_s = None
         self._image_request_s = None
         self._reused = True
+        self._pending_metadata = {}
+        self._image_metadata = {}
         self._lazy_prefetch = False
         self._prefetch_target_s = None
 
@@ -730,13 +732,39 @@ class StallSafeCapture:
 
     def _post(self):
         self._pending_request_s = time.perf_counter()
-        return self._controller.post_screencap()
+        job = self._controller.post_screencap()
+        post_return_s = time.perf_counter()
+        try:
+            job_id = job.job_id
+        except Exception:
+            job_id = None
+        self._pending_metadata = {
+            "request_s": self._pending_request_s,
+            "post_return_s": post_return_s,
+            "screenshot_job_id": job_id,
+            "first_done_observed_s": None,
+            "render_s": None,
+            "capture_completed_s": None,
+            "clock": "perf_counter",
+            "done_time_semantics": "first observation upper bound; not device capture completion",
+        }
+        return job
+
+    def _get(self, job):
+        self._pending_metadata["get_begin_s"] = time.perf_counter()
+        try:
+            return job.get()
+        finally:
+            self._pending_metadata["get_end_s"] = time.perf_counter()
 
     def _accept(self, image):
         if image is not None:
             self._last_image = image
             self._sequence += 1
             self._image_request_s = self._pending_request_s
+            self._image_metadata = dict(self._pending_metadata)
+            self._image_metadata["accept_s"] = time.perf_counter()
+            self._image_metadata["first_return_s"] = None
 
     def prefetch_fresh(self, target_s):
         """同一消费者提前请求，不等待截图完成；每个目标节拍最多发一次。"""
@@ -746,7 +774,7 @@ class StallSafeCapture:
             if not self._job_done(self._pending):
                 return
             try:
-                self._accept(self._pending.get())
+                self._accept(self._get(self._pending))
             except Exception:
                 pass
             self._pending = None
@@ -755,27 +783,31 @@ class StallSafeCapture:
 
     @property
     def frame_metadata(self):
-        return {"sequence": self._sequence, "request_s": self._image_request_s,
-                "reused": self._reused}
+        return {**self._image_metadata, "sequence": self._sequence,
+                "request_s": self._image_request_s, "reused": self._reused}
 
-    @staticmethod
-    def _job_done(job) -> bool:
+    def _job_done(self, job) -> bool:
         try:
-            return bool(job.done)
+            done = bool(job.done)
         except Exception:
             return True
+        if done and self._pending_metadata.get("first_done_observed_s") is None:
+            self._pending_metadata["first_done_observed_s"] = time.perf_counter()
+        return done
 
     def __call__(self):
         image = self._capture()
         # 预取可能已接收新图；是否复用必须与消费者上一次实际返回的帧比较。
         self._reused = self._sequence == self._last_consumed_sequence
         self._last_consumed_sequence = self._sequence
+        if image is not None and self._image_metadata.get("first_return_s") is None:
+            self._image_metadata["first_return_s"] = time.perf_counter()
         return image
 
     def _capture(self):
         if self._pending is not None and self._job_done(self._pending):
             try:
-                image = self._pending.get()
+                image = self._get(self._pending)
                 if image is not None:
                     self._accept(image)
             except Exception:
@@ -791,19 +823,22 @@ class StallSafeCapture:
             # The very first frame must exist before the detector can run;
             # blocking once here is unavoidable and only happens at startup.
             self._pending.wait()
-            self._accept(self._pending.get())
+            self._pending_metadata["first_done_observed_s"] = time.perf_counter()
+            self._accept(self._get(self._pending))
             self._pending = None if self._lazy_prefetch else self._post()
             return self._last_image
         if self._job_done(self._pending):
             try:
-                image = self._pending.get()
+                image = self._get(self._pending)
             except Exception:
                 image = None
             new_frame = image is not None
             if image is None:
                 if self._last_image is None:
                     # First frame must exist before the detector can run.
-                    image = self._post().wait().get()
+                    fallback = self._post().wait()
+                    self._pending_metadata["first_done_observed_s"] = time.perf_counter()
+                    image = self._get(fallback)
                     new_frame = image is not None
                 else:
                     image = self._last_image
@@ -2800,6 +2835,9 @@ class RealtimeProfilePlay(CustomAction):
                         selected_chart.path,
                     )
                     native_backend.configure_timing_offset(timing_offset_ms)
+                    configure_early_start = getattr(native_backend, "configure_early_start", None)
+                    if callable(configure_early_start):
+                        configure_early_start(getattr(settings, "environment", None))
                     print(
                         "RealtimeProfilePlay native_prearmed=consumed "
                         f"chart={selected_chart.path} "

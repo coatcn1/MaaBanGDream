@@ -63,6 +63,10 @@ class CooperativePreparePopupDetector:
 
     _WHITE_SAT_MAX = 70
     _WHITE_VAL_MIN = 190
+    MIN_PANEL_FILL = 0.75
+
+    def __init__(self, *, require_solid_panel: bool = False) -> None:
+        self._require_solid_panel = bool(require_solid_panel)
 
     def __call__(self, image: Any) -> bool:
         if (
@@ -183,4 +187,11 @@ class CooperativePreparePopupDetector:
                 * (height / self._REFERENCE_HEIGHT)
             ),
         )
-        return int(pink.sum()) >= minimum
+        if int(pink.sum()) < minimum:
+            return False
+        # 轮廓音符和连接线也能围出宽白框；候选要求连通白色主体确实填满面板。
+        if self._require_solid_panel:
+            area = int(stats[largest, cv2.CC_STAT_AREA])
+            if area / box_area < self.MIN_PANEL_FILL:
+                return False
+        return True
