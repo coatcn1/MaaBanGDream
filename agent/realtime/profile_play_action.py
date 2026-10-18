@@ -426,11 +426,14 @@ def wait_for_final_cover(
         initial_resolution is not None
         and (
             bool(getattr(initial_resolution.selection, "level_drift_tolerated", False))
-            or bool(getattr(repository, "regional_level_drift_enabled", False))
+            or (
+                bool(getattr(repository, "regional_level_drift_enabled", False))
+                and not bool(getattr(initial_resolution, "unique_cover_confirmed", False))
+            )
         )
         and not initial_resolution.final_title_confirmed
     ):
-        # 旧的预确认结构不能代替候选要求的最终页标题证据。
+        # 可信唯一封面的确认可交接；等级容忍仍须实读标题，不能借此跳过等级复核。
         initial_resolution = None
     resolver = FinalCoverResolver(
         difficulty=difficulty,

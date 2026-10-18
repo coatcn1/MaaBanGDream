@@ -1610,7 +1610,8 @@ def test_final_cover_identity_conflict_stops_without_retry():
     assert flow.run() is False
     assert attempts == [False]
     assert recoveries == []
-    assert jumps == []
+    assert len(jumps) == 1
+    assert "FinalCoverIdentityConflict" in jumps[0]
 
 
 def test_final_cover_timeout_jumps_after_retry_budget():

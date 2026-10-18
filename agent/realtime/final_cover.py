@@ -91,6 +91,7 @@ class FinalCoverResolution:
     observed_title: str | None = None
     observed_title_confidence: float = 0.0
     final_title_confirmed: bool = False
+    unique_cover_confirmed: bool = False
 
 
 def _is_full_song(selection: Any) -> bool:
@@ -313,6 +314,9 @@ class FinalCoverResolver:
         self.last_title_reading_diagnostic = {}
         self.last_selection = selection
         self._final_title_observed_frame = None
+        self._unique_cover_gate: FinalCoverGate | None = None
+        self._unique_cover_song_id: int | None = None
+        self._unique_cover_frames = 0
         # 退化诊断：每个新指纹只打一条日志，避免逐帧刷屏。
         self._logged_fingerprints: set[str] = set()
 
@@ -408,6 +412,25 @@ class FinalCoverResolver:
             return self.gate.evidence_reason()
         return None
 
+    def _clear_unique_cover_candidate(self) -> None:
+        if self._unique_cover_gate is not None and self.gate is self._unique_cover_gate:
+            self.gate = None
+        self._unique_cover_gate = None
+        self._unique_cover_song_id = None
+        self._unique_cover_frames = 0
+
+    def _observe_unique_cover_candidate(self, gate: FinalCoverGate | None) -> None:
+        if gate is None:
+            self._clear_unique_cover_candidate()
+            return
+        song_id = int(gate.selection.bestdori_song_id)
+        self._unique_cover_frames = (
+            self._unique_cover_frames + 1
+            if song_id == self._unique_cover_song_id else 1
+        )
+        self._unique_cover_song_id = song_id
+        self._unique_cover_gate = gate
+
     def _observe_cover_candidate(self, song_id: str) -> bool:
         if song_id == UNKNOWN_SONG_ID:
             self._candidate_song_id = UNKNOWN_SONG_ID
@@ -418,6 +441,7 @@ class FinalCoverResolver:
         else:
             self._candidate_song_id = song_id
             self._candidate_frames = 1
+        self._clear_unique_cover_candidate()
         # 任何未知或不同封面都先隔离标题缓存，得分页也不能绕过身份生命周期。
         self._final_title_confirmed = False
         self.last_title_reading_diagnostic = {}
@@ -426,6 +450,29 @@ class FinalCoverResolver:
             self._observed_title_confidence = 0.0
             self._final_title_observed_frame = None
         return song_id != UNKNOWN_SONG_ID
+
+    def _resolve_unique_cover_gate(self, song_id: str) -> FinalCoverGate | None:
+        # 不传标题、等级或 ID：在完整曲库中按严格封面阈值解析唯一候选，
+        # 不能把等级筛选后的唯一或宽松封面 top1 当作可信唯一封面。
+        assert self.repository is not None
+        selected = self.repository.resolve(
+            song_id, self.difficulty, level=None, title=None,
+        ).selection
+        if (
+            selected is None
+            or bool(getattr(selected, "shared_jacket", False))
+            or bool(getattr(selected, "level_drift_tolerated", False))
+            or not any(same_song(song_id, item)
+                       for item in getattr(selected, "fingerprints", ()))
+        ):
+            return None
+        gate = FinalCoverGate(
+            selected, difficulty=self.difficulty,
+            observed_level=self.observed_level, observed_title=None,
+            allow_missing_level=self.allow_missing_level,
+        )
+        # 唯一封面不能免除实际难度和等级一致性校验。
+        return gate if gate.evidence_reason() is None else None
 
     def observe(
         self, image: Any, *, refresh_title: bool = False, title_reader=None,
@@ -443,6 +490,7 @@ class FinalCoverResolver:
             # 加载页即使稳定多帧也不能确认；出现该页会中断连续候选计数。
             self._candidate_song_id = UNKNOWN_SONG_ID
             self._candidate_frames = 0
+            self._clear_unique_cover_candidate()
             self._final_title_confirmed = False
             self.last_title_reading_diagnostic = {}
             if self.independent_final_title_enabled:
@@ -451,25 +499,79 @@ class FinalCoverResolver:
                 self._final_title_observed_frame = None
             self.last_reason = "member loading screen"
             return None
+        identity = None
         score_identity = None
         if is_final_score_layout(image):
             # 得分页仍展示相同封面，不能把得分标签提升为歌名或制造身份冲突。
             score_identity = identify_final_song(image)
             self._observe_cover_candidate(score_identity.song_id)
+            cached_gate = self._unique_cover_gate
+            if cached_gate is not None:
+                # 相邻帧指纹距离小也可能跨越曲库候选边界；得分页必须重新
+                # 严格扫描全目录，且只能复核已有凭据，不能首次创建凭据。
+                current_gate = self._resolve_unique_cover_gate(score_identity.song_id)
+                if (
+                    current_gate is None
+                    or current_gate.selection.bestdori_song_id
+                    != cached_gate.selection.bestdori_song_id
+                ):
+                    self._clear_unique_cover_candidate()
+                    self.last_selection = None
+                    self.last_title_diagnostic = {"status": "excluded-score-cover-mismatch"}
+                    self.last_reason = "goal score cover no longer matches unique candidate"
+                    return None
+                self._observe_unique_cover_candidate(current_gate)
+                if self.gate is cached_gate:
+                    self.gate = current_gate
             self.last_title_diagnostic = {
                 "status": "excluded-score-layout",
                 "cached_title_frame": self._final_title_observed_frame,
             }
             if not (
-                self._final_title_confirmed
-                and self._final_title_observed_frame is not None
-                and self._candidate_frames >= 2
+                self._candidate_frames >= 2
+                and (
+                    (self._unique_cover_gate is not None and self._unique_cover_frames >= 2)
+                    or (self._final_title_confirmed
+                        and self._final_title_observed_frame is not None)
+                )
             ):
                 self.last_reason = "goal score page is not a song title"
                 return None
-            # 标题条已变为目标得分时，使用同一封面首帧的实读标题完成交叉确认；
-            # 不重新 OCR 得分，也不能只凭缓存标志绕过谱面和标题冲突检查。
-            self.last_title_diagnostic["status"] = "score-layout-cached-title"
+            # 标题条变为目标得分时，只复用同一封面首帧的唯一封面或实读标题
+            # 证据；不重新 OCR 得分，后续仍须通过谱面身份校验。
+            self.last_title_diagnostic["status"] = (
+                "score-layout-cached-cover" if self._unique_cover_gate is not None
+                else "score-layout-cached-title"
+            )
+        if self.gate is None or self.gate is self._unique_cover_gate:
+            identity = score_identity or identify_final_song(image)
+            if score_identity is None and not self._observe_cover_candidate(identity.song_id):
+                self.last_reason = "final cover jacket is not visible"
+                return None
+            if score_identity is None:
+                if self._unique_cover_gate is not None and self.gate is self._unique_cover_gate:
+                    self.gate = None
+                self._observe_unique_cover_candidate(
+                    self._resolve_unique_cover_gate(identity.song_id),
+                )
+            if self._unique_cover_gate is not None:
+                self.last_selection = self._unique_cover_gate.selection
+                self.last_title_diagnostic = {"status": "skipped-unique-cover"}
+                # 指纹接近不代表曲库候选相同；唯一候选 ID 也必须连续两帧一致。
+                if self._candidate_frames < 2 or self._unique_cover_frames < 2:
+                    self.last_reason = "waiting for stable final cover jacket"
+                    return None
+                confirmation = self._unique_cover_gate.observe(image)
+                self.last_reason = self._unique_cover_gate.last_reason
+                if confirmation is None:
+                    return None
+                self.gate = self._unique_cover_gate
+                self.observed_title = None
+                self._observed_title_confidence = 0.0
+                self._final_title_confirmed = False
+                return FinalCoverResolution(
+                    confirmation, self.gate.selection, unique_cover_confirmed=True,
+                )
         if (
             score_identity is None and refresh_title and self.repository is not None
             and not self.independent_final_title_enabled
@@ -508,12 +610,10 @@ class FinalCoverResolver:
                 observed_title=self.observed_title,
                 observed_title_confidence=self._observed_title_confidence,
                 final_title_confirmed=self._final_title_confirmed,
+                unique_cover_confirmed=self.gate is self._unique_cover_gate,
             )
 
-        identity = score_identity or identify_final_song(image)
-        if score_identity is None and not self._observe_cover_candidate(identity.song_id):
-            self.last_reason = "final cover jacket is not visible"
-            return None
+        assert identity is not None
         title_needs_reading = not self._final_title_confirmed
         if self.wide_title_trial and self._final_title_confirmed and self.repository is not None:
             # 未确认身份的高置信截断缓存不能阻止后续帧取得较低置信的完整标题。

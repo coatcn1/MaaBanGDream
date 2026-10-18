@@ -1744,8 +1744,28 @@ class VersusLiveFlow:
             except FinalCoverIdentityConflict as exc:
                 if self.stopped():
                     return True
-                # 实读身份硬冲突不是瞬时故障；保留现场，不消耗预算重新开局。
-                record_failure_reason(f"{type(exc).__name__}: {exc}")
+                # 身份硬冲突禁止重试或继续输入，但不能绕过启动失败的手动跳车提示。
+                reason = f"{type(exc).__name__}: {exc}"
+                try:
+                    self.jump_after_startup_failure(reason)
+                except InterruptedError:
+                    raise
+                except JumpOutUnavailable as jump_exc:
+                    if self.stopped():
+                        return True
+                    record_failure_reason(str(jump_exc))
+                except Exception as jump_error:
+                    if self.stopped():
+                        return True
+                    # 前后台切换自身失败时仍保留最初的身份原因，不能掩盖现场故障。
+                    record_failure_reason(
+                        f"{reason}；跳车切换失败：{type(jump_error).__name__}: "
+                        f"{jump_error}；请手动跳车"
+                    )
+                else:
+                    if self.stopped():
+                        return True
+                    record_failure_reason(reason)
                 return False
             except Exception as exc:
                 if self.stopped():

@@ -854,8 +854,9 @@ def test_real_resolver_keeps_high_confidence_unknown_without_safe_completion(tmp
         if "songs" in content:
             song["display_title"] = expected
         path.write_text(json.dumps(content), encoding="utf-8")
+    # 同级唯一封面现已无需 OCR；保留 1 级漂移来检验辅助标题的冲突保护。
     resolver = FinalCoverResolver(
-        difficulty="Expert", observed_level=27, observed_title=None,
+        difficulty="Expert", observed_level=26, observed_title=None,
         repository=repository, require_observed_title=True,
     )
     def reader(_image, *, roi):
@@ -870,7 +871,7 @@ def test_real_resolver_keeps_high_confidence_unknown_without_safe_completion(tmp
         assert title_similarity(narrow, wide) == .75
     assert resolver.observe(image) is None
     assert resolver.observed_title == narrow
-    with pytest.raises(RuntimeError, match="final cover song title conflicts with selected chart"):
+    with pytest.raises(RuntimeError, match="歌曲身份冲突"):
         resolver.observe(image)
     assert resolver.observed_title == narrow
     assert resolver._candidate_frames == 2
@@ -954,10 +955,8 @@ def test_kana_matching_and_wide_completion_keep_two_stable_cover_frames(tmp_path
         song["titles"] = ["わちゃ・もちゃ・ぺったん行進曲"]
         if "songs" in content:
             song["bestdori_song_id"] = 94
-            song["difficulties"]["expert"]["level"] = 26
         else:
             song["bestdori_id"] = 94
-            content["difficulty"]["level"] = 26
         path.write_text(json.dumps(content), encoding="utf-8")
     resolver = FinalCoverResolver(difficulty="Expert", observed_level=26, observed_title=None, repository=repository)
     calls = []
@@ -970,7 +969,7 @@ def test_kana_matching_and_wide_completion_keep_two_stable_cover_frames(tmp_path
     assert resolver.observe(image) is None
     narrow_supported = title_similarity(narrow_text, "わちゃ・もちゃ・ぺったん行進曲") >= .68
     if not narrow_supported and not trial_enabled:
-        with pytest.raises(RuntimeError, match="final cover song title conflicts with selected chart"):
+        with pytest.raises(RuntimeError, match="歌曲身份冲突"):
             resolver.observe(image)
         return
     outcome = resolver.observe(image)
@@ -1279,7 +1278,7 @@ def test_final_cover_resolver_can_require_title_after_early_ocr_failed():
 
     class Repository:
         def resolve(self, _song_id, _difficulty, *, level, title):
-            assert level == 28
+            assert level == 28 or (level is None and title is None)
             return ChartResolution(
                 selection if title == "FIRE BIRD" else None,
                 "confirmed" if title == "FIRE BIRD" else "title missing",
@@ -1355,7 +1354,8 @@ def test_pending_final_cover_does_not_reuse_a_trusted_preparation_title():
 
     class Repository:
         def resolve(self, *_args, **_kwargs):
-            raise AssertionError("最终标题缺失时不得复用旧标题解析")
+            assert _kwargs.get("level") is None and _kwargs.get("title") is None
+            return ChartResolution(None, "song fingerprint mapping is ambiguous")
 
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setattr(
@@ -1399,7 +1399,8 @@ def test_required_final_cover_title_does_not_degrade_at_playfield(monkeypatch):
 
     class Repository:
         def resolve(self, *_args, **_kwargs):
-            raise AssertionError("标题缺失时不应解析谱面")
+            assert _kwargs.get("level") is None and _kwargs.get("title") is None
+            return ChartResolution(None, "song fingerprint mapping is ambiguous")
 
     monkeypatch.setattr(
         profile_play_action,
@@ -1468,7 +1469,8 @@ def test_cooperative_missing_final_title_waits_to_timeout_without_fallback(monke
         regional_level_drift_enabled = True
 
         def resolve(self, *_a, **_k):
-            raise AssertionError("缺少实读标题不能解析谱面")
+            assert _k.get("level") is None and _k.get("title") is None
+            return ChartResolution(None, "song fingerprint mapping is ambiguous")
 
     monkeypatch.setattr(profile_play_action.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(profile_play_action, "PlayfieldDetector", lambda: lambda _: True)
@@ -1982,7 +1984,7 @@ def test_wait_for_final_cover_can_defer_chart_resolution_until_coop_cover():
     assert outcome.status == "confirmed"
     assert outcome.resolution.confirmation.song_id == song_id
     assert outcome.resolution.selection is resolved
-    assert calls == [(song_id, "expert", 28, "乱码标题")]
+    assert calls == [(song_id, "expert", None, None)] * 2
 
 
 def test_wait_for_final_cover_degrades_to_selected_chart_when_playfield_arrives(
@@ -2126,3 +2128,304 @@ def test_deferred_resolution_rejects_title_fallback_for_wrong_jacket():
     assert resolver.observe(wrong_cover) is None
     assert resolver.observe(wrong_cover) is None
     assert resolver.last_reason == "final cover jacket does not match selected chart"
+
+
+def _cover_priority_test_repository(tmp_path, *, shared=False, fingerprint_mask=0):
+    image, repository = _regional_drift_test_repository(
+        tmp_path, fingerprint_mask=fingerprint_mask,
+    )
+    chart_path = tmp_path / "bestdori/571/expert.json"
+    payload = json.loads(chart_path.read_text(encoding="utf-8"))
+    payload["song"]["titles"] = ["ロキ"]
+    payload["difficulty"]["level"] = 26
+    chart_path.write_text(json.dumps(payload), encoding="utf-8")
+    manifest_path = tmp_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    song = manifest["songs"][0]
+    song["titles"] = ["ロキ"]
+    song["display_title"] = "ロキ"
+    song["difficulties"]["expert"]["level"] = 26
+    if shared:
+        # 完整曲库中的共享封面不能先按等级制造唯一性。
+        other = json.loads(json.dumps(song))
+        other["bestdori_song_id"] = 572
+        other["titles"] = ["[FULL]ロキ"]
+        other["display_title"] = "[FULL]ロキ"
+        other["difficulties"]["expert"]["level"] = 27
+        manifest["songs"].append(other)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    return image, repository
+
+
+@pytest.mark.parametrize("second_page", ["title", "goal"])
+@pytest.mark.parametrize("refresh_title", [False, True])
+def test_unique_strict_cover_confirms_without_reading_wrong_ocr(
+    tmp_path, monkeypatch, second_page, refresh_title,
+):
+    cover, repository = _cover_priority_test_repository(tmp_path)
+    second = cover.copy()
+    if second_page == "goal":
+        cv2.circle(second, (382, 515), 26, (90, 200, 240), -1)
+        cv2.putText(second, "5082000", (738, 530), cv2.FONT_HERSHEY_SIMPLEX,
+                    .9, (180, 140, 250), 2)
+    calls = []
+    monkeypatch.setattr(final_cover, "recognize_song_title",
+                        lambda *_a, **_k: calls.append(True) or TitleReading("□キ", .99))
+    resolver = FinalCoverResolver(
+        difficulty="Expert", observed_level=26, observed_title=None,
+        repository=repository, require_observed_title=True,
+    )
+    assert resolver.observe(cover, refresh_title=refresh_title) is None
+    outcome = resolver.observe(second, refresh_title=refresh_title)
+    assert outcome is not None
+    assert outcome.selection.bestdori_song_id == 571
+    assert outcome.selection.level == 26
+    assert outcome.selection.level_drift_tolerated is False
+    assert outcome.unique_cover_confirmed is True
+    assert resolver.observe(second).unique_cover_confirmed is True
+    assert outcome.final_title_confirmed is False
+    assert outcome.observed_title is None
+    assert calls == []
+
+
+@pytest.mark.parametrize("shared,fingerprint_mask", [(True, 0), (False, (1 << 9) - 1)])
+def test_shared_or_loose_cover_still_reads_title(
+    tmp_path, monkeypatch, shared, fingerprint_mask,
+):
+    cover, repository = _cover_priority_test_repository(
+        tmp_path, shared=shared, fingerprint_mask=fingerprint_mask,
+    )
+    calls = []
+    monkeypatch.setattr(final_cover, "recognize_song_title",
+                        lambda *_a, **_k: calls.append(True) or TitleReading("ロキ", .99))
+    resolver = FinalCoverResolver(
+        difficulty="Expert", observed_level=26, observed_title=None,
+        repository=repository, require_observed_title=True,
+    )
+    assert resolver.observe(cover) is None
+    outcome = resolver.observe(cover)
+    assert outcome is not None
+    assert outcome.final_title_confirmed is True
+    assert calls == [True]
+
+
+def test_unique_cover_does_not_confirm_from_goal_score_page_alone(tmp_path, monkeypatch):
+    cover, repository = _cover_priority_test_repository(tmp_path)
+    cv2.circle(cover, (382, 515), 26, (90, 200, 240), -1)
+    cv2.putText(cover, "5082000", (738, 530), cv2.FONT_HERSHEY_SIMPLEX,
+                .9, (180, 140, 250), 2)
+    monkeypatch.setattr(final_cover, "recognize_song_title",
+                        lambda *_a, **_k: pytest.fail("得分页不得读取标题"))
+    resolver = FinalCoverResolver(
+        difficulty="Expert", observed_level=26, observed_title=None,
+        repository=repository, require_observed_title=True,
+    )
+    assert resolver.observe(cover) is None
+    assert resolver.observe(cover) is None
+    assert resolver.last_reason == "goal score page is not a song title"
+
+
+def test_visible_unmatched_cover_reads_title_but_does_not_confirm_wrong_jacket(tmp_path, monkeypatch):
+    _, repository = _cover_priority_test_repository(tmp_path)
+    wrong_cover, _ = final_cover_frame(seed=83)
+    calls = []
+    monkeypatch.setattr(final_cover, "recognize_song_title",
+                        lambda *_a, **_k: calls.append(True) or TitleReading("ロキ", .99))
+    resolver = FinalCoverResolver(
+        difficulty="Expert", observed_level=26, observed_title=None,
+        repository=repository, require_observed_title=True,
+    )
+    assert resolver.observe(wrong_cover) is None
+    assert resolver.observe(wrong_cover) is None
+    assert calls
+    assert resolver.last_reason == "final cover jacket does not match selected chart"
+
+
+@pytest.mark.parametrize("independent_title", [False, True])
+def test_unknown_cover_does_not_read_title_or_resolve_catalog(tmp_path, monkeypatch, independent_title):
+    cover, repository = _cover_priority_test_repository(tmp_path)
+    repository.regional_level_drift_enabled = independent_title
+    monkeypatch.setattr(repository, "resolve", lambda *_a, **_k: pytest.fail("未知封面不得解析曲库"))
+    monkeypatch.setattr(final_cover, "recognize_song_title", lambda *_a, **_k: pytest.fail("未知封面不得OCR标题"))
+    resolver = FinalCoverResolver(
+        difficulty="Expert", observed_level=26, observed_title=None,
+        repository=repository, require_observed_title=True,
+    )
+    for _ in range(2):
+        assert resolver.observe(np.zeros_like(cover), refresh_title=True) is None
+    assert resolver.last_reason == "final cover jacket is not visible"
+
+
+@pytest.mark.parametrize("difficulty,level", [("Expert", 24), ("Special", 26)])
+def test_unique_cover_does_not_bypass_difficulty_or_level(tmp_path, monkeypatch, difficulty, level):
+    cover, repository = _cover_priority_test_repository(tmp_path)
+    monkeypatch.setattr(final_cover, "recognize_song_title", lambda *_a, **_k: None)
+    resolver = FinalCoverResolver(
+        difficulty=difficulty, observed_level=level, observed_title=None,
+        repository=repository, require_observed_title=True,
+    )
+    assert resolver.observe(cover) is None
+    assert resolver.observe(cover) is None
+    assert resolver._unique_cover_gate is None
+
+
+@pytest.mark.parametrize("second_candidate", ["other-song", "ambiguous"])
+@pytest.mark.parametrize("already_confirmed", [False, True])
+def test_goal_score_rechecks_unique_cover_identity(tmp_path, monkeypatch, second_candidate, already_confirmed):
+    cover, goal, repository, first_hash, second_hash = _cover_boundary_test_repository(
+        tmp_path, ambiguous=second_candidate == "ambiguous",
+    )
+    # 使用真实曲库解析，只有图像指纹提取替换为受控读数。
+    monkeypatch.setattr(final_cover, "identify_final_song", lambda image:
+                        SimpleNamespace(song_id=first_hash if image is cover else second_hash,
+                                        method="song-jacket-phash-v2"))
+    monkeypatch.setattr(final_cover, "recognize_song_title",
+                        lambda *_a, **_k: pytest.fail("唯一封面或得分页均不得OCR标题"))
+    queries = []
+    resolve = repository.resolve
+    def trace_resolve(fingerprint, difficulty, *, level, title):
+        queries.append((fingerprint, level, title))
+        return resolve(fingerprint, difficulty, level=level, title=title)
+    monkeypatch.setattr(repository, "resolve", trace_resolve)
+    resolver = FinalCoverResolver(
+        difficulty="Expert", observed_level=26, observed_title=None,
+        repository=repository, require_observed_title=True,
+    )
+    assert resolver.observe(cover) is None
+    assert resolver._unique_cover_gate.selection.bestdori_song_id == 571
+    if already_confirmed:
+        assert resolver.observe(cover).unique_cover_confirmed is True
+    assert resolver.observe(goal) is None
+    assert resolver._unique_cover_gate is None
+    expected_queries = [(first_hash, None, None)] * (2 if already_confirmed else 1)
+    expected_queries.append((second_hash, None, None))
+    assert queries == expected_queries
+    assert resolver.gate is None
+    # 被拒绝的得分页不能在下一帧自行创建唯一封面凭据。
+    assert resolver.observe(goal) is None
+    assert resolver._unique_cover_gate is None
+    assert queries == expected_queries
+
+
+def _cover_boundary_test_repository(tmp_path, *, ambiguous=False):
+    cover, repository = _cover_priority_test_repository(tmp_path)
+    goal = cover.copy()
+    cv2.circle(goal, (382, 515), 26, (90, 200, 240), -1)
+    cv2.putText(goal, "5082000", (738, 530), cv2.FONT_HERSHEY_SIMPLEX,
+                .9, (180, 140, 250), 2)
+    # 相邻两帧仅差 6 bit，但它们在严格 8 bit 半径中的曲库候选不同。
+    def fingerprint(value):
+        return f"song-jacket-phash-v2-{value:016x}"
+    first_hash, second_hash = fingerprint(0xff), fingerprint(0x3fff)
+    manifest_path = tmp_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["songs"][0]["fingerprints"] = [fingerprint(0)]
+    other = json.loads(json.dumps(manifest["songs"][0]))
+    other["bestdori_song_id"] = 572
+    other["fingerprints"] = [fingerprint(0x3fffff)]
+    other["titles"] = ["Other Song"]
+    other_path = tmp_path / "bestdori/572/expert.json"
+    other_path.parent.mkdir(parents=True)
+    payload = json.loads((tmp_path / "bestdori/571/expert.json").read_text(encoding="utf-8"))
+    payload["song"]["bestdori_id"] = 572
+    payload["song"]["titles"] = ["Other Song"]
+    other_path.write_text(json.dumps(payload), encoding="utf-8")
+    other["difficulties"]["expert"]["path"] = "bestdori/572/expert.json"
+    manifest["songs"].append(other)
+    if ambiguous:
+        third = json.loads(json.dumps(other))
+        third["bestdori_song_id"] = 573
+        third["titles"] = ["Third Song"]
+        third["fingerprints"] = [fingerprint(0x1fffff)]
+        manifest["songs"].append(third)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    first_probe = repository.resolve(first_hash, "Expert", level=None, title=None)
+    second_probe = repository.resolve(second_hash, "Expert", level=None, title=None)
+    assert first_probe.selection.bestdori_song_id == 571
+    if ambiguous:
+        assert second_probe.selection is None
+        assert second_probe.reason == "song fingerprint mapping is ambiguous"
+    else:
+        assert second_probe.selection.bestdori_song_id == 572
+    return cover, goal, repository, first_hash, second_hash
+
+
+
+@pytest.mark.parametrize("already_confirmed", [False, True])
+def test_unique_cover_requires_two_frames_of_same_catalog_candidate(tmp_path, monkeypatch, already_confirmed):
+    cover, _, repository, first_hash, second_hash = _cover_boundary_test_repository(tmp_path)
+    other = cover.copy()
+    monkeypatch.setattr(final_cover, "identify_final_song", lambda image:
+                        SimpleNamespace(song_id=first_hash if image is cover else second_hash,
+                                        method="song-jacket-phash-v2"))
+    monkeypatch.setattr(final_cover, "recognize_song_title",
+                        lambda *_a, **_k: pytest.fail("唯一封面不得OCR标题"))
+    resolver = FinalCoverResolver(
+        difficulty="Expert", observed_level=26, observed_title=None,
+        repository=repository, require_observed_title=True,
+    )
+    assert resolver.observe(cover) is None
+    if already_confirmed:
+        assert resolver.observe(cover).confirmation.bestdori_song_id == 571
+    # 两帧指纹仅差 6 bit，但 B 只出现一帧，不能继承 A 的连续计数。
+    assert resolver.observe(other) is None
+    outcome = resolver.observe(other)
+    assert outcome.confirmation.bestdori_song_id == 572
+    assert outcome.unique_cover_confirmed is True
+
+
+def test_score_candidate_mismatch_resets_unique_cover_streak(tmp_path, monkeypatch):
+    cover, goal, repository, first_hash, second_hash = _cover_boundary_test_repository(tmp_path)
+    monkeypatch.setattr(final_cover, "identify_final_song", lambda image:
+                        SimpleNamespace(song_id=first_hash if image is cover else second_hash,
+                                        method="song-jacket-phash-v2"))
+    monkeypatch.setattr(final_cover, "recognize_song_title",
+                        lambda *_a, **_k: pytest.fail("唯一封面或得分页不得OCR标题"))
+    resolver = FinalCoverResolver(
+        difficulty="Expert", observed_level=26, observed_title=None,
+        repository=repository, require_observed_title=True,
+    )
+    assert resolver.observe(cover) is None
+    assert resolver.observe(goal) is None
+    # 失配后再次出现的 A 仍只有一帧，不能复用旧的稳定计数。
+    assert resolver.observe(cover) is None
+    outcome = resolver.observe(cover)
+    assert outcome.confirmation.bestdori_song_id == 571
+    assert outcome.unique_cover_confirmed is True
+
+
+@pytest.mark.parametrize("interruption", ["unknown", "loading", "ambiguous", "unmatched", "score-mismatch"])
+def test_unique_cover_streak_is_cleared_by_uncertain_or_mismatched_frame(tmp_path, monkeypatch, interruption):
+    cover, goal, repository, first_hash, second_hash = _cover_boundary_test_repository(
+        tmp_path, ambiguous=interruption == "ambiguous",
+    )
+    interrupted = cover.copy()
+    interrupted_hash = second_hash
+    if interruption == "unknown":
+        interrupted = np.zeros_like(cover)
+        interrupted_hash = "unknown"
+    elif interruption == "loading":
+        interrupted, _ = loading_frame()
+    elif interruption == "unmatched":
+        interrupted_hash = "song-jacket-phash-v2-ffffffffffffffff"
+    elif interruption == "score-mismatch":
+        interrupted = goal
+    monkeypatch.setattr(final_cover, "identify_final_song", lambda image:
+                        SimpleNamespace(song_id=first_hash if image is cover else interrupted_hash,
+                                        method="song-jacket-phash-v2"))
+    monkeypatch.setattr(final_cover, "recognize_song_title", lambda *_a, **_k: None)
+    resolver = FinalCoverResolver(
+        difficulty="Expert", observed_level=26, observed_title=None,
+        repository=repository, require_observed_title=True, reject_member_loading=True,
+    )
+    assert resolver.observe(cover) is None
+    assert resolver._unique_cover_frames == 1
+    assert resolver.observe(interrupted) is None
+    assert resolver._unique_cover_frames == 0
+    assert resolver._unique_cover_song_id is None
+    assert resolver._unique_cover_gate is None
+    assert resolver.observe(cover) is None
+    assert resolver._unique_cover_frames == 1
+    outcome = resolver.observe(cover)
+    assert outcome.confirmation.bestdori_song_id == 571
+    assert outcome.unique_cover_confirmed is True
