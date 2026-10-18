@@ -144,6 +144,7 @@ def test_selection_state_is_written_atomically(tmp_path):
         "runtime_options": {
             "skip_process_conflict_cleanup": False,
             "skip_result_check": False,
+            "live_boost_target": 3,
             "note_speed_settings_enabled": True,
             "chart_prediction_enabled": True,
             "chart_predict_presses": True,
@@ -178,6 +179,7 @@ def test_runtime_options_default_and_atomic_update_do_not_invalidate_profile(tmp
     assert listed["runtime_options"] == {
         "skip_process_conflict_cleanup": False,
         "skip_result_check": False,
+        "live_boost_target": 3,
         "note_speed_settings_enabled": True,
         "chart_prediction_enabled": True,
             "chart_predict_presses": True,

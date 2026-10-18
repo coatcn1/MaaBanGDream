@@ -986,7 +986,7 @@ def test_wait_for_preparation_gives_ready_page_independent_60_seconds(monkeypatc
     assert clock[0] == 230.0
 
 
-@pytest.mark.parametrize("choice", ["unspecified", "random", "current"])
+@pytest.mark.parametrize("choice", ["unspecified", "random", "current", "manual"])
 def test_song_choice_configures_and_resets(choice):
     assert configure_cooperative_settings({"reset": True, "song_choice": choice})["song_choice"] == choice
     assert configure_cooperative_settings({"reset": True})["song_choice"] == "unspecified"
@@ -1245,9 +1245,9 @@ def test_cooperative_interface_exposes_requested_modes_and_five_difficulties():
     ]
     options = interface["option"]
     assert [case["name"] for case in options["CooperativeEntryMethod"]["cases"]] == [
-        "Normal", "Friend", "Private",
+        "Normal", "HostInviteAll", "Friend", "Private",
     ]
-    private_case = options["CooperativeEntryMethod"]["cases"][2]
+    private_case = next(case for case in options["CooperativeEntryMethod"]["cases"] if case["name"] == "Private")
     assert options["CooperativeEntryMethod"]["cases"][0]["option"] == [
         "CooperativeRoomTier"
     ]
@@ -1381,6 +1381,7 @@ def test_cooperative_templates_are_deployed_and_nonempty():
     image_dir = ROOT / "resource" / "image" / "cooperative"
     required = {
         "live_entry.png",
+        "live_entry_compact.png",
         "room_search.png",
         "search_private.png",
         "search_friend.png",
@@ -1610,7 +1611,8 @@ def test_final_cover_identity_conflict_stops_without_retry():
     assert flow.run() is False
     assert attempts == [False]
     assert recoveries == []
-    assert jumps == []
+    assert len(jumps) == 1
+    assert "FinalCoverIdentityConflict" in jumps[0]
 
 
 def test_final_cover_timeout_jumps_after_retry_budget():
@@ -2319,3 +2321,67 @@ def test_performance_mode_evidence_uses_unicode_safe_writer(monkeypatch, tmp_pat
     )
     assert len(evidence) == 1
     assert cv2.imread(str(evidence[0])) is not None
+
+
+def test_manual_song_choice_observes_until_player_confirms(monkeypatch, capsys):
+    flow = _bare_flow()
+    flow.settings = {"song_choice": "manual"}
+    flow.song_choice_pause_pending = True
+    now = [0.0]
+    monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(cooperative_action.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+    flow.wait_for = lambda *_args, **_kw: ("ready_button" if now[0] >= 25 else "song_unspecified", None)
+    flow.click = lambda _point: pytest.fail("manual choice must never select or confirm")
+    flow.pause_for_song_filter = lambda: pytest.fail("manual choice must not use automatic 10-second pause")
+    flow.wait_for_preparation()
+    assert 25 <= now[0] < 25.2
+    assert not flow.song_choice_pause_pending
+    assert capsys.readouterr().out.count("等待玩家手动选歌并确认") == 1
+
+
+def test_manual_song_choice_timeout_is_bounded_without_jump(monkeypatch):
+    flow = _bare_flow()
+    flow.settings = {"song_choice": "manual"}
+    now = [0.0]
+    monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(cooperative_action.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+    flow.wait_for = lambda *_args, **_kw: ("song_unspecified", None)
+    flow.click = lambda _point: pytest.fail("manual timeout must not click")
+    flow.jump_after_startup_failure = lambda _reason: pytest.fail("manual timeout must not switch background")
+    with pytest.raises(RoomPreparationTimeout, match="手动选歌"):
+        flow.wait_for_preparation()
+    assert now[0] == 180.0
+
+
+@pytest.mark.parametrize("event", ["stop", "member_exit"])
+def test_manual_song_choice_preserves_stop_and_member_exit(monkeypatch, event):
+    flow = _bare_flow()
+    flow.settings = {"song_choice": "manual"}
+    now = [0.0]
+    monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: now[0])
+    def sleep(seconds):
+        now[0] += seconds
+        if event == "stop":
+            flow.context.tasker.stopping = True
+    monkeypatch.setattr(cooperative_action.time, "sleep", sleep)
+    def wait(*_args, **_kw):
+        if now[0] and event == "member_exit":
+            raise MemberExited("member exited")
+        return "song_unspecified", None
+    flow.wait_for = wait
+    flow.click = lambda _point: pytest.fail("manual observation must not click")
+    with pytest.raises(InterruptedError if event == "stop" else MemberExited):
+        flow.wait_for_preparation()
+    assert now[0] == 0.1
+
+
+def test_manual_song_choice_interface_preserves_unspecified_default():
+    interface = load(ROOT / "interface.json")
+    option = interface["option"]["CooperativeSongChoice"]
+    assert option["default_case"] == "Unspecified"
+    manual = next(case for case in option["cases"] if case["name"] == "Manual")
+    pipeline = load(ROOT / "resource/pipeline/cooperative_live.json")
+    params = dict(pipeline["CooperativeSongChoiceConfigure"]["custom_action_param"])
+    params.update(manual["pipeline_override"]["CooperativeSongChoiceConfigure"]["custom_action_param"])
+    assert params == {"song_choice": "manual"}
+    assert DEFAULT_SETTINGS["song_choice"] == "unspecified"

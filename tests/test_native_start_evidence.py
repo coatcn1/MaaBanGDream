@@ -29,9 +29,9 @@ def backend(writer):
 
 def trigger(result):
     image = np.zeros((720, 1280, 3), np.uint8)
-    for sequence, now, reused in [(1, 10, False), (1, 10.05, True), (2, 10.1, False)]:
+    for sequence, now, reused in [(1, 10, False), (2, 10.05, False), (2, 10.08, True), (3, 10.1, False)]:
         result.observe_start_frame_metadata({"request_s": now - .02, "sequence": sequence, "reused": reused})
-        if sequence == 2:
+        if sequence == 3:
             image[510:536] = 2
         anchor = result.observe_start_frame(image, now)
     return anchor
@@ -48,8 +48,8 @@ def test_debug_off_two_actual_roi_observations_and_interpolation_are_saved_in_ba
     assert result._start_evidence_ticket.report()["state"] == "written"
     packet = json.loads(open(status["metadata_path"], encoding="utf-8").read())
     previous, current = packet["observations"]
-    assert previous["sequence"] == 1 and previous["reused"] is True
-    assert current["sequence"] == 2 and current["reused"] is False
+    assert previous["sequence"] == 2 and previous["reused"] is False
+    assert current["sequence"] == 3 and current["reused"] is False
     assert previous["reference_mean_bgr"] == [0, 0, 0]
     assert previous["reference_observed_s"] == 10
     assert packet["previous_change"] == 0 and packet["current_change"] == 6

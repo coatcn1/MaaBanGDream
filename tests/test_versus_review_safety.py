@@ -43,18 +43,19 @@ def test_public_callback_contains_startup_failure(monkeypatch, error):
 def test_identity_conflict_never_retries_or_recovers(monkeypatch, module, budget):
     flow = bare_flow(module)
     flow.settings["play_failure_retry_count"] = budget
-    attempts, recoveries, failures = [], [], []
+    attempts, recoveries, failures, jumps = [], [], [], []
     def fail(**kwargs):
         attempts.append(kwargs)
         raise FinalCoverIdentityConflict("wrong song evidence")
     flow.run_attempt = fail
     flow.recover_after_play_failure = recoveries.append
-    flow.jump_after_startup_failure = recoveries.append
+    flow.jump_after_startup_failure = jumps.append
     monkeypatch.setattr(module, "record_failure_reason", failures.append)
     monkeypatch.setattr(module, "append_current_run_event", lambda *a, **k: None)
     assert flow.run() is False
     assert len(attempts) == 1
     assert recoveries == []
+    assert jumps == ["FinalCoverIdentityConflict: wrong song evidence"]
     assert failures == ["FinalCoverIdentityConflict: wrong song evidence"]
 
 
@@ -260,3 +261,56 @@ def test_all_startup_jump_exits_preserve_cause_and_request_manual_jump(monkeypat
         flow.jump_after_startup_failure("original timeout")
     assert failures == ["original timeout；请手动跳车"]
     assert calls == [("key", 3), ("start", module.GAME_PACKAGE)]
+
+
+@pytest.mark.parametrize("module", MODULES)
+@pytest.mark.parametrize("switch_error", [False, True])
+def test_identity_failure_manual_jump_preserves_cause_and_never_retries(monkeypatch, module, switch_error):
+    flow = bare_flow(module)
+    flow.settings["play_failure_retry_count"] = 10
+    attempts, jumps, failures = [], [], []
+    def fail(**kwargs):
+        attempts.append(kwargs)
+        raise FinalCoverIdentityConflict("original final cover evidence")
+    def jump(reason):
+        jumps.append(reason)
+        if switch_error:
+            raise RuntimeError("foreground unavailable")
+        raise module.JumpOutUnavailable(reason + "；请手动跳车")
+    flow.run_attempt = fail
+    flow.jump_after_startup_failure = jump
+    flow.recover_after_play_failure = lambda _: pytest.fail("身份冲突不得恢复或重试")
+    monkeypatch.setattr(module, "record_failure_reason", failures.append)
+    assert flow.run() is False
+    assert len(attempts) == len(jumps) == 1
+    assert "original final cover evidence" in failures[-1]
+    assert "请手动跳车" in failures[-1]
+    if switch_error:
+        assert "foreground unavailable" in failures[-1]
+
+
+@pytest.mark.parametrize("module", MODULES)
+def test_stop_during_identity_failure_does_not_jump_or_record_failure(monkeypatch, module):
+    flow = bare_flow(module)
+    def fail(**kwargs):
+        flow.context.tasker.stopping = True
+        raise FinalCoverIdentityConflict("late identity failure")
+    flow.run_attempt = fail
+    flow.jump_after_startup_failure = lambda _: pytest.fail("停止后不得切换应用")
+    monkeypatch.setattr(module, "record_failure_reason", lambda _: pytest.fail("停止不记业务失败"))
+    assert flow.run() is True
+
+
+@pytest.mark.parametrize("module", MODULES)
+def test_stop_inside_identity_jump_preserves_neutral_stop(monkeypatch, module):
+    flow = bare_flow(module)
+    def fail(**kwargs):
+        raise FinalCoverIdentityConflict("identity evidence before stop")
+    def jump(reason):
+        flow.context.tasker.stopping = True
+        raise InterruptedError("用户已停止任务")
+    flow.run_attempt = fail
+    flow.jump_after_startup_failure = jump
+    monkeypatch.setattr(module, "record_failure_reason", lambda _: pytest.fail("停止不记业务失败"))
+    with pytest.raises(InterruptedError):
+        flow.run()

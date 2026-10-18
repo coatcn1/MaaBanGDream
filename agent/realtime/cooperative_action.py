@@ -27,6 +27,8 @@ except ImportError:
     from screen_refresh import ScreenRefreshCancelled, capture_image
     from task_reporting import TaskProgress, record_failure_reason
 
+from .cooperative_friend import CooperativeFriendFlow
+from .cooperative_friend_ui import CooperativeFriendUIAdapter
 from .difficulty_action import RealtimeDifficultySelect
 from .game_effect_settings_action import _click as _maa_click
 from .vision_io import imread_unicode, imwrite_unicode
@@ -132,7 +134,7 @@ READY_DELIVERY_OBSERVE_SECONDS = 2.0
 COOPERATIVE_SONG_RANDOM_POINT = (782, 565)
 COOPERATIVE_SONG_UNSPECIFIED_POINT = (780, 647)
 COOPERATIVE_SONG_CONFIRM_POINT = (1068, 647)
-COOPERATIVE_SONG_CHOICES = ("unspecified", "random", "current")
+COOPERATIVE_SONG_CHOICES = ("unspecified", "random", "current", "manual")
 COOPERATIVE_SONG_CHOICE_PAUSE_SECONDS = 10.0
 ROOM_RECOVERY_TRIAL_ENV = "MAABANGDREAM_COOPERATIVE_ROOM_RECOVERY_TRIAL"
 ROOM_CONFIRM_POINT = (1060, 650)
@@ -270,7 +272,7 @@ def configure_cooperative_settings(params: dict[str, object]) -> dict[str, objec
         candidate["count"] = count
         song_choice = str(candidate.get("song_choice", "unspecified"))
         if song_choice not in COOPERATIVE_SONG_CHOICES:
-            raise ValueError("协力歌曲选择必须是 unspecified/random/current 之一")
+            raise ValueError("协力歌曲选择必须是 unspecified/random/current/manual 之一")
         candidate["song_choice"] = song_choice
         _SETTINGS.clear()
         _SETTINGS.update(candidate)
@@ -317,9 +319,9 @@ def cooperative_profile_preflight(context: Context, difficulty: str) -> str | No
 
 
 def should_stay_in_room(settings: dict[str, object]) -> bool:
-    """Only joined rooms can reuse the current room after a live."""
+    """私有房间的房主或成员可在演出后继续复用当前房间。"""
     return (
-        str(settings.get("entry_method", "normal")) in {"friend", "private"}
+        str(settings.get("entry_method", "normal")) in {"friend", "private", "host_invite_all"}
         and str(settings.get("post_live_action", "exit")) == "stay"
     )
 
@@ -351,6 +353,15 @@ def classify_room_tier(image: np.ndarray) -> str | None:
     return None
 
 
+def cooperative_task_id(argv) -> str | None:
+    """仅使用 MaaFramework 回调提供的稳定任务 ID。"""
+    value = getattr(getattr(argv, "task_detail", None), "task_id", None)
+    if value is None or isinstance(value, bool):
+        return None
+    text = str(value).strip()
+    return text if text and text != "0" else None
+
+
 class CooperativeLiveFlow:
     def __init__(
         self,
@@ -358,9 +369,12 @@ class CooperativeLiveFlow:
         settings: dict[str, object],
         *,
         progress_callback: Callable[[int, int], None] | None = None,
+        task_id: str | None = None,
     ) -> None:
         self.context = context
         self.settings = dict(settings)
+        self.task_id = task_id
+        self.friend_machine: CooperativeFriendFlow | None = None
         # 本次进程候选只在任务入口读取，避免导航中途改变重试语义。
         self.room_recovery_trial = os.environ.get(ROOM_RECOVERY_TRIAL_ENV) == "1"
         print(f"CooperativeLive room_recovery_trial={self.room_recovery_trial}", flush=True)
@@ -790,14 +804,28 @@ class CooperativeLiveFlow:
         if state is None:
             raise RuntimeError("点击房间搜索后未出现搜索方式弹窗")
 
+    def new_friend_machine(self, role: str) -> CooperativeFriendFlow:
+        task_id = getattr(self, "task_id", None)
+        if not isinstance(task_id, str) or not task_id.strip():
+            raise ValueError("好友房间操作缺少有效 MaaFramework 任务 ID")
+        return CooperativeFriendFlow(
+            CooperativeFriendUIAdapter(self, role=role), task_id=task_id
+        )
+
     def enter_friend_room(self) -> None:
-        self.open_room_search()
-        self.click((852, 528))
-        state, _ = self.wait_for(("friend_invite_title",), timeout=10.0)
-        if state is None:
-            raise RuntimeError("未进入好友邀请房间列表")
-        self.click((1038, 237))
-        self.verify_room_entry("好友邀请已失效、列表为空或未能进入房间")
+        self.friend_machine = self.new_friend_machine("guest")
+        self.friend_machine.join_friend_invitation(timeout_s=90.0)
+
+    def enter_host_room(self) -> None:
+        self.friend_machine = self.new_friend_machine("host")
+        self.friend_machine.host_invite_all(timeout_s=90.0, expected_members=2)
+        self.start_host_room()
+
+    def start_host_room(self) -> None:
+        machine = getattr(self, "friend_machine", None)
+        if machine is None:
+            raise RuntimeError("缺少本任务已确认的房主房间，不能复用")
+        machine.start_host_room(timeout_s=30.0, expected_members=2)
 
     def enter_private_room(self) -> None:
         code = str(self.settings.get("room_code", "")).strip()
@@ -821,6 +849,8 @@ class CooperativeLiveFlow:
             self.select_normal_room()
         elif method == "friend":
             self.enter_friend_room()
+        elif method == "host_invite_all":
+            self.enter_host_room()
         elif method == "private":
             self.enter_private_room()
         else:
@@ -847,7 +877,10 @@ class CooperativeLiveFlow:
         choice_deadline = (
             time.monotonic() + ROOM_SONG_CHOICE_TIMEOUT_SECONDS
         )
+        manual_wait_announced = False
         while time.monotonic() < choice_deadline:
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
             state, _ = self.wait_for(
                 ("song_unspecified", "ready_button"),
                 timeout=min(
@@ -863,6 +896,15 @@ class CooperativeLiveFlow:
                 song_choice = str(
                     getattr(self, "settings", {}).get("song_choice", "unspecified")
                 )
+                if song_choice == "manual":
+                    if not manual_wait_announced:
+                        print(
+                            "CooperativeLive 等待玩家手动选歌并确认；到达准备页后继续演出",
+                            flush=True,
+                        )
+                        manual_wait_announced = True
+                    time.sleep(min(0.1, max(0.0, choice_deadline - time.monotonic())))
+                    continue
                 if (
                     song_choice != "unspecified"
                     and getattr(self, "song_choice_pause_pending", False)
@@ -906,6 +948,8 @@ class CooperativeLiveFlow:
                 )
         if self.stopped():
             raise InterruptedError("用户已停止任务")
+        if str(getattr(self, "settings", {}).get("song_choice")) == "manual":
+            raise RoomPreparationTimeout("等待玩家手动选歌并确认180秒后仍未到达准备页")
         if getattr(self, "room_recovery_trial", False):
             raise RoomPreparationTimeout("进入协力房间后180秒内未出现不指定歌曲或准备页")
         self.jump_after_startup_failure(
@@ -1556,8 +1600,8 @@ class CooperativeLiveFlow:
 
     def stay_in_room(self) -> None:
         method = str(self.settings.get("entry_method", "normal"))
-        if method not in {"friend", "private"}:
-            raise ValueError("留在房间仅适用于好友邀请房间或房间号入房")
+        if method not in {"friend", "private", "host_invite_all"}:
+            raise ValueError("留在房间仅适用于创建并邀请好友、好友邀请或房间号入房")
         deadline = time.monotonic() + POST_SCORE_NAVIGATION_TIMEOUT_SECONDS
         result_back_attempts = 0
         while True:
@@ -1619,6 +1663,8 @@ class CooperativeLiveFlow:
         try:
             if not reuse_room:
                 self.enter_room()
+            elif str(self.settings.get("entry_method")) == "host_invite_all":
+                self.start_host_room()
             self.wait_for_preparation()
             self.prepare()
             success = self.play()
@@ -1822,8 +1868,28 @@ class CooperativeLiveFlow:
             except FinalCoverIdentityConflict as exc:
                 if self.stopped():
                     return True
-                # 实读身份硬冲突不是瞬时故障；保留现场，不消耗预算重新开局。
-                record_failure_reason(f"{type(exc).__name__}: {exc}")
+                # 身份硬冲突禁止重试或继续输入，但不能绕过启动失败的手动跳车提示。
+                reason = f"{type(exc).__name__}: {exc}"
+                try:
+                    self.jump_after_startup_failure(reason)
+                except InterruptedError:
+                    raise
+                except JumpOutUnavailable as jump_exc:
+                    if self.stopped():
+                        return True
+                    record_failure_reason(str(jump_exc))
+                except Exception as jump_error:
+                    if self.stopped():
+                        return True
+                    # 前后台切换自身失败时仍保留最初的身份原因，不能掩盖现场故障。
+                    record_failure_reason(
+                        f"{reason}；跳车切换失败：{type(jump_error).__name__}: "
+                        f"{jump_error}；请手动跳车"
+                    )
+                else:
+                    if self.stopped():
+                        return True
+                    record_failure_reason(reason)
                 return False
             except Exception as exc:
                 if self.stopped():
@@ -1975,6 +2041,10 @@ class CooperativeLiveFlow:
                     )
                     reuse_room = False
                     continue
+                if not is_last and str(self.settings.get("entry_method")) == "host_invite_all":
+                    self.friend_machine.begin_next_round(
+                        completed_round_token=f"{self.task_id}:completed:{completed}"
+                    )
                 reuse_room = True
             elif not is_last:
                 try:
@@ -2072,6 +2142,7 @@ class CooperativeLiveAction(CustomAction):
                 context,
                 settings,
                 progress_callback=report_progress,
+                task_id=cooperative_task_id(argv),
             ).run()
         except InterruptedError:
             return True
