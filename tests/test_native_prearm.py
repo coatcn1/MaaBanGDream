@@ -318,10 +318,11 @@ def test_experimental_options_only_enable_feedback_for_formal_modes(tmp_path, mo
         controller=SimpleNamespace(info={"adb_path": "adb", "adb_serial": "test"}),
         live_run=_confirmed_run(mode=mode), difficulty="Expert", project_root=tmp_path,
         runtime_options={"native_realtime_enabled": True, "native_life_feedback_enabled": True,
-                         "native_wait_jitter_filter_enabled": True},
+                         "native_wait_jitter_filter_enabled": True, "native_early_start_enabled": True},
         repository=_repository(chart),
         backend_factory=lambda *args, **kwargs: constructed.append(kwargs) or backend,
         manager=NativePrearmManager(timer_factory=TimerFactory()),
     )
     assert constructed[0]["life_feedback_enabled"] is enabled
     assert constructed[0]["wait_jitter_trial_enabled"] is True
+    assert constructed[0]["early_start_enabled"] is True

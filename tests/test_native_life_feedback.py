@@ -16,17 +16,18 @@ from agent.realtime.profile_store import RealtimeProfileStore
 from agent.realtime.timing_feedback import TimingFeedback
 
 
+@pytest.mark.parametrize("early", [False, True])
 @pytest.mark.parametrize("life", [False, True])
 @pytest.mark.parametrize("wait", [False, True])
-def test_settings_replace_roundtrip_and_frozen_run(tmp_path, life, wait):
+def test_settings_replace_roundtrip_and_frozen_run(tmp_path, life, wait, early):
     store = RealtimeProfileStore(tmp_path)
-    options = store.runtime_options() | {"native_life_feedback_enabled": life,
+    options = store.runtime_options() | {"native_early_start_enabled": early, "native_life_feedback_enabled": life,
                                         "native_wait_jitter_filter_enabled": wait}
     assert store.update_runtime_options(options) == options
     assert store.runtime_options() == options
     stale_reference = reset_live_run(mode="formal", difficulty="Expert")
     assert frozen_native_runtime_options(stale_reference, options) == options
-    changed = options | {"native_life_feedback_enabled": not life,
+    changed = options | {"native_early_start_enabled": not early, "native_life_feedback_enabled": not life,
                          "native_wait_jitter_filter_enabled": not wait}
     assert frozen_native_runtime_options(stale_reference, changed) == options
     assert frozen_native_runtime_options(current_live_run(), changed) == options
@@ -36,7 +37,7 @@ def test_settings_replace_roundtrip_and_frozen_run(tmp_path, life, wait):
     assert frozen_native_runtime_options(next_run, changed) == changed
 
 
-@pytest.mark.parametrize("key", ["native_life_feedback_enabled", "native_wait_jitter_filter_enabled"])
+@pytest.mark.parametrize("key", ["native_life_feedback_enabled", "native_wait_jitter_filter_enabled", "native_early_start_enabled"])
 @pytest.mark.parametrize("value", ["false", 0, 1, None])
 def test_new_options_are_strict_booleans(tmp_path, key, value):
     store = RealtimeProfileStore(tmp_path)

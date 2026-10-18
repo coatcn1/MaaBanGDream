@@ -24,7 +24,6 @@ from .runtime_flags import (
     native_timing_compensation_enabled,
     native_wait_jitter_trial_enabled,
     native_start_shape_trial_enabled,
-    native_early_start_trial_enabled,
 )
 
 
@@ -914,6 +913,7 @@ class NativeMinitouchBackend:
         timing_trial_enabled: bool | None = None,
         wait_jitter_trial_enabled: bool | None = None,
         life_feedback_enabled: bool = False,
+        early_start_enabled: bool = False,
     ) -> None:
         if not native_engine.available():
             raise RuntimeError(
@@ -1050,7 +1050,7 @@ class NativeMinitouchBackend:
         self._state = "idle"
         self._early_start_trial_requested = (
             str(start_gate_mode).strip().lower() in ("cooperative", "versus")
-            and native_early_start_trial_enabled()
+            and early_start_enabled
         )
         self._first_read_delay_s = 0.004
         self._first_action_anchor_s: float | None = None
