@@ -5,6 +5,7 @@ from .optional_diagnostics import safe_print as print, safe_traceback
 
 import json
 import os
+import subprocess
 import threading
 import time
 import traceback
@@ -53,7 +54,9 @@ from .final_cover import (
 from .startup_diagnostics import CooperativeStartupRecorder, cover_diagnostic
 from .room_song_entry import (RoomEntryEvidence, RoomEntryTransient, guarded_song_choice_click,
                               select_song_and_wait, rematch_backoff, wait_for_preplay_recovery_page,
-                              check_preplay_connection_failed, retry_connection_failed)
+                              check_preplay_connection_failed,
+                              wait_for_connection_retry, CONNECT_FAILED_TIMEOUT_S,
+                              CONNECT_FAILED_RETRY_POINT)
 from .profile_play_action import RealtimeProfilePlay
 from .profile_store import (
     EnvironmentSignature,
@@ -63,7 +66,7 @@ from .profile_store import (
 from .rehearsal_action import frame_resolution
 from .native_prearm import discard_prearmed_backend
 from .stamina_task import (prepare_stamina_round, allocate_flow_home, mark_uncertain, mark_stamina_settled, StaminaTaskError)
-from .cooperative_network import GameNetworkGate, UidBlackholeGate, run_network_shell
+from .cooperative_network import (GameNetworkGate, UidBlackholeGate, run_network_shell, resolve_game_uid)
 from .result_navigation import (
     RESULT_ANIMATION_SKIP_POINT,
     accelerated_back,
@@ -96,6 +99,8 @@ TEMPLATE_POSITIONS = {
     # 跳车：真实弹窗正文（2026-09-07 雷电录像提取）。
     "disconnect_continue_body": (488, 313),
     "disconnect_confirm_body": (495, 307),
+    # 「连接失败」弹窗右下角的 NOW LOADING 框；存在时游戏仍在重连。
+    "now_loading": (865, 620),
 }
 
 DEFAULT_SETTINGS: dict[str, object] = {
@@ -111,6 +116,9 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "diagnostic_trace": True,
     "opening_recording": False,
     "disconnect_jump_enabled": False,
+    # 自动断网跳车：仅在 disconnect_jump_enabled 开启且引擎已启动时生效。
+    "auto_disconnect_jump": False,
+    "auto_jump_continue": False,
     "song_choice": "unspecified",
 }
 _SETTINGS = dict(DEFAULT_SETTINGS)
@@ -138,6 +146,8 @@ HOME_LIVE_POINT = (1175, 645)
 # 弹窗2“确认中断当前演出返回主页吗？”点右侧粉色“中断”。
 DISCONNECT_CONTINUE_INTERRUPT_POINT = (508, 447)
 DISCONNECT_CONFIRM_INTERRUPT_POINT = (754, 439)
+# 自动断网跳车连续触发上限：连续两局都触发后，第二局跳完回主页并结束任务。
+AUTO_JUMP_STREAK_LIMIT = 2
 READY_DELIVERY_OBSERVE_SECONDS = 2.0
 # 选曲页坐标沿用贡献者的 1280×720 标定；默认仍选择不指定歌曲。
 COOPERATIVE_SONG_RANDOM_POINT = (782, 565)
@@ -260,6 +270,10 @@ class MemberExited(RuntimeError):
 
 class JumpOutUnavailable(RuntimeError):
     """协力局已安全跳车或无法继续自动恢复，应立即结束任务。"""
+
+
+class RoundContinued(RuntimeError):
+    """生命归零已自动断网跳车，外层应回到房间选择页继续下一局。"""
 
 
 class RoomPreparationTimeout(RoomEntryTransient):
@@ -582,12 +596,27 @@ class CooperativeLiveFlow:
                 raise InterruptedError("用户已停止任务")
             time.sleep(0.8)
 
-    def dismiss_connect_failed(self, attempts: int = 5) -> bool:
-        return retry_connection_failed(self, attempts)
+    def dismiss_connect_failed(
+        self, timeout: float = CONNECT_FAILED_TIMEOUT_S
+    ) -> bool:
+        return wait_for_connection_retry(self, timeout=timeout)
 
     def _adb_shell(self, args) -> tuple[int, str]:
         """核验本次 Maa 作业和远端退出码后再返回网络命令结果。"""
         return run_network_shell(self.controller, args)
+
+    def _wait_for_template(
+        self, name: str, timeout: float, threshold: float = 0.90
+    ) -> bool:
+        """只等待模板出现，不发送输入；断网期间等「连接失败」弹窗用。"""
+        deadline = time.monotonic() + float(timeout)
+        while time.monotonic() < deadline:
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
+            if self.visible(self.capture(), name, threshold):
+                return True
+            time.sleep(0.35)
+        return False
 
     def _wait_and_click(
         self,
@@ -687,15 +716,22 @@ class CooperativeLiveFlow:
                     flush=True,
                 )
                 return False
-            # 先恢复网络，再对“连接失败。”做有界重试；网络隔离状态下点重试
-            # 无效是游戏正常表现。
+            # 继续保持断网，直到「连接失败」弹窗出现。提前恢复网络会被游戏
+            # 判定为中途退出并施加功能限制（2026-10-23 真机实测）。
+            if not self._wait_for_template("connect_failed_body", 30.0):
+                print(
+                    "CooperativeDisconnectJump connect_failed_timeout=true",
+                    flush=True,
+                )
+                return False
+            # 弹窗已出现，此时才恢复网络；恢复后再点“重试”。
             if not gate.restore():
                 print(
                     "CooperativeDisconnectJump network_restore_failed=true",
                     flush=True,
                 )
                 return False
-            time.sleep(0.8)
+            time.sleep(0.3)
             self.dismiss_connect_failed()
             print("CooperativeDisconnectJump completed=true", flush=True)
             return True
@@ -1388,6 +1424,39 @@ class CooperativeLiveFlow:
         )
         raise JumpOutUnavailable(reason)
 
+    def auto_disconnect_jump(self, reason: str) -> str | None:
+        """引擎已启动后的自动断网跳车。
+
+        返回 ``"continue"`` 表示跳车成功且可以继续下一局；``"stop"`` 表示
+        跳车完成但应结束任务；``None`` 表示未启用或跳车失败，调用方走原有
+        的手动跳车路径。
+        """
+        if not bool(self.settings.get("auto_disconnect_jump", False)):
+            return None
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
+        streak = int(getattr(self, "_auto_jump_streak", 0))
+        print(
+            "CooperativeLive auto_jump=start "
+            f"streak={streak}/{AUTO_JUMP_STREAK_LIMIT} reason={reason}",
+            flush=True,
+        )
+        if not self.disconnect_jump_out():
+            print("CooperativeLive auto_jump=failed", flush=True)
+            return None
+        self._auto_jump_streak = streak + 1
+        print(
+            "CooperativeLive auto_jump=completed "
+            f"streak={self._auto_jump_streak}/{AUTO_JUMP_STREAK_LIMIT}",
+            flush=True,
+        )
+        if (
+            self._auto_jump_streak >= AUTO_JUMP_STREAK_LIMIT
+            or not bool(self.settings.get("auto_jump_continue", False))
+        ):
+            return "stop"
+        return "continue"
+
     def jump_after_download_timeout(self) -> None:
         reason = "成员下载超过60秒仍未进入演出，已退后台并尝试返回游戏"
         self.jump_after_startup_failure(reason)
@@ -1418,8 +1487,15 @@ class CooperativeLiveFlow:
             raise InterruptedError("用户已停止任务")
         run = current_live_run()
         if run is not None and bool(run.disconnect_jump_requested):
-            # 生命归零：不再自动跳车（门禁/弹窗在不同设备上不可靠）。
-            # 回主页 → 切回游戏 → 直接结束任务，提示用户手动跳车。
+            # 生命归零：先按「跳车」选项尝试自动断网跳车。关闭或跳车失败时
+            # 回退旧路径（回主页 → 切回游戏 → 结束任务，提示手动跳车）。
+            auto_result = self.auto_disconnect_jump("生命归零")
+            if auto_result == "continue":
+                raise RoundContinued("生命归零；自动断网跳车完成，继续下一局")
+            if auto_result == "stop":
+                raise JumpOutUnavailable(
+                    "生命归零；自动断网跳车完成，任务结束"
+                )
             self.controller.post_click_key(3).wait()
             time.sleep(0.6)
             if self.stopped():
@@ -1747,6 +1823,11 @@ class CooperativeLiveFlow:
             mark_uncertain(getattr(self, "stamina_argv", None))
             outcome = "stopped" if self.stopped() else "startup-failed"
             raise
+        except RoundContinued:
+            # 本局已开演，体力已经消耗；继续下一局前必须保留未决记录。
+            mark_uncertain(getattr(self, "stamina_argv", None))
+            outcome = "auto-jump-continue"
+            raise
         except FinalCoverStartupFailure:
             mark_uncertain(getattr(self, "stamina_argv", None))
             # 已定性的启动失败不能再凭另一张弹窗截图转换成成员退出或重连。
@@ -1884,6 +1965,31 @@ class CooperativeLiveFlow:
         reuse_room = False
         play_failures = 0
         room_timeouts = 0
+        # 自动断网跳车的连续触发计数按任务重置。
+        self._auto_jump_streak = 0
+        # 任务入口控制器空闲，先解析并缓存游戏 UID；引擎停止后再解析会失败。
+        try:
+            self._game_uid = resolve_game_uid(self._adb_shell)
+        except Exception as exc:  # noqa: BLE001 - 解析失败退回跳车时重试
+            self._game_uid = None
+            print(
+                "CooperativeLive game_uid_resolve_warning="
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+        if self._game_uid is None:
+            print("CooperativeLive game_uid_resolve=failed", flush=True)
+        try:
+            # 清理上次崩溃可能遗留的 uidrange 规则，避免游戏一直没网。
+            UidBlackholeGate(
+                self._adb_shell, uid=self._game_uid
+            ).cleanup_stale()
+        except Exception as exc:  # noqa: BLE001 - 清理失败不能阻断任务
+            print(
+                "CooperativeLive network_cleanup_warning="
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
         retry_count = max(
             0,
             min(99, int(self.settings.get("play_failure_retry_count", 0))),
@@ -1925,6 +2031,27 @@ class CooperativeLiveFlow:
                 reconnects = next_reconnects
                 rematch_backoff(self, reconnects)
                 reuse_room = False
+                continue
+            except RoundContinued as exc:
+                if self.stopped():
+                    return True
+                # 自动断网跳车已回到主页；失败局不计数，导航回房间后继续。
+                play_failures = 0
+                reuse_room = False
+                print(
+                    f"CooperativeLive auto_jump=continue_round reason={exc}",
+                    flush=True,
+                )
+                try:
+                    self.navigate_to_cooperative_room_selection("auto-jump")
+                except InterruptedError:
+                    raise
+                except Exception as nav_exc:
+                    record_failure_reason(
+                        "自动跳车后返回协力房间失败："
+                        f"{type(nav_exc).__name__}: {nav_exc}"
+                    )
+                    return False
                 continue
             except JumpOutUnavailable as exc:
                 if self.stopped():
@@ -2063,6 +2190,8 @@ class CooperativeLiveFlow:
             completed += 1
             self._stamina_remaining = None if total == 0 else total-completed
             play_failures = 0
+            # 正常完成一局证明环境恢复，连续跳车计数清零。
+            self._auto_jump_streak = 0
             reconnects = 0
             room_timeouts = 0
             callback = getattr(self, "progress_callback", None)

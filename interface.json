@@ -950,7 +950,9 @@
           "pipeline_override": {
             "CooperativeDisconnectJumpConfigure": {
               "custom_action_param": {
-                "disconnect_jump_enabled": false
+                "disconnect_jump_enabled": false,
+                "auto_disconnect_jump": false,
+                "auto_jump_continue": false
               }
             }
           }
@@ -961,13 +963,41 @@
           "pipeline_override": {
             "CooperativeDisconnectJumpConfigure": {
               "custom_action_param": {
-                "disconnect_jump_enabled": true
+                "disconnect_jump_enabled": true,
+                "auto_disconnect_jump": false,
+                "auto_jump_continue": false
+              }
+            }
+          }
+        },
+        {
+          "name": "AutoEnd",
+          "label": "自动断网跳车（跳完结束任务）",
+          "pipeline_override": {
+            "CooperativeDisconnectJumpConfigure": {
+              "custom_action_param": {
+                "disconnect_jump_enabled": true,
+                "auto_disconnect_jump": true,
+                "auto_jump_continue": false
+              }
+            }
+          }
+        },
+        {
+          "name": "AutoContinue",
+          "label": "自动断网跳车并继续任务",
+          "pipeline_override": {
+            "CooperativeDisconnectJumpConfigure": {
+              "custom_action_param": {
+                "disconnect_jump_enabled": true,
+                "auto_disconnect_jump": true,
+                "auto_jump_continue": true
               }
             }
           }
         }
       ],
-      "description": "开启后生命归零将停止输入，返回桌面再切回游戏并结束任务；请手动跳车。关闭时继续演奏和结算。"
+      "description": "开启后生命归零将停止输入，返回桌面再切回游戏。手动模式请手动跳车；自动模式按游戏 UID 断网并自动完成中断流程（需要模拟器 root；MuMu 走 uidrange，其它模拟器回退 iptables），连续触发 2 局后第 2 次跳完回主页并结束任务。关闭时继续演奏和结算。"
     },
     "VersusRoomType": {
       "type": "select",
@@ -1243,7 +1273,9 @@
           "pipeline_override": {
             "VersusDisconnectJumpConfigure": {
               "custom_action_param": {
-                "disconnect_jump_enabled": false
+                "disconnect_jump_enabled": false,
+                "auto_disconnect_jump": false,
+                "auto_jump_continue": false
               }
             }
           }
@@ -1254,13 +1286,41 @@
           "pipeline_override": {
             "VersusDisconnectJumpConfigure": {
               "custom_action_param": {
-                "disconnect_jump_enabled": true
+                "disconnect_jump_enabled": true,
+                "auto_disconnect_jump": false,
+                "auto_jump_continue": false
+              }
+            }
+          }
+        },
+        {
+          "name": "AutoEnd",
+          "label": "自动断网跳车（跳完结束任务）",
+          "pipeline_override": {
+            "VersusDisconnectJumpConfigure": {
+              "custom_action_param": {
+                "disconnect_jump_enabled": true,
+                "auto_disconnect_jump": true,
+                "auto_jump_continue": false
+              }
+            }
+          }
+        },
+        {
+          "name": "AutoContinue",
+          "label": "自动断网跳车并继续任务",
+          "pipeline_override": {
+            "VersusDisconnectJumpConfigure": {
+              "custom_action_param": {
+                "disconnect_jump_enabled": true,
+                "auto_disconnect_jump": true,
+                "auto_jump_continue": true
               }
             }
           }
         }
       ],
-      "description": "开启后生命归零将停止输入，返回桌面再切回游戏并结束任务；请手动跳车。关闭时继续演奏和结算。"
+      "description": "开启后生命归零将停止输入，返回桌面再切回游戏。手动模式请手动跳车；自动模式按游戏 UID 断网并自动完成中断流程（需要模拟器 root；MuMu 走 uidrange，其它模拟器回退 iptables），连续触发 2 局后第 2 次跳完回主页并结束任务。关闭时继续演奏和结算。"
     },
     "ManualFlowRecordingQuality": {
       "type": "select",

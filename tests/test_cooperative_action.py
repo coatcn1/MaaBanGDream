@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 import agent.realtime.cooperative_action as cooperative_action
+import agent.realtime.room_song_entry as room_song_entry
 from agent.realtime.cooperative_action import (
     COOPERATIVE_DIFFICULTY_TARGETS,
     DISCONNECT_CONFIRM_INTERRUPT_POINT,
@@ -74,6 +75,134 @@ def test_room_entry_never_reclicks_after_selection_departure(monkeypatch):
     monkeypatch.setattr(cooperative_action.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
     flow.verify_room_entry("timeout", confirm_point=cooperative_action.ROOM_CONFIRM_POINT)
     assert clock[0] == 12.25
+
+
+def test_connect_failed_waits_for_now_loading_before_retry(monkeypatch):
+    """NOW LOADING 存在时不能点重试；框消失后才点。"""
+    clock = [0.0]
+    flow = _bare_flow()
+    flow.capture = lambda: "frame"
+    state = {"loading": True, "popup": True}
+
+    def visible(_image, name, *args):
+        if name == "connect_failed_body":
+            return state["popup"]
+        if name == "now_loading":
+            return state["loading"]
+        return False
+
+    flow.visible = visible
+    clicks = []
+
+    def click(point):
+        clicks.append((round(clock[0], 2), point))
+        state["popup"] = False
+
+    flow.click = click
+
+    def sleep(seconds):
+        clock[0] += seconds
+        if clock[0] >= 2.0:
+            state["loading"] = False
+
+    monkeypatch.setattr(room_song_entry.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(room_song_entry.time, "sleep", sleep)
+
+    assert flow.dismiss_connect_failed(timeout=10) is True
+    assert clicks and clicks[0][0] >= 2.0
+    assert clicks[0][1] == cooperative_action.CONNECT_FAILED_RETRY_POINT
+
+
+def test_connect_failed_clicks_twice_when_loading_stays_absent(monkeypatch):
+    """加载框不出现时，每个可点窗口点两次。"""
+    clock = [0.0]
+    flow = _bare_flow()
+    flow.capture = lambda: "frame"
+    state = {"popup": True}
+    flow.visible = lambda _image, name, *args: (
+        state["popup"] if name == "connect_failed_body" else False
+    )
+    clicks = []
+
+    def click(point):
+        clicks.append(point)
+        if len(clicks) >= 2:
+            state["popup"] = False
+
+    flow.click = click
+    monkeypatch.setattr(room_song_entry.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        room_song_entry.time,
+        "sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+
+    assert flow.dismiss_connect_failed(timeout=10) is True
+    assert clicks == [
+        cooperative_action.CONNECT_FAILED_RETRY_POINT,
+        cooperative_action.CONNECT_FAILED_RETRY_POINT,
+    ]
+
+
+def test_connect_failed_times_out_while_loading_persists(monkeypatch):
+    """加载框一直不消失时只等待、不点击，最终返回失败。"""
+    clock = [0.0]
+    flow = _bare_flow()
+    flow.capture = lambda: "frame"
+    flow.visible = lambda _image, name, *args: name in {
+        "connect_failed_body",
+        "now_loading",
+    }
+    clicks = []
+    flow.click = clicks.append
+    monkeypatch.setattr(room_song_entry.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        room_song_entry.time,
+        "sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+
+    assert flow.dismiss_connect_failed(timeout=2.0) is False
+    assert clicks == []
+
+
+def test_auto_disconnect_jump_disabled_does_nothing():
+    flow = _bare_flow()
+    flow.settings.update(auto_disconnect_jump=False)
+    flow.disconnect_jump_out = lambda: pytest.fail("未启用时不能跳车")
+    assert flow.auto_disconnect_jump("reason") is None
+
+
+def test_auto_disconnect_jump_continue_then_stop_at_limit():
+    flow = _bare_flow()
+    flow.settings.update(auto_disconnect_jump=True, auto_jump_continue=True)
+    flow._auto_jump_streak = 0
+    calls = []
+    flow.disconnect_jump_out = lambda: (calls.append(True) or True)
+
+    assert flow.auto_disconnect_jump("first") == "continue"
+    assert flow.auto_disconnect_jump("second") == "stop"
+    assert len(calls) == 2
+    assert flow._auto_jump_streak == cooperative_action.AUTO_JUMP_STREAK_LIMIT
+
+
+def test_auto_disconnect_jump_end_mode_stops_on_first_trigger():
+    flow = _bare_flow()
+    flow.settings.update(auto_disconnect_jump=True, auto_jump_continue=False)
+    flow._auto_jump_streak = 0
+    flow.disconnect_jump_out = lambda: True
+
+    assert flow.auto_disconnect_jump("reason") == "stop"
+
+
+def test_auto_disconnect_jump_failure_falls_back_without_counting():
+    flow = _bare_flow()
+    flow.settings.update(auto_disconnect_jump=True, auto_jump_continue=True)
+    flow._auto_jump_streak = 0
+    flow.disconnect_jump_out = lambda: False
+
+    assert flow.auto_disconnect_jump("reason") is None
+    assert flow._auto_jump_streak == 0
 
 
 def test_room_preparation_trial_raises_after_180_seconds_without_jump(monkeypatch):
@@ -342,6 +471,7 @@ def test_disconnect_jump_out_switches_dismisses_and_restores(monkeypatch):
         visible_results={
             "disconnect_continue_body": True,
             "disconnect_confirm_body": True,
+            "connect_failed_body": True,
         },
         gate_block=True,
     )
@@ -403,6 +533,7 @@ def test_disconnect_jump_out_falls_back_to_iptables_owner(monkeypatch):
         visible_results={
             "disconnect_continue_body": True,
             "disconnect_confirm_body": True,
+            "connect_failed_body": True,
         },
         gate_block=False,
         block_results=[False, True],
@@ -413,6 +544,34 @@ def test_disconnect_jump_out_falls_back_to_iptables_owner(monkeypatch):
     assert gates[1].restored == 2
     assert controller.keys == [3]
     assert dismiss_calls == [True]
+
+
+def test_disconnect_jump_out_keeps_network_blocked_until_connect_failed(
+    monkeypatch,
+):
+    """必须等「连接失败」弹窗出现才恢复网络，提前恢复会被游戏处罚。"""
+    flow, controller, clicks, dismiss_calls, gates = _fake_jump_flow(
+        monkeypatch,
+        templates={
+            "disconnect_continue_body": np.zeros((10, 10, 3), dtype=np.uint8),
+            "disconnect_confirm_body": np.zeros((10, 10, 3), dtype=np.uint8),
+        },
+        visible_results={
+            "disconnect_continue_body": True,
+            "disconnect_confirm_body": True,
+            # connect_failed_body 始终不可见
+        },
+        gate_block=True,
+    )
+    # 把等待窗口缩短，避免测试真的等 30 秒。
+    monkeypatch.setattr(
+        flow,
+        "_wait_for_template",
+        lambda name, timeout, threshold=0.9: False,
+    )
+    assert flow.disconnect_jump_out() is False
+    assert gates[0].restored == 1  # 只有 finally 的恢复
+    assert dismiss_calls == []
 
 
 def test_disconnect_jump_out_restores_network_when_popup_times_out(
@@ -1407,15 +1566,27 @@ def test_cooperative_interface_exposes_requested_modes_and_five_difficulties():
         }
     assert [
         case["name"] for case in options["CooperativeDisconnectJump"]["cases"]
-    ] == ["Off", "On"]
+    ] == ["Off", "On", "AutoEnd", "AutoContinue"]
     assert (
         options["CooperativeDisconnectJump"]["cases"][1]["pipeline_override"]
         == {
             "CooperativeDisconnectJumpConfigure": {
-                "custom_action_param": {"disconnect_jump_enabled": True}
+                "custom_action_param": {
+                    "disconnect_jump_enabled": True,
+                    "auto_disconnect_jump": False,
+                    "auto_jump_continue": False,
+                }
             }
         }
     )
+    auto_case = options["CooperativeDisconnectJump"]["cases"][3][
+        "pipeline_override"
+    ]["CooperativeDisconnectJumpConfigure"]["custom_action_param"]
+    assert auto_case == {
+        "disconnect_jump_enabled": True,
+        "auto_disconnect_jump": True,
+        "auto_jump_continue": True,
+    }
     assert set(COOPERATIVE_DIFFICULTY_TARGETS) == {
         "Easy", "Normal", "Hard", "Expert", "Special",
     }
@@ -1530,6 +1701,7 @@ def test_cooperative_templates_are_deployed_and_nonempty():
         "sss_guide_close.png",
         "disconnect_continue_body.png",
         "disconnect_confirm_body.png",
+        "now_loading.png",
     }
     assert required == {path.name for path in image_dir.glob("*.png")}
     assert all(
