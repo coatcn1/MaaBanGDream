@@ -152,7 +152,7 @@ def setup_route(monkeypatch, tmp_path, selection_params, options):
             song_id="song-48", song_id_method="mock"), observed_title=None)))
     monkeypatch.setattr(profile_play_action, "resolve_profile", lambda *_args, **_kwargs: settings)
     monkeypatch.setattr(profile_play_action, "require_game_foreground", lambda _: None)
-    monkeypatch.setattr(profile_play_action, "debug_enabled", lambda: False)
+    monkeypatch.setattr(profile_play_action, "debug_recording_enabled", lambda _argv: False)
     monkeypatch.setattr(profile_play_action, "diagnostic_trace_enabled", lambda: False)
     monkeypatch.setattr(profile_play_action, "ControllerTouchDispatcher", lambda *_args, **_kwargs: SimpleNamespace(close=lambda: None))
     assert difficulty_action.RealtimeDifficultySelect().run(

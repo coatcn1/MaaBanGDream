@@ -191,8 +191,7 @@ def test_segmented_settings_merge_without_overwriting_other_choices():
     settings = configure_medley_settings({
         "difficulty": "Special",
         "count": 3,
-        "debug_recording": True,
-    })
+        "debug_recording": True, "opening_recording": False})
 
     assert settings == {
         "tour_type": "free",
@@ -200,8 +199,7 @@ def test_segmented_settings_merge_without_overwriting_other_choices():
         "difficulty": "Special",
         "count": 3,
         "debug_recording": True,
-        "diagnostic_trace": True,
-    }
+        "diagnostic_trace": True, "opening_recording": False}
     with pytest.raises(ValueError, match="巡演类型"):
         configure_medley_settings({"tour_type": "invalid"})
     settings = configure_medley_settings({"count": 6})
@@ -411,8 +409,7 @@ def test_free_current_song_selects_only_difficulty_and_allows_duplicate_slots(
     flow.settings = {
         "song_mode": "current",
         "difficulty": "Expert",
-        "debug_recording": False,
-    }
+        "debug_recording": False, "opening_recording": False}
     flow.context = object()
     flow.repository = object()
     flow.profile_store = object()
@@ -494,7 +491,7 @@ def test_unopened_free_song_never_sends_random_or_difficulty_input(monkeypatch):
     clicks = []
     evidence = []
     flow = _bare_flow()
-    flow.settings = {"song_mode": "random", "difficulty": "Hard", "debug_recording": False}
+    flow.settings = {"song_mode": "random", "difficulty": "Hard", "debug_recording": False, "opening_recording": False}
     flow.click = clicks.append
     flow.capture = lambda: image
     flow.wait = lambda seconds: clock.__setitem__(0, clock[0] + seconds)
@@ -722,7 +719,7 @@ def test_medley_build_confirm_activate_keeps_pending_identity_isolated(
         title_source="preparation",
     )
     flow = _bare_flow()
-    flow.settings = {"debug_recording": False}
+    flow.settings = {"debug_recording": False, "opening_recording": False}
     flow.read_preparation_song = lambda _index, _image, **_kwargs: observed
     monkeypatch.setattr(medley_action, "detect_medley_stage", lambda _image: 1)
 
@@ -812,7 +809,7 @@ def test_play_requires_final_cover_title_when_earlier_reads_failed(monkeypatch):
         title_confidence=0.0,
     )
     flow = _bare_flow()
-    flow.settings = {"debug_recording": False, "diagnostic_trace": True}
+    flow.settings = {"debug_recording": False, "diagnostic_trace": True, "opening_recording": False}
     flow.context = SimpleNamespace(
         tasker=SimpleNamespace(stopping=False),
     )
@@ -900,7 +897,7 @@ def test_play_failure_reads_life_depletion_from_engine_error_report(
     )
     flow = _bare_flow()
     flow.outer_task_id = 101
-    flow.settings = {"debug_recording": False, "diagnostic_trace": False}
+    flow.settings = {"debug_recording": False, "diagnostic_trace": False, "opening_recording": False}
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
     failed_song = song(1)
     flow.run_preflight = lambda _song, _image: (failed_song, False)
@@ -1157,8 +1154,7 @@ def test_free_random_clicks_random_without_reading_identity(monkeypatch):
     flow.settings = {
         "song_mode": "random",
         "difficulty": "Special",
-        "debug_recording": False,
-    }
+        "debug_recording": False, "opening_recording": False}
     flow.context = object()
     flow.repository = object()
     flow.profile_store = object()
@@ -1354,17 +1350,23 @@ def test_medley_quit_cancel_confirms_home_without_sending_more_back():
 def test_medley_navigation_checks_quit_popup_before_live_entry(monkeypatch):
     events = []
     flow = _bare_flow()
+    flow.settings = {"count": 3}
+    detail = SimpleNamespace(task_id=200000001)
+    flow.argv = SimpleNamespace(task_detail=detail)
+    received = []
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
     flow.capture = lambda: object()
     flow.dismiss_quit_confirm = lambda image: events.append("check-modal") or True
     flow.click = lambda point: events.append("click-live")
     flow.wait = lambda seconds: None
     monkeypatch.setattr(medley_action, "LiveSelectFind", lambda: SimpleNamespace(
-        run=lambda *_args: events.append("find-tour") or True,
+        run=lambda _context, argv: received.append(argv.task_detail) or events.append("find-tour") or True,
     ))
 
     flow.navigate_to_tour()
     assert events == ["check-modal", "click-live", "find-tour"]
+
+    assert received == [detail]
 
 
 def test_medley_failed_live_recovery_uses_dedicated_two_stage_nodes(monkeypatch):
@@ -2715,3 +2717,92 @@ def test_wait_does_not_pass_negative_duration_when_deadline_is_crossed(
     flow.wait(0.35)
 
     assert sleeps == pytest.approx([0.01])
+
+
+@pytest.mark.parametrize("failure_at", ["start", "update", "update_song", "supersede"])
+def test_session_disk_failure_keeps_same_task_memory_and_never_creates_resume(tmp_path, monkeypatch, failure_at):
+    store = MedleySessionStore(tmp_path / "sessions")
+    settings = {"tour_type": "free", "song_mode": "random", "difficulty": "Expert"}
+    session = None
+    if failure_at != "start":
+        session = store.start(settings=settings, songs=(song(1), song(2), song(3)), outer_task_id=911)
+    original = Path.write_text
+    def fail(path, *args, **kwargs):
+        if path.name.endswith(".json.tmp"):
+            raise PermissionError("session disk blocked")
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "write_text", fail)
+    if failure_at == "start":
+        session = store.start(settings=settings, songs=(song(1), song(2), song(3)), outer_task_id=911)
+        assert not list(store.root.glob("*.json"))
+    elif failure_at == "update":
+        store.update(session, completed_songs=2, stage="ready-3")
+        assert store.latest("free")["completed_songs"] == 2
+    elif failure_at == "update_song":
+        changed = replace(song(2), title="changed")
+        store.update_song(session, changed)
+        assert store.latest("free")["songs"][1]["title"] == "changed"
+    else:
+        store.update(session, status="superseded")
+        assert store.latest("free") is None
+    assert session["outer_task_id"] == 911
+    # 新实例只能读取实际落盘的数据，不能跨进程借用旧实例的内存完成凭据。
+    reloaded = MedleySessionStore(store.root).latest("free")
+    if failure_at == "start":
+        assert reloaded is None
+    elif reloaded is not None:
+        assert reloaded["completed_songs"] == 0
+
+
+def test_initial_progress_notification_false_keeps_local_count():
+    flow = _bare_flow()
+    flow.settings = {"count": 9}
+    flow.progress = lambda phase: False
+    flow.initialise_progress(6, next_started=True)
+    assert flow._progress_completed == 6
+
+
+@pytest.mark.parametrize("report_error", [False, True])
+def test_retry_progress_failure_keeps_group_counter_and_budget(monkeypatch, report_error):
+    flow = _bare_flow()
+    flow._play_failure_retries = 0
+    flow._play_failure_retry_limit = 1
+    flow.sessions = SimpleNamespace(update=lambda session, **changes: session.update(changes) or session)
+    flow.restore_progress = lambda count: (_ for _ in ()).throw(OSError("report")) if report_error else False
+    flow.recover_home = lambda: None
+    monkeypatch.setattr(medley_action, "discard_prearmed_backend", lambda reason: None)
+    monkeypatch.setattr(medley_action, "append_current_run_event", lambda *args, **kwargs: None)
+    failure = medley_action.MedleyPlayFailure(song_index=2, report_path="report.json",
+        reason="life_failed", result_status="life_failed", retryable=True)
+    session = {"completed_before_round": 6, "completed_songs": 1}
+    assert flow.retry_failed_round(session, failure) is True
+    assert flow._next_round_completed == flow._progress_completed == 6
+    assert flow._play_failure_retries == 1
+    assert session["status"] == "superseded"
+
+
+def test_replace_failure_preserves_old_json_and_isolates_new_session_memory(tmp_path, monkeypatch):
+    store = MedleySessionStore(tmp_path / "sessions")
+    settings = {"tour_type": "free", "song_mode": "random", "difficulty": "Expert"}
+    previous = store.start(settings=settings, songs=(song(1), song(2), song(3)), outer_task_id=101)
+    old_bytes = previous["_path"].read_bytes()
+    monkeypatch.setattr(medley_action.os, "replace", lambda *args: (_ for _ in ()).throw(PermissionError("replace-blocked")))
+    current = store.start(settings=settings, songs=(song(1), song(2), song(3)), outer_task_id=202)
+    assert previous["_path"].read_bytes() == old_bytes
+    assert store.latest("free") is current
+    reloaded = MedleySessionStore(store.root).latest("free")
+    assert reloaded["outer_task_id"] == 101
+    assert reloaded["session_id"] != current["session_id"]
+    assert not session_matches_outer_task(reloaded, 202)
+    assert not current["_path"].exists()
+
+
+def test_session_memory_retains_only_latest_tour_during_long_running_disk_failure(tmp_path, monkeypatch):
+    store = MedleySessionStore(tmp_path / "sessions")
+    settings = {"tour_type": "free", "song_mode": "random", "difficulty": "Expert"}
+    monkeypatch.setattr(medley_action.os, "replace", lambda *args: (_ for _ in ()).throw(PermissionError("disk")))
+    for index in range(20):
+        session = store.start(settings=settings, songs=(song(1), song(2), song(3)), outer_task_id=303)
+        store.update(session, status="completed", completed_songs=3)
+    assert len(store._memory_sessions) == 1
+    assert store.latest("free") is None

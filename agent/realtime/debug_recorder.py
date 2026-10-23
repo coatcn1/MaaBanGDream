@@ -23,6 +23,7 @@ from .vision_io import imwrite_unicode
 _SENTINEL = None
 _RECORD_QUEUE_CAPACITY = 12
 _VIDEO_QUEUE_CAPACITY = 12
+_OPENING_EVENT_CAPACITY = 64
 _LIFECYCLE_LOCK = threading.Lock()
 
 
@@ -95,6 +96,7 @@ class RealtimeDebugRecorder:
         session_metadata: Mapping[str, object] | None = None,
         close_timeout_seconds: float = 2.0,
         session_kind: str = "realtime",
+        opening_seconds: float | None = None,
     ) -> None:
         # 目录名带演奏类型（单人正式/单人排练/协力/挑战/校准等），便于
         # 直接区分录像来源；重试可能在同一秒重新建包，微秒后缀避免诊断
@@ -104,7 +106,31 @@ class RealtimeDebugRecorder:
         self.output_dir = root / f"{kind}-{stamp}"
         self.output_dir.mkdir(parents=True, exist_ok=False)
         self.video_fps = video_fps
-        self.video_enabled = bool(video_enabled)
+        self.video_enabled = bool(video_enabled) and opening_seconds is None
+        self.opening_seconds = None if opening_seconds is None else max(0.0,float(opening_seconds))
+        self._opening_first_note_at = None
+        self._opening_cutoff = None
+        self._opening_window_reached = False
+        self._opening_after_cutoff_frames = 0
+        self._opening_duplicate_frames = 0
+        self._last_enqueued_timestamp = None
+        self._opening_pins = {}
+        self._opening_before = deque(maxlen=24)
+        self._opening_after = deque(maxlen=80)
+        self._opening_next_after_at = None
+        self._opening_seen_sequence = {}
+        self._opening_capacity_evictions = 0
+        self._opening_sampled_out = 0
+        self._opening_written = 0
+        self._opening_checkpoints = []
+        # 整局异常图独立于开场128张预算；关闭清理后由工作线程统一编码。
+        self._opening_events = []
+        self._opening_event_flush_status = "pending" if opening_seconds is not None else "disabled"
+        self._event_requested = 0
+        self._event_dropped_reasons = {}
+        self._opening_flush_allowed = threading.Event()
+        self._opening_checkpoint_dropped = 0
+        self._opening_flush_status = "pending" if opening_seconds is not None else "disabled"
         self.close_timeout_seconds = max(0.01, float(close_timeout_seconds))
         self._trace = (self.output_dir / "trace.jsonl").open("w", encoding="utf-8")
         self._events = (self.output_dir / "events.jsonl").open("w", encoding="utf-8")
@@ -133,10 +159,12 @@ class RealtimeDebugRecorder:
         self._summary_finalizer_thread: threading.Thread | None = None
         self._checkpoint_lock = threading.Lock()
         self._checkpoint_count = 0
+        self._checkpoint_requested = 0
         self._event_count = 0
         self._native_life_history: deque[_NativeLifeFrame] = deque(maxlen=10)
         self._native_life_triggered_at: float | None = None
         self._native_life_evidence_count = 0
+        self._native_life_written = 0
         self._dropped_native_life_frames = 0
         self._native_feedback_window = None
         self._native_feedback_window_index = -1
@@ -193,6 +221,15 @@ class RealtimeDebugRecorder:
                 raise RuntimeError("session metadata run_id cannot change")
             self._session_metadata = incoming
 
+    @property
+    def recording_mode(self):
+        return "opening-screenshots+trace" if self.opening_seconds is not None else "video" if self.video_enabled else "trace-only"
+
+    def mark_first_note(self, timestamp: float) -> None:
+        if self.opening_seconds is not None and self._opening_first_note_at is None:
+            self._opening_first_note_at = float(timestamp)
+            self._opening_cutoff = float(timestamp) + self.opening_seconds
+
     def record_phase(
         self,
         image: np.ndarray,
@@ -200,6 +237,7 @@ class RealtimeDebugRecorder:
         phase: str,
         *,
         diagnostics: list[dict[str, object]] | None = None,
+        frame_metadata: dict[str, object] | None = None,
     ) -> None:
         """记录演奏热路径之外的封面、门控等阶段画面。"""
         self.record(
@@ -210,6 +248,7 @@ class RealtimeDebugRecorder:
             None,
             diagnostics=diagnostics,
             phase=phase,
+            frame_metadata=frame_metadata,
         )
 
     def save_checkpoint(
@@ -219,7 +258,7 @@ class RealtimeDebugRecorder:
         status: str,
         *,
         details: Mapping[str, object] | None = None,
-    ) -> Path:
+    ) -> Path | None:
         """保存低频关键阶段现场；即使热路径录像已关闭也允许补写结算证据。"""
         safe_phase = "".join(
             character if character.isalnum() or character in "-_" else "-"
@@ -230,14 +269,14 @@ class RealtimeDebugRecorder:
             for character in str(status)
         ).strip("-") or "unknown"
         with self._checkpoint_lock:
-            index = self._checkpoint_count
+            index = self._checkpoint_requested
+            self._checkpoint_requested += 1
             checkpoint_dir = self.output_dir / "checkpoints"
-            checkpoint_dir.mkdir(exist_ok=True)
+            if self.opening_seconds is None or self._closed:
+                checkpoint_dir.mkdir(exist_ok=True)
             relative = Path("checkpoints") / (
                 f"{index:03d}-{safe_phase}-{safe_status}.png"
             )
-            if not imwrite_unicode(self.output_dir / relative, image):
-                raise OSError("无法保存实时演奏阶段证据截图")
             payload = {
                 "index": index,
                 "phase": str(phase),
@@ -246,21 +285,26 @@ class RealtimeDebugRecorder:
                 "screenshot": relative.as_posix(),
                 "details": deepcopy(dict(details or {})),
             }
-            with (self.output_dir / "checkpoints.jsonl").open(
-                "a",
-                encoding="utf-8",
-            ) as stream:
-                stream.write(
-                    json.dumps(
-                        payload,
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    )
-                    + "\n"
-                )
+            if self.opening_seconds is not None and not self._closed:
+                if len(self._opening_checkpoints) < 8:
+                    self._opening_checkpoints.append((relative, image.copy(), payload))
+                else:
+                    self._opening_checkpoint_dropped += 1
+                    payload.update(screenshot=None, screenshot_status="dropped-capacity")
+                    self._write_checkpoint_index(payload)
+                    return None
+                return self.output_dir / relative
+            if not imwrite_unicode(self.output_dir / relative, image):
+                raise OSError("无法保存实时演奏阶段证据截图")
+            payload["screenshot_status"] = "saved"
+            self._write_checkpoint_index(payload)
             self._checkpoint_count += 1
             self._refresh_checkpoint_summary()
             return self.output_dir / relative
+
+    def _write_checkpoint_index(self, payload):
+        with (self.output_dir / "checkpoints.jsonl").open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
 
     def _refresh_checkpoint_summary(self) -> None:
         path = self.output_dir / "summary.json"
@@ -272,6 +316,8 @@ class RealtimeDebugRecorder:
             except (OSError, json.JSONDecodeError):
                 return
             payload["checkpoint_count"] = self._checkpoint_count
+            payload["checkpoint_requested"] = self._checkpoint_requested
+            payload["opening_checkpoint_dropped"] = self._opening_checkpoint_dropped
             payload["checkpoint_index"] = "checkpoints.jsonl"
             temporary = path.with_suffix(".json.tmp")
             temporary.write_text(
@@ -301,13 +347,17 @@ class RealtimeDebugRecorder:
         # later queue overflow drops that frame before the worker serialises it.
         if self._first_timestamp is None:
             self._first_timestamp = timestamp
+        metadata = dict(frame_metadata or {})
+        if timestamp == self._last_enqueued_timestamp:
+            metadata["duplicate_observation"] = True
+        self._last_enqueued_timestamp = timestamp
         try:
             self._record_queue.put_nowait(
                 (
                     image, timestamp, notes, actions, life_status,
                     diagnostics, timing_state, life_value, touch_state,
                     str(phase),
-                    dict(frame_metadata or {}),
+                    metadata,
                 )
             )
         except queue.Full:
@@ -409,7 +459,6 @@ class RealtimeDebugRecorder:
                                       f"native-feedback-{item.window_index:02d}-{item.index:03d}",
                                       "existing-fresh-candidate-roi", 0.0,
                                       frame_metadata=item.metadata)
-                    self._native_feedback_written += 1
                     continue
                 (
                     image, timestamp, notes, actions, life_status,
@@ -427,6 +476,16 @@ class RealtimeDebugRecorder:
             self._error = exc
         finally:
             self._discard_pending_records()
+            if self.opening_seconds is not None:
+                self._opening_flush_allowed.wait()
+                for flush in (self._flush_opening_frames, self._flush_opening_checkpoints,
+                              self._flush_opening_events):
+                    try:
+                        flush()
+                    except BaseException as exc:
+                        self._opening_flush_status = "failed"
+                        if self._error is None:
+                            self._error = exc
             try:
                 self._trace.flush()
                 self._trace.close()
@@ -459,7 +518,29 @@ class RealtimeDebugRecorder:
         error = self._error
         return {
             "schema_version": 2,
-            "recording_mode": "video" if self.video_enabled else "trace-only",
+            "recording_mode": self.recording_mode,
+            "opening_seconds_after_first_note": self.opening_seconds,
+            "opening_first_note_observed_at": self._opening_first_note_at,
+            "opening_cutoff_timestamp": self._opening_cutoff,
+            "opening_window_reached": self._opening_window_reached,
+            "opening_after_cutoff_frames": self._opening_after_cutoff_frames,
+            "opening_duplicate_frames": self._opening_duplicate_frames,
+            "opening_truncated": bool(self.opening_seconds is not None and not self._opening_window_reached),
+            "opening_screenshot_capacity": 128,
+            "opening_screenshots_written": self._opening_written,
+            "opening_capacity_evictions": self._opening_capacity_evictions,
+            "opening_capacity_truncated": self._opening_capacity_evictions > 0,
+            "opening_reused_skipped": self._opening_duplicate_frames,
+            "opening_sampled_out": self._opening_sampled_out,
+            "opening_flush_status": self._opening_flush_status,
+            "opening_checkpoint_dropped": self._opening_checkpoint_dropped,
+            "event_screenshot_capacity": _OPENING_EVENT_CAPACITY if self.opening_seconds is not None else None,
+            "event_screenshots_requested": self._event_requested,
+            "event_screenshots_dropped": sum(self._event_dropped_reasons.values()),
+            "event_screenshot_drop_reasons": dict(self._event_dropped_reasons),
+            "event_screenshot_flush_status": self._opening_event_flush_status,
+            "opening_frame_index": "opening_frames.jsonl" if self.opening_seconds is not None else None,
+            "opening_continuous_frame_evidence": False if self.opening_seconds is not None else None,
             "video_enabled": self.video_enabled,
             "record_worker_finalized": bool(record_worker_finalized),
             "encoder_finalized": bool(encoder_finalized),
@@ -468,12 +549,14 @@ class RealtimeDebugRecorder:
             ),
             "trace_frames": self._trace_frames,
             "dropped_trace_frames": self._dropped_trace_frames,
-            "native_life_evidence_frames": self._native_life_evidence_count,
+            "native_life_evidence_frames": self._native_life_written,
             "dropped_native_life_frames": self._dropped_native_life_frames,
             "native_feedback_evidence_frames": self._native_feedback_written,
             "dropped_native_feedback_frames": self._dropped_native_feedback_frames,
-            "native_life_evidence_complete": self._dropped_native_life_frames == 0,
-            "native_feedback_evidence_complete": self._dropped_native_feedback_frames == 0,
+            "native_life_evidence_complete": bool(record_worker_finalized and error is None
+                and self._dropped_native_life_frames == 0),
+            "native_feedback_evidence_complete": bool(record_worker_finalized and error is None
+                and self._dropped_native_feedback_frames == 0),
             "video_frames": self._video_frames,
             "skipped_video_frames": self._skipped_video_frames,
             "dropped_video_frames": self._dropped_video_frames,
@@ -490,6 +573,7 @@ class RealtimeDebugRecorder:
             "video_finalize_status": self._video_finalize_status,
             "complete_frame_evidence": bool(
                 self._dropped_trace_frames == 0
+                and self.opening_seconds is None
                 and (
                     not self.video_enabled
                     or (
@@ -500,8 +584,9 @@ class RealtimeDebugRecorder:
             ),
             "event_screenshots": self._event_count,
             "checkpoint_count": self._checkpoint_count,
+            "checkpoint_requested": self._checkpoint_requested,
             "checkpoint_index": (
-                "checkpoints.jsonl" if self._checkpoint_count else None
+                "checkpoints.jsonl" if self._checkpoint_requested else None
             ),
             "diagnostic_counts": dict(self._diagnostic_counts),
             "phase_counts": dict(self._phase_counts),
@@ -517,11 +602,13 @@ class RealtimeDebugRecorder:
     ) -> None:
         path = self.output_dir / "summary.json"
         temporary = path.with_suffix(".json.tmp")
-        payload = self._summary_payload(
-            record_worker_finalized=record_worker_finalized,
-            encoder_finalized=encoder_finalized,
-        )
         with self._summary_lock:
+            # 快照与替换同属一个临界区，避免后台旧快照覆盖关闭后的checkpoint补写。
+            # 锁顺序为summary→metadata；元数据更新不持锁刷新summary。
+            payload = self._summary_payload(
+                record_worker_finalized=record_worker_finalized,
+                encoder_finalized=encoder_finalized,
+            )
             temporary.write_text(
                 json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",
@@ -645,6 +732,9 @@ class RealtimeDebugRecorder:
                     "post-release-rescue", action.reason, delay,
                 )
         self._trace_frames += 1
+        if self.opening_seconds is not None:
+            self._retain_opening_frame(image, timestamp, trace_frame, phase, frame_metadata or {}, diagnostics, actions)
+            return
         if not self.video_enabled:
             return
         if self._next_video_at is None:
@@ -656,6 +746,8 @@ class RealtimeDebugRecorder:
                     trace_frame,
                     float(timestamp),
                     round(elapsed_ms, 3),
+                    phase,
+                    dict(frame_metadata or {}),
                 ))
             except queue.Full:
                 self._dropped_video_frames += 1
@@ -675,24 +767,178 @@ class RealtimeDebugRecorder:
         delay: float,
         *, frame_metadata: dict[str, object] | None = None,
     ) -> None:
-        event_dir = self.output_dir / "events"
-        event_dir.mkdir(exist_ok=True)
-        relative = Path("events") / (
-            f"frame-{self._trace_frames:06d}-{kind}-lane-{lane}.png"
-        )
-        if not imwrite_unicode(self.output_dir / relative, image):
-            raise OSError("无法保存实时演奏异常截图")
-        self._events.write(json.dumps({
+        relative = Path("events") / f"event-{self._event_requested:04d}-{kind}-lane-{lane}.png"
+        self._event_requested += 1
+        payload = {
+            "event_index": self._event_requested - 1,
             "frame": self._trace_frames,
             "timestamp": timestamp,
             "kind": kind,
             "lane": lane,
             "reason": reason,
             "delay_seconds": round(delay, 3),
-            "screenshot": relative.as_posix(),
+            "screenshot": None,
             "frame_metadata": frame_metadata or {},
-        }, ensure_ascii=False, separators=(",", ":")) + "\n")
-        self._event_count += 1
+        }
+        if self.opening_seconds is not None:
+            # close置位后工作线程可能仍在排空队列，也必须留到统一flush再写PNG。
+            if len(self._opening_events) >= _OPENING_EVENT_CAPACITY:
+                self._finish_event(payload, None, "dropped-capacity")
+            else:
+                self._opening_events.append((relative, image.copy(), payload))
+            return
+        (self.output_dir / "events").mkdir(exist_ok=True)
+        if not imwrite_unicode(self.output_dir / relative, image):
+            self._finish_event(payload, None, "write-failed")
+            raise OSError("无法保存实时演奏异常截图")
+        self._finish_event(payload, relative, "saved")
+
+    def _finish_event(self, payload, relative, status):
+        payload.update(screenshot=relative.as_posix() if relative is not None else None,
+                       screenshot_status=status)
+        saved = relative is not None
+        if saved:
+            self._event_count += 1
+        else:
+            self._event_dropped_reasons[status] = self._event_dropped_reasons.get(status, 0) + 1
+        if payload["kind"].startswith("native-life-drop-"):
+            if saved:
+                self._native_life_written += 1
+            else:
+                self._dropped_native_life_frames += 1
+        if payload["kind"].startswith("native-feedback-"):
+            if saved:
+                self._native_feedback_written += 1
+            else:
+                self._dropped_native_feedback_frames += 1
+        self._events.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+    def _flush_opening_events(self):
+        self._opening_event_flush_status = "flushing"
+        failure = None
+        try:
+            for relative, image, payload in self._opening_events:
+                try:
+                    (self.output_dir / "events").mkdir(exist_ok=True)
+                    if not imwrite_unicode(self.output_dir / relative, image):
+                        raise OSError("无法保存实时演奏异常截图")
+                except Exception as exc:
+                    failure = exc
+                    self._finish_event(payload, None, "write-failed")
+                else:
+                    self._finish_event(payload, relative, "saved")
+            if failure is not None:
+                raise failure
+        except BaseException:
+            self._opening_event_flush_status = "failed"
+            raise
+        finally:
+            self._opening_events.clear()
+        self._opening_event_flush_status = "complete"
+
+    def _retain_opening_frame(self, image, timestamp, trace_frame, phase, metadata, diagnostics, actions):
+        if self._opening_first_note_at is None and actions:
+            self.mark_first_note(timestamp)
+        if self._opening_cutoff is not None and timestamp >= self._opening_cutoff:
+            self._opening_window_reached = True
+            self._opening_after_cutoff_frames += 1
+            return
+        sequence = metadata.get("sequence")
+        source = metadata.get("source", "capture")
+        repeated = (metadata.get("reused") or metadata.get("reused_frame")
+                    or metadata.get("fresh") is False or metadata.get("duplicate_observation"))
+        if sequence is not None:
+            previous = self._opening_seen_sequence.get(source)
+            repeated = repeated or (previous is not None and sequence <= previous)
+            if not repeated:
+                self._opening_seen_sequence[source] = sequence
+        if repeated:
+            self._opening_duplicate_frames += 1
+            return
+        reasons = []
+        if phase != "engine" and "phase:"+phase not in self._opening_pins:
+            reasons.append("phase:"+phase)
+        for item in diagnostics:
+            event = item.get("gate_event")
+            event_observed_s = item.get("gate_event_observed_s")
+            if (isinstance(event, dict) and event.get("event")
+                and isinstance(event_observed_s, (int, float))
+                and abs(event_observed_s-timestamp) <= 1e-6):
+                reasons.append("gate-event:"+str(event["event"]))
+        if metadata.get("black") is True:
+            reasons.append("first-black")
+        if any(item.get("opening_triggered") is True or item.get("triggered") is True for item in diagnostics):
+            reasons.append("first-trigger")
+        reasons = [reason for reason in reasons if reason not in self._opening_pins]
+        before = self._opening_first_note_at is None or timestamp < self._opening_first_note_at
+        if not before and self._opening_next_after_at is not None and timestamp < self._opening_next_after_at and not reasons:
+            self._opening_sampled_out += 1
+            return
+        # 16张固定证据、首音前24张、首音后80张，另8张低频checkpoint，总计不超过128；整局事件另计。
+        entry = {"image": image.copy(), "trace_frame": trace_frame, "phase": phase,
+                 "observed_timestamp": float(timestamp), "frame_metadata": dict(metadata),
+                 "diagnostics": diagnostics, "retention_reasons": list(reasons)}
+        priority = {"phase:preparation-identity", "phase:ready-before-click", "phase:final-cover",
+                    "phase:native-prearm", "phase:native-first-note-gate", "phase:first-note-gate", "first-trigger", "first-black", "gate-event:ignored-prelude", "gate-event:broad-shape-mismatch", "gate-event:broad-change-blocked"}
+        for reason in reasons:
+            if len(self._opening_pins) >= 16 and reason in priority:
+                removable = next((key for key in self._opening_pins if key not in priority), None)
+                if removable is not None:
+                    del self._opening_pins[removable]
+                    self._opening_capacity_evictions += 1
+            if len(self._opening_pins) < 16:
+                self._opening_pins[reason] = entry
+        ring = self._opening_before if before else self._opening_after
+        if len(ring) == ring.maxlen:
+            self._opening_capacity_evictions += 1
+        ring.append(entry)
+        if not before:
+            self._opening_next_after_at = timestamp + .25
+
+    def _flush_opening_frames(self):
+        self._opening_flush_status = "flushing"
+        frames = {entry["trace_frame"]: entry for entry in (
+            *self._opening_pins.values(), *self._opening_before, *self._opening_after)}
+        directory = self.output_dir / "opening"
+        directory.mkdir(exist_ok=True)
+        with (self.output_dir / "opening_frames.jsonl").open("w", encoding="utf-8") as index:
+            for number, entry in enumerate(sorted(frames.values(), key=lambda row: (row["observed_timestamp"], row["trace_frame"]))):
+                relative = f"opening/frame-{number:03d}.png"
+                if not imwrite_unicode(self.output_dir / relative, entry["image"]):
+                    raise OSError("无法保存开场截图")
+                payload = {key: value for key, value in entry.items() if key != "image"}
+                payload["path"] = relative
+                payload["first_note_relative_ms"] = (None if self._opening_first_note_at is None else
+                    round((entry["observed_timestamp"]-self._opening_first_note_at)*1000, 3))
+                index.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":"))+"\n")
+                self._opening_written += 1
+        self._opening_pins.clear()
+        self._opening_before.clear()
+        self._opening_after.clear()
+        self._opening_flush_status = "complete"
+
+    def _flush_opening_checkpoints(self):
+        failure = None
+        # 结算可能在close超时后补图，序号和索引写入由同一锁保护。
+        with self._checkpoint_lock:
+            try:
+                for relative, image, payload in self._opening_checkpoints:
+                    try:
+                        (self.output_dir / relative).parent.mkdir(exist_ok=True)
+                        if not imwrite_unicode(self.output_dir / relative, image):
+                            raise OSError("无法保存开场阶段截图")
+                    except Exception as exc:
+                        failure = exc
+                        self._opening_checkpoint_dropped += 1
+                        payload.update(screenshot=None, screenshot_status="write-failed")
+                    else:
+                        payload["screenshot_status"] = "saved"
+                        self._checkpoint_count += 1
+                    self._write_checkpoint_index(payload)
+            finally:
+                self._opening_checkpoints.clear()
+        if failure is not None:
+            raise failure
 
     def _encode_video(self) -> None:
         if not self.video_enabled:
@@ -701,46 +947,33 @@ class RealtimeDebugRecorder:
         mapping = None
         partial_path = self.output_dir / "playfield.partial.mkv"
         final_path = self.output_dir / "playfield.mkv"
-        first_timestamp: float | None = None
-        last_timestamp: float | None = None
+        first_timestamp = None
+        last_timestamp = None
         try:
-            mapping = (self.output_dir / "video_frames.jsonl").open(
-                "w", encoding="utf-8",
-            )
+            mapping = (self.output_dir / "video_frames.jsonl").open("w", encoding="utf-8")
             while True:
                 item = self._frames.get()
                 if item is _SENTINEL:
                     break
+                phase, metadata = None, {}
                 if isinstance(item, tuple):
-                    frame, trace_frame, timestamp, elapsed_ms = item
+                    frame, trace_frame, timestamp, elapsed_ms = item[:4]
+                    if len(item) > 4:
+                        phase, metadata = item[4:6]
                 else:
-                    # Backward-compatible with tests/tools that put a raw
-                    # frame directly into the internal queue.
-                    frame = item
-                    trace_frame = -1
-                    timestamp = float("nan")
-                    elapsed_ms = None
+                    frame, trace_frame, timestamp, elapsed_ms = item, -1, float("nan"), None
                 if writer is None:
                     height, width = frame.shape[:2]
-                    writer = cv2.VideoWriter(
-                        str(partial_path),
-                        cv2.VideoWriter_fourcc(*"MJPG"),
-                        float(self.video_fps),
-                        (width, height),
-                    )
+                    writer = cv2.VideoWriter(str(partial_path), cv2.VideoWriter_fourcc(*"MJPG"),
+                        float(self.video_fps), (width, height))
                     if not writer.isOpened():
                         raise OSError("无法创建实时调试录像")
                 writer.write(frame)
-                mapping.write(json.dumps({
-                    "encoded_frame": self._video_frames,
-                    "trace_frame": int(trace_frame),
-                    "monotonic_timestamp": timestamp,
-                    "elapsed_ms": elapsed_ms,
-                }, ensure_ascii=False, separators=(",", ":")) + "\n")
+                mapping.write(json.dumps({"encoded_frame": self._video_frames, "trace_frame": int(trace_frame),
+                    "monotonic_timestamp": timestamp, "elapsed_ms": elapsed_ms,
+                    "phase": phase, "frame_metadata": metadata}, ensure_ascii=False, separators=(",", ":"))+"\n")
                 if timestamp == timestamp:
-                    first_timestamp = (
-                        timestamp if first_timestamp is None else first_timestamp
-                    )
+                    first_timestamp = timestamp if first_timestamp is None else first_timestamp
                     last_timestamp = timestamp
                 self._video_frames += 1
         except BaseException as exc:
@@ -758,12 +991,8 @@ class RealtimeDebugRecorder:
             self._video_finalize_status = "no-frames"
             return
         try:
-            self._verify_and_publish_video(
-                partial_path,
-                final_path,
-                first_timestamp=first_timestamp,
-                last_timestamp=last_timestamp,
-            )
+            self._verify_and_publish_video(partial_path, final_path,
+                first_timestamp=first_timestamp, last_timestamp=last_timestamp)
         except BaseException as exc:
             self._video_finalize_status = "verification-failed"
             if self._error is None:
@@ -822,6 +1051,7 @@ class RealtimeDebugRecorder:
         if self._closed:
             return
         self._closed = True
+        self._opening_flush_allowed.set()
         if self._record_thread.is_alive():
             # Give the normal fast path a small bounded grace period so a
             # caller that closes immediately after record() retains its trace.

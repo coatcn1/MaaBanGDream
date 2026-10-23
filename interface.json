@@ -3,7 +3,7 @@
   "interface_version": 2,
   "name": "MaaBanGDream",
   "label": "BanG Dream! 自动化（MaaFramework）",
-  "version": "1.4.10",
+  "version": "1.4.11",
   "description": "docs/about.md",
   "about_icon": "docs/assets/maabangdream-logo-v1.png",
   "contact": "docs/contact.md",
@@ -45,7 +45,8 @@
       "option": [
         "AutoLiveSongMode",
         "AutoLiveDifficulty",
-        "AutoLiveCount"
+        "AutoLiveCount",
+        "AutoLiveStaminaRefill"
       ]
     },
     {
@@ -58,7 +59,8 @@
         "RealtimeLiveSongMode",
         "RealtimeLiveDifficulty",
         "RealtimeLiveCount",
-        "RealtimeLiveDebug"
+        "RealtimeLiveDebug",
+        "RealtimeLiveStaminaRefill"
       ]
     },
     {
@@ -70,10 +72,10 @@
         "CooperativeEntryMethod",
         "CooperativeDifficulty",
         "CooperativeCount",
-        "CooperativeMemberExitPolicy",
         "CooperativeSongChoice",
         "CooperativeDebug",
-        "CooperativeDisconnectJump"
+        "CooperativeDisconnectJump",
+        "CooperativeLiveStaminaRefill"
       ]
     },
     {
@@ -87,7 +89,8 @@
         "VersusCount",
         "VersusSongChoice",
         "VersusDebug",
-        "VersusDisconnectJump"
+        "VersusDisconnectJump",
+        "VersusLiveStaminaRefill"
       ]
     },
     {
@@ -97,7 +100,8 @@
       "entry": "ContinuousRealtimeLive",
       "option": [
         "ContinuousRealtimeDifficulty",
-        "ContinuousRealtimeDebug"
+        "ContinuousRealtimeDebug",
+        "ContinuousRealtimeLiveStaminaRefill"
       ]
     },
     {
@@ -109,7 +113,8 @@
         "CalibrationDifficulty",
         "CalibrationSongMode",
         "CalibrationResumeMode",
-        "CalibrationDebug"
+        "CalibrationDebug",
+        "RealtimeCalibrationStaminaRefill"
       ]
     },
     {
@@ -138,7 +143,8 @@
       "option": [
         "MedleyTourType",
         "MedleyCount",
-        "MedleyDebug"
+        "MedleyDebug",
+        "MedleyLiveStaminaRefill"
       ]
     },
     {
@@ -233,7 +239,9 @@
       ],
       "pipeline_override": {
         "MedleyCountConfigure": {
-          "custom_action_param": {"count": "{Count}"}
+          "custom_action_param": {
+            "count": "{Count}"
+          }
         },
         "MedleyComplete": {
           "custom_action_param": {
@@ -329,7 +337,8 @@
             "MedleyDebugConfigure": {
               "custom_action_param": {
                 "debug_recording": false,
-                "diagnostic_trace": true
+                "diagnostic_trace": true,
+                "opening_recording": false
               }
             }
           }
@@ -341,7 +350,8 @@
             "MedleyDebugConfigure": {
               "custom_action_param": {
                 "debug_recording": false,
-                "diagnostic_trace": false
+                "diagnostic_trace": false,
+                "opening_recording": false
               }
             }
           }
@@ -353,12 +363,27 @@
             "MedleyDebugConfigure": {
               "custom_action_param": {
                 "debug_recording": true,
-                "diagnostic_trace": true
+                "diagnostic_trace": true,
+                "opening_recording": false
+              }
+            }
+          }
+        },
+        {
+          "name": "Opening",
+          "label": "开场截图＋轻量 Trace（首音后20秒）",
+          "pipeline_override": {
+            "MedleyDebugConfigure": {
+              "custom_action_param": {
+                "debug_recording": false,
+                "diagnostic_trace": true,
+                "opening_recording": true
               }
             }
           }
         }
-      ]
+      ],
+      "description": "Trace只保留结构化帧和事件，不是连续画面；开场截图复用已有截图，有界保留首音前及首音后20秒的真实截图，可能丢帧或截断，不能用于证明绝对输入延迟。"
     },
     "CooperativeEntryMethod": {
       "type": "select",
@@ -369,10 +394,15 @@
         {
           "name": "Normal",
           "label": "普通房间匹配",
-          "option": ["CooperativeRoomTier"],
+          "option": [
+            "CooperativeRoomTier"
+          ],
           "pipeline_override": {
             "CooperativeEntryConfigure": {
-              "custom_action_param": {"reset": true, "entry_method": "normal"}
+              "custom_action_param": {
+                "reset": true,
+                "entry_method": "normal"
+              }
             }
           }
         },
@@ -380,10 +410,15 @@
           "name": "HostInviteAll",
           "label": "创建房间并邀请全部好友",
           "description": "创建私人房间，每个任务在同一房间仅邀请一次全部好友；等待至少一位好友加入后开始。留在房间时后续演出复用房间。",
-          "option": ["CooperativePostLiveAction"],
+          "option": [
+            "CooperativePostLiveAction"
+          ],
           "pipeline_override": {
             "CooperativeEntryConfigure": {
-              "custom_action_param": {"reset": true, "entry_method": "host_invite_all"}
+              "custom_action_param": {
+                "reset": true,
+                "entry_method": "host_invite_all"
+              }
             }
           }
         },
@@ -391,20 +426,31 @@
           "name": "Friend",
           "label": "好友邀请房间",
           "description": "等待唯一有效的好友邀请，并确认进入私人房间；多条有效邀请时停止，避免误入。",
-          "option": ["CooperativePostLiveAction"],
+          "option": [
+            "CooperativePostLiveAction"
+          ],
           "pipeline_override": {
             "CooperativeEntryConfigure": {
-              "custom_action_param": {"reset": true, "entry_method": "friend"}
+              "custom_action_param": {
+                "reset": true,
+                "entry_method": "friend"
+              }
             }
           }
         },
         {
           "name": "Private",
           "label": "输入房间号",
-          "option": ["CooperativeRoomCode", "CooperativePostLiveAction"],
+          "option": [
+            "CooperativeRoomCode",
+            "CooperativePostLiveAction"
+          ],
           "pipeline_override": {
             "CooperativeEntryConfigure": {
-              "custom_action_param": {"reset": true, "entry_method": "private"}
+              "custom_action_param": {
+                "reset": true,
+                "entry_method": "private"
+              }
             }
           }
         }
@@ -420,28 +466,44 @@
           "name": "Free",
           "label": "自由房间",
           "pipeline_override": {
-            "CooperativeTierConfigure": {"custom_action_param": {"room_tier": "free"}}
+            "CooperativeTierConfigure": {
+              "custom_action_param": {
+                "room_tier": "free"
+              }
+            }
           }
         },
         {
           "name": "Beginner",
           "label": "初级房间（70000）",
           "pipeline_override": {
-            "CooperativeTierConfigure": {"custom_action_param": {"room_tier": "beginner"}}
+            "CooperativeTierConfigure": {
+              "custom_action_param": {
+                "room_tier": "beginner"
+              }
+            }
           }
         },
         {
           "name": "Chief",
           "label": "首席房间（250000）",
           "pipeline_override": {
-            "CooperativeTierConfigure": {"custom_action_param": {"room_tier": "chief"}}
+            "CooperativeTierConfigure": {
+              "custom_action_param": {
+                "room_tier": "chief"
+              }
+            }
           }
         },
         {
           "name": "Legend",
           "label": "传奇房间（290000）",
           "pipeline_override": {
-            "CooperativeTierConfigure": {"custom_action_param": {"room_tier": "legend"}}
+            "CooperativeTierConfigure": {
+              "custom_action_param": {
+                "room_tier": "legend"
+              }
+            }
           }
         }
       ]
@@ -461,7 +523,9 @@
       ],
       "pipeline_override": {
         "CooperativeCodeConfigure": {
-          "custom_action_param": {"room_code": "{RoomCode}"}
+          "custom_action_param": {
+            "room_code": "{RoomCode}"
+          }
         }
       }
     },
@@ -480,7 +544,9 @@
       ],
       "pipeline_override": {
         "CooperativeCountConfigure": {
-          "custom_action_param": {"count": "{Count}"}
+          "custom_action_param": {
+            "count": "{Count}"
+          }
         }
       }
     },
@@ -493,40 +559,105 @@
           "name": "Easy",
           "label": "Easy",
           "pipeline_override": {
-            "CooperativeDifficultyConfigure": {"custom_action_param": {"difficulty": "Easy"}},
-            "CooperativeSpeedSettingsGate": {"custom_action_param": {"entry_mode": "home", "difficulty": "Easy", "require_profile": true, "dpi": 240, "game_fps": 60, "render_quality": "standard"}}
+            "CooperativeDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Easy"
+              }
+            },
+            "CooperativeSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Easy",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            }
           }
         },
         {
           "name": "Normal",
           "label": "Normal",
           "pipeline_override": {
-            "CooperativeDifficultyConfigure": {"custom_action_param": {"difficulty": "Normal"}},
-            "CooperativeSpeedSettingsGate": {"custom_action_param": {"entry_mode": "home", "difficulty": "Normal", "require_profile": true, "dpi": 240, "game_fps": 60, "render_quality": "standard"}}
+            "CooperativeDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Normal"
+              }
+            },
+            "CooperativeSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Normal",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            }
           }
         },
         {
           "name": "Hard",
           "label": "Hard",
           "pipeline_override": {
-            "CooperativeDifficultyConfigure": {"custom_action_param": {"difficulty": "Hard"}},
-            "CooperativeSpeedSettingsGate": {"custom_action_param": {"entry_mode": "home", "difficulty": "Hard", "require_profile": true, "dpi": 240, "game_fps": 60, "render_quality": "standard"}}
+            "CooperativeDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Hard"
+              }
+            },
+            "CooperativeSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Hard",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            }
           }
         },
         {
           "name": "Expert",
           "label": "Expert",
           "pipeline_override": {
-            "CooperativeDifficultyConfigure": {"custom_action_param": {"difficulty": "Expert"}},
-            "CooperativeSpeedSettingsGate": {"custom_action_param": {"entry_mode": "home", "difficulty": "Expert", "require_profile": true, "dpi": 240, "game_fps": 60, "render_quality": "standard"}}
+            "CooperativeDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Expert"
+              }
+            },
+            "CooperativeSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Expert",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            }
           }
         },
         {
           "name": "Special",
           "label": "Special",
           "pipeline_override": {
-            "CooperativeDifficultyConfigure": {"custom_action_param": {"difficulty": "Special"}},
-            "CooperativeSpeedSettingsGate": {"custom_action_param": {"entry_mode": "home", "difficulty": "Special", "require_profile": true, "dpi": 240, "game_fps": 60, "render_quality": "standard"}}
+            "CooperativeDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Special"
+              }
+            },
+            "CooperativeSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Special",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            }
           }
         }
       ]
@@ -542,7 +673,9 @@
           "label": "退出房间并返回主页",
           "pipeline_override": {
             "CooperativePostLiveConfigure": {
-              "custom_action_param": {"post_live_action": "exit"}
+              "custom_action_param": {
+                "post_live_action": "exit"
+              }
             }
           }
         },
@@ -551,7 +684,9 @@
           "label": "留在当前房间",
           "pipeline_override": {
             "CooperativePostLiveConfigure": {
-              "custom_action_param": {"post_live_action": "stay"}
+              "custom_action_param": {
+                "post_live_action": "stay"
+              }
             }
           }
         }
@@ -560,14 +695,17 @@
     "CooperativeMemberExitPolicy": {
       "type": "select",
       "label": "成员退出处理",
-      "default_case": "Fail",
+      "default_case": "Reconnect",
       "cases": [
         {
           "name": "Fail",
-          "label": "确认后报错结束",
+          "label": "安全恢复并重新入房",
           "pipeline_override": {
             "CooperativeMemberExitConfigure": {
-              "custom_action_param": {"member_exit_policy": "fail", "max_reconnects": 3}
+              "custom_action_param": {
+                "member_exit_policy": "reconnect",
+                "max_reconnects": 3
+              }
             }
           }
         },
@@ -576,7 +714,10 @@
           "label": "不报错并重新入房",
           "pipeline_override": {
             "CooperativeMemberExitConfigure": {
-              "custom_action_param": {"member_exit_policy": "reconnect", "max_reconnects": 3}
+              "custom_action_param": {
+                "member_exit_policy": "reconnect",
+                "max_reconnects": 3
+              }
             }
           }
         }
@@ -593,7 +734,9 @@
           "description": "等待玩家自行选择歌曲并点击确认，最多等待180秒；到达准备页后继续自动演出。",
           "pipeline_override": {
             "CooperativeSongChoiceConfigure": {
-              "custom_action_param": {"song_choice": "manual"}
+              "custom_action_param": {
+                "song_choice": "manual"
+              }
             }
           }
         },
@@ -602,7 +745,9 @@
           "label": "不指定歌曲",
           "pipeline_override": {
             "CooperativeSongChoiceConfigure": {
-              "custom_action_param": {"song_choice": "unspecified"}
+              "custom_action_param": {
+                "song_choice": "unspecified"
+              }
             }
           }
         },
@@ -611,7 +756,9 @@
           "label": "随机选曲（第一轮留 10 秒筛歌）",
           "pipeline_override": {
             "CooperativeSongChoiceConfigure": {
-              "custom_action_param": {"song_choice": "random"}
+              "custom_action_param": {
+                "song_choice": "random"
+              }
             }
           }
         },
@@ -620,7 +767,9 @@
           "label": "当前曲目（第一轮留 10 秒筛歌）",
           "pipeline_override": {
             "CooperativeSongChoiceConfigure": {
-              "custom_action_param": {"song_choice": "current"}
+              "custom_action_param": {
+                "song_choice": "current"
+              }
             }
           }
         }
@@ -638,7 +787,8 @@
             "CooperativeDebugConfigure": {
               "custom_action_param": {
                 "debug_recording": false,
-                "diagnostic_trace": true
+                "diagnostic_trace": true,
+                "opening_recording": false
               }
             }
           }
@@ -650,7 +800,8 @@
             "CooperativeDebugConfigure": {
               "custom_action_param": {
                 "debug_recording": false,
-                "diagnostic_trace": false
+                "diagnostic_trace": false,
+                "opening_recording": false
               }
             }
           }
@@ -662,12 +813,27 @@
             "CooperativeDebugConfigure": {
               "custom_action_param": {
                 "debug_recording": true,
-                "diagnostic_trace": true
+                "diagnostic_trace": true,
+                "opening_recording": false
+              }
+            }
+          }
+        },
+        {
+          "name": "Opening",
+          "label": "开场截图＋轻量 Trace（首音后20秒）",
+          "pipeline_override": {
+            "CooperativeDebugConfigure": {
+              "custom_action_param": {
+                "debug_recording": false,
+                "diagnostic_trace": true,
+                "opening_recording": true
               }
             }
           }
         }
-      ]
+      ],
+      "description": "Trace只保留结构化帧和事件，不是连续画面；开场截图复用已有截图，有界保留首音前及首音后20秒的真实截图，可能丢帧或截断，不能用于证明绝对输入延迟。"
     },
     "CooperativeDisconnectJump": {
       "type": "select",
@@ -709,14 +875,22 @@
           "name": "Free",
           "label": "自由选歌房间",
           "pipeline_override": {
-            "VersusRoomTypeConfigure": {"custom_action_param": {"room_type": "free"}}
+            "VersusRoomTypeConfigure": {
+              "custom_action_param": {
+                "room_type": "free"
+              }
+            }
           }
         },
         {
           "name": "Activity",
           "label": "活动歌曲房间",
           "pipeline_override": {
-            "VersusRoomTypeConfigure": {"custom_action_param": {"room_type": "activity"}}
+            "VersusRoomTypeConfigure": {
+              "custom_action_param": {
+                "room_type": "activity"
+              }
+            }
           }
         }
       ]
@@ -730,40 +904,105 @@
           "name": "Easy",
           "label": "Easy",
           "pipeline_override": {
-            "VersusDifficultyConfigure": {"custom_action_param": {"difficulty": "Easy"}},
-            "VersusSpeedSettingsGate": {"custom_action_param": {"entry_mode": "home", "difficulty": "Easy", "require_profile": true, "dpi": 240, "game_fps": 60, "render_quality": "standard"}}
+            "VersusDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Easy"
+              }
+            },
+            "VersusSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Easy",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            }
           }
         },
         {
           "name": "Normal",
           "label": "Normal",
           "pipeline_override": {
-            "VersusDifficultyConfigure": {"custom_action_param": {"difficulty": "Normal"}},
-            "VersusSpeedSettingsGate": {"custom_action_param": {"entry_mode": "home", "difficulty": "Normal", "require_profile": true, "dpi": 240, "game_fps": 60, "render_quality": "standard"}}
+            "VersusDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Normal"
+              }
+            },
+            "VersusSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Normal",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            }
           }
         },
         {
           "name": "Hard",
           "label": "Hard",
           "pipeline_override": {
-            "VersusDifficultyConfigure": {"custom_action_param": {"difficulty": "Hard"}},
-            "VersusSpeedSettingsGate": {"custom_action_param": {"entry_mode": "home", "difficulty": "Hard", "require_profile": true, "dpi": 240, "game_fps": 60, "render_quality": "standard"}}
+            "VersusDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Hard"
+              }
+            },
+            "VersusSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Hard",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            }
           }
         },
         {
           "name": "Expert",
           "label": "Expert",
           "pipeline_override": {
-            "VersusDifficultyConfigure": {"custom_action_param": {"difficulty": "Expert"}},
-            "VersusSpeedSettingsGate": {"custom_action_param": {"entry_mode": "home", "difficulty": "Expert", "require_profile": true, "dpi": 240, "game_fps": 60, "render_quality": "standard"}}
+            "VersusDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Expert"
+              }
+            },
+            "VersusSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Expert",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            }
           }
         },
         {
           "name": "Special",
           "label": "Special",
           "pipeline_override": {
-            "VersusDifficultyConfigure": {"custom_action_param": {"difficulty": "Special"}},
-            "VersusSpeedSettingsGate": {"custom_action_param": {"entry_mode": "home", "difficulty": "Special", "require_profile": true, "dpi": 240, "game_fps": 60, "render_quality": "standard"}}
+            "VersusDifficultyConfigure": {
+              "custom_action_param": {
+                "difficulty": "Special"
+              }
+            },
+            "VersusSpeedSettingsGate": {
+              "custom_action_param": {
+                "entry_mode": "home",
+                "difficulty": "Special",
+                "require_profile": true,
+                "dpi": 240,
+                "game_fps": 60,
+                "render_quality": "standard"
+              }
+            }
           }
         }
       ]
@@ -783,7 +1022,9 @@
       ],
       "pipeline_override": {
         "VersusCountConfigure": {
-          "custom_action_param": {"count": "{Count}"}
+          "custom_action_param": {
+            "count": "{Count}"
+          }
         }
       }
     },
@@ -797,7 +1038,9 @@
           "label": "不指定歌曲",
           "pipeline_override": {
             "VersusSongChoiceConfigure": {
-              "custom_action_param": {"song_choice": "unspecified"}
+              "custom_action_param": {
+                "song_choice": "unspecified"
+              }
             }
           }
         },
@@ -806,7 +1049,9 @@
           "label": "随机选曲（第一轮留 10 秒筛歌）",
           "pipeline_override": {
             "VersusSongChoiceConfigure": {
-              "custom_action_param": {"song_choice": "random"}
+              "custom_action_param": {
+                "song_choice": "random"
+              }
             }
           }
         },
@@ -815,7 +1060,9 @@
           "label": "当前曲目（第一轮留 10 秒筛歌）",
           "pipeline_override": {
             "VersusSongChoiceConfigure": {
-              "custom_action_param": {"song_choice": "current"}
+              "custom_action_param": {
+                "song_choice": "current"
+              }
             }
           }
         }
@@ -833,7 +1080,8 @@
             "VersusDebugConfigure": {
               "custom_action_param": {
                 "debug_recording": false,
-                "diagnostic_trace": true
+                "diagnostic_trace": true,
+                "opening_recording": false
               }
             }
           }
@@ -845,7 +1093,8 @@
             "VersusDebugConfigure": {
               "custom_action_param": {
                 "debug_recording": false,
-                "diagnostic_trace": false
+                "diagnostic_trace": false,
+                "opening_recording": false
               }
             }
           }
@@ -857,12 +1106,27 @@
             "VersusDebugConfigure": {
               "custom_action_param": {
                 "debug_recording": true,
-                "diagnostic_trace": true
+                "diagnostic_trace": true,
+                "opening_recording": false
+              }
+            }
+          }
+        },
+        {
+          "name": "Opening",
+          "label": "开场截图＋轻量 Trace（首音后20秒）",
+          "pipeline_override": {
+            "VersusDebugConfigure": {
+              "custom_action_param": {
+                "debug_recording": false,
+                "diagnostic_trace": true,
+                "opening_recording": true
               }
             }
           }
         }
-      ]
+      ],
+      "description": "Trace只保留结构化帧和事件，不是连续画面；开场截图复用已有截图，有界保留首音前及首音后20秒的真实截图，可能丢帧或截断，不能用于证明绝对输入延迟。"
     },
     "VersusDisconnectJump": {
       "type": "select",
@@ -1135,7 +1399,9 @@
       ],
       "pipeline_override": {
         "AutoLiveRoundGate": {
-          "custom_recognition_param": {"total": "{Count}"},
+          "custom_recognition_param": {
+            "total": "{Count}"
+          },
           "custom_action_param": {
             "task_name": "AutoLive",
             "label": "自动演出",
@@ -1651,7 +1917,9 @@
       ],
       "pipeline_override": {
         "RealtimeLiveRoundGate": {
-          "custom_recognition_param": {"total": "{Count}"},
+          "custom_recognition_param": {
+            "total": "{Count}"
+          },
           "custom_action_param": {
             "task_name": "RealtimeLive",
             "label": "单人实时演奏",
@@ -1673,7 +1941,8 @@
             "RealtimeLiveDebugGate": {
               "custom_action_param": {
                 "debug_recording": false,
-                "diagnostic_trace": true
+                "diagnostic_trace": true,
+                "opening_recording": false
               }
             }
           }
@@ -1685,7 +1954,8 @@
             "RealtimeLiveDebugGate": {
               "custom_action_param": {
                 "debug_recording": false,
-                "diagnostic_trace": false
+                "diagnostic_trace": false,
+                "opening_recording": false
               }
             }
           }
@@ -1697,12 +1967,27 @@
             "RealtimeLiveDebugGate": {
               "custom_action_param": {
                 "debug_recording": true,
-                "diagnostic_trace": true
+                "diagnostic_trace": true,
+                "opening_recording": false
+              }
+            }
+          }
+        },
+        {
+          "name": "Opening",
+          "label": "开场截图＋轻量 Trace（首音后20秒）",
+          "pipeline_override": {
+            "RealtimeLiveDebugGate": {
+              "custom_action_param": {
+                "debug_recording": false,
+                "diagnostic_trace": true,
+                "opening_recording": true
               }
             }
           }
         }
-      ]
+      ],
+      "description": "Trace只保留结构化帧和事件，不是连续画面；开场截图复用已有截图，有界保留首音前及首音后20秒的真实截图，可能丢帧或截断，不能用于证明绝对输入延迟。"
     },
     "ContinuousRealtimeDifficulty": {
       "type": "select",
@@ -1783,7 +2068,8 @@
             "ContinuousRealtimeDebugConfigure": {
               "custom_action_param": {
                 "debug_recording": false,
-                "diagnostic_trace": true
+                "diagnostic_trace": true,
+                "opening_recording": false
               }
             }
           }
@@ -1795,7 +2081,8 @@
             "ContinuousRealtimeDebugConfigure": {
               "custom_action_param": {
                 "debug_recording": false,
-                "diagnostic_trace": false
+                "diagnostic_trace": false,
+                "opening_recording": false
               }
             }
           }
@@ -1807,12 +2094,27 @@
             "ContinuousRealtimeDebugConfigure": {
               "custom_action_param": {
                 "debug_recording": true,
-                "diagnostic_trace": true
+                "diagnostic_trace": true,
+                "opening_recording": false
+              }
+            }
+          }
+        },
+        {
+          "name": "Opening",
+          "label": "开场截图＋轻量 Trace（首音后20秒）",
+          "pipeline_override": {
+            "ContinuousRealtimeDebugConfigure": {
+              "custom_action_param": {
+                "debug_recording": false,
+                "diagnostic_trace": true,
+                "opening_recording": true
               }
             }
           }
         }
-      ]
+      ],
+      "description": "Trace只保留结构化帧和事件，不是连续画面；开场截图复用已有截图，有界保留首音前及首音后20秒的真实截图，可能丢帧或截断，不能用于证明绝对输入延迟。"
     },
     "CalibrationSongMode": {
       "type": "select",
@@ -1982,7 +2284,8 @@
             "CalibrationDebugSetting": {
               "custom_action_param": {
                 "debug_recording": false,
-                "diagnostic_trace": true
+                "diagnostic_trace": true,
+                "opening_recording": false
               }
             }
           }
@@ -1994,7 +2297,8 @@
             "CalibrationDebugSetting": {
               "custom_action_param": {
                 "debug_recording": false,
-                "diagnostic_trace": false
+                "diagnostic_trace": false,
+                "opening_recording": false
               }
             }
           }
@@ -2006,12 +2310,27 @@
             "CalibrationDebugSetting": {
               "custom_action_param": {
                 "debug_recording": true,
-                "diagnostic_trace": true
+                "diagnostic_trace": true,
+                "opening_recording": false
+              }
+            }
+          }
+        },
+        {
+          "name": "Opening",
+          "label": "开场截图＋轻量 Trace（首音后20秒）",
+          "pipeline_override": {
+            "CalibrationDebugSetting": {
+              "custom_action_param": {
+                "debug_recording": false,
+                "diagnostic_trace": true,
+                "opening_recording": true
               }
             }
           }
         }
-      ]
+      ],
+      "description": "Trace只保留结构化帧和事件，不是连续画面；开场截图复用已有截图，有界保留首音前及首音后20秒的真实截图，可能丢帧或截断，不能用于证明绝对输入延迟。"
     },
     "ChallengeDifficulty": {
       "type": "select",
@@ -2338,7 +2657,9 @@
       ],
       "pipeline_override": {
         "ChallengeRoundGate": {
-          "custom_recognition_param": {"total": "{Count}"},
+          "custom_recognition_param": {
+            "total": "{Count}"
+          },
           "custom_action_param": {
             "task_name": "ChallengeLive",
             "label": "挑战演出",
@@ -2360,7 +2681,8 @@
             "ChallengeDebugGate": {
               "custom_action_param": {
                 "debug_recording": false,
-                "diagnostic_trace": true
+                "diagnostic_trace": true,
+                "opening_recording": false
               }
             }
           }
@@ -2372,7 +2694,8 @@
             "ChallengeDebugGate": {
               "custom_action_param": {
                 "debug_recording": false,
-                "diagnostic_trace": false
+                "diagnostic_trace": false,
+                "opening_recording": false
               }
             }
           }
@@ -2384,7 +2707,470 @@
             "ChallengeDebugGate": {
               "custom_action_param": {
                 "debug_recording": true,
-                "diagnostic_trace": true
+                "diagnostic_trace": true,
+                "opening_recording": false
+              }
+            }
+          }
+        },
+        {
+          "name": "Opening",
+          "label": "开场截图＋轻量 Trace（首音后20秒）",
+          "pipeline_override": {
+            "ChallengeDebugGate": {
+              "custom_action_param": {
+                "debug_recording": false,
+                "diagnostic_trace": true,
+                "opening_recording": true
+              }
+            }
+          }
+        }
+      ],
+      "description": "Trace只保留结构化帧和事件，不是连续画面；开场截图复用已有截图，有界保留首音前及首音后20秒的真实截图，可能丢帧或截断，不能用于证明绝对输入延迟。"
+    },
+    "AutoLiveStaminaRefill": {
+      "type": "select",
+      "label": "体力补充（仅主页）",
+      "description": "仅在主页体力不足下一局（组曲为完整下一组三首）时补充。长任务按约20点、18–24点目标带规划，优先减少返主页及可避免的最后1/2局缺口；剩余需求不超过24点时优先一次覆盖，已够下一局则不预补。库存不足目标时按可用道具补充；仅大罐可能有必要超量。完整演出及结算后不足才回主页，可能换房；不使用星石，无累计补充上限。",
+      "default_case": "Off",
+      "cases": [
+        {
+          "name": "Off",
+          "label": "关闭",
+          "pipeline_override": {
+            "AutoLiveStaminaRefillConfigure": {
+              "custom_action_param": {
+                "task_mode": "AutoLive",
+                "stamina_refill_enabled": false,
+                "stamina_refill_small_enabled": true,
+                "stamina_refill_large_enabled": true
+              }
+            }
+          }
+        },
+        {
+          "name": "SmallOnly",
+          "label": "仅小火罐（+1）",
+          "pipeline_override": {
+            "AutoLiveStaminaRefillConfigure": {
+              "custom_action_param": {
+                "task_mode": "AutoLive",
+                "stamina_refill_enabled": true,
+                "stamina_refill_small_enabled": true,
+                "stamina_refill_large_enabled": false
+              }
+            }
+          }
+        },
+        {
+          "name": "LargeOnly",
+          "label": "仅大火罐（+10）",
+          "pipeline_override": {
+            "AutoLiveStaminaRefillConfigure": {
+              "custom_action_param": {
+                "task_mode": "AutoLive",
+                "stamina_refill_enabled": true,
+                "stamina_refill_small_enabled": false,
+                "stamina_refill_large_enabled": true
+              }
+            }
+          }
+        },
+        {
+          "name": "Both",
+          "label": "大小火罐智能补充",
+          "pipeline_override": {
+            "AutoLiveStaminaRefillConfigure": {
+              "custom_action_param": {
+                "task_mode": "AutoLive",
+                "stamina_refill_enabled": true,
+                "stamina_refill_small_enabled": true,
+                "stamina_refill_large_enabled": true
+              }
+            }
+          }
+        }
+      ]
+    },
+    "RealtimeLiveStaminaRefill": {
+      "type": "select",
+      "label": "体力补充（仅主页）",
+      "description": "仅在主页体力不足下一局（组曲为完整下一组三首）时补充。长任务按约20点、18–24点目标带规划，优先减少返主页及可避免的最后1/2局缺口；剩余需求不超过24点时优先一次覆盖，已够下一局则不预补。库存不足目标时按可用道具补充；仅大罐可能有必要超量。完整演出及结算后不足才回主页，可能换房；不使用星石，无累计补充上限。",
+      "default_case": "Off",
+      "cases": [
+        {
+          "name": "Off",
+          "label": "关闭",
+          "pipeline_override": {
+            "RealtimeLiveStaminaRefillConfigure": {
+              "custom_action_param": {
+                "task_mode": "RealtimeLive",
+                "stamina_refill_enabled": false,
+                "stamina_refill_small_enabled": true,
+                "stamina_refill_large_enabled": true
+              }
+            }
+          }
+        },
+        {
+          "name": "SmallOnly",
+          "label": "仅小火罐（+1）",
+          "pipeline_override": {
+            "RealtimeLiveStaminaRefillConfigure": {
+              "custom_action_param": {
+                "task_mode": "RealtimeLive",
+                "stamina_refill_enabled": true,
+                "stamina_refill_small_enabled": true,
+                "stamina_refill_large_enabled": false
+              }
+            }
+          }
+        },
+        {
+          "name": "LargeOnly",
+          "label": "仅大火罐（+10）",
+          "pipeline_override": {
+            "RealtimeLiveStaminaRefillConfigure": {
+              "custom_action_param": {
+                "task_mode": "RealtimeLive",
+                "stamina_refill_enabled": true,
+                "stamina_refill_small_enabled": false,
+                "stamina_refill_large_enabled": true
+              }
+            }
+          }
+        },
+        {
+          "name": "Both",
+          "label": "大小火罐智能补充",
+          "pipeline_override": {
+            "RealtimeLiveStaminaRefillConfigure": {
+              "custom_action_param": {
+                "task_mode": "RealtimeLive",
+                "stamina_refill_enabled": true,
+                "stamina_refill_small_enabled": true,
+                "stamina_refill_large_enabled": true
+              }
+            }
+          }
+        }
+      ]
+    },
+    "CooperativeLiveStaminaRefill": {
+      "type": "select",
+      "label": "体力补充（仅主页）",
+      "description": "仅在主页体力不足下一局（组曲为完整下一组三首）时补充。长任务按约20点、18–24点目标带规划，优先减少返主页及可避免的最后1/2局缺口；剩余需求不超过24点时优先一次覆盖，已够下一局则不预补。库存不足目标时按可用道具补充；仅大罐可能有必要超量。完整演出及结算后不足才回主页，可能换房；不使用星石，无累计补充上限。",
+      "default_case": "Off",
+      "cases": [
+        {
+          "name": "Off",
+          "label": "关闭",
+          "pipeline_override": {
+            "CooperativeLiveStaminaRefillConfigure": {
+              "custom_action_param": {
+                "task_mode": "CooperativeLive",
+                "stamina_refill_enabled": false,
+                "stamina_refill_small_enabled": true,
+                "stamina_refill_large_enabled": true
+              }
+            }
+          }
+        },
+        {
+          "name": "SmallOnly",
+          "label": "仅小火罐（+1）",
+          "pipeline_override": {
+            "CooperativeLiveStaminaRefillConfigure": {
+              "custom_action_param": {
+                "task_mode": "CooperativeLive",
+                "stamina_refill_enabled": true,
+                "stamina_refill_small_enabled": true,
+                "stamina_refill_large_enabled": false
+              }
+            }
+          }
+        },
+        {
+          "name": "LargeOnly",
+          "label": "仅大火罐（+10）",
+          "pipeline_override": {
+            "CooperativeLiveStaminaRefillConfigure": {
+              "custom_action_param": {
+                "task_mode": "CooperativeLive",
+                "stamina_refill_enabled": true,
+                "stamina_refill_small_enabled": false,
+                "stamina_refill_large_enabled": true
+              }
+            }
+          }
+        },
+        {
+          "name": "Both",
+          "label": "大小火罐智能补充",
+          "pipeline_override": {
+            "CooperativeLiveStaminaRefillConfigure": {
+              "custom_action_param": {
+                "task_mode": "CooperativeLive",
+                "stamina_refill_enabled": true,
+                "stamina_refill_small_enabled": true,
+                "stamina_refill_large_enabled": true
+              }
+            }
+          }
+        }
+      ]
+    },
+    "VersusLiveStaminaRefill": {
+      "type": "select",
+      "label": "体力补充（仅主页）",
+      "description": "仅在主页体力不足下一局（组曲为完整下一组三首）时补充。长任务按约20点、18–24点目标带规划，优先减少返主页及可避免的最后1/2局缺口；剩余需求不超过24点时优先一次覆盖，已够下一局则不预补。库存不足目标时按可用道具补充；仅大罐可能有必要超量。完整演出及结算后不足才回主页，可能换房；不使用星石，无累计补充上限。",
+      "default_case": "Off",
+      "cases": [
+        {
+          "name": "Off",
+          "label": "关闭",
+          "pipeline_override": {
+            "VersusLiveStaminaRefillConfigure": {
+              "custom_action_param": {
+                "task_mode": "VersusLive",
+                "stamina_refill_enabled": false,
+                "stamina_refill_small_enabled": true,
+                "stamina_refill_large_enabled": true
+              }
+            }
+          }
+        },
+        {
+          "name": "SmallOnly",
+          "label": "仅小火罐（+1）",
+          "pipeline_override": {
+            "VersusLiveStaminaRefillConfigure": {
+              "custom_action_param": {
+                "task_mode": "VersusLive",
+                "stamina_refill_enabled": true,
+                "stamina_refill_small_enabled": true,
+                "stamina_refill_large_enabled": false
+              }
+            }
+          }
+        },
+        {
+          "name": "LargeOnly",
+          "label": "仅大火罐（+10）",
+          "pipeline_override": {
+            "VersusLiveStaminaRefillConfigure": {
+              "custom_action_param": {
+                "task_mode": "VersusLive",
+                "stamina_refill_enabled": true,
+                "stamina_refill_small_enabled": false,
+                "stamina_refill_large_enabled": true
+              }
+            }
+          }
+        },
+        {
+          "name": "Both",
+          "label": "大小火罐智能补充",
+          "pipeline_override": {
+            "VersusLiveStaminaRefillConfigure": {
+              "custom_action_param": {
+                "task_mode": "VersusLive",
+                "stamina_refill_enabled": true,
+                "stamina_refill_small_enabled": true,
+                "stamina_refill_large_enabled": true
+              }
+            }
+          }
+        }
+      ]
+    },
+    "MedleyLiveStaminaRefill": {
+      "type": "select",
+      "label": "体力补充（仅主页）",
+      "description": "仅在主页体力不足下一局（组曲为完整下一组三首）时补充。长任务按约20点、18–24点目标带规划，优先减少返主页及可避免的最后1/2局缺口；剩余需求不超过24点时优先一次覆盖，已够下一局则不预补。库存不足目标时按可用道具补充；仅大罐可能有必要超量。完整演出及结算后不足才回主页，可能换房；不使用星石，无累计补充上限。",
+      "default_case": "Off",
+      "cases": [
+        {
+          "name": "Off",
+          "label": "关闭",
+          "pipeline_override": {
+            "MedleyLiveStaminaRefillConfigure": {
+              "custom_action_param": {
+                "task_mode": "MedleyLive",
+                "stamina_refill_enabled": false,
+                "stamina_refill_small_enabled": true,
+                "stamina_refill_large_enabled": true
+              }
+            }
+          }
+        },
+        {
+          "name": "SmallOnly",
+          "label": "仅小火罐（+1）",
+          "pipeline_override": {
+            "MedleyLiveStaminaRefillConfigure": {
+              "custom_action_param": {
+                "task_mode": "MedleyLive",
+                "stamina_refill_enabled": true,
+                "stamina_refill_small_enabled": true,
+                "stamina_refill_large_enabled": false
+              }
+            }
+          }
+        },
+        {
+          "name": "LargeOnly",
+          "label": "仅大火罐（+10）",
+          "pipeline_override": {
+            "MedleyLiveStaminaRefillConfigure": {
+              "custom_action_param": {
+                "task_mode": "MedleyLive",
+                "stamina_refill_enabled": true,
+                "stamina_refill_small_enabled": false,
+                "stamina_refill_large_enabled": true
+              }
+            }
+          }
+        },
+        {
+          "name": "Both",
+          "label": "大小火罐智能补充",
+          "pipeline_override": {
+            "MedleyLiveStaminaRefillConfigure": {
+              "custom_action_param": {
+                "task_mode": "MedleyLive",
+                "stamina_refill_enabled": true,
+                "stamina_refill_small_enabled": true,
+                "stamina_refill_large_enabled": true
+              }
+            }
+          }
+        }
+      ]
+    },
+    "RealtimeCalibrationStaminaRefill": {
+      "type": "select",
+      "label": "体力补充（仅主页）",
+      "description": "仅在主页体力不足下一局（组曲为完整下一组三首）时补充。长任务按约20点、18–24点目标带规划，优先减少返主页及可避免的最后1/2局缺口；剩余需求不超过24点时优先一次覆盖，已够下一局则不预补。库存不足目标时按可用道具补充；仅大罐可能有必要超量。完整演出及结算后不足才回主页，可能换房；不使用星石，无累计补充上限。",
+      "default_case": "Off",
+      "cases": [
+        {
+          "name": "Off",
+          "label": "关闭",
+          "pipeline_override": {
+            "RealtimeCalibrationStaminaRefillConfigure": {
+              "custom_action_param": {
+                "task_mode": "RealtimeCalibration",
+                "stamina_refill_enabled": false,
+                "stamina_refill_small_enabled": true,
+                "stamina_refill_large_enabled": true
+              }
+            }
+          }
+        },
+        {
+          "name": "SmallOnly",
+          "label": "仅小火罐（+1）",
+          "pipeline_override": {
+            "RealtimeCalibrationStaminaRefillConfigure": {
+              "custom_action_param": {
+                "task_mode": "RealtimeCalibration",
+                "stamina_refill_enabled": true,
+                "stamina_refill_small_enabled": true,
+                "stamina_refill_large_enabled": false
+              }
+            }
+          }
+        },
+        {
+          "name": "LargeOnly",
+          "label": "仅大火罐（+10）",
+          "pipeline_override": {
+            "RealtimeCalibrationStaminaRefillConfigure": {
+              "custom_action_param": {
+                "task_mode": "RealtimeCalibration",
+                "stamina_refill_enabled": true,
+                "stamina_refill_small_enabled": false,
+                "stamina_refill_large_enabled": true
+              }
+            }
+          }
+        },
+        {
+          "name": "Both",
+          "label": "大小火罐智能补充",
+          "pipeline_override": {
+            "RealtimeCalibrationStaminaRefillConfigure": {
+              "custom_action_param": {
+                "task_mode": "RealtimeCalibration",
+                "stamina_refill_enabled": true,
+                "stamina_refill_small_enabled": true,
+                "stamina_refill_large_enabled": true
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ContinuousRealtimeLiveStaminaRefill": {
+      "type": "select",
+      "label": "体力补充（仅主页）",
+      "description": "仅在主页体力不足下一局（组曲为完整下一组三首）时补充。长任务按约20点、18–24点目标带规划，优先减少返主页及可避免的最后1/2局缺口；剩余需求不超过24点时优先一次覆盖，已够下一局则不预补。库存不足目标时按可用道具补充；仅大罐可能有必要超量。完整演出及结算后不足才回主页，可能换房；不使用星石，无累计补充上限。",
+      "default_case": "Off",
+      "cases": [
+        {
+          "name": "Off",
+          "label": "关闭",
+          "pipeline_override": {
+            "ContinuousRealtimeLiveStaminaRefillConfigure": {
+              "custom_action_param": {
+                "task_mode": "ContinuousRealtimeLive",
+                "stamina_refill_enabled": false,
+                "stamina_refill_small_enabled": true,
+                "stamina_refill_large_enabled": true
+              }
+            }
+          }
+        },
+        {
+          "name": "SmallOnly",
+          "label": "仅小火罐（+1）",
+          "pipeline_override": {
+            "ContinuousRealtimeLiveStaminaRefillConfigure": {
+              "custom_action_param": {
+                "task_mode": "ContinuousRealtimeLive",
+                "stamina_refill_enabled": true,
+                "stamina_refill_small_enabled": true,
+                "stamina_refill_large_enabled": false
+              }
+            }
+          }
+        },
+        {
+          "name": "LargeOnly",
+          "label": "仅大火罐（+10）",
+          "pipeline_override": {
+            "ContinuousRealtimeLiveStaminaRefillConfigure": {
+              "custom_action_param": {
+                "task_mode": "ContinuousRealtimeLive",
+                "stamina_refill_enabled": true,
+                "stamina_refill_small_enabled": false,
+                "stamina_refill_large_enabled": true
+              }
+            }
+          }
+        },
+        {
+          "name": "Both",
+          "label": "大小火罐智能补充",
+          "pipeline_override": {
+            "ContinuousRealtimeLiveStaminaRefillConfigure": {
+              "custom_action_param": {
+                "task_mode": "ContinuousRealtimeLive",
+                "stamina_refill_enabled": true,
+                "stamina_refill_small_enabled": true,
+                "stamina_refill_large_enabled": true
               }
             }
           }

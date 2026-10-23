@@ -326,3 +326,51 @@ def test_experimental_options_only_enable_feedback_for_formal_modes(tmp_path, mo
     assert constructed[0]["life_feedback_enabled"] is enabled
     assert constructed[0]["wait_jitter_trial_enabled"] is True
     assert constructed[0]["early_start_enabled"] is True
+
+
+@pytest.mark.parametrize("stopped",[False,True])
+def test_opening_wait_observer_handoff_and_stop_cleanup_without_caching(tmp_path,stopped):
+    manager=NativePrearmManager(timer_factory=TimerFactory())
+    chart=tmp_path/"48"/"expert.json"
+    backend=FakeBackend()
+    observer=lambda:None
+    should_stop=lambda:stopped
+    seen=[]
+    def wait(timeout_s,**kwargs):
+        seen.append(kwargs)
+        if kwargs['should_stop']():raise InterruptedError("用户已停止任务")
+        kwargs['wait_observer']()
+        return True
+    backend.wait_until_ready=wait
+    kwargs=dict(controller=SimpleNamespace(info={"adb_path":"C:/tools/adb.exe","adb_serial":"test-device"}),
+        live_run=_confirmed_run(),difficulty="Expert",project_root=tmp_path,
+        runtime_options={"native_realtime_enabled":True},repository=_repository(chart),
+        backend_factory=lambda *a,**kw:backend,manager=manager,
+        wait_observer=observer,should_stop=should_stop)
+    if stopped:
+        with pytest.raises(InterruptedError):prepare_native_for_settings_gate(**kwargs)
+        assert backend.stop_calls==1
+        with pytest.raises(NativePrearmError):manager.consume("run-48",chart)
+    else:
+        assert prepare_native_for_settings_gate(**kwargs) is not None
+        assert manager.consume("run-48",chart) is backend
+    assert seen==[{"wait_observer":observer,"should_stop":should_stop}]
+
+
+def test_opening_stop_race_before_manager_cache_cleans_backend(tmp_path):
+    manager=NativePrearmManager(timer_factory=TimerFactory())
+    chart=tmp_path/"48"/"expert.json"
+    backend=FakeBackend()
+    stopping=[False]
+    def ready(timeout_s,**kwargs):
+        stopping[0]=True
+        return True
+    backend.wait_until_ready=ready
+    with pytest.raises(InterruptedError):
+        prepare_native_for_settings_gate(controller=SimpleNamespace(info={"adb_path":"C:/tools/adb.exe","adb_serial":"test-device"}),
+            live_run=_confirmed_run(),difficulty="Expert",project_root=tmp_path,
+            runtime_options={"native_realtime_enabled":True},repository=_repository(chart),
+            backend_factory=lambda *a,**kw:backend,manager=manager,
+            wait_observer=lambda:None,should_stop=lambda:stopping[0])
+    assert backend.stop_calls==1
+    with pytest.raises(NativePrearmError):manager.consume("run-48",chart)

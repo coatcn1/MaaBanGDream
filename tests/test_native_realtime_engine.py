@@ -3373,3 +3373,51 @@ def test_static_go_prelude_junk_produces_no_observations():
     # 开场 0~5 秒只有 GO/前奏静态残影，运动门禁必须全部排除。
     observations = sync_front.extract_observations(TRACE_64, until_s=5.0)
     assert observations == []
+
+
+@pytest.mark.parametrize('broken_marker',[False,True])
+def test_opening_observes_native_gate_without_changing_capture_cadence(monkeypatch,broken_marker):
+    import sys
+    original=RealtimeEngine
+    phases=[];markers=[]
+    class Recorder:
+        opening_seconds=20
+        supports_frame_metadata=True
+        def record_phase(self,image,timestamp,phase,**kwargs):phases.append((timestamp,phase,kwargs.get('frame_metadata')))
+        def mark_first_note(self,stamp):
+            markers.append(stamp)
+            if broken_marker:raise OSError('optional marker failed')
+        def record(self,*a,**kw):pass
+        def close(self):pass
+    def build(*a,**kw):
+        kw['debug_recorder']=Recorder()
+        return original(*a,**kw)
+    monkeypatch.setattr(sys.modules[__name__],'RealtimeEngine',build)
+    test_engine_waits_for_photogate_then_switches_to_5hz_monitor(monkeypatch)
+    gate=[entry for entry in phases if entry[1]=='native-first-note-gate']
+    assert len(gate)==3 and all('observed_s' in entry[2] for entry in gate)
+    assert len(markers)==1
+
+
+def test_prearm_optional_observer_and_broken_stdout_still_reach_ready(monkeypatch):
+    backend = object.__new__(NativeMinitouchBackend)
+    backend._state = "arming"
+    backend._device_error = None
+    backend._device = SimpleNamespace(connected=True)
+    backend._require_probe = False
+    joins, observations = [], []
+    class DeviceThread:
+        def is_alive(self):
+            return len(joins) < 2
+        def join(self, timeout):
+            joins.append(timeout)
+    backend._device_thread = DeviceThread()
+    def observe():
+        observations.append(True)
+        raise OSError("optional screenshot unavailable")
+    def broken_print(*args, **kwargs):
+        raise BrokenPipeError("stdout unavailable")
+    monkeypatch.setattr("builtins.print", broken_print)
+    assert backend.wait_until_ready(2, wait_observer=observe, should_stop=lambda: False)
+    assert observations == [True]
+    assert backend._state == "armed"

@@ -233,7 +233,13 @@ def test_versus_normal_configuration_and_start_do_not_require_trial_env(monkeypa
     assert len(started) == 1
     assert started[0]["room_type"] == "free"
     nodes = json.loads((versus.PROJECT_ROOT / "resource/pipeline/versus_live.json").read_text(encoding="utf-8"))
-    assert nodes["VersusProcessConflictGuard"]["next"] == ["VersusRecover"]
+    assert nodes["VersusLive"]["next"] == ["VersusProcessConflictGuard"]
+    assert nodes["VersusProcessConflictGuard"]["custom_action"] == "ProcessConflictGuard"
+    assert nodes["VersusProcessConflictGuard"]["next"] == ["VersusLiveStaminaRefillConfigure"]
+    configure = nodes["VersusLiveStaminaRefillConfigure"]
+    assert configure["custom_action"] == "StaminaRefillConfigure"
+    assert configure["custom_action_param"]["stamina_refill_enabled"] is False
+    assert configure["next"] == ["VersusRecover"]
     assert "VersusTrialGate" not in nodes
     assert not hasattr(versus, "VersusLiveTrialGate")
 

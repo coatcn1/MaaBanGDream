@@ -172,6 +172,8 @@ def test_debug_recorder_writes_lossless_trace_and_replay_summary(tmp_path):
         "trace_frame": 0,
         "monotonic_timestamp": 1.25,
         "elapsed_ms": 0.0,
+        "phase": "engine",
+        "frame_metadata": {},
     }]
 
 
@@ -683,3 +685,327 @@ def test_record_write_failure_is_reported_at_close(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="实时调试录像写入失败"):
         recorder.close()
+
+
+def _opening_record(recorder,image,timestamp,phase="engine",**kwargs):
+    if "diagnostics" in kwargs:
+        kwargs["diagnostics"] = [dict(item, gate_event_observed_s=item.get("gate_event_observed_s",timestamp)) for item in kwargs["diagnostics"]]
+    recorder.record_phase(image,timestamp,phase,**kwargs)
+    deadline=time.monotonic()+2
+    while not recorder._record_queue.empty() and time.monotonic()<deadline:time.sleep(.001)
+
+
+def test_opening_screenshots_keep_real_timestamps_and_trace_after_cutoff(tmp_path):
+    recorder=RealtimeDebugRecorder(tmp_path,opening_seconds=20)
+    assert recorder.video_enabled is False
+    image=np.zeros((24,32,3),np.uint8)
+    _opening_record(recorder,image,10,"native-first-note-gate",frame_metadata={"sequence":1})
+    recorder.mark_first_note(11)
+    _opening_record(recorder,image,11,frame_metadata={"sequence":2})
+    _opening_record(recorder,image,30.9,frame_metadata={"sequence":3})
+    _opening_record(recorder,image,31.1,frame_metadata={"sequence":4})
+    assert not list(recorder.output_dir.glob("opening/*.png"))
+    recorder.close()
+    summary=json.loads((recorder.output_dir/'summary.json').read_text(encoding='utf-8'))
+    assert summary['recording_mode']=='opening-screenshots+trace'
+    assert summary['trace_frames']==4 and summary['video_frames']==0
+    assert summary['opening_screenshots_written']==3
+    assert summary['opening_window_reached'] and not summary['opening_truncated']
+    assert summary['opening_flush_status']=='complete'
+    mapping=[json.loads(line) for line in (recorder.output_dir/'opening_frames.jsonl').read_text(encoding='utf-8').splitlines()]
+    assert [row['observed_timestamp'] for row in mapping]==[10,11,30.9]
+    assert mapping[0]['first_note_relative_ms']==-1000
+    assert all((recorder.output_dir/row['path']).is_file() for row in mapping)
+    assert not list(recorder.output_dir.glob('*.mkv'))
+    assert not (recorder.output_dir/'video_frames.jsonl').exists()
+    assert all('held' not in row for row in mapping)
+
+
+def test_opening_buffer_preserves_early_rejected_candidate_and_recent_trajectory(tmp_path):
+    recorder=RealtimeDebugRecorder(tmp_path,opening_seconds=20)
+    image=np.zeros((12,16,3),np.uint8)
+    _opening_record(recorder,image,0,'preparation-identity')
+    _opening_record(recorder,image,1,'native-first-note-gate',diagnostics=[{'event':'native-start-observation','gate_event':{'event':'ignored-prelude'}}])
+    for stamp in range(2,160):_opening_record(recorder,image,float(stamp),'native-first-note-gate')
+    recorder.mark_first_note(160)
+    for index in range(101):_opening_record(recorder,image,160+index*.2)
+    _opening_record(recorder,image,181)
+    recorder.close()
+    mapping=[json.loads(line) for line in (recorder.output_dir/'opening_frames.jsonl').read_text(encoding='utf-8').splitlines()]
+    assert len(mapping)<=128
+    assert any(row['observed_timestamp']==1 and 'gate-event:ignored-prelude' in row['retention_reasons'] for row in mapping)
+    assert mapping[0]['phase']=='preparation-identity'
+    assert any(row['observed_timestamp']==159 for row in mapping)
+    assert any(row['observed_timestamp']>=179 for row in mapping)
+    summary=json.loads((recorder.output_dir/'summary.json').read_text(encoding='utf-8'))
+    assert summary['opening_capacity_evictions']>0 and summary['opening_sampled_out']>0
+
+
+def test_opening_reused_or_duplicate_sequence_never_writes_fake_png(tmp_path):
+    recorder=RealtimeDebugRecorder(tmp_path,opening_seconds=20)
+    image=np.zeros((12,16,3),np.uint8)
+    for stamp,metadata in [(1,{'sequence':1}),(2,{'sequence':1}),(3,{'sequence':2,'reused':True}),(4,{'sequence':3,'fresh':False})]:
+        _opening_record(recorder,image,stamp,'native-first-note-gate',frame_metadata=metadata)
+    recorder.close()
+    summary=json.loads((recorder.output_dir/'summary.json').read_text(encoding='utf-8'))
+    assert summary['opening_screenshots_written']==1
+    assert summary['opening_duplicate_frames']==3
+    assert summary['opening_truncated'] is True
+
+
+def test_opening_png_failure_is_reported_only_after_flush(monkeypatch,tmp_path):
+    recorder=RealtimeDebugRecorder(tmp_path,opening_seconds=20)
+    _opening_record(recorder,np.zeros((12,16,3),np.uint8),1)
+    monkeypatch.setattr('agent.realtime.debug_recorder.imwrite_unicode',lambda *a:False)
+    with pytest.raises(RuntimeError):recorder.close()
+    summary=json.loads((recorder.output_dir/'summary.json').read_text(encoding='utf-8'))
+    assert summary['opening_flush_status']=='failed'
+
+
+def test_opening_priority_pins_survive_event_kind_pressure_and_flush_is_deferred(tmp_path):
+    recorder=RealtimeDebugRecorder(tmp_path,opening_seconds=20)
+    image=np.zeros((12,16,3),np.uint8)
+    checkpoint=recorder.save_checkpoint(image,'cached-preparation','unknown-time')
+    for index in range(20):
+        _opening_record(recorder,image,float(index),'native-first-note-gate',diagnostics=[{'gate_event':{'event':f'event-{index}'}}])
+    _opening_record(recorder,image,20,'native-first-note-gate',diagnostics=[{'gate_event':{'event':'ignored-prelude'}}])
+    _opening_record(recorder,image,21,'native-first-note-gate',frame_metadata={'black':True})
+    _opening_record(recorder,image,22,'native-first-note-gate',diagnostics=[{'triggered':True}])
+    for stamp in range(23,100):_opening_record(recorder,image,float(stamp),'native-first-note-gate')
+    assert not checkpoint.exists()
+    assert not list(recorder.output_dir.rglob('*.png'))
+    recorder.close()
+    rows=[json.loads(line) for line in (recorder.output_dir/'opening_frames.jsonl').read_text(encoding='utf-8').splitlines()]
+    timestamps={row['observed_timestamp'] for row in rows}
+    assert {20,21,22}.issubset(timestamps)
+    assert checkpoint.exists()
+    assert len(rows)+1<=128
+
+
+def test_opening_index_failure_does_not_publish_complete(monkeypatch,tmp_path):
+    recorder=RealtimeDebugRecorder(tmp_path,opening_seconds=20)
+    _opening_record(recorder,np.zeros((12,16,3),np.uint8),1)
+    monkeypatch.setattr('agent.realtime.debug_recorder.imwrite_unicode',lambda *a:False)
+    with pytest.raises(RuntimeError):recorder.close()
+    summary=json.loads((recorder.output_dir/'summary.json').read_text(encoding='utf-8'))
+    assert summary['opening_flush_status']=='failed'
+    assert summary['recorder_error']
+
+
+def test_opening_checkpoint_after_close_keeps_low_frequency_api(tmp_path):
+    recorder=RealtimeDebugRecorder(tmp_path,opening_seconds=20)
+    recorder.close()
+    path=recorder.save_checkpoint(np.zeros((12,16,3),np.uint8),'result','complete')
+    assert path.exists()
+
+
+def test_opening_old_gate_event_state_does_not_pin_an_unrelated_current_png(tmp_path):
+    recorder=RealtimeDebugRecorder(tmp_path,opening_seconds=20)
+    image=np.zeros((12,16,3),np.uint8)
+    _opening_record(recorder,image,2,'native-first-note-gate',diagnostics=[{
+        'gate_event':{'event':'ignored-prelude'},'gate_event_observed_s':1.0}])
+    for stamp in range(3,50):_opening_record(recorder,image,float(stamp),'native-first-note-gate')
+    recorder.close()
+    rows=[json.loads(line) for line in (recorder.output_dir/'opening_frames.jsonl').read_text(encoding='utf-8').splitlines()]
+    assert not any('gate-event:ignored-prelude' in row['retention_reasons'] for row in rows)
+
+
+def test_opening_keeps_full_life_window_and_feedback_separate_from_checkpoints(tmp_path):
+    from agent.realtime.vision_io import imread_unicode
+
+    recorder = RealtimeDebugRecorder(tmp_path, opening_seconds=20)
+    for index in range(21):
+        image = np.full((720, 1280, 3), index, np.uint8)
+        recorder.record_native_life(
+            image, index * .2, 1000 if index < 10 else 900,
+            visible=True, alive_confirmed=True, frame_metadata={"pixel": index},
+        )
+        deadline = time.monotonic() + 2
+        while not recorder._record_queue.empty() and time.monotonic() < deadline:
+            time.sleep(.001)
+    for index in range(5):
+        recorder.record_native_feedback(
+            np.full((720, 1280, 3), 30 + index, np.uint8), 21 + index,
+            {"pixel": 30 + index}, 20,
+        )
+    checkpoint = recorder.save_checkpoint(
+        np.zeros((12, 16, 3), np.uint8), "result", "pending",
+    )
+    assert not list(recorder.output_dir.rglob("*.png"))
+    recorder.close()
+    events = [json.loads(line) for line in
+              (recorder.output_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert len(events) == 26
+    for event in events:
+        assert event["screenshot"] is not None
+        pixels = imread_unicode(recorder.output_dir / event["screenshot"])
+        assert np.all(pixels == event["frame_metadata"]["pixel"])
+    assert checkpoint.is_file()
+    summary = json.loads((recorder.output_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary["native_life_evidence_frames"] == 21
+    assert summary["native_feedback_evidence_frames"] == 5
+    assert summary["event_screenshots"] == 26
+    assert summary["native_feedback_evidence_complete"] is True
+
+
+def test_opening_event_and_checkpoint_overflow_have_no_false_paths(tmp_path):
+    recorder = RealtimeDebugRecorder(tmp_path, opening_seconds=20)
+    image = np.zeros((12, 16, 3), np.uint8)
+    for index in range(67):
+        _opening_record(recorder, image, index, diagnostics=[{
+            "event": f"native-feedback-00-{index:03d}", "evidence_screenshot": True,
+        }])
+    paths = [recorder.save_checkpoint(image, "gate", str(index)) for index in range(10)]
+    assert paths[8:] == [None, None]
+    assert not list(recorder.output_dir.rglob("*.png"))
+    recorder.close()
+    events = [json.loads(line) for line in
+              (recorder.output_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+    checkpoints = [json.loads(line) for line in
+                   (recorder.output_dir / "checkpoints.jsonl").read_text(encoding="utf-8").splitlines()]
+    for row in events + checkpoints:
+        if row["screenshot"] is not None:
+            assert (recorder.output_dir / row["screenshot"]).is_file()
+        else:
+            assert row["screenshot_status"] == "dropped-capacity"
+    assert sorted(row["event_index"] for row in events) == list(range(67))
+    summary = json.loads((recorder.output_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary["event_screenshot_capacity"] == 64
+    assert summary["event_screenshots_requested"] == 67
+    assert summary["event_screenshots"] == 64
+    assert summary["event_screenshot_drop_reasons"] == {"dropped-capacity": 3}
+    assert summary["checkpoint_requested"] == 10
+    assert summary["checkpoint_count"] == 8
+    assert summary["opening_checkpoint_dropped"] == 2
+    assert summary["dropped_native_feedback_frames"] == 3
+    assert summary["native_feedback_evidence_complete"] is False
+
+
+def test_opening_event_write_failure_has_null_path_and_incomplete_summary(tmp_path, monkeypatch):
+    recorder = RealtimeDebugRecorder(tmp_path, opening_seconds=20)
+    recorder.record_native_feedback(np.zeros((720, 1280, 3), np.uint8), 21, {}, 20)
+    monkeypatch.setattr("agent.realtime.debug_recorder.imwrite_unicode", lambda *args: False)
+    with pytest.raises(RuntimeError):
+        recorder.close()
+    event = json.loads((recorder.output_dir / "events.jsonl").read_text(encoding="utf-8"))
+    assert event["screenshot"] is None
+    assert event["screenshot_status"] == "write-failed"
+    summary = json.loads((recorder.output_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary["event_screenshots"] == 0
+    assert summary["native_feedback_evidence_frames"] == 0
+    assert summary["event_screenshot_drop_reasons"] == {"write-failed": 1}
+    assert summary["event_screenshot_flush_status"] == "failed"
+    assert summary["opening_flush_status"] == "failed"
+    assert summary["native_feedback_evidence_complete"] is False
+
+
+def test_opening_event_flush_continues_after_one_png_failure(tmp_path, monkeypatch):
+    from agent.realtime.debug_recorder import imwrite_unicode
+
+    recorder = RealtimeDebugRecorder(tmp_path, opening_seconds=20)
+    for pixel in range(20, 23):
+        recorder.record_native_feedback(
+            np.full((720, 1280, 3), pixel, np.uint8), pixel, {"pixel": pixel}, 20,
+        )
+    def selective_write(path, image):
+        if path.parent.name == "events" and np.all(image == 20):
+            return False
+        return imwrite_unicode(path, image)
+    monkeypatch.setattr("agent.realtime.debug_recorder.imwrite_unicode", selective_write)
+    with pytest.raises(RuntimeError):
+        recorder.close()
+    events = [json.loads(line) for line in
+              (recorder.output_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [row["event_index"] for row in events] == [0, 1, 2]
+    assert events[0]["screenshot"] is None
+    assert events[0]["screenshot_status"] == "write-failed"
+    assert all((recorder.output_dir / row["screenshot"]).is_file() for row in events[1:])
+    summary = json.loads((recorder.output_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary["event_screenshots"] == 2
+    assert summary["native_feedback_evidence_frames"] == 2
+    assert summary["event_screenshot_flush_status"] == "failed"
+
+
+def test_opening_late_worker_flush_keeps_evidence_incomplete_after_timeout(tmp_path, monkeypatch):
+    recorder = RealtimeDebugRecorder(tmp_path, opening_seconds=20, close_timeout_seconds=.02)
+    entered, release = threading.Event(), threading.Event()
+    original = recorder._flush_opening_events
+
+    def delayed_flush():
+        entered.set()
+        assert release.wait(2)
+        original()
+
+    monkeypatch.setattr(recorder, "_flush_opening_events", delayed_flush)
+    recorder.record_native_feedback(np.zeros((720, 1280, 3), np.uint8), 21, {}, 20)
+    with pytest.raises(RuntimeError):
+        recorder.close()
+    assert entered.is_set()
+    provisional = json.loads((recorder.output_dir / "summary.json").read_text(encoding="utf-8"))
+    assert provisional["record_worker_finalized"] is False
+    assert provisional["native_feedback_evidence_complete"] is False
+    release.set()
+    recorder._summary_finalizer_thread.join(timeout=2)
+    path = recorder.save_checkpoint(np.zeros((12, 16, 3), np.uint8), "result", "complete")
+    assert path.is_file()
+    final = json.loads((recorder.output_dir / "summary.json").read_text(encoding="utf-8"))
+    assert final["record_worker_finalized"] is True
+    assert final["native_feedback_evidence_frames"] == 1
+    assert final["native_feedback_evidence_complete"] is False
+    assert final["checkpoint_count"] == 1
+    assert final["recorder_error"]
+
+
+def test_final_summary_snapshot_cannot_overwrite_a_late_checkpoint(tmp_path, monkeypatch):
+    recorder = RealtimeDebugRecorder(tmp_path, opening_seconds=20)
+    recorder.close()
+    snapshot_ready, checkpoint_refresh_requested = threading.Event(), threading.Event()
+    release_snapshot = threading.Event()
+    snapshot_lock_held = []
+    failures = []
+    original_payload = recorder._summary_payload
+    original_refresh = recorder._refresh_checkpoint_summary
+
+    def paused_payload(**kwargs):
+        payload = original_payload(**kwargs)
+        snapshot_lock_held.append(recorder._summary_lock.locked())
+        snapshot_ready.set()
+        assert release_snapshot.wait(2)
+        return payload
+
+    def checkpoint_refresh():
+        checkpoint_refresh_requested.set()
+        original_refresh()
+
+    def run_guarded(operation):
+        try:
+            operation()
+        except BaseException as exc:
+            failures.append(exc)
+
+    monkeypatch.setattr(recorder, "_summary_payload", paused_payload)
+    monkeypatch.setattr(recorder, "_refresh_checkpoint_summary", checkpoint_refresh)
+    finalizer = threading.Thread(target=lambda: run_guarded(lambda: recorder._write_summary(
+        record_worker_finalized=True, encoder_finalized=True,
+    )))
+    checkpoint = threading.Thread(target=lambda: run_guarded(lambda: recorder.save_checkpoint(
+        np.zeros((12, 16, 3), np.uint8), "result", "complete",
+    )))
+    finalizer.start()
+    try:
+        assert snapshot_ready.wait(2)
+        checkpoint.start()
+        assert checkpoint_refresh_requested.wait(2)
+    finally:
+        release_snapshot.set()
+        finalizer.join(timeout=2)
+        if checkpoint.ident is not None:
+            checkpoint.join(timeout=2)
+    assert not finalizer.is_alive() and not checkpoint.is_alive()
+    assert not failures
+    # 快照和替换必须共享锁；否则旧快照可在补写成功后覆盖最新计数。
+    assert snapshot_lock_held == [True]
+    summary = json.loads((recorder.output_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary["checkpoint_count"] == 1
+    assert summary["checkpoint_requested"] == 1
+    assert len(list(recorder.output_dir.glob("checkpoints/*.png"))) == 1

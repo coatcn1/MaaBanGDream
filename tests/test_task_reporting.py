@@ -410,3 +410,36 @@ print('real-loop-ok')
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "real-loop-ok" in result.stdout
+
+
+def test_remaining_rounds_readonly_uses_completed_and_trusted_id():
+    context=Context(hit_count=1)
+    args=argv(301,total=8,phase="start")
+    assert task_reporting.TaskProgress().run(context,args)
+    assert task_reporting.remaining_task_rounds(args)==8
+    assert task_reporting.TaskProgress().run(context,argv(301,phase="completed"))
+    assert task_reporting.remaining_task_rounds(args)==7
+    assert task_reporting.remaining_task_rounds(argv(302)) is None
+    with pytest.raises(ValueError):task_reporting.remaining_task_rounds(SimpleNamespace())
+
+
+@pytest.mark.parametrize("phase", ["start", "completed", "restore", "outcome"])
+def test_stdout_failure_never_changes_valid_task_state(monkeypatch, phase):
+    context = Context()
+    monkeypatch.setattr(task_reporting, "log_task", lambda *args: (_ for _ in ()).throw(BrokenPipeError("stdout")))
+    params = {"total": 3, "phase": phase, "completed": 2}
+    action = task_reporting.TaskOutcome() if phase == "outcome" else task_reporting.TaskProgress()
+    assert action.run(context, argv(910, **params)) is True
+    if phase == "completed":
+        assert task_reporting._states[910].completed == 1
+    if phase == "restore":
+        assert task_reporting._states[910].completed == 2
+
+
+def test_progress_counter_observation_error_uses_existing_memory(monkeypatch):
+    context = Context()
+    context.get_hit_count = lambda _: (_ for _ in ()).throw(OSError("framework-progress"))
+    assert task_reporting.TaskProgress().run(context, argv(941, total=3, phase="start")) is True
+    assert task_reporting._states[941].current == 1
+    assert task_reporting.TaskProgress().run(context, argv(941, total=3, phase="completed")) is True
+    assert task_reporting._states[941].completed == 1

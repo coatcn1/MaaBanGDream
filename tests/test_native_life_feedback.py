@@ -150,7 +150,7 @@ def test_phase_guards_preserve_dispatch(guard):
         backend._phase_receipts = deque([(1, .1, 2, 2, .1, .5), (2, .2, 3, 3, .2, .5), (3, .3, 4, 4, .3, .5)])
     backend._consume_phase_candidate()
     assert calls == []
-    assert (backend._phase_slot is not None) is (guard == "hold")
+    assert (backend._phase_slot is not None) is (guard in {"hold", "few", "duplicate", "late"})
 
 
 def test_fresh_capture_prefetch_is_five_hz_without_wait(monkeypatch):
@@ -376,3 +376,118 @@ def test_engine_disabled_feedback_retains_native_five_hz_baseline(monkeypatch):
     assert not hasattr(backend, "_life_feedback_summary")
     assert stats.timing_feedback_fast == stats.timing_feedback_valid == 0
     assert len(data["captures"]) <= 43
+
+
+def test_real_eighth_round_receipt_staleness_waits_for_fresh_receipt_with_original_ttl():
+    backend,calls=_phase_backend()
+    now=[102931.3019289]
+    backend._clock=lambda:now[0]
+    backend._clock_uncertainty_ms=.5096
+    backend._phase_receipts=deque((i,102930.68342733383,1.8043,1.8043,102930.681623,.5096) for i in range(22))
+    assert backend.request_future_phase(15,102930.1637968)
+    backend._consume_phase_candidate()
+    assert backend.phase_status_snapshot().state=="waiting-execution-receipts"
+    assert backend._phase_slot[-1]==pytest.approx(102932.1637968)
+    assert backend._phase_receipt_diagnostics[-1]['failed_checks']==['stale-last-commit']
+    for _ in range(100):backend._consume_phase_candidate()
+    assert len(backend._phase_receipt_diagnostics)==1
+    now[0]=102931.36
+    backend._phase_receipts.append((23,102931.35887337,2,2,102931.3568,.5096))
+    backend._session.apply_future_phase=lambda *args:"unsafe-gap"
+    backend._consume_phase_candidate()
+    assert not calls and backend.phase_status_snapshot().state=="waiting-gap"
+    backend._session.apply_future_phase=lambda *args:calls.append(args) or "applied"
+    backend._consume_phase_candidate()
+    assert len(calls)==1 and backend.phase_status_snapshot().state=="applied"
+
+
+def test_waiting_receipts_expires_without_applying_or_extending_ttl():
+    backend,calls=_phase_backend()
+    backend._phase_receipts.clear()
+    assert backend.request_future_phase(15,.95)
+    backend._consume_phase_candidate()
+    backend._clock=lambda:2.951
+    backend._consume_phase_candidate()
+    assert not calls and backend.phase_status_snapshot().state=="expired"
+
+
+@pytest.mark.parametrize("failure",["stop","invalidate","clock","residual"])
+def test_waiting_receipt_candidate_revalidates_hard_guards(failure):
+    backend,calls=_phase_backend()
+    backend._phase_receipts.clear()
+    assert backend.request_future_phase(15,.95)
+    backend._consume_phase_candidate()
+    assert backend.phase_status_snapshot().state=="waiting-execution-receipts"
+    backend._phase_receipts=deque([(i,.9,2,2,.9,.5) for i in range(3)])
+    if failure=="stop":backend._phase_closed=True
+    elif failure=="invalidate":backend._phase_invalidated_sequence=1
+    elif failure=="clock":backend._clock_uncertainty_ms=1.001
+    else:backend._phase_receipts=deque([(i,.9,40.001,40.001,.9,.5) for i in range(3)])
+    backend._consume_phase_candidate()
+    assert not calls and backend._phase_slot is None
+
+
+@pytest.mark.parametrize("probe",[False,True])
+@pytest.mark.parametrize("behavior",["frames","failure","stop","timeout","cross-deadline-ready"])
+def test_opening_ready_observer_preserves_deadline_ready_and_stop(monkeypatch,probe,behavior):
+    import agent.realtime.native_play as module
+    now=[0.0]
+    monkeypatch.setattr(module.time,"monotonic",lambda:now[0])
+    backend=object.__new__(NativeMinitouchBackend)
+    backend._state="arming"
+    backend._device_error=None
+    backend._device=SimpleNamespace(connected=True)
+    backend._require_probe=probe
+    ready_at=[.3 if behavior!="timeout" else 20]
+    class Thread:
+        def is_alive(self):return not probe and now[0]<ready_at[0]
+        def join(self,timeout):now[0]+=timeout
+    class Event:
+        def is_set(self):return now[0]>=ready_at[0]
+        def wait(self,timeout):now[0]+=timeout;return self.is_set()
+    backend._device_thread=Thread()
+    backend._probe_complete=Event()
+    cleanup=[]
+    backend._cancel_device_start=lambda timeout:cleanup.append("cancel")
+    backend._emergency_stop_device_with_budget=lambda timeout:cleanup.append("stop")
+    calls=[]
+    def observe():
+        calls.append(now[0])
+        if behavior=="failure":raise OSError("disk/capture unavailable")
+        if behavior=="stop":raise InterruptedError("用户已停止任务")
+        if behavior=="cross-deadline-ready":now[0]=2.0
+    if behavior=="stop":
+        with pytest.raises(InterruptedError):backend.wait_until_ready(1,wait_observer=observe,should_stop=lambda:False)
+    elif behavior=="timeout":
+        with pytest.raises(RuntimeError):backend.wait_until_ready(1,wait_observer=observe,should_stop=lambda:False)
+        assert now[0]<=1.001 and cleanup
+    else:
+        assert backend.wait_until_ready(1,wait_observer=observe,should_stop=lambda:False)
+        assert backend._state=="armed"
+    assert len(calls)<=10
+    if behavior=="failure":assert len(calls)==1
+
+
+def test_opening_ready_already_complete_does_not_capture():
+    backend=object.__new__(NativeMinitouchBackend)
+    backend._state="arming"
+    backend._device_error=None
+    backend._device=SimpleNamespace(connected=True)
+    backend._require_probe=False
+    backend._device_thread=SimpleNamespace(is_alive=lambda:False)
+    calls=[]
+    assert backend.wait_until_ready(1,wait_observer=lambda:calls.append(1),should_stop=lambda:False)
+    assert not calls
+
+
+def test_opening_stop_race_after_ready_join_does_not_publish_armed():
+    backend=object.__new__(NativeMinitouchBackend)
+    backend._state="arming"
+    backend._device_error=None
+    backend._device=SimpleNamespace(connected=True)
+    backend._require_probe=False
+    state={'alive':True,'stop':False}
+    def join(timeout):state.update(alive=False,stop=True)
+    backend._device_thread=SimpleNamespace(is_alive=lambda:state['alive'],join=join)
+    with pytest.raises(InterruptedError):backend.wait_until_ready(1,wait_observer=lambda:None,should_stop=lambda:state['stop'])
+    assert backend._state=="arming"

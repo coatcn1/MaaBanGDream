@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .optional_diagnostics import safe_print as print, safe_traceback
+
 import json
 from pathlib import Path
 
@@ -18,7 +20,9 @@ from .profile_store import RealtimeProfileStore
 
 
 _DEBUG_ENABLED = False
+_DEBUG_BY_TASK: dict[int, bool] = {}
 _DIAGNOSTIC_TRACE_ENABLED = True
+_OPENING_BY_TASK: dict[int, bool] = {}
 _CALIBRATION_DIFFICULTY = "Easy"
 _CALIBRATION_SONG_MODE = "current"
 _CALIBRATION_RESUME_MODE = "auto"
@@ -49,8 +53,19 @@ def debug_enabled() -> bool:
     return _DEBUG_ENABLED
 
 
+def debug_recording_enabled(argv) -> bool:
+    identity = getattr(getattr(argv, "task_detail", None), "task_id", None)
+    # 基础播放节点的默认 false 不能遮盖本任务 Full；未知任务不得继承进程旧值。
+    return bool(_DEBUG_BY_TASK.get(identity, False)) if type(identity) is int and identity > 0 else False
+
+
 def diagnostic_trace_enabled() -> bool:
     return _DIAGNOSTIC_TRACE_ENABLED
+
+
+def opening_recording_enabled(argv) -> bool:
+    identity = getattr(getattr(argv,"task_detail",None),"task_id",None)
+    return bool(_OPENING_BY_TASK.get(identity,False)) if type(identity) is int else False
 
 
 def calibration_difficulty() -> str:
@@ -74,8 +89,15 @@ class RealtimeRuntimeOptions(CustomAction):
         if context.tasker.stopping:
             return True
         params = json.loads(argv.custom_action_param or "{}")
+        if "opening_recording" in params:
+            identity = getattr(getattr(argv,"task_detail",None),"task_id",None)
+            if type(identity) is int and identity > 0:
+                _OPENING_BY_TASK[identity] = params["opening_recording"] is True
         if "debug_recording" in params:
             _DEBUG_ENABLED = bool(params["debug_recording"])
+            identity = getattr(getattr(argv, "task_detail", None), "task_id", None)
+            if type(identity) is int and identity > 0:
+                _DEBUG_BY_TASK[identity] = _DEBUG_ENABLED
         if "diagnostic_trace" in params:
             _DIAGNOSTIC_TRACE_ENABLED = bool(params["diagnostic_trace"])
         if "difficulty" in params:

@@ -132,7 +132,9 @@
   "ChallengeRoundGate": {
     "recognition": "Custom",
     "custom_recognition": "TaskRoundAvailable",
-    "custom_recognition_param": {"total": 1},
+    "custom_recognition_param": {
+      "total": 1
+    },
     "action": "Custom",
     "custom_action": "TaskProgress",
     "custom_action_param": {
@@ -141,7 +143,9 @@
       "total": 1,
       "phase": "start"
     },
-    "on_error": ["ChallengeFailure"],
+    "on_error": [
+      "ChallengeFailure"
+    ],
     "next": [
       "ChallengeDebugGate"
     ]
@@ -152,7 +156,8 @@
     "custom_action": "RealtimeRuntimeOptions",
     "custom_action_param": {
       "debug_recording": false,
-      "diagnostic_trace": true
+      "diagnostic_trace": true,
+      "opening_recording": false
     },
     "next": [
       "ChallengeProfileCheck"
@@ -596,7 +601,8 @@
       "require_completion": true,
       "save_result_frame": true,
       "result_back_attempts": 30,
-      "result_back_interval_seconds": 1.5
+      "result_back_interval_seconds": 1.5,
+      "opening_recording": false
     },
     "next": [
       "ChallengeReturnHome"
@@ -625,7 +631,8 @@
       "require_completion": true,
       "save_result_frame": true,
       "result_back_attempts": 30,
-      "result_back_interval_seconds": 1.5
+      "result_back_interval_seconds": 1.5,
+      "opening_recording": false
     },
     "next": [
       "ChallengeReturnHome"
@@ -654,7 +661,8 @@
       "require_completion": true,
       "save_result_frame": true,
       "result_back_attempts": 30,
-      "result_back_interval_seconds": 1.5
+      "result_back_interval_seconds": 1.5,
+      "opening_recording": false
     },
     "next": [
       "ChallengeReturnHome"
@@ -683,7 +691,8 @@
       "require_completion": true,
       "save_result_frame": true,
       "result_back_attempts": 30,
-      "result_back_interval_seconds": 1.5
+      "result_back_interval_seconds": 1.5,
+      "opening_recording": false
     },
     "next": [
       "ChallengeReturnHome"
@@ -712,7 +721,8 @@
       "require_completion": true,
       "save_result_frame": true,
       "result_back_attempts": 30,
-      "result_back_interval_seconds": 1.5
+      "result_back_interval_seconds": 1.5,
+      "opening_recording": false
     },
     "next": [
       "ChallengeReturnHome"

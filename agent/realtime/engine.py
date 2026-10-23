@@ -15,6 +15,9 @@ from .live_failed_detector import LiveFailedPopupDetector
 from .playfield_monitor import PlayfieldLifecycleMonitor
 from .timing_feedback import AdaptiveTimingController, TimingFeedbackDetector
 from .native_life_feedback import NativeLifeFeedback
+from .native_game_clock import NativeGameClockController
+from .native_game_clock_matcher import NativeGameClockMatcher
+from .optional_diagnostics import OptionalDiagnostics, warning, safe_print as print
 from .touch_planner import ActionKind, RealtimePlanner
 
 
@@ -307,12 +310,40 @@ class RealtimeEngine:
         scheduled_actions.clear()
         native_exclusive = self.native_backend_takeover()
         native_started = False
-        native_feedback = (NativeLifeFeedback(self.native_backend)
+        optional_diagnostics = OptionalDiagnostics(stopping)
+        native_feedback = (optional_diagnostics.call("native-feedback-init", lambda: NativeLifeFeedback(self.native_backend))
                            if native_exclusive and getattr(
                                self.native_backend, "life_feedback_enabled", False) else None)
+        game_clock = (optional_diagnostics.call("native-game-clock-init", lambda: NativeGameClockController(
+            self.native_backend, matcher=NativeGameClockMatcher(
+                chart_path=getattr(self.native_backend, "_game_clock_chart_path", None),
+                environment=getattr(self.native_backend, "_game_clock_environment", None))))
+            if native_feedback is not None and callable(getattr(self.native_backend, "set_visual_phase_guard", None)) else None)
+        def feedback_call(callback, default=None):
+            nonlocal native_feedback
+            if native_feedback is None or stopping():
+                return default
+            try:
+                return callback()
+            except Exception as exc:
+                if isinstance(exc, InterruptedError) and stopping():
+                    raise
+                native_feedback = None
+                optional_diagnostics.call("native-feedback-revoke", lambda: self.native_backend.revoke_future_phase("feedback-error"), during_cleanup=True)
+                if not stopping():
+                    warning(f"NativeLifeFeedback disabled=true error={type(exc).__name__}: {exc}")
+                return default
+
         native_monitor_due = started_at
         native_feedback_scene_valid = False
         frame_metadata: dict[str, object] = {}
+
+        def mark_opening_first_note(timestamp):
+            with optional_diagnostics.guard("first-note-marker") as diagnostic_enabled:
+                if diagnostic_enabled:
+                    method = getattr(self.debug_recorder, "mark_first_note", None)
+                    if callable(method):
+                        method(timestamp)
 
         def recorder_frame_kwargs():
             if native_exclusive and getattr(self.debug_recorder, "supports_frame_metadata", False):
@@ -350,39 +381,41 @@ class RealtimeEngine:
             """Persist the fatal reading before the life guard exits the loop."""
             if self.debug_recorder is None:
                 return
-            trace_state = getattr(self.touch, "trace_state", None)
-            touch_state = trace_state() if trace_state is not None else {
-                "active_contacts": sorted(
-                    getattr(self.touch, "active_contacts", ())
-                ),
-            }
-            timing_state = (
-                {
-                    "initial_offset_ms": initial_timing_offset_ms,
-                    "current_offset_ms": self.timing_controller.current_offset_ms,
-                    "valid_samples": self.timing_controller.valid_samples,
-                    "ignored_samples": self.timing_controller.ignored_samples,
-                    "ignored_reasons": self.timing_controller.ignored_reasons,
-                }
-                if self.timing_controller is not None else {}
-            )
-            self.debug_recorder.record(
-                image,
-                now,
-                [],
-                [],
-                life_status,
-                [{
-                    "event": "life_terminal",
-                    "timestamp": now,
-                    "reason": reason,
-                    "life_value": life_value,
-                }],
-                timing_state,
-                life_value,
-                touch_state,
-                **recorder_frame_kwargs(),
-            )
+            with optional_diagnostics.guard("terminal-life-frame") as diagnostic_enabled:
+                if diagnostic_enabled:
+                    trace_state = getattr(self.touch, "trace_state", None)
+                    touch_state = trace_state() if trace_state is not None else {
+                        "active_contacts": sorted(
+                            getattr(self.touch, "active_contacts", ())
+                        ),
+                    }
+                    timing_state = (
+                        {
+                            "initial_offset_ms": initial_timing_offset_ms,
+                            "current_offset_ms": self.timing_controller.current_offset_ms,
+                            "valid_samples": self.timing_controller.valid_samples,
+                            "ignored_samples": self.timing_controller.ignored_samples,
+                            "ignored_reasons": self.timing_controller.ignored_reasons,
+                        }
+                        if self.timing_controller is not None else {}
+                    )
+                    self.debug_recorder.record(
+                        image,
+                        now,
+                        [],
+                        [],
+                        life_status,
+                        [{
+                            "event": "life_terminal",
+                            "timestamp": now,
+                            "reason": reason,
+                            "life_value": life_value,
+                        }],
+                        timing_state,
+                        life_value,
+                        touch_state,
+                        **recorder_frame_kwargs(),
+                    )
 
         def record_startup_timeout_frame(
             image: np.ndarray,
@@ -393,31 +426,33 @@ class RealtimeEngine:
             """Persist one diagnostic frame before normal trace capture starts."""
             if self.debug_recorder is None:
                 return
-            trace_state = getattr(self.touch, "trace_state", None)
-            touch_state = trace_state() if trace_state is not None else {
-                "active_contacts": sorted(
-                    getattr(self.touch, "active_contacts", ())
-                ),
-            }
-            self.debug_recorder.record(
-                image,
-                now,
-                [],
-                [],
-                life_status,
-                [{
-                    "event": "playfield_start_timeout",
-                    "timestamp": now,
-                    "timeout_seconds": startup_timeout_seconds,
-                    "reason": (
-                        f"{startup_marker} was never confirmed after live start"
-                    ),
-                }],
-                {},
-                None,
-                touch_state,
-                **recorder_frame_kwargs(),
-            )
+            with optional_diagnostics.guard("startup-timeout-frame") as diagnostic_enabled:
+                if diagnostic_enabled:
+                    trace_state = getattr(self.touch, "trace_state", None)
+                    touch_state = trace_state() if trace_state is not None else {
+                        "active_contacts": sorted(
+                            getattr(self.touch, "active_contacts", ())
+                        ),
+                    }
+                    self.debug_recorder.record(
+                        image,
+                        now,
+                        [],
+                        [],
+                        life_status,
+                        [{
+                            "event": "playfield_start_timeout",
+                            "timestamp": now,
+                            "timeout_seconds": startup_timeout_seconds,
+                            "reason": (
+                                f"{startup_marker} was never confirmed after live start"
+                            ),
+                        }],
+                        {},
+                        None,
+                        touch_state,
+                        **recorder_frame_kwargs(),
+                    )
 
         def snapshot_stats(terminal_reason: str) -> EngineStats:
             measured_seconds = (
@@ -612,7 +647,7 @@ class RealtimeEngine:
                     time.sleep(min(0.002, wait_target - now))
                     continue
                 capture_interval = (
-                    (native_feedback.SAMPLE_INTERVAL_SECONDS if native_feedback is not None and native_feedback.active(now) else .2)
+                    (native_feedback.SAMPLE_INTERVAL_SECONDS if native_feedback is not None and feedback_call(lambda: native_feedback.active(now), False) else .2)
                     if native_exclusive and native_started else interval
                 )
                 next_frame += capture_interval
@@ -630,7 +665,7 @@ class RealtimeEngine:
                     was_stopped = True
                     break
                 terminal_sample = (native_feedback is None or not native_started or now >= native_monitor_due
-                                   or native_feedback.finish_due(now))
+                                   or feedback_call(lambda: native_feedback.finish_due(now), False))
                 if terminal_sample:
                     native_monitor_due = now + .2
                 if native_exclusive and not native_started:
@@ -644,7 +679,17 @@ class RealtimeEngine:
                     observe_metadata = getattr(self.native_backend, "observe_start_frame_metadata", None)
                     if callable(observe_metadata):
                         observe_metadata(frame_metadata)
-                    first_action_anchor = observe_start(image, now)
+                    try:
+                        first_action_anchor = observe_start(image, now)
+                    finally:
+                        with optional_diagnostics.guard("native-first-note-frame") as diagnostic_enabled:
+                            if diagnostic_enabled:
+                                phase_recorder = getattr(self.debug_recorder, "record_phase", None)
+                                if callable(phase_recorder) and getattr(self.debug_recorder, "opening_seconds", None) is not None:
+                                    snapshot = getattr(self.native_backend, "opening_gate_snapshot", None)
+                                    details = snapshot() if callable(snapshot) else {}
+                                    phase_recorder(image, now, "native-first-note-gate", frame_metadata=frame_metadata,
+                                        diagnostics=[{"event": "native-start-observation", **details}])
                     if first_action_anchor is None:
                         frames += 1
                         if now - started_at >= startup_timeout_seconds:
@@ -663,6 +708,7 @@ class RealtimeEngine:
                         raise RuntimeError("Native 后端缺少 start() 会话接口")
                     start_native(float(first_action_anchor))
                     native_started = True
+                    mark_opening_first_note(now)
                     if native_feedback is not None:
                         enable_prefetch = getattr(capture, "enable_fresh_prefetch", None)
                         if callable(enable_prefetch):
@@ -704,19 +750,21 @@ class RealtimeEngine:
                     playfield_state = self.playfield_monitor.observe(image, now)
                     native_feedback_scene_valid = playfield_state == "active"
                     if native_feedback is not None and playfield_state != "active":
-                        native_feedback.close(now, "invalid-scene")
+                        feedback_call(lambda: native_feedback.close(now, "invalid-scene"))
                     record_stage_sample(
                         "playfield_monitor",
                         (self.clock() - stage_started) * 1000,
                     )
                     if playfield_state == "waiting":
-                        gate = getattr(self.playfield_monitor, "start_gate", None)
-                        record_phase = getattr(self.debug_recorder, "record_phase", None)
-                        if gate is not None and callable(record_phase):
-                            record_phase(image, now, "first-note-gate", diagnostics=[{
-                                "event": "waiting-first-note",
-                                **gate.report(),
-                            }])
+                        with optional_diagnostics.guard("legacy-first-note-frame") as diagnostic_enabled:
+                            if diagnostic_enabled:
+                                gate = getattr(self.playfield_monitor, "start_gate", None)
+                                record_phase = getattr(self.debug_recorder, "record_phase", None)
+                                if gate is not None and callable(record_phase):
+                                    record_phase(image, now, "first-note-gate", diagnostics=[{
+                                        "event": "waiting-first-note",
+                                        **gate.report(),
+                                    }])
                         frames += 1
                         if now - started_at >= startup_timeout_seconds:
                             startup_timed_out = True
@@ -727,6 +775,8 @@ class RealtimeEngine:
                             )
                             break
                         continue
+                    if playfield_state == "active":
+                        mark_opening_first_note(now)
                     if playfield_state == "completed":
                         completed = True
                         break
@@ -753,28 +803,32 @@ class RealtimeEngine:
                         status = self.life_guard.update(reading)
                         life_status = status.value
                         if native_feedback is not None and native_started:
-                            native_feedback.observe_life(reading.value, now, visible=reading.visible)
+                            feedback_call(lambda: native_feedback.observe_life(reading.value, now, visible=reading.visible))
                             if self.playfield_monitor is None:
                                 native_feedback_scene_valid = reading.visible
                         if native_exclusive and native_started:
-                            record_native_life = getattr(
-                                self.debug_recorder, "record_native_life", None
-                            )
-                            if callable(record_native_life):
-                                record_native_life(
-                                    image, now, reading.value,
-                                    visible=reading.visible,
-                                    alive_confirmed=self.life_guard.alive_confirmed,
-                                    **recorder_frame_kwargs(),
-                                )
-                        if life_monitor_diagnostics is not None:
-                            candidate = life_monitor_diagnostics.observe(
-                                reading,
-                                self.life_guard,
-                                now,
-                            )
-                            if candidate is not None:
-                                life_diagnostic_events.append(candidate)
+                            with optional_diagnostics.guard("native-life-frame") as diagnostic_enabled:
+                                if diagnostic_enabled:
+                                    record_native_life = getattr(
+                                        self.debug_recorder, "record_native_life", None
+                                    )
+                                    if callable(record_native_life):
+                                        record_native_life(
+                                            image, now, reading.value,
+                                            visible=reading.visible,
+                                            alive_confirmed=self.life_guard.alive_confirmed,
+                                            **recorder_frame_kwargs(),
+                                        )
+                        with optional_diagnostics.guard("life-monitor-diagnostic") as diagnostic_enabled:
+                            if diagnostic_enabled:
+                                if life_monitor_diagnostics is not None:
+                                    candidate = life_monitor_diagnostics.observe(
+                                        reading,
+                                        self.life_guard,
+                                        now,
+                                    )
+                                    if candidate is not None:
+                                        life_diagnostic_events.append(candidate)
                         if (
                             self.completion_guard is not None
                             and self.completion_guard.update(
@@ -846,20 +900,33 @@ class RealtimeEngine:
                         "life", (self.clock() - stage_started) * 1000
                     )
                 if native_exclusive and native_started:
+                    if game_clock is not None and not stopping():
+                        try:
+                            game_clock.submit(image, frame_metadata, now, visible=native_feedback_scene_valid)
+                        except Exception as exc:
+                            with optional_diagnostics.guard("native-game-clock-error", during_cleanup=True) as diagnostic_enabled:
+                                if diagnostic_enabled:
+                                    game_clock.close(now, "observer-error:" + type(exc).__name__)
+                                    self.native_backend._game_clock_report = game_clock.report()
+                            # 观察器清理自身异常也不能让视觉租约继续压制旧反馈。
+                            optional_diagnostics.call("native-game-clock-release", lambda: self.native_backend.set_visual_phase_guard(False), during_cleanup=True)
+                            game_clock = None
                     if native_feedback is not None:
-                        native_feedback.refresh_phase_status(now)
-                        fresh_feedback_frame = native_feedback.fresh(frame_metadata, now)
+                        feedback_call(lambda: native_feedback.refresh_phase_status(now))
+                        fresh_feedback_frame = feedback_call(lambda: native_feedback.fresh(frame_metadata, now), False)
                         # 先复核场景、死亡与停止；基础新帧和候选加密帧共用独立事件入口。
-                        if fresh_feedback_frame or not native_feedback_scene_valid:
-                            native_feedback.observe_scene(now, visible=native_feedback_scene_valid)
-                        if fresh_feedback_frame and native_feedback.scene_valid:
-                            native_feedback.observe_frame(image, now)
-                            record_feedback = getattr(self.debug_recorder, "record_native_feedback", None)
-                            if native_feedback.roi_worthy and callable(record_feedback):
-                                record_feedback(image, now,
-                                    dict(frame_metadata, feedback_sniff=native_feedback.last_sniff),
-                                    native_feedback.burst_started_at if native_feedback.burst_started_at is not None else now)
-                        if native_feedback.active(now):
+                        if native_feedback is not None and (fresh_feedback_frame or not native_feedback_scene_valid):
+                            feedback_call(lambda: native_feedback.observe_scene(now, visible=native_feedback_scene_valid))
+                        if native_feedback is not None and fresh_feedback_frame and native_feedback.scene_valid:
+                            feedback_call(lambda: native_feedback.observe_frame(image, now))
+                            with optional_diagnostics.guard("native-feedback-frame") as diagnostic_enabled:
+                                if diagnostic_enabled:
+                                    record_feedback = getattr(self.debug_recorder, "record_native_feedback", None)
+                                    if native_feedback is not None and native_feedback.roi_worthy and callable(record_feedback):
+                                        record_feedback(image, now,
+                                            dict(frame_metadata, feedback_sniff=native_feedback.last_sniff),
+                                            native_feedback.burst_started_at if native_feedback.burst_started_at is not None else now)
+                        if feedback_call(lambda: native_feedback.active(now), False):
                             next_frame = min(next_frame, now + native_feedback.SAMPLE_INTERVAL_SECONDS)
                     poll_native = getattr(self.native_backend, "poll", None)
                     if poll_native is None:
@@ -1110,32 +1177,34 @@ class RealtimeEngine:
                 )
                 stage_started = self.clock()
                 if self.debug_recorder is not None:
-                    timing_state = (
-                        {
-                            "initial_offset_ms": initial_timing_offset_ms,
-                            "current_offset_ms": self.timing_controller.current_offset_ms,
-                            "valid_samples": self.timing_controller.valid_samples,
-                            "ignored_samples": self.timing_controller.ignored_samples,
-                            "ignored_reasons": self.timing_controller.ignored_reasons,
-                        }
-                        if self.timing_controller is not None else {}
-                    )
-                    trace_state = getattr(self.touch, "trace_state", None)
-                    touch_state = trace_state() if trace_state is not None else {
-                        "active_contacts": sorted(
-                            getattr(self.touch, "active_contacts", ())
-                        ),
-                    }
-                    life_value = (
-                        reading.value
-                        if reading is not None and reading.visible
-                        else None
-                    )
-                    self.debug_recorder.record(
-                        image, now, notes, recorded_actions, life_status,
-                        diagnostics, timing_state, life_value, touch_state,
-                        **recorder_frame_kwargs(),
-                    )
+                    with optional_diagnostics.guard("realtime-frame") as diagnostic_enabled:
+                        if diagnostic_enabled:
+                            timing_state = (
+                                {
+                                    "initial_offset_ms": initial_timing_offset_ms,
+                                    "current_offset_ms": self.timing_controller.current_offset_ms,
+                                    "valid_samples": self.timing_controller.valid_samples,
+                                    "ignored_samples": self.timing_controller.ignored_samples,
+                                    "ignored_reasons": self.timing_controller.ignored_reasons,
+                                }
+                                if self.timing_controller is not None else {}
+                            )
+                            trace_state = getattr(self.touch, "trace_state", None)
+                            touch_state = trace_state() if trace_state is not None else {
+                                "active_contacts": sorted(
+                                    getattr(self.touch, "active_contacts", ())
+                                ),
+                            }
+                            life_value = (
+                                reading.value
+                                if reading is not None and reading.visible
+                                else None
+                            )
+                            self.debug_recorder.record(
+                                image, now, notes, recorded_actions, life_status,
+                                diagnostics, timing_state, life_value, touch_state,
+                                **recorder_frame_kwargs(),
+                            )
                 record_stage_sample(
                     "recorder_enqueue", (self.clock() - stage_started) * 1000
                 )
@@ -1226,11 +1295,17 @@ class RealtimeEngine:
                 f"{type(exc).__name__}: {exc}"
             )
         finally:
-            if native_feedback is not None:
-                native_feedback.close(self.clock(), "terminal")
-                self.native_backend._life_feedback_report = list(native_feedback.events)
-                self.native_backend._life_feedback_summary = dict(native_feedback.summary)
-                self.native_backend._life_feedback_sniff = native_feedback.sniff_report()
+            with optional_diagnostics.guard("native-game-clock-terminal", during_cleanup=True) as diagnostic_enabled:
+                if diagnostic_enabled and game_clock is not None:
+                    game_clock.close(self.clock(), "stopped" if stopping() else "terminal")
+                    self.native_backend._game_clock_report = game_clock.report()
+            with optional_diagnostics.guard("native-feedback-terminal", during_cleanup=True) as diagnostic_enabled:
+                if diagnostic_enabled:
+                    if native_feedback is not None:
+                        native_feedback.close(self.clock(), "terminal")
+                        self.native_backend._life_feedback_report = list(native_feedback.events)
+                        self.native_backend._life_feedback_summary = dict(native_feedback.summary)
+                        self.native_backend._life_feedback_sniff = native_feedback.sniff_report()
             if not native_exclusive:
                 try:
                     cleanup = self.planner.reset(self.clock())
@@ -1253,6 +1328,10 @@ class RealtimeEngine:
                     )
                     if set_terminal_reason is not None and base_stats is not None:
                         set_terminal_reason(base_stats.terminal_reason)
+                except Exception as exc:
+                    if not stopping():
+                        warning(f"RealtimeEngine native_terminal_reason_warning={type(exc).__name__}: {exc}")
+                try:
                     self.native_backend.stop()
                 except Exception as exc:
                     cleanup_errors.append(
@@ -1269,9 +1348,8 @@ class RealtimeEngine:
                     self.debug_recorder.close()
                 except Exception as exc:
                     recorder_error = f"{type(exc).__name__}: {exc}"
-                    print(
+                    warning(
                         "RealtimeEngine recorder_error=" + recorder_error,
-                        flush=True,
                     )
         if base_stats is None:
             raise RuntimeError("realtime engine finished without statistics")

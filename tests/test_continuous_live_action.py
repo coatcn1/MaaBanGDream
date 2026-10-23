@@ -631,3 +631,15 @@ def test_action_hands_opening_identity_to_profile_play(
     assert params["native_prearm_deferred"] is chart_available
     assert params["save_result_frame"] is True
     assert recovered == [context]
+
+
+def test_listener_optional_observation_error_does_not_block_confirmed_song():
+    evidence = object()
+    played = []
+    recognizer = Recognizer([evidence])
+    recognizer.diagnostic_state = lambda: {}
+    run_continuous_listener(lambda: "opening-frame", lambda: False,
+        lambda song: played.append(song) or True,
+        recognizer=recognizer, sleeper=lambda _: None,
+        on_observation=lambda *args: (_ for _ in ()).throw(OSError("diagnostic IO")))
+    assert played == [evidence]

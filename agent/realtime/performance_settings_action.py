@@ -28,6 +28,7 @@ from .profile_store import (
     engine_from_native_flag,
 )
 from .rehearsal_action import frame_resolution
+from .runtime_options import opening_recording_enabled
 from .live_session import (
     current_live_run,
     effective_difficulty_for_current_run,
@@ -459,6 +460,7 @@ class RealtimePerformanceSettingsGate(CustomAction):
                 context,
                 params,
                 on_expected=capture_snapshot,
+                opening_recording=opening_recording_enabled(argv),
             )
         except Exception as exc:
             if context.tasker.stopping:
@@ -507,6 +509,7 @@ class RealtimePerformanceSettingsGate(CustomAction):
         params: dict,
         *,
         on_expected: Callable[[PreflightPerformanceSnapshot], None] | None = None,
+        opening_recording: bool = False,
     ) -> bool:
         global _ACTIVE_SPEED_TARGET
         if context.tasker.stopping:
@@ -527,8 +530,16 @@ class RealtimePerformanceSettingsGate(CustomAction):
             )
         controller = context.tasker.controller
         before = controller.post_screencap().wait().get()
+        before_captured_at = time.monotonic()
         if context.tasker.stopping:
             return True
+        try:
+            from .live_session import retain_opening_observation
+            if opening_recording:
+                retain_opening_observation(before, before_captured_at, "preparation-identity",
+                    {"source": "existing-performance-settings-capture", "timestamp_kind": "capture-completed-upper-bound"})
+        except Exception as exc:
+            print(f"Opening diagnostics_warning={type(exc).__name__}: {exc}", flush=True)
         if params.get("confirm_preparation_identity", False):
             # 单人/校准在“演出开始”按钮出现的准备页左下角复核标题、等级
             # 与难度；共享封面（如 FIRE BIRD 与 [FULL]FIRE BIRD）必须靠
@@ -602,7 +613,7 @@ class RealtimePerformanceSettingsGate(CustomAction):
                 flush=True,
             )
             if bool(effective_params.get("cache_preparation_image", False)):
-                update_live_run(cooperative_prestart_image=before.copy())
+                update_live_run(cooperative_prestart_image=before.copy(), cooperative_prestart_captured_at=before_captured_at)
                 print(
                     "RealtimePerformanceSettingsGate preparation_image=cached "
                     f"reason={source}",

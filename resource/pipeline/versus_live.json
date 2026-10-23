@@ -2,15 +2,21 @@
   "VersusLive": {
     "recognition": "DirectHit",
     "action": "DoNothing",
-    "next": ["VersusProcessConflictGuard"],
+    "next": [
+      "VersusProcessConflictGuard"
+    ],
     "focus": {
       "Node.Action.Starting": {
         "content": "正在启动竞演演出任务",
-        "display": ["log"]
+        "display": [
+          "log"
+        ]
       },
       "Node.Action.Succeeded": {
         "content": "竞演演出启动检查已开始",
-        "display": ["log"]
+        "display": [
+          "log"
+        ]
       }
     }
   },
@@ -18,8 +24,12 @@
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "ProcessConflictGuard",
-    "next": ["VersusRecover"],
-    "on_error": ["VersusFailure"]
+    "next": [
+      "VersusLiveStaminaRefillConfigure"
+    ],
+    "on_error": [
+      "VersusFailure"
+    ]
   },
   "VersusRecover": {
     "recognition": "DirectHit",
@@ -27,7 +37,9 @@
     "custom_action": "CommonRecover",
     "custom_action_param": {
       "home_node": "VersusHomeMarker",
-      "modal_cancel_nodes": ["QuitConfirmCancel"],
+      "modal_cancel_nodes": [
+        "QuitConfirmCancel"
+      ],
       "click_nodes": [
         "AutoLiveLoginTap",
         "AutoLiveLoginNext",
@@ -43,78 +55,139 @@
       "restart_wait_ms": 5000,
       "startup_grace_ms": 12000,
       "login_start_node": "AutoLiveLoginScreenMarker",
-      "login_start_target": [640, 635],
+      "login_start_target": [
+        640,
+        635
+      ],
       "login_marker_priority_attempts": 3,
       "escape_after_login_start": true,
       "package": "com.bilibili.star.bili",
-      "login_tap_target": [640, 360]
+      "login_tap_target": [
+        640,
+        360
+      ]
     },
-    "next": ["VersusEntryConfigure"],
-    "on_error": ["VersusFailure"]
+    "next": [
+      "VersusEntryConfigure"
+    ],
+    "on_error": [
+      "VersusFailure"
+    ]
   },
   "VersusEntryConfigure": {
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "VersusLiveConfigure",
-    "custom_action_param": {"reset": true, "entry_method": "confirm"},
-    "next": ["VersusRoomTypeConfigure"],
-    "on_error": ["VersusFailure"]
+    "custom_action_param": {
+      "reset": true,
+      "entry_method": "confirm"
+    },
+    "next": [
+      "VersusRoomTypeConfigure"
+    ],
+    "on_error": [
+      "VersusFailure"
+    ]
   },
   "VersusRoomTypeConfigure": {
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "VersusLiveConfigure",
-    "custom_action_param": {"room_type": "free"},
-    "next": ["VersusDifficultyConfigure"],
-    "on_error": ["VersusFailure"]
+    "custom_action_param": {
+      "room_type": "free"
+    },
+    "next": [
+      "VersusDifficultyConfigure"
+    ],
+    "on_error": [
+      "VersusFailure"
+    ]
   },
   "VersusDifficultyConfigure": {
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "VersusLiveConfigure",
-    "custom_action_param": {"difficulty": "Expert"},
-    "next": ["VersusCountConfigure"],
-    "on_error": ["VersusFailure"]
+    "custom_action_param": {
+      "difficulty": "Expert"
+    },
+    "next": [
+      "VersusCountConfigure"
+    ],
+    "on_error": [
+      "VersusFailure"
+    ]
   },
   "VersusCountConfigure": {
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "VersusLiveConfigure",
-    "custom_action_param": {"count": 1},
-    "next": ["VersusPostLiveConfigure"],
-    "on_error": ["VersusFailure"]
+    "custom_action_param": {
+      "count": 1
+    },
+    "next": [
+      "VersusPostLiveConfigure"
+    ],
+    "on_error": [
+      "VersusFailure"
+    ]
   },
   "VersusPostLiveConfigure": {
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "VersusLiveConfigure",
-    "custom_action_param": {"post_live_action": "exit"},
-    "next": ["VersusSongChoiceConfigure"],
-    "on_error": ["VersusFailure"]
+    "custom_action_param": {
+      "post_live_action": "exit"
+    },
+    "next": [
+      "VersusSongChoiceConfigure"
+    ],
+    "on_error": [
+      "VersusFailure"
+    ]
   },
   "VersusSongChoiceConfigure": {
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "VersusLiveConfigure",
-    "custom_action_param": {"song_choice": "unspecified"},
-    "next": ["VersusDebugConfigure"],
-    "on_error": ["VersusFailure"]
+    "custom_action_param": {
+      "song_choice": "unspecified"
+    },
+    "next": [
+      "VersusDebugConfigure"
+    ],
+    "on_error": [
+      "VersusFailure"
+    ]
   },
   "VersusDebugConfigure": {
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "VersusLiveConfigure",
-    "custom_action_param": {"debug_recording": false, "diagnostic_trace": true},
-    "next": ["VersusDisconnectJumpConfigure"],
-    "on_error": ["VersusFailure"]
+    "custom_action_param": {
+      "debug_recording": false,
+      "diagnostic_trace": true,
+      "opening_recording": false
+    },
+    "next": [
+      "VersusDisconnectJumpConfigure"
+    ],
+    "on_error": [
+      "VersusFailure"
+    ]
   },
   "VersusDisconnectJumpConfigure": {
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "VersusLiveConfigure",
-    "custom_action_param": {"disconnect_jump_enabled": false},
-    "next": ["VersusSpeedSettingsGate"],
-    "on_error": ["VersusFailure"]
+    "custom_action_param": {
+      "disconnect_jump_enabled": false
+    },
+    "next": [
+      "VersusSpeedSettingsGate"
+    ],
+    "on_error": [
+      "VersusFailure"
+    ]
   },
   "VersusSpeedSettingsGate": {
     "recognition": "DirectHit",
@@ -128,8 +201,12 @@
       "game_fps": 60,
       "render_quality": "standard"
     },
-    "next": ["VersusHomeLive"],
-    "on_error": ["VersusFailure"]
+    "next": [
+      "VersusHomeLive"
+    ],
+    "on_error": [
+      "VersusFailure"
+    ]
   },
   "VersusHomeMarker": {
     "recognition": "TemplateMatch",
@@ -142,19 +219,33 @@
     "template": "home_live.png",
     "threshold": 0.82,
     "action": "Custom",
-    "custom_action": "ForegroundClick",
-    "target": [1085, 580, 180, 130],
+    "custom_action": "StaminaHomeEntry",
+    "target": [
+      1085,
+      580,
+      180,
+      130
+    ],
     "post_delay": 1000,
-    "next": ["VersusSelectPage", "VersusNavigationClose"],
-    "on_error": ["VersusFailure"],
+    "next": [
+      "VersusSelectPage",
+      "VersusNavigationClose"
+    ],
+    "on_error": [
+      "VersusFailure"
+    ],
     "focus": {
       "Node.Action.Starting": {
         "content": "正在点击主页右下角“演出”",
-        "display": ["log"]
+        "display": [
+          "log"
+        ]
       },
       "Node.Action.Succeeded": {
         "content": "已点击“演出”，正在寻找竞演演出入口",
-        "display": ["log"]
+        "display": [
+          "log"
+        ]
       }
     }
   },
@@ -164,8 +255,13 @@
     "threshold": 0.9,
     "action": "Custom",
     "custom_action": "ForegroundClick",
-    "next": ["VersusSelectPage", "VersusNavigationClose"],
-    "on_error": ["VersusFailure"]
+    "next": [
+      "VersusSelectPage",
+      "VersusNavigationClose"
+    ],
+    "on_error": [
+      "VersusFailure"
+    ]
   },
   "VersusLiveEntryTemplate": {
     "recognition": "TemplateMatch",
@@ -180,14 +276,23 @@
     "custom_action_param": {
       "expected": "竞演演出",
       "template_node": "VersusLiveEntryTemplate",
-      "roi": [0, 100, 1280, 620],
+      "roi": [
+        0,
+        100,
+        1280,
+        620
+      ],
       "click": false,
       "missing_reason": "无法确认选择演出页面上的竞演演出入口",
       "timeout_ms": 10000,
       "interval_ms": 500
     },
-    "next": ["VersusEnterLive"],
-    "on_error": ["VersusFailure"]
+    "next": [
+      "VersusEnterLive"
+    ],
+    "on_error": [
+      "VersusFailure"
+    ]
   },
   "VersusEnterLive": {
     "recognition": "DirectHit",
@@ -196,28 +301,46 @@
     "custom_action_param": {
       "expected": "竞演演出",
       "template_node": "VersusLiveEntryTemplate",
-      "roi": [0, 100, 1280, 620],
+      "roi": [
+        0,
+        100,
+        1280,
+        620
+      ],
       "click": true,
       "timeout_ms": 10000,
       "interval_ms": 500
     },
-    "next": ["VersusRun"],
-    "on_error": ["VersusFailure"]
+    "next": [
+      "VersusRun"
+    ],
+    "on_error": [
+      "VersusFailure"
+    ]
   },
   "VersusRun": {
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "VersusLiveFlow",
-    "next": ["VersusReturnHome"],
-    "on_error": ["VersusFailure"],
+    "next": [
+      "VersusReturnHome"
+    ],
+    "on_error": [
+      "VersusFailure"
+    ],
     "focus": {
       "Node.Action.Starting": {
         "content": "正在按设定次数执行竞演演出",
-        "display": ["log"]
+        "display": [
+          "log"
+        ]
       },
       "Node.Action.Failed": {
         "content": "❌ 竞演演出未完成，请查看本次任务的明确原因",
-        "display": ["log", "toast"]
+        "display": [
+          "log",
+          "toast"
+        ]
       }
     }
   },
@@ -227,7 +350,9 @@
     "custom_action": "VersusLiveFinalize",
     "custom_action_param": {
       "home_node": "VersusHomeMarker",
-      "modal_cancel_nodes": ["QuitConfirmCancel"],
+      "modal_cancel_nodes": [
+        "QuitConfirmCancel"
+      ],
       "click_nodes": [],
       "back_only_click_nodes": [
         "AutoLiveStorySkipConfirmLarge",
@@ -236,21 +361,34 @@
         "AutoLiveStoryMenu"
       ],
       "back_only": true,
-      "back_acceleration_click_point": [1279, 719],
+      "back_acceleration_click_point": [
+        1279,
+        719
+      ],
       "escape_interval_ms": 500,
       "escape_timeout_ms": 60000,
       "restart_limit": 1,
       "restart_wait_ms": 5000,
       "startup_grace_ms": 12000,
       "login_start_node": "AutoLiveLoginScreenMarker",
-      "login_start_target": [640, 635],
+      "login_start_target": [
+        640,
+        635
+      ],
       "login_marker_priority_attempts": 3,
       "escape_after_login_start": true,
       "package": "com.bilibili.star.bili",
-      "login_tap_target": [640, 360]
+      "login_tap_target": [
+        640,
+        360
+      ]
     },
-    "next": ["VersusComplete"],
-    "on_error": ["VersusFailure"]
+    "next": [
+      "VersusComplete"
+    ],
+    "on_error": [
+      "VersusFailure"
+    ]
   },
   "VersusComplete": {
     "recognition": "DirectHit",
@@ -274,5 +412,22 @@
       "reason": "竞演演出流程未完成",
       "reason_source": "latest"
     }
+  },
+  "VersusLiveStaminaRefillConfigure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "StaminaRefillConfigure",
+    "custom_action_param": {
+      "task_mode": "VersusLive",
+      "stamina_refill_enabled": false,
+      "stamina_refill_small_enabled": true,
+      "stamina_refill_large_enabled": true
+    },
+    "next": [
+      "VersusRecover"
+    ],
+    "on_error": [
+      "VersusFailure"
+    ]
   }
 }
