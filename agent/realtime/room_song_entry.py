@@ -47,6 +47,43 @@ def retry_connection_failed(flow, attempts=3):
     return not flow.visible(image, "connect_failed_body", 0.90)
 
 
+# 「连接失败」弹窗：右下角 NOW LOADING 框存在时游戏仍在重连，点「重试」无效。
+# 恢复网络后通常要等 20 秒左右；等待窗口和点击节奏都在此统一定义。
+CONNECT_FAILED_RETRY_POINT = (748, 527)
+CONNECT_FAILED_TIMEOUT_S = 35.0
+CONNECT_FAILED_POLL_S = 0.5
+CONNECT_FAILED_RETRY_GAP_S = 0.8
+
+
+def wait_for_connection_retry(flow, *, timeout: float = CONNECT_FAILED_TIMEOUT_S) -> bool:
+    """「连接失败」弹窗：等 NOW LOADING 消失后再点「重试」。
+
+    每个可点窗口最多点两次，覆盖一次点击被吞掉的情况；点完若加载框重新
+    出现，就退回等待而不是继续连点。返回弹窗是否已消失。
+    """
+    deadline = time.monotonic() + float(timeout)
+    while time.monotonic() < deadline:
+        check_stopping(flow)
+        image = flow.capture()
+        check_stopping(flow)
+        if not flow.visible(image, "connect_failed_body", 0.90):
+            return True
+        if flow.visible(image, "now_loading", 0.90):
+            time.sleep(CONNECT_FAILED_POLL_S)
+            continue
+        flow.click(CONNECT_FAILED_RETRY_POINT)
+        time.sleep(CONNECT_FAILED_RETRY_GAP_S)
+        image = flow.capture()
+        if not flow.visible(image, "connect_failed_body", 0.90):
+            return True
+        if not flow.visible(image, "now_loading", 0.90):
+            flow.click(CONNECT_FAILED_RETRY_POINT)
+        time.sleep(CONNECT_FAILED_RETRY_GAP_S)
+    check_stopping(flow)
+    image = flow.capture()
+    return not flow.visible(image, "connect_failed_body", 0.90)
+
+
 def rematch_backoff(flow, failures):
     # 累计次数只影响重匹配节奏；安全页面已经恢复时不能据此结束任务。
     deadline = time.monotonic() + min(2.0, max(0, failures - 3) * 0.25)

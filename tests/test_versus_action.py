@@ -86,7 +86,18 @@ def test_versus_interface_exposes_room_types_difficulties_and_flow_options():
     assert count["pipeline_override"]["VersusCountConfigure"][
         "custom_action_param"
     ] == {"count": "{Count}"}
-    assert [c["name"] for c in options["VersusDisconnectJump"]["cases"]] == ["Off", "On"]
+    assert [c["name"] for c in options["VersusDisconnectJump"]["cases"]] == [
+        "Off", "On", "AutoEnd", "AutoContinue",
+    ]
+    assert options["VersusDisconnectJump"]["cases"][3]["pipeline_override"] == {
+        "VersusDisconnectJumpConfigure": {
+            "custom_action_param": {
+                "disconnect_jump_enabled": True,
+                "auto_disconnect_jump": True,
+                "auto_jump_continue": True,
+            }
+        }
+    }
     assert set(VERSUS_DIFFICULTY_TARGETS) == {
         "Easy", "Normal", "Hard", "Expert", "Special",
     }
@@ -148,6 +159,9 @@ def test_versus_templates_are_deployed_and_nonempty():
         "ready_button.png",
         "member_exit_title.png",
         "connect_failed_body.png",
+        "disconnect_continue_body.png",
+        "disconnect_confirm_body.png",
+        "now_loading.png",
     }
     assert required == {path.name for path in image_dir.glob("*.png")}
     assert all(
