@@ -137,6 +137,44 @@ def test_stopping_after_foreground_check_prevents_next_input():
     assert not context.clicks
 
 
+def test_swallowed_ok_click_is_retried_until_panel_closes():
+    """面板开启动画期间 OK 点击被吞掉时，按面板可见性重试而不是直接失败。"""
+    class Swallow(Context):
+        def __init__(self, detector, *, saved=0, swallow=1):
+            super().__init__(detector, saved=saved)
+            self.swallow = swallow
+
+        def post_click(self, x, y):
+            if (x, y) == (640, 640) and self.swallow:
+                self.swallow -= 1
+                self.clicks.append((x, y))
+                return SimpleNamespace(
+                    wait=lambda: SimpleNamespace(succeeded=True)
+                )
+            return super().post_click(x, y)
+
+    context = Swallow(BoostDetector(), saved=1)
+    assert runner(context).ensure(1)
+    assert context.clicks.count((640, 640)) == 3
+    assert context.saved == 1
+
+
+def test_ok_click_that_never_closes_fails_after_bounded_retries():
+    class NeverCloses(Context):
+        def post_click(self, x, y):
+            if (x, y) == (640, 640):
+                self.clicks.append((x, y))
+                return SimpleNamespace(
+                    wait=lambda: SimpleNamespace(succeeded=True)
+                )
+            return super().post_click(x, y)
+
+    context = NeverCloses(BoostDetector(), saved=1)
+    with pytest.raises(RuntimeError, match="OK 点击未生效"):
+        runner(context).ensure(1)
+    assert context.clicks.count((640, 640)) == 3
+
+
 def test_foreground_proxy_replacement_is_consumed_before_click():
     context = Context(BoostDetector())
     fresh = SimpleNamespace(clicks=[])
