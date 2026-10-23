@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.4.11-ff6f9f" alt="Version"></a>
+  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.4.12-ff6f9f" alt="Version"></a>
   <img src="https://img.shields.io/badge/MaaFramework-5.10.2-4c8bf5" alt="MaaFramework">
   <img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?logo=windows11&logoColor=white" alt="Windows">
@@ -22,7 +22,7 @@
 
 ---
 
-v1.4.11 新增各任务独立的主页体力识别与大小火罐智能补充，改用开场截图关联轻量 Trace，并完善成员退出、连接失败和附加功能异常的恢复。Native 判定反馈内加入默认关闭的视觉相位观察候选；目前仍存在原因未定的偶发死亡，不承诺所有卡顿均能恢复。详见[本版本发行说明](docs/release-notes-v1.4.11.md)。
+v1.4.12 修正演出设置与 Profile 管理器的管道编码：旧 Profile 中的特殊字符可能使 JSON 无法解析，导致列表为空、设置显示默认值或无法保存，原文件仍然保留。输入、输出和错误管道统一 UTF-8，异常及时清理子进程，并记录加载及保存错误；本次不新增演奏行为。详见[本版本发行说明](docs/release-notes-v1.4.12.md)。
 
 ## ✨ 功能
 
@@ -157,6 +157,7 @@ MuMu 与雷电双开后连接失效时，可在任务停止后重新连接或刷
 | 结算与调试 | 安全推进结算，保存 PGGBM、Trace 和录像证据 |
 
 “演出设置 → Profile”中，单击行查看，双击设为当前任务难度的 Profile；参数编辑和校准记录在同页下方直接展开。
+演出设置通过 UTF-8 管道读取和保存，兼容旧 Profile 中的中文及特殊字符；加载失败时不自动保存默认值，调用和自动保存错误会写入日志。原 Profile 与 `selection.json` 无需删除、转换或重新校准；隔离包已验证旧 Profile 升级保留及设置后端保存重开，正式客户端界面仍待验收。
 Special 只有确认不可选时才允许显式回退 Expert；实时校准要求精确选择 Special。
 实际 Special 缺少可信本地谱面时，不发送演奏触控。
 
@@ -208,7 +209,7 @@ Special 只有确认不可选时才允许显式回退 Expert；实时校准要�
 .\scripts\setup.ps1
 & '..\.tools\Miniconda3\envs\maabangdream\python.exe' `
   -m pip install -r .\requirements-release.txt
-.\scripts\build-windows-release.ps1 -Version 1.4.11
+.\scripts\build-windows-release.ps1 -Version 1.4.12
 ```
 
 发布包须保持定制 MFA 与 Core 一致、依赖完整、路径可迁移，并排除本机用户配置。
