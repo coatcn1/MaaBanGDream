@@ -162,6 +162,7 @@ def test_versus_templates_are_deployed_and_nonempty():
         "disconnect_continue_body.png",
         "disconnect_confirm_body.png",
         "now_loading.png",
+        "room_match_wait.png",
     }
     assert required == {path.name for path in image_dir.glob("*.png")}
     assert all(

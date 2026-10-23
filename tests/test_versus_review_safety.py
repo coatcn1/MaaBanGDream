@@ -23,6 +23,39 @@ def bare_flow(module):
     return flow
 
 
+def test_versus_room_entry_recovers_stalled_match_popup(monkeypatch):
+    """「匹配中」弹窗卡住时取消并重新确定，而不是等到超时失败。"""
+    clock = [0.0]
+    flow = bare_flow(versus)
+    flow.capture = lambda: "frame"
+
+    def visible(_image, name, *args):
+        if name in {"room_match_wait", "room_search"}:
+            return clock[0] < 13.0
+        if name == "room_together":
+            return clock[0] >= 13.5
+        return False
+
+    flow.visible = visible
+    clicks = []
+    flow.click = lambda point: clicks.append(point)
+    monkeypatch.setattr(versus.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        versus.time,
+        "sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+
+    flow.verify_room_entry(
+        "entry timeout", confirm_point=versus.VERSUS_CONFIRM_POINT
+    )
+
+    assert clicks == [
+        versus.ROOM_MATCH_CANCEL_POINT,
+        versus.VERSUS_CONFIRM_POINT,
+    ]
+
+
 @pytest.mark.parametrize("error", [FinalCoverStartupFailure, FinalCoverIdentityConflict])
 def test_public_callback_contains_startup_failure(monkeypatch, error):
     action = profile.RealtimeProfilePlay()
