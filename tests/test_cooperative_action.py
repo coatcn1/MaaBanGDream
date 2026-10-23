@@ -238,6 +238,7 @@ def _fake_jump_flow(
     templates,
     visible_results,
     gate_block,
+    block_results=None,
 ):
     """构造只含历史跳车实现所需成员的 CooperativeLiveFlow 与假控制器。"""
     class Job:
@@ -283,14 +284,22 @@ def _fake_jump_flow(
     flow.click = clicks.append
     flow.dismiss_connect_failed = lambda: dismiss_calls.append(True)
 
+    pending_blocks = list(block_results) if block_results is not None else None
+
     class Gate:
         def __init__(self, shell):
             self.shell = shell
             self.restored = 0
             self.last_error = None
+            self.block_result = (
+                pending_blocks.pop(0) if pending_blocks else gate_block
+            )
 
         def block(self):
-            return gate_block
+            return self.block_result
+
+        def cleanup_stale(self):
+            return True
 
         def restore(self):
             self.restored += 1
@@ -303,6 +312,10 @@ def _fake_jump_flow(
         gates.append(gate)
         return gate
 
+    # uidrange 失败后会回退 iptables，两套后端都必须走同一个假门禁。
+    monkeypatch.setattr(
+        cooperative_action, "UidBlackholeGate", gate_factory
+    )
     monkeypatch.setattr(
         cooperative_action, "GameNetworkGate", gate_factory
     )
@@ -372,7 +385,32 @@ def test_disconnect_jump_out_restores_network_when_gate_block_fails(
     )
     assert flow.disconnect_jump_out() is False
     assert controller.keys == []
+    # uidrange 在回退前被显式 restore；iptables 回退失败后由 finally 兜底。
     assert gates[0].restored == 1
+    assert gates[1].restored == 1
+
+
+def test_disconnect_jump_out_falls_back_to_iptables_owner(monkeypatch):
+    """MuMu 12 之外的旧内核不支持 uidrange 时仍能按 iptables 跳车。"""
+    flow, controller, clicks, dismiss_calls, gates = _fake_jump_flow(
+        monkeypatch,
+        templates={
+            "disconnect_continue_body": np.zeros((10, 10, 3), dtype=np.uint8),
+            "disconnect_confirm_body": np.zeros((10, 10, 3), dtype=np.uint8),
+        },
+        visible_results={
+            "disconnect_continue_body": True,
+            "disconnect_confirm_body": True,
+        },
+        gate_block=False,
+        block_results=[False, True],
+    )
+    assert flow.disconnect_jump_out() is True
+    assert len(gates) == 2
+    assert gates[0].restored == 1
+    assert gates[1].restored == 2
+    assert controller.keys == [3]
+    assert dismiss_calls == [True]
 
 
 def test_disconnect_jump_out_restores_network_when_popup_times_out(
