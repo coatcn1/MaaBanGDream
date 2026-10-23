@@ -25,6 +25,7 @@ import realtime.continuous_live_action  # noqa: F401 - registration happens at i
 import realtime.formal_preflight  # noqa: F401 - registration happens at import time
 import realtime.calibration_action  # noqa: F401 - registration happens at import time
 import realtime.difficulty_action  # noqa: F401 - registration happens at import time
+import realtime.stamina_task  # noqa: F401 - 注册任务独立的主页体力门禁
 import realtime.runtime_options  # noqa: F401 - registration happens at import time
 import realtime.performance_settings_action  # noqa: F401 - registration happens at import time
 import realtime.game_effect_settings_action  # noqa: F401 - registration happens at import time

@@ -45,6 +45,7 @@ def test_versus_interface_exposes_room_types_difficulties_and_flow_options():
         "VersusSongChoice",
         "VersusDebug",
         "VersusDisconnectJump",
+        "VersusLiveStaminaRefill",
     ]
     options = interface["option"]
     assert options["VersusRoomType"]["default_case"] == "Free"
@@ -75,9 +76,10 @@ def test_versus_interface_exposes_room_types_difficulties_and_flow_options():
         c["name"]: c["pipeline_override"]["VersusDebugConfigure"]["custom_action_param"]
         for c in debug["cases"]
     } == {
-        "Light": {"debug_recording": False, "diagnostic_trace": True},
-        "Off": {"debug_recording": False, "diagnostic_trace": False},
-        "Full": {"debug_recording": True, "diagnostic_trace": True},
+        "Light": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": False},
+        "Off": {"debug_recording": False, "diagnostic_trace": False, "opening_recording": False},
+        "Full": {"debug_recording": True, "diagnostic_trace": True, "opening_recording": False},
+        "Opening": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": True},
     }
     count = options["VersusCount"]
     assert count["inputs"][0]["verify"] == r"^(?:0|[1-9][0-9]{0,2})$"
@@ -161,7 +163,7 @@ def test_agent_server_registers_versus_action():
 
 def test_versus_play_params_carry_the_versus_run_mode():
     params = versus_play_params({"difficulty": "Expert", "debug_recording": False,
-                                 "diagnostic_trace": True})
+                                 "diagnostic_trace": True, "opening_recording": False})
     assert params["run_mode"] == "versus"
     assert params["difficulty"] == "Expert"
     assert params["confirm_final_cover"] is True

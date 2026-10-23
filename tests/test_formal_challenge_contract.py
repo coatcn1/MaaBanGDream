@@ -109,9 +109,13 @@ def test_calibration_is_single_task_with_three_rehearsal_contract():
     task = next(task for task in interface["task"] if task["name"] == "RealtimeCalibration")
     assert task["entry"] == "RealtimeCalibration"
     nodes = load("resource/pipeline/realtime_calibration.json")
-    assert nodes["RealtimeCalibrationProcessConflictGuard"]["next"] == [
-        "RealtimeCalibrationRecover"
-    ]
+    assert nodes["RealtimeCalibration"]["next"] == ["RealtimeCalibrationProcessConflictGuard"]
+    assert nodes["RealtimeCalibrationProcessConflictGuard"]["custom_action"] == "ProcessConflictGuard"
+    assert nodes["RealtimeCalibrationProcessConflictGuard"]["next"] == ["RealtimeCalibrationStaminaRefillConfigure"]
+    configure = nodes["RealtimeCalibrationStaminaRefillConfigure"]
+    assert configure["custom_action"] == "StaminaRefillConfigure"
+    assert configure["custom_action_param"]["stamina_refill_enabled"] is False
+    assert configure["next"] == ["RealtimeCalibrationRecover"]
     assert nodes["RealtimeCalibrationRecover"]["next"] == [
         "RealtimeCalibrationSpeedSettingsGate"
     ]
@@ -126,9 +130,9 @@ def test_calibration_is_single_task_with_three_rehearsal_contract():
         "game_fps": 60,
         "render_quality": "standard",
     }
-    assert nodes["RealtimeCalibrationSpeedSettingsGate"]["next"] == [
-        "CalibrationDifficultySetting"
-    ]
+    assert nodes["RealtimeCalibrationSpeedSettingsGate"]["next"] == ["CalibrationStaminaHomeGate"]
+    assert nodes["CalibrationStaminaHomeGate"]["custom_action"] == "StaminaPassiveHomeGate"
+    assert nodes["CalibrationStaminaHomeGate"]["next"] == ["CalibrationDifficultySetting"]
     assert nodes["RealtimeCalibrationRun"]["custom_action"] == "RealtimeCalibrationRun"
     assert "CalibrationCaptureSong" not in nodes
     assert nodes["RealtimeCalibrationRoundComplete"]["action"] == "DoNothing"

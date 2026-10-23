@@ -119,8 +119,6 @@ class Tasker:
     @property
     def controller(self):
         self.controller_reads += 1
-        if self.controller_reads > 1:
-            raise RuntimeError("controller proxy retrieved twice")
         return self._controller
 
 
@@ -224,7 +222,7 @@ def test_native_execution_gate_accepts_only_proven_jump_cancellation():
         ), field
 
 
-def test_profile_play_reuses_one_agent_controller_proxy(monkeypatch):
+def test_profile_play_refreshes_proxy_at_safety_boundaries(monkeypatch):
     tasker = Tasker()
     context = SimpleNamespace(tasker=tasker)
     settings = SimpleNamespace(
@@ -278,7 +276,7 @@ def test_profile_play_reuses_one_agent_controller_proxy(monkeypatch):
 
     argv = SimpleNamespace(custom_action_param=json.dumps({"difficulty": "Easy"}))
     assert RealtimeProfilePlay()._run(context, argv)
-    assert tasker.controller_reads == 1
+    assert 3 <= tasker.controller_reads <= 5
     assert foreground_checks == [tasker._controller]
     assert dispatcher_options == [{}]
     assert engine_options[0]["startup_timeout_seconds"] == 60.0
@@ -389,8 +387,8 @@ def test_explicit_native_initialization_failure_never_falls_back(
         lambda controller: None,
     )
     monkeypatch.setattr(
-        "agent.realtime.profile_play_action.debug_enabled",
-        lambda: False,
+        "agent.realtime.profile_play_action.debug_recording_enabled",
+        lambda _argv: False,
     )
     monkeypatch.setattr(
         "agent.realtime.profile_play_action.diagnostic_trace_enabled",
@@ -486,7 +484,7 @@ def test_profile_native_consumes_and_configures_prearmed_backend(monkeypatch):
         "require_game_foreground",
         lambda controller: None,
     )
-    monkeypatch.setattr(profile_play_action, "debug_enabled", lambda: False)
+    monkeypatch.setattr(profile_play_action, "debug_recording_enabled", lambda _argv: False)
     monkeypatch.setattr(
         profile_play_action,
         "diagnostic_trace_enabled",
@@ -598,7 +596,7 @@ def test_profile_jump_cancellation_reaches_disconnect_branch(monkeypatch):
     monkeypatch.setattr(
         profile_play_action, "require_game_foreground", lambda _controller: None
     )
-    monkeypatch.setattr(profile_play_action, "debug_enabled", lambda: False)
+    monkeypatch.setattr(profile_play_action, "debug_recording_enabled", lambda _argv: False)
     monkeypatch.setattr(
         profile_play_action, "diagnostic_trace_enabled", lambda: False
     )
@@ -710,7 +708,7 @@ def test_profile_falls_back_to_legacy_without_reliable_native_chart(
         "require_game_foreground",
         lambda controller: None,
     )
-    monkeypatch.setattr(profile_play_action, "debug_enabled", lambda: False)
+    monkeypatch.setattr(profile_play_action, "debug_recording_enabled", lambda _argv: False)
     monkeypatch.setattr(
         profile_play_action,
         "diagnostic_trace_enabled",
@@ -1517,8 +1515,8 @@ def test_late_preflight_failure_preserves_verified_speed(
         lambda *_args, **_kwargs: {},
     )
     monkeypatch.setattr(
-        "agent.realtime.profile_play_action.debug_enabled",
-        lambda: (_ for _ in ()).throw(RuntimeError("debug option failed")),
+        "agent.realtime.profile_play_action.debug_recording_enabled",
+        lambda _argv: (_ for _ in ()).throw(RuntimeError("debug option failed")),
     )
     monkeypatch.setattr("agent.realtime.profile_play_action.PROJECT_ROOT", tmp_path)
     recorder_constructions = []
@@ -1739,6 +1737,7 @@ def _completed_play_harness(
     native_report=None,
     collected_result=None,
     collect_callback=None,
+    runtime_task_id=None,
 ):
     reset_live_run(
         mode="pending",
@@ -1804,10 +1803,11 @@ def _completed_play_harness(
         "agent.realtime.profile_play_action.ControllerTouchDispatcher",
         lambda *_args, **_kwargs: object(),
     )
-    monkeypatch.setattr(
-        "agent.realtime.profile_play_action.debug_enabled",
-        lambda: False,
-    )
+    if runtime_task_id is None:
+        monkeypatch.setattr(
+            "agent.realtime.profile_play_action.debug_recording_enabled",
+            lambda _argv: False,
+        )
     recorder_holder = {}
     class FakeRecorder:
         def __init__(self, *, video_enabled=True):
@@ -1943,6 +1943,8 @@ def _completed_play_harness(
             "deferred_result_report": "screencap/medley-session-song1.json",
         })
     argv = SimpleNamespace(custom_action_param=json.dumps(params))
+    if runtime_task_id is not None:
+        argv.task_detail = SimpleNamespace(task_id=runtime_task_id)
     assert RealtimeProfilePlay()._run(context, argv) is expected_success
     return tmp_path, writes, recorder_holder.get("value")
 
@@ -2282,6 +2284,107 @@ def test_completed_cooperative_play_saves_stable_judgements(tmp_path, monkeypatc
     assert writes == []
 
 
+def test_stable_multiplayer_read_uses_expected_total_resolver():
+    now = [0.0]
+    image = np.zeros((720, 1280, 3), dtype=np.uint8)
+    original = LiveResult(568, 0, 0, 0, 1, 0, 0, confidence=.76)
+    repaired = LiveResult(668, 0, 0, 0, 1, 0, 0, confidence=.76)
+    calls = []
+
+    class Parser:
+        def parse(self, frame):
+            return original
+
+        def resolve_expected_total(self, frame, *, expected_notes, fallback):
+            calls.append((expected_notes, fallback))
+            return repaired
+
+    result, _ = profile_play_action._read_stable_cooperative_judgements(
+        Controller(), lambda: False, image, parser=Parser(), expected_notes=669,
+        maximum_notes=9999, deadline=20, stability_interval_seconds=.2,
+        is_result_page=lambda frame: True, clock=lambda: now[0],
+        sleeper=lambda seconds: now.__setitem__(0, now[0] + seconds),
+    )
+    assert result == repaired
+    assert calls == [(669, original), (669, original)]
+    assert now[0] == pytest.approx(.2)
+
+
+@pytest.mark.parametrize("failure,reason", [
+    ("parse", "parse failed"),
+    ("mismatch", "does not match chart"),
+    ("confidence", "too low"),
+    ("fast-slow", "FAST/SLOW counts are inconsistent"),
+    ("unstable", "did not remain stable"),
+    ("page-left", "result page left"),
+])
+def test_stable_multiplayer_read_keeps_rejection_budget_and_summary(failure, reason, capsys):
+    now, reads = [0.0], [0]
+
+    class Parser:
+        def parse(self, image):
+            reads[0] += 1
+            if failure == "parse":
+                raise ValueError("unreadable digit")
+            if failure == "mismatch":
+                return LiveResult(568, 0, 0, 0, 1, 0, 0)
+            if failure == "confidence":
+                return LiveResult(668, 0, 0, 0, 1, 0, 0, confidence=.29)
+            if failure == "fast-slow":
+                return LiveResult(668, 0, 0, 0, 1, 670, 0)
+            if failure == "unstable" and reads[0] % 2:
+                return LiveResult(667, 1, 0, 0, 1, 0, 0)
+            return LiveResult(668, 0, 0, 0, 1, 0, 0)
+
+        def resolve_expected_total(self, image, **kwargs):
+            raise ValueError("no constrained candidate")
+
+    result, _ = profile_play_action._read_stable_cooperative_judgements(
+        Controller(), lambda: False, object(), parser=Parser(), expected_notes=669,
+        maximum_notes=9999, deadline=20, stability_interval_seconds=.2,
+        is_result_page=lambda image: failure != "page-left", clock=lambda: now[0],
+        sleeper=lambda seconds: now.__setitem__(0, now[0] + seconds),
+    )
+    assert result is None
+    assert now[0] <= 3.0
+    output = capsys.readouterr().out
+    assert reason in output
+    assert output.count("cooperative_judgement_unreadable=") == 1
+
+
+def test_stable_multiplayer_read_stop_precedes_capture_and_logging(monkeypatch):
+    class Forbidden:
+        def parse(self, image):
+            raise AssertionError("停止后不能解析")
+
+        def post_screencap(self):
+            raise AssertionError("停止后不能截图")
+
+    result, _ = profile_play_action._read_stable_cooperative_judgements(
+        Forbidden(), lambda: True, object(), parser=Forbidden(), expected_notes=669,
+        maximum_notes=9999, deadline=20, stability_interval_seconds=.2,
+        is_result_page=lambda image: True, clock=lambda: 0, sleeper=lambda seconds: None,
+    )
+    assert result is None
+
+
+def test_stable_multiplayer_read_logging_failure_remains_nonfatal(monkeypatch):
+    now = [0.0]
+    def parse(image):
+        raise ValueError("unreadable digit")
+    def print_failure(*args, **kwargs):
+        raise OSError("output unavailable")
+    monkeypatch.setattr("builtins.print", print_failure)
+    result, _ = profile_play_action._read_stable_cooperative_judgements(
+        Controller(), lambda: False, object(), parser=SimpleNamespace(parse=parse),
+        expected_notes=669, maximum_notes=9999, deadline=20, stability_interval_seconds=.2,
+        is_result_page=lambda image: True, clock=lambda: now[0],
+        sleeper=lambda seconds: now.__setitem__(0, now[0] + seconds),
+    )
+    assert result is None
+    assert now[0] == pytest.approx(3.0)
+
+
 def test_completed_with_diagnostics_disabled_writes_result_only(
     tmp_path, monkeypatch,
 ):
@@ -2347,6 +2450,30 @@ def test_completed_with_debug_recording_writes_json_and_screenshot(
     payload = json.loads(reports[0].read_text(encoding="utf-8"))
     assert payload["debug_recording_path"].endswith("debug-rec")
     assert recorder.video_enabled is True
+
+
+@pytest.mark.parametrize("run_mode,pipeline", [("formal", "realtime_multi_live.json"), ("challenge", "challenge_live.json")])
+def test_current_task_full_gate_overrides_base_node_false_without_next_task_leak(monkeypatch, tmp_path, run_mode, pipeline):
+    from agent.realtime import runtime_options
+    monkeypatch.setattr(runtime_options, "_DEBUG_BY_TASK", {})
+    monkeypatch.setattr(runtime_options, "_DEBUG_ENABLED", False)
+    resource = json.loads((Path(__file__).parents[1] / "resource" / "pipeline" / pipeline).read_text(encoding="utf-8"))
+    play_nodes = [node for node in resource.values() if node.get("custom_action") == "RealtimeProfilePlay"]
+    assert play_nodes and all(node["custom_action_param"]["debug_recording"] is False for node in play_nodes)
+    context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    def options(task_id, enabled):
+        argv = SimpleNamespace(task_detail=SimpleNamespace(task_id=task_id),
+            custom_action_param=json.dumps({"debug_recording": enabled}))
+        assert runtime_options.RealtimeRuntimeOptions().run(context, argv)
+    options(91001, True)
+    _, _, recorder = _completed_play_harness(monkeypatch, tmp_path / "full", debug_recording=False,
+        runtime_task_id=91001, run_mode=run_mode)
+    assert recorder.video_enabled is True
+    options(91002, False)
+    for task_id in (91002, 91003):
+        _, _, recorder = _completed_play_harness(monkeypatch, tmp_path / str(task_id), debug_recording=False,
+            runtime_task_id=task_id, run_mode=run_mode)
+        assert recorder.video_enabled is False
 
 
 def test_result_collection_timeout_writes_invalid_correlated_json(
@@ -2680,3 +2807,175 @@ def test_collect_result_dismisses_reward_popup_before_stabilizing():
     assert outcome.result is not None
     assert clicks == [profile_play_action.RESULT_ANIMATION_SKIP_POINT] * 4
     assert keys == [4, 4]
+
+
+@pytest.mark.parametrize('mode',['full','trace','opening'])
+def test_recorder_creation_failure_is_nonfatal_at_profile_play_callsite(monkeypatch,mode,capsys):
+    monkeypatch.setattr(profile_play_action,'debug_recording_enabled',lambda _argv:mode=='full')
+    monkeypatch.setattr(profile_play_action,'diagnostic_trace_enabled',lambda:mode=='trace')
+    monkeypatch.setattr(profile_play_action,'opening_recording_enabled',lambda argv:mode=='opening')
+    def broken(*args,**kwargs):raise OSError('diagnostic disk unavailable')
+    monkeypatch.setattr(profile_play_action,'RealtimeDebugRecorder',broken)
+    test_profile_play_refreshes_proxy_at_safety_boundaries(monkeypatch)
+    assert 'create_warning' in capsys.readouterr().out
+
+
+def test_recorder_metadata_checkpoint_and_lifecycle_failures_are_nonfatal_at_play_callsite(monkeypatch,tmp_path,capsys):
+    monkeypatch.setattr(profile_play_action,'debug_recording_enabled',lambda _argv:False)
+    monkeypatch.setattr(profile_play_action,'diagnostic_trace_enabled',lambda:True)
+    monkeypatch.setattr(profile_play_action,'opening_recording_enabled',lambda argv:False)
+    class Recorder:
+        output_dir=tmp_path
+        def __init__(self,*a,**kw):pass
+        def set_session_metadata(self,*a):raise OSError('metadata disk error')
+        def save_checkpoint(self,*a,**kw):raise OSError('checkpoint disk error')
+        def close(self):pass
+    def broken_lifecycle(*a,**kw):raise OSError('lifecycle disk error')
+    monkeypatch.setattr(profile_play_action,'RealtimeDebugRecorder',Recorder)
+    monkeypatch.setattr(profile_play_action,'_append_lifecycle_event',broken_lifecycle)
+    test_profile_play_refreshes_proxy_at_safety_boundaries(monkeypatch)
+    output=capsys.readouterr().out
+    assert 'metadata_warning' in output and 'lifecycle_warning' in output and 'checkpoint_warning' in output
+
+
+@pytest.mark.parametrize("enabled",[False,True])
+def test_opening_only_native_wait_capture_uses_existing_refresh_and_return_time(monkeypatch,enabled):
+    import agent.screen_refresh as refresh
+    context=SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    frame=object()
+    captured=[]
+    recorder=SimpleNamespace(record_phase=lambda *a,**kw:captured.append((a,kw)))
+    def capture(ctx):
+        assert ctx is context
+        return frame
+    monkeypatch.setattr(refresh,'capture_image',capture)
+    monkeypatch.setattr(profile_play_action.time,'monotonic',lambda:123.5)
+    kwargs=profile_play_action._opening_native_wait_kwargs(context,recorder,enabled)
+    if not enabled:
+        assert kwargs=={} and not captured
+        return
+    kwargs['wait_observer']()
+    assert captured[0][0]==(frame,123.5,'native-prearm')
+    assert captured[0][1]['frame_metadata']['timestamp_kind']=='capture-return-upper-bound'
+    context.tasker.stopping=True
+    with pytest.raises(InterruptedError):kwargs['wait_observer']()
+    assert len(captured)==1
+
+
+def test_native_opening_observer_imports_in_agent_server_top_level_runtime(tmp_path):
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    env=dict(os.environ,PYTHONPATH=str(Path(__file__).resolve().parents[1]/"agent"))
+    script="""
+from types import SimpleNamespace
+import realtime.profile_play_action as play
+import screen_refresh
+screen_refresh.capture_image=lambda ctx:object()
+context=SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+seen=[]
+recorder=SimpleNamespace(record_phase=lambda *a,**kw:seen.append(a))
+play._opening_native_wait_kwargs(context,recorder,True)['wait_observer']()
+assert seen[0][2]=='native-prearm'
+"""
+    result=subprocess.run([sys.executable,'-c',script],cwd=tmp_path,env=env,capture_output=True,text=True,timeout=20)
+    assert result.returncode==0,result.stderr
+
+
+@pytest.mark.parametrize("close_error",[False,True])
+def test_stop_after_recorder_created_closes_it_without_failure_screenshot(monkeypatch,tmp_path,close_error):
+    reset_live_run(mode="cooperative",difficulty="Expert",prepared_for_play=True)
+    update_live_run(preparation_identity_pending_final_cover=True)
+    monkeypatch.setattr(profile_play_action,'PROJECT_ROOT',tmp_path)
+    monkeypatch.setattr(profile_play_action.RealtimeProfileStore,'runtime_options',lambda self:{
+        'native_realtime_enabled':False,'chart_prediction_enabled':False,'chart_predict_presses':False})
+    monkeypatch.setattr(profile_play_action,'resolve_local_chart_for_run',lambda *a:SimpleNamespace(
+        selection=_chart_selection('resource/charts/bestdori/55/expert.json'),reason='test'))
+    context=SimpleNamespace(tasker=SimpleNamespace(stopping=False,controller=Controller()))
+    closed=[]
+    class Recorder:
+        output_dir=tmp_path
+        recording_mode='opening-screenshots+trace'
+        def __init__(self,*a,**kw):pass
+        def set_session_metadata(self,*a,**kw):pass
+        def save_checkpoint(self,*a,**kw):pass
+        def record_phase(self,*a,**kw):pass
+        def close(self):
+            closed.append(True)
+            if close_error:raise OSError('close unavailable')
+    monkeypatch.setattr(profile_play_action,'RealtimeDebugRecorder',Recorder)
+    def stop(*a,**kw):
+        context.tasker.stopping=True
+        raise InterruptedError('user stop')
+    monkeypatch.setattr(profile_play_action,'wait_for_final_cover',stop)
+    params={'difficulty':'Expert','require_profile':False,'run_mode':'cooperative','opening_recording':True}
+    assert RealtimeProfilePlay()._run(context,SimpleNamespace(custom_action_param=json.dumps(params))) is True
+    assert closed==[True]
+    assert not list(tmp_path.glob('**/realtime-result-*.json'))
+
+
+def test_nested_refresh_invalidates_old_proxy_and_foreground_can_replace_it_again(monkeypatch):
+    class Proxy:
+        valid=True
+        @property
+        def info(self):
+            assert self.valid,'stale proxy used'
+            return {'offline':True}
+    class Context:
+        def __init__(self):self.current=Proxy();self.tasker=SimpleNamespace(stopping=False)
+        def run_task(self,node):
+            self.current.valid=False;self.current=Proxy()
+            self.current.cached_image=object()
+            return SimpleNamespace(status=SimpleNamespace(succeeded=True))
+    context=Context()
+    class Tasker:
+        stopping=False
+        @property
+        def controller(self):return context.current
+    context.tasker=Tasker()
+    old=context.tasker.controller
+    recorder=SimpleNamespace(record_phase=lambda *a,**kw:None)
+    profile_play_action._opening_native_wait_kwargs(context,recorder,True)['wait_observer']()
+    def guard(controller):
+        assert controller.info['offline']
+        context.run_task('foreground-side-effect')
+    monkeypatch.setattr(profile_play_action,'require_game_foreground',guard)
+    current=profile_play_action._fresh_foreground_controller(context)
+    assert not old.valid and current is context.current and current.info['offline']
+
+
+def test_setup_stop_cleans_consumed_native_and_warns_if_cleanup_fails(monkeypatch,tmp_path,capsys):
+    reset_live_run(mode="formal",difficulty="Expert",prepared_for_play=True)
+    context=SimpleNamespace(tasker=SimpleNamespace(stopping=False,controller=Controller()))
+    settings=SimpleNamespace(target_fps=60,timing_offset_ms=17,note_speed=10.0,profile_path=SimpleNamespace(name="expert.json"))
+    selection=SimpleNamespace(path=Path('chart-48-expert.json'),timeline=object(),bestdori_song_id=48,difficulty='expert')
+    monkeypatch.setattr(profile_play_action,'PROJECT_ROOT',tmp_path)
+    monkeypatch.setattr(profile_play_action.RealtimeProfileStore,'resolve_latest',lambda *a,**kw:settings)
+    monkeypatch.setattr(profile_play_action.RealtimeProfileStore,'runtime_options',lambda *a,**kw:{
+        'chart_prediction_enabled':False,'chart_predict_presses':False,'native_realtime_enabled':True})
+    monkeypatch.setattr(profile_play_action,'resolve_local_chart_for_run',lambda *a,**kw:SimpleNamespace(selection=selection,reason='matched'))
+    monkeypatch.setattr(profile_play_action,'debug_recording_enabled',lambda _argv:False)
+    monkeypatch.setattr(profile_play_action,'diagnostic_trace_enabled',lambda:False)
+    monkeypatch.setattr(profile_play_action,'opening_recording_enabled',lambda argv:False)
+    monkeypatch.setattr(profile_play_action,'require_game_foreground',lambda _:pytest.fail('stop优先，不能再查前台'))
+    stopped=[]
+    class Backend:
+        def configure_timing_offset(self,value):context.tasker.stopping=True
+        def stop(self):stopped.append(True);raise OSError('cleanup unavailable')
+    monkeypatch.setattr(profile_play_action,'consume_prearmed_backend',lambda *a:Backend())
+    assert RealtimeProfilePlay()._run(context,SimpleNamespace(custom_action_param=json.dumps({'difficulty':'Expert'}))) is True
+    assert stopped==[True]
+    assert 'stop_cleanup_warning' in capsys.readouterr().out
+    assert not list(tmp_path.glob('**/realtime-result-*.json'))
+
+
+@pytest.mark.parametrize("invalid", [{"release_confirmed": False}, {"executed": 1}, {"underflows": 1}, {"executed_observation_complete": False}])
+def test_completed_visual_does_not_hide_native_integrity_failure(monkeypatch, tmp_path, invalid):
+    report = {"planned": 637, "sent": 637, "executed": 637, "underflows": 0,
+              "executed_observation_complete": True, "state": "finished",
+              "session_state": "finished", "release_confirmed": True, "stop_latency_ms": 120.0}
+    with pytest.raises(RuntimeError, match="完整性门禁"):
+        _completed_play_harness(monkeypatch, tmp_path, debug_recording=False,
+                                native_report=report | invalid)
+    assert current_live_run().play_completed is False

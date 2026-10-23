@@ -25,7 +25,7 @@
     "action": "Custom",
     "custom_action": "ProcessConflictGuard",
     "next": [
-      "MedleyTourTypeConfigure"
+      "MedleyLiveStaminaRefillConfigure"
     ],
     "on_error": [
       "MedleyFailure"
@@ -94,7 +94,8 @@
     "custom_action": "MedleyLiveConfigure",
     "custom_action_param": {
       "debug_recording": false,
-      "diagnostic_trace": true
+      "diagnostic_trace": true,
+      "opening_recording": false
     },
     "next": [
       "MedleyFlow"
@@ -173,5 +174,22 @@
     ],
     "threshold": 0.88,
     "action": "DoNothing"
+  },
+  "MedleyLiveStaminaRefillConfigure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "StaminaRefillConfigure",
+    "custom_action_param": {
+      "task_mode": "MedleyLive",
+      "stamina_refill_enabled": false,
+      "stamina_refill_small_enabled": true,
+      "stamina_refill_large_enabled": true
+    },
+    "next": [
+      "MedleyTourTypeConfigure"
+    ],
+    "on_error": [
+      "MedleyFailure"
+    ]
   }
 }

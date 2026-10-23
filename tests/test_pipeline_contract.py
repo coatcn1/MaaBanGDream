@@ -76,7 +76,7 @@ def test_all_pipeline_clicks_use_the_foreground_guard():
 def test_interface_references_existing_entry_and_resource():
     interface = load(ROOT / "interface.json")
     assert interface["interface_version"] == 2
-    assert interface["version"] == "1.4.10"
+    assert interface["version"] == "1.4.11"
     assert interface["license"] == "PolyForm-Noncommercial-1.0.0"
     assert interface["github"] == "https://github.com/coatcn1/MaaBanGDream"
     assert "mirrorchyan_rid" not in interface
@@ -113,9 +113,8 @@ def test_medley_pipeline_merges_options_and_defers_recovery_to_flow():
     pipeline = load(ROOT / "resource" / "pipeline" / "medley_live.json")
     options = interface["option"]
 
-    assert pipeline["MedleyProcessConflictGuard"]["next"] == [
-        "MedleyTourTypeConfigure"
-    ]
+    assert pipeline["MedleyProcessConflictGuard"]["next"] == ["MedleyLiveStaminaRefillConfigure"]
+    assert pipeline["MedleyLiveStaminaRefillConfigure"]["next"] == ["MedleyTourTypeConfigure"]
     assert "MedleyRecover" not in pipeline
     assert pipeline["MedleyTourTypeConfigure"]["next"] == [
         "MedleySongModeConfigure"
@@ -465,6 +464,7 @@ def test_multi_live_options_and_loop_contract():
         "AutoLiveSongMode",
         "AutoLiveDifficulty",
         "AutoLiveCount",
+        "AutoLiveStaminaRefill",
     ]
     song_mode = interface["option"]["AutoLiveSongMode"]
     assert [case["name"] for case in song_mode["cases"]] == ["Current", "Random"]
@@ -644,7 +644,7 @@ def test_realtime_multi_live_contract_and_options():
     task = next(task for task in interface["task"] if task["name"] == "RealtimeLive")
     assert task["option"] == [
         "RealtimeMode", "RealtimeLiveSongMode", "RealtimeLiveDifficulty",
-        "RealtimeLiveCount", "RealtimeLiveDebug",
+        "RealtimeLiveCount", "RealtimeLiveDebug", "RealtimeLiveStaminaRefill",
     ]
     assert nodes["RealtimeMultiLive"]["next"] == [
         "RealtimeLiveProcessConflictGuard"
@@ -845,7 +845,7 @@ def test_realtime_multi_live_contract_and_options():
     debug = interface["option"]["RealtimeLiveDebug"]
     assert debug["default_case"] == "Light"
     assert [case["name"] for case in debug["cases"]] == [
-        "Light", "Off", "Full",
+        "Light", "Off", "Full", "Opening",
     ]
     params = {
         case["name"]: case["pipeline_override"]["RealtimeLiveDebugGate"][
@@ -854,9 +854,10 @@ def test_realtime_multi_live_contract_and_options():
         for case in debug["cases"]
     }
     assert params == {
-        "Light": {"debug_recording": False, "diagnostic_trace": True},
-        "Off": {"debug_recording": False, "diagnostic_trace": False},
-        "Full": {"debug_recording": True, "diagnostic_trace": True},
+        "Light": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": False},
+        "Off": {"debug_recording": False, "diagnostic_trace": False, "opening_recording": False},
+        "Full": {"debug_recording": True, "diagnostic_trace": True, "opening_recording": False},
+        "Opening": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": True},
     }
     assert not any(task["name"] == "RealtimeFullSong" for task in interface["task"])
 
@@ -871,7 +872,7 @@ def test_continuous_realtime_live_returns_home_after_internal_result_navigation(
 
     assert task["entry"] == "ContinuousRealtimeLive"
     assert task["option"] == [
-        "ContinuousRealtimeDifficulty", "ContinuousRealtimeDebug",
+        "ContinuousRealtimeDifficulty", "ContinuousRealtimeDebug", "ContinuousRealtimeLiveStaminaRefill",
     ]
     assert nodes["ContinuousRealtimeLive"]["next"] == [
         "ContinuousRealtimeProcessConflictGuard"
@@ -879,9 +880,8 @@ def test_continuous_realtime_live_returns_home_after_internal_result_navigation(
     assert nodes["ContinuousRealtimeProcessConflictGuard"]["custom_action"] == (
         "ProcessConflictGuard"
     )
-    assert nodes["ContinuousRealtimeProcessConflictGuard"]["next"] == [
-        "ContinuousRealtimeDifficultyConfigure"
-    ]
+    assert nodes["ContinuousRealtimeProcessConflictGuard"]["next"] == ["ContinuousRealtimeLiveStaminaRefillConfigure"]
+    assert nodes["ContinuousRealtimeLiveStaminaRefillConfigure"]["next"] == ["ContinuousRealtimeDifficultyConfigure"]
     difficulty_gate = nodes["ContinuousRealtimeDifficultyConfigure"]
     assert difficulty_gate["custom_action"] == "ContinuousRealtimeLiveConfigure"
     assert difficulty_gate["custom_action_param"] == {
@@ -893,9 +893,9 @@ def test_continuous_realtime_live_returns_home_after_internal_result_navigation(
     assert debug_gate["custom_action"] == "ContinuousRealtimeLiveConfigure"
     assert debug_gate["custom_action_param"] == {
         "debug_recording": False,
-        "diagnostic_trace": True,
-    }
-    assert debug_gate["next"] == ["ContinuousRealtimeWatcher"]
+        "diagnostic_trace": True, "opening_recording": False}
+    assert debug_gate["next"] == ["ContinuousRealtimeStaminaHomeGate"]
+    assert nodes["ContinuousRealtimeStaminaHomeGate"]["next"] == ["ContinuousRealtimeWatcher"]
     watcher = nodes["ContinuousRealtimeWatcher"]
     assert watcher["custom_action"] == "ContinuousRealtimeLive"
     assert watcher["next"] == ["ContinuousRealtimeComplete"]
@@ -929,7 +929,7 @@ def test_continuous_realtime_live_returns_home_after_internal_result_navigation(
     debug = interface["option"]["ContinuousRealtimeDebug"]
     assert debug["default_case"] == "Light"
     assert [case["name"] for case in debug["cases"]] == [
-        "Light", "Off", "Full",
+        "Light", "Off", "Full", "Opening",
     ]
     params = {
         case["name"]: case["pipeline_override"][
@@ -940,9 +940,10 @@ def test_continuous_realtime_live_returns_home_after_internal_result_navigation(
         for case in debug["cases"]
     }
     assert params == {
-        "Light": {"debug_recording": False, "diagnostic_trace": True},
-        "Off": {"debug_recording": False, "diagnostic_trace": False},
-        "Full": {"debug_recording": True, "diagnostic_trace": True},
+        "Light": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": False},
+        "Off": {"debug_recording": False, "diagnostic_trace": False, "opening_recording": False},
+        "Full": {"debug_recording": True, "diagnostic_trace": True, "opening_recording": False},
+        "Opening": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": True},
     }
 
 
@@ -1000,8 +1001,7 @@ print(json.dumps({
     }
     assert effective["ContinuousRealtimeDebugConfigure"] == {
         "debug_recording": False,
-        "diagnostic_trace": True,
-    }
+        "diagnostic_trace": True, "opening_recording": False}
 
 
 def test_calibration_and_challenge_offer_three_diagnostic_levels():
@@ -1013,7 +1013,7 @@ def test_calibration_and_challenge_offer_three_diagnostic_levels():
         option = interface["option"][option_name]
         assert option["default_case"] == "Light"
         assert [case["name"] for case in option["cases"]] == [
-            "Light", "Off", "Full",
+            "Light", "Off", "Full", "Opening",
         ]
         params = {
             case["name"]: case["pipeline_override"][gate][
@@ -1022,9 +1022,10 @@ def test_calibration_and_challenge_offer_three_diagnostic_levels():
             for case in option["cases"]
         }
         assert params == {
-            "Light": {"debug_recording": False, "diagnostic_trace": True},
-            "Off": {"debug_recording": False, "diagnostic_trace": False},
-            "Full": {"debug_recording": True, "diagnostic_trace": True},
+            "Light": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": False},
+            "Off": {"debug_recording": False, "diagnostic_trace": False, "opening_recording": False},
+            "Full": {"debug_recording": True, "diagnostic_trace": True, "opening_recording": False},
+        "Opening": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": True},
         }
 
 
@@ -1073,7 +1074,14 @@ def test_task_entries_bootstrap_before_round_execution():
         guard = nodes[guard_name]
         assert guard["custom_action"] == "ProcessConflictGuard"
         expected_next = recover_name or gate_name
-        assert guard["next"] == [expected_next]
+        if entry_name == "ChallengeLive":
+            assert guard["next"] == [expected_next]
+        else:
+            mode = "RealtimeLive" if entry_name == "RealtimeMultiLive" else entry_name
+            config = mode + "StaminaRefillConfigure"
+            assert guard["next"] == [config]
+            assert nodes[config]["custom_action"] == "StaminaRefillConfigure"
+            assert nodes[config]["next"] == [expected_next]
         assert guard["on_error"]
         if recover_name:
             recover = nodes[recover_name]
@@ -1159,3 +1167,35 @@ def test_terminal_states_are_explicit_and_stop_task_is_not_used():
         node = load(ROOT / "resource/pipeline" / filename)[complete]
         assert node["custom_action"] == "TaskOutcome"
         assert "Node.Action.Succeeded" in node["focus"]
+
+
+def test_seven_opening_debug_options_resolve_complete_params_in_real_maafw(tmp_path):
+    import subprocess,sys
+    interface=load(ROOT/'interface.json')
+    pipeline={}
+    for path in (ROOT/'resource/pipeline').glob('*.json'):pipeline.update(load(path))
+    entries=[]
+    for name in ['RealtimeLiveDebug','CooperativeDebug','VersusDebug','ContinuousRealtimeDebug','CalibrationDebug','ChallengeDebug','MedleyDebug']:
+        option=interface['option'][name]
+        assert option['default_case']!='Opening'
+        for case in option['cases']:
+            override=case.get('pipeline_override',{})
+            for node,value in override.items():
+                params=value.get('custom_action_param',{})
+                if 'debug_recording' in params:
+                    assert params['opening_recording'] is (case['name']=='Opening')
+                    entries.append({'node':node,'base':pipeline[node],'override':value,'expected':params})
+    code="""
+import json,sys
+from maa.resource import Resource
+from maa.toolkit import Toolkit
+payload=json.load(sys.stdin);Toolkit.init_option(payload['logs']);r=Resource();out=[]
+for entry in payload['entries']:
+ assert r.override_pipeline({entry['node']:entry['base']})
+ assert r.override_pipeline({entry['node']:entry['override']})
+ out.append(r.get_node_data(entry['node'])['action']['param']['custom_action_param'])
+print(json.dumps(out))
+"""
+    result=subprocess.run([sys.executable,'-c',code],input=json.dumps({'logs':str(tmp_path),'entries':entries}),text=True,capture_output=True,check=True)
+    assert json.loads(result.stdout)==[entry['expected'] for entry in entries]
+    assert len(entries)>=28

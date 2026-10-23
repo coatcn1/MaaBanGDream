@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+# 日志通道是附加功能，输出故障不得改变演出、停止或清理结果。
+from .optional_diagnostics import safe_print as print, safe_traceback
+
 import json
 import math
 import os
@@ -25,7 +28,8 @@ from maa.context import Context
 from maa.custom_action import CustomAction
 
 from .controller_touch import ControllerTouchDispatcher
-from .debug_recorder import RealtimeDebugRecorder, append_lifecycle_event
+from .optional_diagnostics import OptionalDiagnostics
+from .debug_recorder import RealtimeDebugRecorder, append_lifecycle_event as _append_lifecycle_event
 from .engine import EngineStats, RealtimeEngine
 from .final_cover import (
     FinalCoverResolution, FinalCoverResolver, FinalCoverStartupFailure,
@@ -69,7 +73,7 @@ from .run_reporting import (
 )
 from .timing_feedback import AdaptiveTimingController, TimingFeedbackDetector
 from .touch_planner import RealtimePlanner, sliding_holds_enabled
-from .runtime_options import debug_enabled, diagnostic_trace_enabled
+from .runtime_options import debug_recording_enabled, diagnostic_trace_enabled, opening_recording_enabled
 from .song_title_ocr import (
     FINAL_COVER_TITLE_ROI,
     recognize_song_title,
@@ -931,6 +935,56 @@ def _relative_artifact_path(path) -> str:
         return path.resolve().as_posix()
 
 
+def _fresh_foreground_controller(context):
+    """前台保护和嵌套任务可替换代理；只在既有安全边界重新获取。"""
+    if context.tasker.stopping:
+        raise InterruptedError("用户已停止任务")
+    require_game_foreground(context.tasker.controller)
+    if context.tasker.stopping:
+        raise InterruptedError("用户已停止任务")
+    return context.tasker.controller
+
+
+def _opening_native_wait_kwargs(context, recorder, enabled):
+    if not enabled or recorder is None:
+        return {}
+    diagnostics = OptionalDiagnostics(lambda: context.tasker.stopping)
+    def observe_native_prearm():
+        try:
+            from ..screen_refresh import capture_image, ScreenRefreshCancelled
+        except ImportError:
+            from screen_refresh import capture_image, ScreenRefreshCancelled
+        if context.tasker.stopping:
+            raise InterruptedError("用户已停止任务")
+        try:
+            image = capture_image(context)
+        except ScreenRefreshCancelled as exc:
+            raise InterruptedError("用户已停止任务") from exc
+        captured_at = time.monotonic()
+        if context.tasker.stopping:
+            raise InterruptedError("用户已停止任务")
+        diagnostics.call("native-prearm-record", lambda: recorder.record_phase(
+            image, captured_at, "native-prearm",
+            frame_metadata={"source": "existing-common-refresh", "timestamp_kind": "capture-return-upper-bound"}))
+    return {"wait_observer": observe_native_prearm, "should_stop": lambda: bool(context.tasker.stopping)}
+
+
+def _create_debug_recorder(*args, **kwargs):
+    try:
+        return RealtimeDebugRecorder(*args, **kwargs)
+    except Exception as exc:
+        print(f"RealtimeDiagnostics create_warning={type(exc).__name__}: {exc}",flush=True)
+        return None
+
+
+def append_lifecycle_event(*args, **kwargs):
+    try:
+        return _append_lifecycle_event(*args, **kwargs)
+    except Exception as exc:
+        print(f"RealtimeDiagnostics lifecycle_warning={exc}",flush=True)
+        return None
+
+
 def _recorder_checkpoint(
     recorder,
     image,
@@ -941,13 +995,19 @@ def _recorder_checkpoint(
 ) -> None:
     method = getattr(recorder, "save_checkpoint", None)
     if callable(method):
-        method(image, phase, status, details=details)
+        try:
+            method(image, phase, status, details=details)
+        except Exception as exc:
+            print(f"RealtimeDiagnostics checkpoint_warning={exc}",flush=True)
 
 
 def _recorder_update_metadata(recorder, live_run: LiveRunContext) -> None:
     method = getattr(recorder, "update_session_metadata", None)
     if callable(method):
-        method(live_run.to_mapping())
+        try:
+            method(live_run.to_mapping())
+        except Exception as exc:
+            print(f"RealtimeDiagnostics metadata_warning={exc}",flush=True)
 
 
 def resolve_life_policy(
@@ -1254,7 +1314,7 @@ def _dismiss_quit_confirm(
     if stopping():
         return True
     before_input()
-    controller.post_click(*point).wait()
+    (controller() if callable(controller) else controller).post_click(*point).wait()
     return True
 
 
@@ -1315,23 +1375,40 @@ def _read_stable_cooperative_judgements(
     image = first_image
     interval = max(0.05, float(stability_interval_seconds))
     read_deadline = min(deadline, clock() + COOPERATIVE_RESULT_READ_TIMEOUT_SECONDS)
+    last_reason = "no judgement sample within read budget"
+
+    def unreadable(reason):
+        # 统计和诊断均为附加功能；只在最终放弃时汇总，日志异常不能阻断结算。
+        if stopping():
+            return None, image
+        try:
+            print(f"RealtimeResult cooperative_judgement_unreadable={reason}", flush=True)
+        except Exception:
+            pass
+        return None, image
+
     while clock() < read_deadline:
         if stopping():
             return None, image
         now = clock()
         try:
             result = parser.parse(image)
-            plausible, _ = _plausible_result(
+            if expected_notes is not None and result.total != expected_notes:
+                resolver = getattr(parser, "resolve_expected_total", None)
+                if callable(resolver):
+                    try:
+                        result = resolver(image, expected_notes=expected_notes, fallback=result)
+                    except ValueError:
+                        # 与普通结算一致：恢复失败仍由原始读数给出严格校验原因。
+                        pass
+            plausible, validation_reason = _plausible_result(
                 result, expected_notes=expected_notes, maximum_notes=maximum_notes,
             )
-        except ValueError:
+        except ValueError as exc:
             result, plausible = None, False
+            validation_reason = f"parse failed: {exc}"
         except Exception as exc:
-            print(
-                "RealtimeResult cooperative_judgement_warning="
-                f"{type(exc).__name__}: {exc}", flush=True,
-            )
-            return None, image
+            return unreadable(f"parser error: {type(exc).__name__}: {exc}")
         if plausible:
             if (
                 candidate is not None
@@ -1341,26 +1418,26 @@ def _read_stable_cooperative_judgements(
                 return result, image
             if candidate is None or _result_counts(result) != _result_counts(candidate):
                 candidate, candidate_at = result, now
+            last_reason = "judgement samples did not remain stable within read budget"
         else:
             candidate = None
+            last_reason = validation_reason
         if not _wait_until(
             min(read_deadline, now + interval), stopping, clock=clock, sleeper=sleeper,
         ) or clock() >= read_deadline:
-            return None, image
+            return (None, image) if stopping() else unreadable(last_reason)
         if stopping():
             return None, image
         try:
             current_controller = controller() if callable(controller) else controller
             image = current_controller.post_screencap().wait().get()
-            if stopping() or not is_result_page(image):
+            if stopping():
                 return None, image
+            if not is_result_page(image):
+                return unreadable(f"result page left before stable judgements; last={last_reason}")
         except Exception as exc:
-            print(
-                "RealtimeResult cooperative_capture_warning="
-                f"{type(exc).__name__}: {exc}", flush=True,
-            )
-            return None, image
-    return None, image
+            return unreadable(f"capture/page check failed: {type(exc).__name__}: {exc}")
+    return (None, image) if stopping() else unreadable(last_reason)
 
 
 def _advance_result_rank_page(
@@ -1572,7 +1649,7 @@ def collect_result(
             image = pending_image
             pending_image = None
         else:
-            image = controller.post_screencap().wait().get()
+            image = (controller() if callable(controller) else controller).post_screencap().wait().get()
         last_image = image
         now = clock()
         if _dismiss_quit_confirm(
@@ -1971,7 +2048,7 @@ def resolve_profile_for_settings_gate(
 ):
     controller = controller or context.tasker.controller
     store = RealtimeProfileStore(PROJECT_ROOT / "profiles")
-    image = controller.post_screencap().wait().get()
+    image = (controller() if callable(controller) else controller).post_screencap().wait().get()
     signature = EnvironmentSignature(
         frame_resolution(image),
         int(params.get("dpi", 240)),
@@ -2000,7 +2077,7 @@ def resolve_profile(context: Context, params: dict, *, controller=None):
         else float(params.get("note_speed", 2.0))
     )
     store = RealtimeProfileStore(PROJECT_ROOT / "profiles")
-    image = controller.post_screencap().wait().get()
+    image = (controller() if callable(controller) else controller).post_screencap().wait().get()
     signature = EnvironmentSignature(
         frame_resolution(image),
         int(params.get("dpi", 240)),
@@ -2060,8 +2137,8 @@ class RealtimeProfileCheck(CustomAction):
                     f"{type(artifact_error).__name__}: {artifact_error}",
                     flush=True,
                 )
-                traceback.print_exc()
-            traceback.print_exc()
+                safe_traceback()
+            safe_traceback()
             print(f"RealtimeProfileCheck failed={type(exc).__name__}: {exc}", flush=True)
             return False
 
@@ -2107,7 +2184,7 @@ def _continue_after_completed_play(method):
             if not completed:
                 raise
             # 数字、截图、报告及 Profile 回写都不能否决已经完成的演出。
-            traceback.print_exc()
+            safe_traceback()
             print(
                 "[任务][实时演奏][结算][WARNING] 已确认演出结束，"
                 f"后处理异常不终止任务：{type(exc).__name__}: {exc}",
@@ -2144,7 +2221,7 @@ class RealtimeProfilePlay(CustomAction):
             if propagate_startup_failure and isinstance(exc, FinalCoverStartupFailure):
                 raise
             record_failure_reason(f"{type(exc).__name__}: {exc}")
-            traceback.print_exc()
+            safe_traceback()
             print(f"RealtimeProfilePlay failed={type(exc).__name__}: {exc}", flush=True)
             return False
 
@@ -2158,6 +2235,7 @@ class RealtimeProfilePlay(CustomAction):
         verified = None
         settings = None
         recorder = None
+        diagnostics = OptionalDiagnostics(lambda: context.tasker.stopping)
         try:
             controller = context.tasker.controller
             require_profile = bool(params.get("require_profile", True))
@@ -2375,10 +2453,11 @@ class RealtimeProfilePlay(CustomAction):
                 numeric_life_monitor_enabled or disconnect_jump_request
             )
             debug_recording = bool(
-                params.get("debug_recording") or debug_enabled()
+                params.get("debug_recording", False) or debug_recording_enabled(argv)
             )
+            opening_recording = params.get("opening_recording", False) is True or opening_recording_enabled(argv)
             diagnostic_trace = bool(
-                debug_recording
+                opening_recording or debug_recording
                 or params.get(
                     "diagnostic_trace",
                     diagnostic_trace_enabled(),
@@ -2422,71 +2501,97 @@ class RealtimeProfilePlay(CustomAction):
             runtime_options = frozen_native_runtime_options(live_run, runtime_options)
             live_run = current_live_run()
             if debug_recording:
-                recorder = RealtimeDebugRecorder(
+                recorder = _create_debug_recorder(
                     PROJECT_ROOT / "debug" / "recordings",
                     session_kind=_recording_kind(run_mode),
                 )
+            elif opening_recording:
+                try:
+                    recorder = _create_debug_recorder(
+                        PROJECT_ROOT / "debug" / "recordings",
+                        opening_seconds=20.0, session_kind=_recording_kind(run_mode),
+                    )
+                except Exception as exc:
+                    print(f"OpeningRecorder create_warning={exc}",flush=True)
             elif diagnostic_trace:
-                recorder = RealtimeDebugRecorder(
+                recorder = _create_debug_recorder(
                     PROJECT_ROOT / "debug" / "recordings",
                     video_enabled=False,
                     session_kind=_recording_kind(run_mode),
                 )
-            if recorder is not None:
-                live_run = update_live_run(
-                    recording_path=_relative_artifact_path(recorder.output_dir),
-                )
-                recorder.set_session_metadata(live_run.to_mapping())
-                append_lifecycle_event(
-                    recorder.output_dir,
-                    "preflight",
-                    "ready",
-                    details={
-                        "song_id": live_run.song_id,
-                        "song_id_method": live_run.song_id_method,
-                        "song_level": live_run.song_level,
-                        "song_title": live_run.song_title,
-                        "profile_name": live_run.profile_name,
-                        "expected_note_speed": live_run.expected_note_speed,
-                        "actual_note_speed": live_run.actual_note_speed,
-                    },
-                )
-                try:
-                    if live_run.preparation_identity_image is not None:
-                        _recorder_checkpoint(
-                            recorder, live_run.preparation_identity_image,
-                            "preparation-identity", "confirmed",
-                            details={"title": live_run.song_title, "level": live_run.song_level},
+            with diagnostics.guard("profile-recorder-init") as diagnostic_enabled:
+                if diagnostic_enabled:
+                    if recorder is not None:
+                        live_run = update_live_run(
+                            recording_path=_relative_artifact_path(recorder.output_dir),
                         )
-                    preflight_image = controller.post_screencap().wait().get()
-                    _recorder_checkpoint(
-                        recorder,
-                        preflight_image,
-                        "preflight",
-                        "ready",
-                        details={
-                            "song_id": live_run.song_id,
-                            "difficulty": live_run.difficulty,
-                        },
-                    )
-                except Exception as checkpoint_error:
-                    append_lifecycle_event(
-                        recorder.output_dir,
-                        "preflight",
-                        "checkpoint-error",
-                        details={
-                            "reason": (
-                                f"{type(checkpoint_error).__name__}: "
-                                f"{checkpoint_error}"
-                            ),
-                        },
-                    )
-                print(
-                    "RealtimeProfilePlay diagnostics="
-                    f"{recorder.output_dir} "
-                    f"mode={'video' if debug_recording else 'trace-only'}",
-                    flush=True,
-                )
+                        try:
+                            recorder.set_session_metadata(live_run.to_mapping())
+                        except Exception as exc:
+                            print(f"RealtimeDiagnostics metadata_warning={exc}",flush=True)
+                        append_lifecycle_event(
+                            recorder.output_dir,
+                            "preflight",
+                            "ready",
+                            details={
+                                "song_id": live_run.song_id,
+                                "song_id_method": live_run.song_id_method,
+                                "song_level": live_run.song_level,
+                                "song_title": live_run.song_title,
+                                "profile_name": live_run.profile_name,
+                                "expected_note_speed": live_run.expected_note_speed,
+                                "actual_note_speed": live_run.actual_note_speed,
+                            },
+                        )
+                        try:
+                            if opening_recording:
+                                for observed_image, captured_at, phase, metadata in live_run.opening_observed_frames:
+                                    recorder.record_phase(observed_image, captured_at, phase, frame_metadata=metadata)
+                                update_live_run(opening_observed_frames=())
+                            if live_run.preparation_identity_image is not None:
+                                _recorder_checkpoint(
+                                    recorder, live_run.preparation_identity_image,
+                                    "preparation-identity", "confirmed",
+                                    details={"title": live_run.song_title, "level": live_run.song_level},
+                                )
+                            if context.tasker.stopping:
+                                raise InterruptedError("用户已停止任务")
+                            controller = context.tasker.controller
+                            preflight_image = controller.post_screencap().wait().get()
+                            preflight_captured_at = time.monotonic()
+                            if opening_recording:
+                                recorder.record_phase(preflight_image, preflight_captured_at, "preflight-ready",
+                                    frame_metadata={"source": "existing-preflight-capture", "timestamp_kind": "capture-completed-upper-bound"})
+                            _recorder_checkpoint(
+                                recorder,
+                                preflight_image,
+                                "preflight",
+                                "ready",
+                                details={
+                                    "song_id": live_run.song_id,
+                                    "difficulty": live_run.difficulty,
+                                },
+                            )
+                        except InterruptedError:
+                            raise
+                        except Exception as checkpoint_error:
+                            append_lifecycle_event(
+                                recorder.output_dir,
+                                "preflight",
+                                "checkpoint-error",
+                                details={
+                                    "reason": (
+                                        f"{type(checkpoint_error).__name__}: "
+                                        f"{checkpoint_error}"
+                                    ),
+                                },
+                            )
+                        print(
+                            "RealtimeProfilePlay diagnostics="
+                            f"{recorder.output_dir} "
+                            f"mode={getattr(recorder, 'recording_mode', 'opening-screenshots+trace' if opening_recording else 'video' if debug_recording else 'trace-only')}",
+                            flush=True,
+                        )
             if final_cover_required:
                 # 协力准备页的歌曲身份可能受随机选曲和网络阶段影响，最终封面
                 # 必须独立解析谱面，不能被早先的候选结果锁死。
@@ -2520,25 +2625,27 @@ class RealtimeProfilePlay(CustomAction):
                 cover_checkpoint_stages = set()
 
                 def observe_final_cover(image, timestamp, diagnostic) -> None:
-                    assert recorder is not None
-                    record_phase = getattr(recorder, "record_phase", None)
-                    if callable(record_phase):
-                        record_phase(
-                            image,
-                            timestamp,
-                            "final-cover",
-                            diagnostics=[diagnostic],
-                        )
-                    stage = diagnostic["status"]
-                    if stage not in cover_checkpoint_stages:
-                        _recorder_checkpoint(
-                            recorder,
-                            image,
-                            "final-cover",
-                            stage,
-                            details=diagnostic,
-                        )
-                        cover_checkpoint_stages.add(stage)
+                    with diagnostics.guard("final-cover-observer") as diagnostic_enabled:
+                        if diagnostic_enabled:
+                            assert recorder is not None
+                            record_phase = getattr(recorder, "record_phase", None)
+                            if callable(record_phase):
+                                record_phase(
+                                    image,
+                                    timestamp,
+                                    "final-cover",
+                                    diagnostics=[diagnostic],
+                                )
+                            stage = diagnostic["status"]
+                            if stage not in cover_checkpoint_stages:
+                                _recorder_checkpoint(
+                                    recorder,
+                                    image,
+                                    "final-cover",
+                                    stage,
+                                    details=diagnostic,
+                                )
+                                cover_checkpoint_stages.add(stage)
 
                 cover_outcome = wait_for_final_cover(
                     controller,
@@ -2664,7 +2771,9 @@ class RealtimeProfilePlay(CustomAction):
                     and native_prearm_deferred
                     and selected_chart is not None
                 ):
+                    opening_wait_kwargs = _opening_native_wait_kwargs(context, recorder, opening_recording)
                     prepared_selection = prepare_native_for_settings_gate(
+                        **opening_wait_kwargs,
                         controller=controller,
                         live_run=live_run,
                         difficulty=difficulty,
@@ -2703,6 +2812,11 @@ class RealtimeProfilePlay(CustomAction):
                     )
         except Exception as exc:
             if context.tasker.stopping:
+                if recorder is not None:
+                    try:
+                        recorder.close()
+                    except Exception as close_error:
+                        print(f"Opening stop_close_warning={type(close_error).__name__}: {close_error}", flush=True)
                 return True
             reason = f"{type(exc).__name__}: {exc}"
             performance_snapshot = None
@@ -2740,7 +2854,9 @@ class RealtimeProfilePlay(CustomAction):
                     except Exception:
                         pass
                     try:
-                        failure_image = controller.post_screencap().wait().get()
+                        if context.tasker.stopping:
+                            raise InterruptedError("用户已停止任务")
+                        failure_image = context.tasker.controller.post_screencap().wait().get()
                         _recorder_checkpoint(
                             recorder,
                             failure_image,
@@ -2764,7 +2880,7 @@ class RealtimeProfilePlay(CustomAction):
                     f"{type(artifact_error).__name__}: {artifact_error}",
                     flush=True,
                 )
-                traceback.print_exc()
+                safe_traceback()
             raise
 
         def write_failure_artifacts(
@@ -2850,10 +2966,8 @@ class RealtimeProfilePlay(CustomAction):
                         "且禁止开演后重新构造："
                         f"{type(exc).__name__}: {exc}"
                     ) from exc
-            require_game_foreground(controller)
-            # Foreground verification is intentionally outside the realtime
-            # touch hot path. A dumpsys query before every down/move/up blocks
-            # capture for 100-450 ms and causes otherwise correct SLOW notes.
+            controller = _fresh_foreground_controller(context)
+            # 仅在正式setup边界确认前台并重取代理，触控热路径不增加前台查询。
             touch = ControllerTouchDispatcher(
                 controller,
                 lambda: context.tasker.stopping,
@@ -2964,13 +3078,6 @@ class RealtimeProfilePlay(CustomAction):
         except Exception as setup_error:
             cleanup_errors = []
             recorder_error = None
-            if recorder is not None:
-                try:
-                    recorder.close()
-                except Exception as cleanup_error:
-                    recorder_error = (
-                        f"{type(cleanup_error).__name__}: {cleanup_error}"
-                    )
             if touch is not None:
                 try:
                     touch.close()
@@ -2986,6 +3093,17 @@ class RealtimeProfilePlay(CustomAction):
                         "native_backend_stop="
                         f"{type(cleanup_error).__name__}: {cleanup_error}"
                     )
+            if recorder is not None:
+                try:
+                    recorder.close()
+                except Exception as cleanup_error:
+                    recorder_error = (
+                        f"{type(cleanup_error).__name__}: {cleanup_error}"
+                    )
+            if context.tasker.stopping:
+                if cleanup_errors or recorder_error:
+                    print(f"RealtimeProfilePlay stop_cleanup_warning errors={cleanup_errors!r} recorder_error={recorder_error!r}", flush=True)
+                return True
             reason = f"preflight error: {type(setup_error).__name__}: {setup_error}"
             preflight_stats = EngineStats(
                 0,
@@ -3053,43 +3171,39 @@ class RealtimeProfilePlay(CustomAction):
                     _save_challenge_life_failure(
                         stall_safe_capture, stats, live_run, timing_offset_ms)
                     return False
-            if (
-                stats.completed and not stats.cleanup_failed
-                and not stats.aborted_for_life and not stats.life_failed
-                and not stats.stopped
-            ):
-                confirm_completed()
-            if recorder is not None and stall_safe_capture.last_image is not None:
-                _recorder_checkpoint(
-                    recorder,
-                    stall_safe_capture.last_image,
-                    "engine",
-                    "completed" if stats.completed else "incomplete",
-                    details={
-                        "processed_frames": stats.processed_frames,
-                        "dispatched_actions": stats.dispatched_actions,
-                        "terminal_reason": stats.terminal_reason,
-                    },
-                )
-                _recorder_checkpoint(
-                    recorder,
-                    stall_safe_capture.last_image,
-                    "cleanup",
-                    "failed" if stats.cleanup_failed else "completed",
-                    details={
-                        "cleanup_errors": list(stats.cleanup_errors),
-                        "stopped": stats.stopped,
-                    },
-                )
-                append_lifecycle_event(
-                    recorder.output_dir,
-                    "cleanup",
-                    "failed" if stats.cleanup_failed else "completed",
-                    details={
-                        "cleanup_errors": list(stats.cleanup_errors),
-                        "stopped": stats.stopped,
-                    },
-                )
+            with diagnostics.guard("profile-engine-checkpoint") as diagnostic_enabled:
+                if diagnostic_enabled:
+                    if recorder is not None and stall_safe_capture.last_image is not None:
+                        _recorder_checkpoint(
+                            recorder,
+                            stall_safe_capture.last_image,
+                            "engine",
+                            "completed" if stats.completed else "incomplete",
+                            details={
+                                "processed_frames": stats.processed_frames,
+                                "dispatched_actions": stats.dispatched_actions,
+                                "terminal_reason": stats.terminal_reason,
+                            },
+                        )
+                        _recorder_checkpoint(
+                            recorder,
+                            stall_safe_capture.last_image,
+                            "cleanup",
+                            "failed" if stats.cleanup_failed else "completed",
+                            details={
+                                "cleanup_errors": list(stats.cleanup_errors),
+                                "stopped": stats.stopped,
+                            },
+                        )
+                        append_lifecycle_event(
+                            recorder.output_dir,
+                            "cleanup",
+                            "failed" if stats.cleanup_failed else "completed",
+                            details={
+                                "cleanup_errors": list(stats.cleanup_errors),
+                                "stopped": stats.stopped,
+                            },
+                        )
             if native_requested and not stats.stopped:
                 native_report = dict(stats.native_report)
                 native_failures = _native_execution_gate_failures(
@@ -3121,10 +3235,13 @@ class RealtimeProfilePlay(CustomAction):
                         + "; ".join(native_failures)
                     )
                     native_error.realtime_stats = stats
-                    if stats.completed and not stats.cleanup_failed and not stats.life_failed:
-                        print(f"RealtimeProfilePlay post_play_warning={native_error}", flush=True)
-                    else:
-                        raise native_error
+                    raise native_error
+            if (
+                stats.completed and not stats.cleanup_failed
+                and not stats.aborted_for_life and not stats.life_failed
+                and not stats.stopped
+            ):
+                confirm_completed()
         except Exception as exc:
             error_stats = getattr(exc, "realtime_stats", None)
             if run_mode == "challenge":
@@ -3469,14 +3586,14 @@ class RealtimeProfilePlay(CustomAction):
                 def click_story(point):
                     if context.tasker.stopping:
                         return
-                    require_game_foreground(controller)
+                    current_controller = _fresh_foreground_controller(context)
                     if not context.tasker.stopping:
-                        controller.post_click(*point).wait()
+                        current_controller.post_click(*point).wait()
 
                 outcome = collect_result(
-                    controller,
+                    lambda: context.tasker.controller,
                     lambda: context.tasker.stopping,
-                    before_input=lambda: require_game_foreground(controller),
+                    before_input=lambda: _fresh_foreground_controller(context),
                     timeout_seconds=180.0,
                     expected_notes=(
                         selected_chart.expected_notes

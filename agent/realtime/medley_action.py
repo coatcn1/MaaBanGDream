@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+# 日志通道是附加功能，输出故障不得改变演出、停止或清理结果。
+from .optional_diagnostics import safe_print as print, safe_traceback
+
 import json
 import os
 import threading
@@ -57,6 +60,7 @@ from .live_session import (
     update_live_run,
 )
 from .native_prearm import discard_prearmed_backend
+from .stamina_task import allocate_home
 from .performance_settings_action import (
     RealtimePerformanceSettingsGate,
     _speed_settings_target,
@@ -310,6 +314,7 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "count": 3,
     "debug_recording": False,
     "diagnostic_trace": True,
+    "opening_recording": False,
 }
 _SETTINGS = dict(DEFAULT_SETTINGS)
 _SETTINGS_LOCK = threading.Lock()
@@ -348,7 +353,7 @@ def configure_medley_settings(params: dict[str, object]) -> dict[str, object]:
         if count != 0 and (not 3 <= count <= 999 or count % 3 != 0):
             raise ValueError("组曲次数必须是 3 到 999 的整数且为 3 的倍数，0 表示无限")
         candidate["count"] = count
-        for key in ("debug_recording", "diagnostic_trace"):
+        for key in ("debug_recording", "diagnostic_trace", "opening_recording"):
             if not isinstance(candidate[key], bool):
                 raise ValueError(f"{key} 必须是布尔值")
         _SETTINGS.clear()
@@ -749,21 +754,31 @@ class MedleySessionStore:
 
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
+        self._memory_sessions = {}
+        self._storage_warning_emitted = False
 
     @staticmethod
     def _clean(session: dict[str, Any]) -> dict[str, Any]:
         return {key: value for key, value in session.items() if key != "_path"}
 
     def _save(self, session: dict[str, Any]) -> dict[str, Any]:
-        self.root.mkdir(parents=True, exist_ok=True)
         session["updated_at"] = datetime.now().isoformat(timespec="milliseconds")
         path = Path(session["_path"])
-        temporary = path.with_suffix(".json.tmp")
-        temporary.write_text(
-            json.dumps(self._clean(session), ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        os.replace(temporary, path)
+        # 仅本 Store 实例持有内存状态；新任务/进程仍只消费可信落盘会话。
+        self._memory_sessions[str(session["tour_type"])] = session
+        try:
+            self.root.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_suffix(".json.tmp")
+            temporary.write_text(
+                json.dumps(self._clean(session), ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(temporary, path)
+        except OSError as exc:
+            if not self._storage_warning_emitted:
+                self._storage_warning_emitted = True
+                log_task("组曲演奏", "会话", "WARNING",
+                         f"会话落盘不可用，本任务按内存状态继续；跨进程续跑状态可能过期：{exc}")
         return session
 
     def _load(self, path: Path) -> dict[str, Any] | None:
@@ -777,20 +792,17 @@ class MedleySessionStore:
         return value
 
     def latest(self, tour_type: str) -> dict[str, Any] | None:
+        if tour_type in self._memory_sessions:
+            # 每种巡演只保留最新会话；已结束状态同样阻止回读旧磁盘活动会话。
+            current = self._memory_sessions[tour_type]
+            return current if current.get("status") in {"active", "paused"} else None
         if not self.root.exists():
             return None
-        candidates = [
-            value
-            for value in (self._load(path) for path in self.root.glob("*.json"))
-            if value is not None
-            and value.get("tour_type") == tour_type
-            and value.get("status") in {"active", "paused"}
-        ]
-        return max(
-            candidates,
-            key=lambda value: str(value.get("updated_at", "")),
-            default=None,
-        )
+        candidates = [value for path in self.root.glob("*.json")
+                      if (value := self._load(path)) is not None
+                      and value.get("tour_type") == tour_type
+                      and value.get("status") in {"active", "paused"}]
+        return max(candidates, key=lambda value: str(value.get("updated_at", "")), default=None)
 
     def start(
         self,
@@ -1246,6 +1258,9 @@ class MedleyFlow:
             self.dismiss_quit_confirm(self.capture())
         finally:
             self._result_refresh = previous_refresh
+        total = int(self.settings.get("count", 0))
+        remaining = max(0, total-int(getattr(self, "_next_round_completed", 0))) if total else None
+        allocate_home(self.context, getattr(self, "argv", None), remaining, minimum_rounds=3)
         self.click(HOME_LIVE_POINT)
         self.wait(1.0)
         params = {
@@ -1255,7 +1270,9 @@ class MedleyFlow:
             "timeout_ms": 10000,
             "interval_ms": 500,
         }
-        if not LiveSelectFind().run(self.context, self.action_argv(params)):
+        if not LiveSelectFind().run(self.context, self.action_argv(
+            params, task_detail=getattr(getattr(self, "argv", None), "task_detail", None),
+        )):
             raise RuntimeError("选择演出页面未找到“巡回演出”入口")
         self.wait(1.2)
         return self.capture()
@@ -1700,6 +1717,7 @@ class MedleyFlow:
             "settings_gate_required": True,
             "debug_recording": bool(self.settings["debug_recording"]),
             "diagnostic_trace": bool(self.settings["diagnostic_trace"]),
+            "opening_recording": bool(self.settings.get("opening_recording",False)),
             "duration_seconds": 600,
             "startup_timeout_seconds": 60,
             "dpi": MEDLEY_DPI,
@@ -2177,22 +2195,30 @@ class MedleyFlow:
                 failure_reason = f"{failure_reason}；主页恢复失败：{exc}"
         raise RuntimeError(failure_reason)
 
-    def initialise_progress(
-        self,
-        completed: int,
-        *,
-        next_started: bool,
-    ) -> None:
+    def report_progress_safely(self, phase):
+        try:
+            if self.progress(phase):
+                return
+        except ScreenRefreshCancelled:
+            raise
+        except Exception as exc:
+            if self.context.tasker.stopping:
+                raise ScreenRefreshCancelled("task is stopping") from exc
+        log_task("组曲演奏", "进度", "WARNING", "进度通知不可用，按本任务内存计数继续")
+
+    def initialise_progress(self, completed: int, *, next_started: bool) -> None:
         target = int(self.settings.get("count", 3))
-        if completed > 0 and not self.progress("start"):
-            raise RuntimeError("组曲进度初始化失败")
+        if completed < 0 or (target and completed > target):
+            raise ValueError("组曲完成数超出任务范围")
+        self._progress_completed = completed
+        if completed > 0:
+            self.report_progress_safely("start")
         for index in range(completed):
-            if not self.progress("completed"):
-                raise RuntimeError("组曲续跑进度恢复失败")
-            if index + 1 < completed and not self.progress("start"):
-                raise RuntimeError("组曲续跑进度恢复失败")
-        if next_started and (target == 0 or completed < target) and not self.progress("start"):
-            raise RuntimeError("组曲当前歌曲进度恢复失败")
+            self.report_progress_safely("completed")
+            if index + 1 < completed:
+                self.report_progress_safely("start")
+        if next_started and (target == 0 or completed < target):
+            self.report_progress_safely("start")
 
     def ensure_progress(self, completed: int, *, next_started: bool) -> None:
         if getattr(self, "_progress_initialised", False):
@@ -2278,17 +2304,17 @@ class MedleyFlow:
         if self.context.tasker.stopping:
             raise ScreenRefreshCancelled("task is stopping")
         completed_before = int(session.get("completed_before_round", 0))
-        if not self.restore_progress(completed_before):
-            reason = (
-                "play_failure_retry_progress_restore_failed: "
-                f"completed_before_round={completed_before}"
-            )
-            self.sessions.update(
-                session,
-                status="paused",
-                terminal_reason=reason,
-            )
-            raise RuntimeError(reason)
+        self._progress_completed = completed_before
+        try:
+            restored = self.restore_progress(completed_before)
+        except ScreenRefreshCancelled:
+            raise
+        except Exception:
+            if self.context.tasker.stopping:
+                raise ScreenRefreshCancelled("task is stopping")
+            restored = False
+        if not restored:
+            log_task("组曲演奏", "进度", "WARNING", "重试进度通知失败，按本组开始前内存计数恢复")
         if not failure.retryable:
             raise RuntimeError(
                 f"第{failure.song_index}曲失败不可重试：{failure.reason}"
@@ -2334,6 +2360,8 @@ class MedleyFlow:
         try:
             # CommonRecover 的 LiveFailed 契约只点左侧“退出”，不点击星石继续。
             self.recover_home()
+        except ScreenRefreshCancelled:
+            raise
         except Exception as exc:
             reason = (
                 "play_failure_retry_recovery_failed: "
@@ -2670,7 +2698,7 @@ class MedleyLiveConfigure(CustomAction):
             return True
         except Exception as exc:
             record_failure_reason(f"组曲任务配置失败：{type(exc).__name__}: {exc}")
-            traceback.print_exc()
+            safe_traceback()
             return False
 
 
@@ -2733,6 +2761,6 @@ class MedleyLiveFlow(CustomAction):
                         "无法写入失败会话，保留原始流程错误："
                         f"{type(session_exc).__name__}: {session_exc}",
                     )
-            traceback.print_exc()
+            safe_traceback()
             log_task("组曲演奏", "流程", "ERROR", reason)
             return False

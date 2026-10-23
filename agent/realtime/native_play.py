@@ -16,6 +16,7 @@ from typing import Any, Callable
 import numpy as np
 
 from . import native_engine
+from .optional_diagnostics import safe_print
 from .native_minitouch import NativeMinitouchDevice
 from .playfield_monitor import LANE_CENTERS, PlayfieldDetector
 from .prepare_popup import CooperativePreparePopupDetector
@@ -52,6 +53,8 @@ class NativePhaseStatus:
     transient_actual_s: float | None = None
     transient_action_token: int | None = None
     transient_chunk_sequence: int | None = None
+    owner: str = "feedback"
+    owner_cumulative_phase_ms: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -921,6 +924,8 @@ class NativeMinitouchBackend:
                 f"{native_engine.unavailable_reason() or 'unknown'}"
             )
         self._timeline = native_engine.compile_chart(chart_path)
+        self._game_clock_chart_path = Path(chart_path)
+        self._game_clock_environment = None
         self._actions: list[dict[str, object]] = list(
             self._timeline.compile_actions({})
         )
@@ -1032,6 +1037,8 @@ class NativeMinitouchBackend:
         # 主截图消费者只提交空闲单槽；唯一 owner 才能验证并移动未来切片。
         self._phase_lock = threading.Lock()
         self._phase_closed = False
+        self._visual_phase_guard = False
+        self._phase_owner_totals = {"feedback": 0.0, "game-clock": 0.0}
         self._phase_slot: tuple[str, int, float, float, float] | None = None
         self._phase_sequence = 0
         self._phase_invalidated_sequence = 0
@@ -1888,7 +1895,7 @@ class NativeMinitouchBackend:
         )
         self._device_thread.start()
 
-    def wait_until_ready(self, timeout_s: float) -> bool:
+    def wait_until_ready(self, timeout_s: float, *, wait_observer=None, should_stop=None) -> bool:
         """等待设备握手完成，但不观察 photogate，也不启动演奏。"""
         if timeout_s <= 0:
             raise ValueError("timeout_s 必须大于 0")
@@ -1897,8 +1904,40 @@ class NativeMinitouchBackend:
         device_thread = self._device_thread
         if device_thread is None:
             raise RuntimeError("minitouch 准备线程未启动")
+        if should_stop is not None and should_stop():
+            raise InterruptedError("用户已停止任务")
         deadline = time.monotonic() + float(timeout_s)
-        device_thread.join(timeout=max(0.0, deadline - time.monotonic()))
+        observer_calls = 0
+        last_observation = float("-inf")
+        def observe_wait():
+            nonlocal observer_calls, last_observation, wait_observer
+            if should_stop is not None and should_stop():
+                raise InterruptedError("用户已停止任务")
+            now = time.monotonic()
+            if wait_observer is None or observer_calls >= 40 or now >= deadline or now-last_observation < .1:
+                return
+            last_observation = now
+            observer_calls += 1
+            try:
+                wait_observer()
+            except InterruptedError:
+                raise
+            except Exception as exc:
+                safe_print(f"NativePrearm opening_warning={type(exc).__name__}: {exc}", flush=True)
+                wait_observer = None
+            if should_stop is not None and should_stop():
+                raise InterruptedError("用户已停止任务")
+
+        if wait_observer is None and should_stop is None:
+            device_thread.join(timeout=max(0.0, deadline - time.monotonic()))
+        else:
+            # 仅开场截图拆分等待；不增加ready总预算，也不为采样延后已到达的ready。
+            while device_thread.is_alive() and time.monotonic() < deadline:
+                if should_stop is not None and should_stop():
+                    raise InterruptedError("用户已停止任务")
+                device_thread.join(timeout=min(.05, max(0.0, deadline-time.monotonic())))
+                if device_thread.is_alive():
+                    observe_wait()
         if device_thread.is_alive():
             self._state = "failed"
             self._cancel_device_start(0.05)
@@ -1912,13 +1951,28 @@ class NativeMinitouchBackend:
         if not self._device.connected:
             self._state = "failed"
             raise RuntimeError("minitouch 准备结束但未建立连接")
-        if self._require_probe and not self._probe_complete.wait(
-            timeout=max(0.0, deadline - time.monotonic())
-        ):
+        if self._require_probe:
+            if wait_observer is None and should_stop is None:
+                probe_ready = self._probe_complete.wait(timeout=max(0.0, deadline-time.monotonic()))
+            else:
+                probe_ready = self._probe_complete.is_set()
+                while not probe_ready and time.monotonic() < deadline:
+                    if should_stop is not None and should_stop():
+                        raise InterruptedError("用户已停止任务")
+                    probe_ready = self._probe_complete.wait(timeout=min(.05,max(0.0,deadline-time.monotonic())))
+                    if not probe_ready:
+                        observe_wait()
+        else:
+            probe_ready = True
+        if not probe_ready and self._probe_complete.is_set():
+            probe_ready = True
+        if not probe_ready:
             self._state = "failed"
             self._cancel_device_start(0.05)
             self._emergency_stop_device_with_budget(0.05)
             raise RuntimeError(f"minitouch 启动探测在 {float(timeout_s):g} 秒内未完成")
+        if should_stop is not None and should_stop():
+            raise InterruptedError("用户已停止任务")
         if self._state == "arming":
             self._state = "armed"
         return True
@@ -1932,6 +1986,9 @@ class NativeMinitouchBackend:
         self._config["press_bias_ms"] = value
 
     def configure_early_start(self, environment) -> None:
+        config = getattr(self, "_config", {})
+        self._game_clock_environment = (environment if config.get("judgement_y") == TOUCH_Y
+            and tuple(config.get("lane_centers", ())) == tuple(LANE_CENTERS) else None)
         if not getattr(self, "_early_start_trial_requested", False):
             return
         if self._state not in ("idle", "arming", "armed", "ready"):
@@ -1947,6 +2004,17 @@ class NativeMinitouchBackend:
 
     def observe_start_frame_metadata(self, metadata):
         self._start_frame_metadata = dict(metadata)
+
+    def opening_gate_snapshot(self):
+        """仅供可选开场截图读取小型既有状态，不改变首音门控。"""
+        gate = self._photogate
+        events = gate._significant_events
+        event = dict(events[-1]) if events else None
+        event_observed_s = (None if event is None or gate._observed_since_s is None else
+                            gate._observed_since_s + float(event["elapsed_ms"]) / 1000.0)
+        return {"gate_event": event, "gate_event_observed_s": event_observed_s,
+                "frozen": gate.frozen, "change_score": gate.last_change_score,
+                "trigger_source": gate.trigger_source, "triggered": gate.triggered}
 
     def observe_start_frame(self, image: Any, now: float) -> float | None:
         """只观察首拍门控；触发时设备未就绪则立即失败。"""
@@ -2570,6 +2638,7 @@ class NativeMinitouchBackend:
         if not hasattr(self, "_phase_events"):
             self._phase_events = deque(maxlen=128)
         self._phase_events.append({"event": event, "sequence": status.request_sequence,
+                                   "owner": status.owner,
                                    "event_cursor": cursor, "state": status.state,
                                    "observed_s": status.original_observed_s,
                                    "delta_ms": status.delta_ms,
@@ -2579,11 +2648,25 @@ class NativeMinitouchBackend:
                                    "first_affected_action_token": status.first_affected_action_token,
                                    **details})
 
-    def request_future_phase(self, delta_ms: float, observed_s: float) -> bool:
+    def set_visual_phase_guard(self, active: bool) -> None:
+        """可信视觉目标独占请求；旧反馈仍可观测，但不能叠加相位。"""
+        self._visual_phase_guard = bool(active)
+
+    def phase_owner_cumulative(self, owner: str) -> float:
+        """读取 owner 已应用增量；未知窗口内其他来源的修正不会被视觉归还。"""
+        return float(getattr(self, "_phase_owner_totals", {}).get(owner, 0.0))
+
+    def request_future_phase(self, delta_ms: float, observed_s: float, *, owner: str = "feedback") -> bool:
         """非阻塞单槽请求，不等待 owner，也不触碰 C++ 会话。"""
         if not self.life_feedback_enabled or not self._phase_lock.acquire(False):
             return False
         try:
+            if owner not in {"feedback", "game-clock"}:
+                return False
+            if owner == "feedback" and getattr(self, "_visual_phase_guard", False):
+                return False
+            if owner == "game-clock" and not getattr(self, "_visual_phase_guard", False):
+                return False
             if self._phase_closed or self._state != "running" or self._phase_slot is not None:
                 return False
             if delta_ms not in {-15.0, 15.0} or not math.isfinite(observed_s):
@@ -2594,6 +2677,8 @@ class NativeMinitouchBackend:
             self._publish_phase_status(NativePhaseStatus(
                 self._run_id, self._phase_sequence, state="requested", delta_ms=delta_ms,
                 original_observed_s=observed_s,
+                owner=owner,
+                owner_cumulative_phase_ms=self.phase_owner_cumulative(owner),
                 cumulative_phase_ms=self.phase_status_snapshot().cumulative_phase_ms,
             ), "requested")
             return True
@@ -2632,22 +2717,47 @@ class NativeMinitouchBackend:
                           and row[1] + row[5] / 1000.0 <= now}
                 tail_age = min((now - (row[1] - row[5] / 1000.0) for row in recent.values()), default=None)
                 absolute_median = median([row[2] for row in recent.values()]) if recent else None
+                uncertainty = self._clock_uncertainty_ms
+                failed_checks = []
+                if (self._clock_basis != "probe-midpoint" or uncertainty is None
+                    or not math.isfinite(uncertainty) or not 0 <= uncertainty <= 1.0):
+                    failed_checks.append("clock-untrusted")
+                if any(len(row) != 6 or row[5] is None
+                       or not all(math.isfinite(value) for value in (row[1], row[2], row[3], row[5]))
+                       or not 0 <= row[5] <= 1.0 for row in self._phase_receipts):
+                    failed_checks.append("invalid-receipt-data")
+                if absolute_median is not None and absolute_median > 40.0:
+                    failed_checks.append("high-execution-residual")
+                if len(recent) < 3:
+                    failed_checks.append("insufficient-commits")
+                if tail_age is None or tail_age > .5:
+                    failed_checks.append("stale-last-commit")
                 diagnostic = {"observed_s": now, "request_sequence": sequence,
                     "window_seconds": 1.5, "unique_commits": len(recent), "tail_age_s": tail_age,
+                    "last_commit_age_s": tail_age,
+                    "failed_checks": failed_checks,
+                    "thresholds": {"minimum_commits": 3, "maximum_last_commit_age_s": .5,
+                                   "maximum_abs_residual_ms": 40.0, "maximum_clock_uncertainty_ms": 1.0},
                     "abs_execution_residual_median_ms": absolute_median,
                     "signed_execution_residual_median_ms": median([row[3] for row in recent.values()]) if recent else None,
                     "clock_uncertainty_ms": self._clock_uncertainty_ms}
                 if not hasattr(self, "_phase_receipt_diagnostics"):
                     self._phase_receipt_diagnostics = deque(maxlen=128)
-                if len(self._phase_receipt_diagnostics) == self._phase_receipt_diagnostics.maxlen:
-                    self._phase_receipt_diagnostics_dropped = getattr(self, "_phase_receipt_diagnostics_dropped", 0) + 1
-                self._phase_receipt_diagnostics.append(diagnostic)
-                uncertainty = self._clock_uncertainty_ms
-                if (self._clock_basis != "probe-midpoint" or uncertainty is None
-                    or not math.isfinite(uncertainty) or not 0 <= uncertainty <= 1.0
-                    or len(recent) < 3 or tail_age is None or tail_age > .5
-                    or absolute_median is None or absolute_median > 40.0):
+                previous = self._phase_receipt_diagnostics[-1] if self._phase_receipt_diagnostics else None
+                # 等待不阻塞正常补粮；相同失败最多每50ms保留一次诊断。
+                if (previous is None or previous.get("request_sequence") != sequence
+                    or previous.get("failed_checks") != failed_checks
+                    or now - previous["observed_s"] >= .05):
+                    if len(self._phase_receipt_diagnostics) == self._phase_receipt_diagnostics.maxlen:
+                        self._phase_receipt_diagnostics_dropped = getattr(self, "_phase_receipt_diagnostics_dropped", 0) + 1
+                    self._phase_receipt_diagnostics.append(diagnostic)
+                hard_checks = {"clock-untrusted", "invalid-receipt-data", "high-execution-residual"}
+                if hard_checks.intersection(failed_checks):
                     reason = "untrusted-execution-receipts"
+                elif failed_checks:
+                    self._publish_phase_status(replace(self.phase_status_snapshot(), state="waiting-execution-receipts"),
+                                               "waiting-execution-receipts", applied_s=now)
+                    return
                 else:
                     reason = str(self._session.apply_future_phase(
                         delta_ms, self._compiler.contact_available_s()))
@@ -2661,14 +2771,23 @@ class NativeMinitouchBackend:
                                        "cumulative_phase_ms": float(getattr(
                                            self._session, "future_phase_offset_ms", 0.0))}
             state = reason if reason in {"applied", "expired", "stopped"} else "rejected"
+            owner = self.phase_status_snapshot().owner
+            if reason == "applied":
+                if not hasattr(self, "_phase_owner_totals"):
+                    self._phase_owner_totals = {}
+                self._phase_owner_totals[owner] = self.phase_owner_cumulative(owner) + delta_ms
             self._publish_phase_status(replace(self.phase_status_snapshot(), state=state,
                                        terminal_reason=None if reason == "applied" else reason,
+                                       owner_cumulative_phase_ms=self.phase_owner_cumulative(owner),
                                        cumulative_phase_ms=event["cumulative_phase_ms"]), reason, applied_s=now)
             # 原报告继续持有同一事件，由首个受影响切片补齐效果边界。
             if reason == "applied":
                 self._phase_applied_pending = self._phase_events[-1]
 
-    def revoke_future_phase(self, reason: str) -> None:
+    def revoke_future_phase(self, reason: str, *, owner: str = "feedback") -> None:
+        status = self.phase_status_snapshot()
+        if status.owner != owner:
+            return
         # 标量失效标记不等待 owner；即使锁正在使用，下一次消费也会拒绝旧候选。
         self._phase_invalidated_sequence = self._phase_sequence
         if not self._phase_lock.acquire(False):
@@ -3005,6 +3124,8 @@ class NativeMinitouchBackend:
                                   for row in getattr(self, "_phase_receipts", ()) if len(row) == 6],
                               "sampling_events": getattr(self, "_life_feedback_report", []),
                               "phase_events": list(getattr(self, "_phase_events", [])),
+                              "game_clock": getattr(self, "_game_clock_report", {}),
+                              "phase_owner_totals_ms": dict(getattr(self, "_phase_owner_totals", {})),
                               "phase_status": asdict(self.phase_status_snapshot())},
             "state": self._state,
             "session_state": self._session_state,

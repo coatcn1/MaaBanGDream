@@ -25,7 +25,7 @@
     "action": "Custom",
     "custom_action": "ProcessConflictGuard",
     "next": [
-      "RealtimeLiveRecover"
+      "RealtimeLiveStaminaRefillConfigure"
     ],
     "on_error": [
       "RealtimeLiveFailure"
@@ -186,7 +186,9 @@
   "RealtimeLiveRoundGate": {
     "recognition": "Custom",
     "custom_recognition": "TaskRoundAvailable",
-    "custom_recognition_param": {"total": 1},
+    "custom_recognition_param": {
+      "total": 1
+    },
     "action": "Custom",
     "custom_action": "TaskProgress",
     "custom_action_param": {
@@ -195,7 +197,9 @@
       "total": 1,
       "phase": "start"
     },
-    "on_error": ["RealtimeLiveFailure"],
+    "on_error": [
+      "RealtimeLiveFailure"
+    ],
     "next": [
       "RealtimeLiveRetryReset"
     ]
@@ -354,7 +358,7 @@
     "template": "home_live.png",
     "threshold": 0.82,
     "action": "Custom",
-    "custom_action": "ForegroundClick",
+    "custom_action": "StaminaHomeEntry",
     "target": [
       1085,
       580,
@@ -740,7 +744,8 @@
     "custom_action": "RealtimeRuntimeOptions",
     "custom_action_param": {
       "debug_recording": false,
-      "diagnostic_trace": true
+      "diagnostic_trace": true,
+      "opening_recording": false
     },
     "next": [
       "RealtimeLiveHomeLive"
@@ -939,7 +944,8 @@
       "require_completion": true,
       "save_result_frame": true,
       "result_back_attempts": 30,
-      "result_back_interval_seconds": 1.5
+      "result_back_interval_seconds": 1.5,
+      "opening_recording": false
     },
     "next": [
       "RealtimeLiveReturnHome"
@@ -971,7 +977,8 @@
       "require_completion": true,
       "save_result_frame": true,
       "result_back_attempts": 30,
-      "result_back_interval_seconds": 1.5
+      "result_back_interval_seconds": 1.5,
+      "opening_recording": false
     },
     "next": [
       "RealtimeLiveReturnHome"
@@ -1003,7 +1010,8 @@
       "require_completion": true,
       "save_result_frame": true,
       "result_back_attempts": 30,
-      "result_back_interval_seconds": 1.5
+      "result_back_interval_seconds": 1.5,
+      "opening_recording": false
     },
     "next": [
       "RealtimeLiveReturnHome"
@@ -1035,7 +1043,8 @@
       "require_completion": true,
       "save_result_frame": true,
       "result_back_attempts": 30,
-      "result_back_interval_seconds": 1.5
+      "result_back_interval_seconds": 1.5,
+      "opening_recording": false
     },
     "next": [
       "RealtimeLiveReturnHome"
@@ -1067,7 +1076,8 @@
       "require_completion": true,
       "save_result_frame": true,
       "result_back_attempts": 30,
-      "result_back_interval_seconds": 1.5
+      "result_back_interval_seconds": 1.5,
+      "opening_recording": false
     },
     "next": [
       "RealtimeLiveReturnHome"
@@ -1096,7 +1106,8 @@
       "require_completion": true,
       "save_result_frame": true,
       "result_back_attempts": 30,
-      "result_back_interval_seconds": 1.5
+      "result_back_interval_seconds": 1.5,
+      "opening_recording": false
     },
     "next": [
       "RealtimeLiveReturnHome"
@@ -1125,7 +1136,8 @@
       "require_completion": true,
       "save_result_frame": true,
       "result_back_attempts": 30,
-      "result_back_interval_seconds": 1.5
+      "result_back_interval_seconds": 1.5,
+      "opening_recording": false
     },
     "next": [
       "RealtimeLiveReturnHome"
@@ -1154,7 +1166,8 @@
       "require_completion": true,
       "save_result_frame": true,
       "result_back_attempts": 30,
-      "result_back_interval_seconds": 1.5
+      "result_back_interval_seconds": 1.5,
+      "opening_recording": false
     },
     "next": [
       "RealtimeLiveReturnHome"
@@ -1183,7 +1196,8 @@
       "require_completion": true,
       "save_result_frame": true,
       "result_back_attempts": 30,
-      "result_back_interval_seconds": 1.5
+      "result_back_interval_seconds": 1.5,
+      "opening_recording": false
     },
     "next": [
       "RealtimeLiveReturnHome"
@@ -1212,7 +1226,8 @@
       "require_completion": true,
       "save_result_frame": true,
       "result_back_attempts": 30,
-      "result_back_interval_seconds": 1.5
+      "result_back_interval_seconds": 1.5,
+      "opening_recording": false
     },
     "next": [
       "RealtimeLiveReturnHome"
@@ -1356,5 +1371,22 @@
         ]
       }
     }
+  },
+  "RealtimeLiveStaminaRefillConfigure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "StaminaRefillConfigure",
+    "custom_action_param": {
+      "task_mode": "RealtimeLive",
+      "stamina_refill_enabled": false,
+      "stamina_refill_small_enabled": true,
+      "stamina_refill_large_enabled": true
+    },
+    "next": [
+      "RealtimeLiveRecover"
+    ],
+    "on_error": [
+      "RealtimeLiveFailure"
+    ]
   }
 }

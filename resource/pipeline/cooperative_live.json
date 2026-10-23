@@ -2,15 +2,21 @@
   "CooperativeLive": {
     "recognition": "DirectHit",
     "action": "DoNothing",
-    "next": ["CooperativeProcessConflictGuard"],
+    "next": [
+      "CooperativeProcessConflictGuard"
+    ],
     "focus": {
       "Node.Action.Starting": {
         "content": "正在启动协力演出任务",
-        "display": ["log"]
+        "display": [
+          "log"
+        ]
       },
       "Node.Action.Succeeded": {
         "content": "协力演出启动检查已开始",
-        "display": ["log"]
+        "display": [
+          "log"
+        ]
       }
     }
   },
@@ -18,8 +24,12 @@
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "ProcessConflictGuard",
-    "next": ["CooperativeRecover"],
-    "on_error": ["CooperativeFailure"]
+    "next": [
+      "CooperativeLiveStaminaRefillConfigure"
+    ],
+    "on_error": [
+      "CooperativeFailure"
+    ]
   },
   "CooperativeRecover": {
     "recognition": "DirectHit",
@@ -27,7 +37,9 @@
     "custom_action": "CommonRecover",
     "custom_action_param": {
       "home_node": "CooperativeHomeMarker",
-      "modal_cancel_nodes": ["QuitConfirmCancel"],
+      "modal_cancel_nodes": [
+        "QuitConfirmCancel"
+      ],
       "click_nodes": [
         "AutoLiveLoginTap",
         "AutoLiveLoginNext",
@@ -43,78 +55,138 @@
       "restart_wait_ms": 5000,
       "startup_grace_ms": 12000,
       "login_start_node": "AutoLiveLoginScreenMarker",
-      "login_start_target": [640, 635],
+      "login_start_target": [
+        640,
+        635
+      ],
       "login_marker_priority_attempts": 3,
       "escape_after_login_start": true,
       "package": "com.bilibili.star.bili",
-      "login_tap_target": [640, 360]
+      "login_tap_target": [
+        640,
+        360
+      ]
     },
-    "next": ["CooperativeEntryConfigure"],
-    "on_error": ["CooperativeFailure"]
+    "next": [
+      "CooperativeEntryConfigure"
+    ],
+    "on_error": [
+      "CooperativeFailure"
+    ]
   },
   "CooperativeEntryConfigure": {
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "CooperativeLiveConfigure",
-    "custom_action_param": {"reset": true, "entry_method": "normal"},
-    "next": ["CooperativeTierConfigure"],
-    "on_error": ["CooperativeFailure"]
+    "custom_action_param": {
+      "reset": true,
+      "entry_method": "normal"
+    },
+    "next": [
+      "CooperativeTierConfigure"
+    ],
+    "on_error": [
+      "CooperativeFailure"
+    ]
   },
   "CooperativeTierConfigure": {
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "CooperativeLiveConfigure",
-    "custom_action_param": {"room_tier": "free"},
-    "next": ["CooperativeCodeConfigure"],
-    "on_error": ["CooperativeFailure"]
+    "custom_action_param": {
+      "room_tier": "free"
+    },
+    "next": [
+      "CooperativeCodeConfigure"
+    ],
+    "on_error": [
+      "CooperativeFailure"
+    ]
   },
   "CooperativeCodeConfigure": {
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "CooperativeLiveConfigure",
-    "custom_action_param": {"room_code": ""},
-    "next": ["CooperativeDifficultyConfigure"],
-    "on_error": ["CooperativeFailure"]
+    "custom_action_param": {
+      "room_code": ""
+    },
+    "next": [
+      "CooperativeDifficultyConfigure"
+    ],
+    "on_error": [
+      "CooperativeFailure"
+    ]
   },
   "CooperativeDifficultyConfigure": {
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "CooperativeLiveConfigure",
-    "custom_action_param": {"difficulty": "Expert"},
-    "next": ["CooperativeCountConfigure"],
-    "on_error": ["CooperativeFailure"]
+    "custom_action_param": {
+      "difficulty": "Expert"
+    },
+    "next": [
+      "CooperativeCountConfigure"
+    ],
+    "on_error": [
+      "CooperativeFailure"
+    ]
   },
   "CooperativeCountConfigure": {
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "CooperativeLiveConfigure",
-    "custom_action_param": {"count": 1},
-    "next": ["CooperativePostLiveConfigure"],
-    "on_error": ["CooperativeFailure"]
+    "custom_action_param": {
+      "count": 1
+    },
+    "next": [
+      "CooperativePostLiveConfigure"
+    ],
+    "on_error": [
+      "CooperativeFailure"
+    ]
   },
   "CooperativePostLiveConfigure": {
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "CooperativeLiveConfigure",
-    "custom_action_param": {"post_live_action": "exit"},
-    "next": ["CooperativeMemberExitConfigure"],
-    "on_error": ["CooperativeFailure"]
+    "custom_action_param": {
+      "post_live_action": "exit"
+    },
+    "next": [
+      "CooperativeMemberExitConfigure"
+    ],
+    "on_error": [
+      "CooperativeFailure"
+    ]
   },
   "CooperativeMemberExitConfigure": {
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "CooperativeLiveConfigure",
-    "custom_action_param": {"member_exit_policy": "fail", "max_reconnects": 3},
-    "next": ["CooperativeSongChoiceConfigure"],
-    "on_error": ["CooperativeFailure"]
+    "custom_action_param": {
+      "member_exit_policy": "reconnect",
+      "max_reconnects": 3
+    },
+    "next": [
+      "CooperativeSongChoiceConfigure"
+    ],
+    "on_error": [
+      "CooperativeFailure"
+    ]
   },
   "CooperativeSongChoiceConfigure": {
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "CooperativeLiveConfigure",
-    "custom_action_param": {"song_choice": "unspecified"},
-    "next": ["CooperativeDebugConfigure"],
-    "on_error": ["CooperativeFailure"]
+    "custom_action_param": {
+      "song_choice": "unspecified"
+    },
+    "next": [
+      "CooperativeDebugConfigure"
+    ],
+    "on_error": [
+      "CooperativeFailure"
+    ]
   },
   "CooperativeDebugConfigure": {
     "recognition": "DirectHit",
@@ -122,10 +194,15 @@
     "custom_action": "CooperativeLiveConfigure",
     "custom_action_param": {
       "debug_recording": false,
-      "diagnostic_trace": true
+      "diagnostic_trace": true,
+      "opening_recording": false
     },
-    "next": ["CooperativeDisconnectJumpConfigure"],
-    "on_error": ["CooperativeFailure"]
+    "next": [
+      "CooperativeDisconnectJumpConfigure"
+    ],
+    "on_error": [
+      "CooperativeFailure"
+    ]
   },
   "CooperativeDisconnectJumpConfigure": {
     "recognition": "DirectHit",
@@ -134,8 +211,12 @@
     "custom_action_param": {
       "disconnect_jump_enabled": false
     },
-    "next": ["CooperativeSpeedSettingsGate"],
-    "on_error": ["CooperativeFailure"]
+    "next": [
+      "CooperativeSpeedSettingsGate"
+    ],
+    "on_error": [
+      "CooperativeFailure"
+    ]
   },
   "CooperativeSpeedSettingsGate": {
     "recognition": "DirectHit",
@@ -149,8 +230,12 @@
       "game_fps": 60,
       "render_quality": "standard"
     },
-    "next": ["CooperativeHomeLive"],
-    "on_error": ["CooperativeFailure"]
+    "next": [
+      "CooperativeHomeLive"
+    ],
+    "on_error": [
+      "CooperativeFailure"
+    ]
   },
   "CooperativeHomeMarker": {
     "recognition": "TemplateMatch",
@@ -163,19 +248,33 @@
     "template": "home_live.png",
     "threshold": 0.82,
     "action": "Custom",
-    "custom_action": "ForegroundClick",
-    "target": [1085, 580, 180, 130],
+    "custom_action": "StaminaHomeEntry",
+    "target": [
+      1085,
+      580,
+      180,
+      130
+    ],
     "post_delay": 1000,
-    "next": ["CooperativeSelectPage", "CooperativeNavigationClose"],
-    "on_error": ["CooperativeFailure"],
+    "next": [
+      "CooperativeSelectPage",
+      "CooperativeNavigationClose"
+    ],
+    "on_error": [
+      "CooperativeFailure"
+    ],
     "focus": {
       "Node.Action.Starting": {
         "content": "正在点击主页右下角“演出”",
-        "display": ["log"]
+        "display": [
+          "log"
+        ]
       },
       "Node.Action.Succeeded": {
         "content": "已点击“演出”，正在寻找协力演出入口",
-        "display": ["log"]
+        "display": [
+          "log"
+        ]
       }
     }
   },
@@ -185,12 +284,20 @@
     "threshold": 0.9,
     "action": "Custom",
     "custom_action": "ForegroundClick",
-    "next": ["CooperativeSelectPage", "CooperativeNavigationClose"],
-    "on_error": ["CooperativeFailure"]
+    "next": [
+      "CooperativeSelectPage",
+      "CooperativeNavigationClose"
+    ],
+    "on_error": [
+      "CooperativeFailure"
+    ]
   },
   "CooperativeLiveEntryTemplate": {
     "recognition": "TemplateMatch",
-    "template": ["cooperative/live_entry.png", "cooperative/live_entry_compact.png"],
+    "template": [
+      "cooperative/live_entry.png",
+      "cooperative/live_entry_compact.png"
+    ],
     "threshold": 0.88,
     "action": "DoNothing"
   },
@@ -201,19 +308,33 @@
     "custom_action_param": {
       "expected": "协力演出",
       "template_node": "CooperativeLiveEntryTemplate",
-      "roi": [0, 100, 1280, 620],
+      "roi": [
+        0,
+        100,
+        1280,
+        620
+      ],
       "click": false,
       "missing_reason": "无法确认选择演出页面上的协力演出入口",
       "timeout_ms": 10000,
       "interval_ms": 500
     },
-    "next": ["CooperativeEnterLive"],
-    "on_error": ["CooperativeFailure"]
+    "next": [
+      "CooperativeEnterLive"
+    ],
+    "on_error": [
+      "CooperativeFailure"
+    ]
   },
   "CooperativeRoomSelectMarker": {
     "recognition": "TemplateMatch",
     "template": "cooperative/room_search.png",
-    "roi": [557, 612, 216, 76],
+    "roi": [
+      557,
+      612,
+      216,
+      76
+    ],
     "threshold": 0.9,
     "action": "DoNothing"
   },
@@ -224,7 +345,12 @@
     "custom_action_param": {
       "expected": "协力演出",
       "template_node": "CooperativeLiveEntryTemplate",
-      "roi": [0, 100, 1280, 620],
+      "roi": [
+        0,
+        100,
+        1280,
+        620
+      ],
       "click": true,
       "delivery_node": "CooperativeRoomSelectMarker",
       "delivery_timeout_ms": 12000,
@@ -233,23 +359,36 @@
       "timeout_ms": 10000,
       "interval_ms": 500
     },
-    "next": ["CooperativeRun"],
-    "on_error": ["CooperativeFailure"]
+    "next": [
+      "CooperativeRun"
+    ],
+    "on_error": [
+      "CooperativeFailure"
+    ]
   },
   "CooperativeRun": {
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "CooperativeLiveFlow",
-    "next": ["CooperativeReturnHome"],
-    "on_error": ["CooperativeFailure"],
+    "next": [
+      "CooperativeReturnHome"
+    ],
+    "on_error": [
+      "CooperativeFailure"
+    ],
     "focus": {
       "Node.Action.Starting": {
         "content": "正在按设定次数执行协力演出",
-        "display": ["log"]
+        "display": [
+          "log"
+        ]
       },
       "Node.Action.Failed": {
         "content": "❌ 协力演出未完成，请查看本次任务的明确原因",
-        "display": ["log", "toast"]
+        "display": [
+          "log",
+          "toast"
+        ]
       }
     }
   },
@@ -265,7 +404,9 @@
     "custom_action": "CooperativeLiveFinalize",
     "custom_action_param": {
       "home_node": "CooperativeHomeMarker",
-      "modal_cancel_nodes": ["QuitConfirmCancel"],
+      "modal_cancel_nodes": [
+        "QuitConfirmCancel"
+      ],
       "click_nodes": [],
       "back_only_click_nodes": [
         "AutoLiveStorySkipConfirmLarge",
@@ -274,21 +415,34 @@
         "AutoLiveStoryMenu"
       ],
       "back_only": true,
-      "back_acceleration_click_point": [1279, 719],
+      "back_acceleration_click_point": [
+        1279,
+        719
+      ],
       "escape_interval_ms": 500,
       "escape_timeout_ms": 60000,
       "restart_limit": 1,
       "restart_wait_ms": 5000,
       "startup_grace_ms": 12000,
       "login_start_node": "AutoLiveLoginScreenMarker",
-      "login_start_target": [640, 635],
+      "login_start_target": [
+        640,
+        635
+      ],
       "login_marker_priority_attempts": 3,
       "escape_after_login_start": true,
       "package": "com.bilibili.star.bili",
-      "login_tap_target": [640, 360]
+      "login_tap_target": [
+        640,
+        360
+      ]
     },
-    "next": ["CooperativeComplete"],
-    "on_error": ["CooperativeFailure"]
+    "next": [
+      "CooperativeComplete"
+    ],
+    "on_error": [
+      "CooperativeFailure"
+    ]
   },
   "CooperativeComplete": {
     "recognition": "DirectHit",
@@ -312,5 +466,22 @@
       "reason": "协力演出流程未完成",
       "reason_source": "latest"
     }
+  },
+  "CooperativeLiveStaminaRefillConfigure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "StaminaRefillConfigure",
+    "custom_action_param": {
+      "task_mode": "CooperativeLive",
+      "stamina_refill_enabled": false,
+      "stamina_refill_small_enabled": true,
+      "stamina_refill_large_enabled": true
+    },
+    "next": [
+      "CooperativeRecover"
+    ],
+    "on_error": [
+      "CooperativeFailure"
+    ]
   }
 }

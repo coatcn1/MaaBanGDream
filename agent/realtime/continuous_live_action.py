@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+# 日志通道是附加功能，输出故障不得改变演出、停止或清理结果。
+from .optional_diagnostics import safe_print as print, safe_traceback
+
 import json
 import threading
 import time
@@ -32,6 +35,7 @@ from .performance_settings_action import verified_settings
 from .playfield_monitor import PlayfieldDetector
 from .profile_action import PROJECT_ROOT
 from .profile_play_action import RealtimeProfilePlay, resolve_profile_for_settings_gate
+from .optional_diagnostics import OptionalDiagnostics
 from .profile_store import RealtimeProfileStore
 from .result_navigation import RESULT_ANIMATION_SKIP_POINT, STORY_NODES
 from .song_identity import (
@@ -59,6 +63,7 @@ CONTINUOUS_DEFAULT_SETTINGS: dict[str, object] = {
     "render_quality": "standard",
     "debug_recording": False,
     "diagnostic_trace": True,
+    "opening_recording": False,
 }
 _CONTINUOUS_SETTINGS = dict(CONTINUOUS_DEFAULT_SETTINGS)
 _CONTINUOUS_SETTINGS_LOCK = threading.Lock()
@@ -497,13 +502,14 @@ def run_continuous_listener(
     on_observation: Callable[[object, dict[str, object]], None] | None = None,
 ) -> bool:
     """被动等待开场身份，完整演奏第一首歌后返回成功。"""
+    diagnostics = OptionalDiagnostics(stopping)
     while not stopping():
         image = capture()
         if on_frame is not None:
-            on_frame(image)
+            diagnostics.call("listener-frame", lambda: on_frame(image))
         evidence = recognizer.observe(image)
         if on_observation is not None:
-            on_observation(image, recognizer.diagnostic_state())
+            diagnostics.call("listener-observation", lambda: on_observation(image, recognizer.diagnostic_state()))
         if evidence is not None:
             if not play_song(evidence):
                 raise RuntimeError("continuous realtime song playback failed")
@@ -532,7 +538,7 @@ class ContinuousRealtimeLiveConfigure(CustomAction):
             record_failure_reason(
                 f"一键实时演奏选项无效：{type(exc).__name__}: {exc}"
             )
-            traceback.print_exc()
+            safe_traceback()
             return False
 
 
@@ -544,9 +550,11 @@ class ContinuousRealtimeLive(CustomAction):
         try:
             return self._run(context, argv)
         except Exception as exc:
+            if context.tasker.stopping:
+                return True
             reason = f"{type(exc).__name__}: {exc}"
             record_failure_reason(reason)
-            traceback.print_exc()
+            safe_traceback()
             print(f"ContinuousRealtimeLive failed={reason}", flush=True)
             return False
 
@@ -583,9 +591,10 @@ class ContinuousRealtimeLive(CustomAction):
             LocalChartRepository(PROJECT_ROOT / "resource" / "charts"),
             difficulty,
         )
-        diagnostics = ListenerDiagnosticCapture(
+        optional_diagnostics = OptionalDiagnostics(lambda: context.tasker.stopping)
+        diagnostics = optional_diagnostics.call("listener-init", lambda: ListenerDiagnosticCapture(
             Path(__file__).resolve().parents[2] / "debug" / "recordings"
-        )
+        ))
 
         def play_song(evidence: ContinuousSongEvidence) -> bool:
             if context.tasker.stopping:
@@ -647,13 +656,15 @@ class ContinuousRealtimeLive(CustomAction):
                 lambda: context.tasker.stopping,
                 play_song,
                 recognizer=recognizer,
-                on_observation=diagnostics.observe_recognition,
+                on_observation=(diagnostics.observe_recognition if diagnostics is not None else None),
             )
         except Exception:
-            diagnostics.save("failed")
+            if diagnostics is not None:
+                optional_diagnostics.call("listener-save", lambda: diagnostics.save("failed"))
             raise
         if context.tasker.stopping or not completed:
-            diagnostics.save("stopped")
+            if diagnostics is not None:
+                optional_diagnostics.call("listener-save", lambda: diagnostics.save("stopped"))
             print("ContinuousRealtimeLive stopped by user", flush=True)
             return True
         try:

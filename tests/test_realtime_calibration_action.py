@@ -420,3 +420,60 @@ def test_completed_calibration_result_error_pauses_neutrally_after_budget_withou
     assert "pending_stage=" in capsys.readouterr().out
     profiles = list((tmp_path / "profiles").glob("*.json"))
     assert all(json.loads(path.read_text(encoding="utf-8")).get("accepted") is not True for path in profiles)
+
+
+@pytest.mark.parametrize("fault", ["finish-save", "begin-save", "candidate", "candidate-read", "pin", "post-play-report", "identity-save"])
+def test_completed_calibration_persistence_error_is_neutral_without_replay(monkeypatch, tmp_path, fault):
+    from agent.realtime.calibration_session import CalibrationSessionStore
+    from agent.realtime.live_session import reset_live_run, update_live_run
+    class Job:
+        def wait(self): return self
+        def get(self): return object()
+    context = SimpleNamespace(tasker=SimpleNamespace(stopping=False, controller=SimpleNamespace(post_screencap=lambda: Job())))
+    plays = []
+    reset_live_run(mode="calibration", difficulty="Expert")
+    if fault == "identity-save":
+        update_live_run(song_id="song-A")
+    def run_task(*args):
+        plays.append(args)
+        play_params = next(node["custom_action_param"] for node in args[1].values()
+                           if "calibration_report" in node.get("custom_action_param", {}))
+        report_path = Path(play_params["calibration_report"])
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        reset_live_run(mode="calibration", difficulty="Expert")
+        update_live_run(play_completed=True)
+        if fault == "post-play-report":
+            raise OSError("callback-report")
+        report_path.write_text(json.dumps(record("song-B" if fault == "identity-save" else "song-A")), encoding="utf-8")
+        return SimpleNamespace(status=SimpleNamespace(succeeded=True))
+    context.run_task = run_task
+    monkeypatch.setattr(calibration_action_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(calibration_action_module, "calibration_difficulty", lambda: "Expert")
+    monkeypatch.setattr(calibration_action_module, "calibration_song_mode", lambda: "current")
+    monkeypatch.setattr(calibration_action_module, "calibration_resume_mode", lambda: "auto")
+    monkeypatch.setattr(calibration_action_module, "frame_resolution", lambda image: (1280, 720))
+    monkeypatch.setattr(RealtimeProfileStore, "runtime_options", lambda self: {
+        "calibration_note_speeds": {"Expert": 5.0}, "play_failure_retry_count": 3})
+    original_save = CalibrationSessionStore._save
+    def failing_save(self, session):
+        status = session.get("attempts", [{}])[-1].get("status") if session.get("attempts") else None
+        if (fault == "finish-save" and status == "completed") or (fault == "begin-save" and status == "running") or (fault == "identity-save" and status == "technical-failure"):
+            raise PermissionError("finish-save")
+        return original_save(self, session)
+    if fault in {"finish-save", "begin-save", "identity-save"}:
+        monkeypatch.setattr(CalibrationSessionStore, "_save", failing_save)
+    elif fault == "candidate":
+        monkeypatch.setattr(CalibrationSessionStore, "_update_candidate", lambda *args: (_ for _ in ()).throw(OSError("candidate")))
+    elif fault == "candidate-read":
+        original_read = Path.read_text
+        def fail_candidate(path, *args, **kwargs):
+            if path.name.startswith("expert-"):
+                raise PermissionError("candidate-read")
+            return original_read(path, *args, **kwargs)
+        monkeypatch.setattr(Path, "read_text", fail_candidate)
+    elif fault == "pin":
+        monkeypatch.setattr(RealtimeProfileStore, "pin", lambda *args: (_ for _ in ()).throw(OSError("pin")))
+    assert RealtimeCalibration().run(context, SimpleNamespace(custom_action_param="{}")) is (fault != "identity-save")
+    assert len(plays) == (1 if fault in {"post-play-report", "identity-save"} else 2)
+    if fault in {"candidate", "candidate-read", "identity-save"}:
+        assert not (tmp_path / "profiles" / "profile-selection.json").exists()

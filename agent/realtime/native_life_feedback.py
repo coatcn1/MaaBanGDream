@@ -268,7 +268,7 @@ class NativeLifeFeedback:
             return "eligible-event"
         self.qualified_direction, self.qualified_at = kind, now
         if (self._pending_observed_s is not None or self._phase_status is None
-                or self._phase_status.state in {"requested", "waiting-touch-boundary", "waiting-gap"}
+                or self._phase_status.state in {"requested", "waiting-touch-boundary", "waiting-gap", "waiting-execution-receipts"}
                 or self._terminal_phase_reason is not None or self._blocked_direction == kind):
             return "pending-or-blocked"
         if now - self._last_submit_s < .3:

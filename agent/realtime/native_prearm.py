@@ -346,6 +346,8 @@ def prepare_native_for_settings_gate(
     manager: NativePrearmManager = _GLOBAL_MANAGER,
     ready_timeout_s: float = DEFAULT_READY_TIMEOUT_SECONDS,
     ttl_s: float = DEFAULT_TTL_SECONDS,
+    wait_observer=None,
+    should_stop=None,
 ) -> Any | None:
     """在 SettingsGate 成功后编译、武装并缓存 Native 后端。"""
     root = Path(project_root)
@@ -406,10 +408,16 @@ def prepare_native_for_settings_gate(
     )
     try:
         backend.arm()
-        if not bool(backend.wait_until_ready(float(ready_timeout_s))):
+        ready_kwargs = {} if wait_observer is None and should_stop is None else {
+            "wait_observer": wait_observer, "should_stop": should_stop}
+        if not bool(backend.wait_until_ready(float(ready_timeout_s), **ready_kwargs)):
             raise RuntimeError("Native 预武装等待 minitouch ready 失败")
+        if should_stop is not None and should_stop():
+            raise InterruptedError("用户已停止任务")
     except Exception as exc:
         NativePrearmManager._stop_backend(backend, "prepare-failed")
+        if isinstance(exc, InterruptedError):
+            raise
         raise RuntimeError(
             "Native 预武装失败："
             f"{type(exc).__name__}: {exc}"

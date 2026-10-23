@@ -42,6 +42,7 @@ def _bare_flow():
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
     # 绕过构造器的流程测试仍须提供正常任务已冻结的保护开关。
     flow.settings = {"cooperative_member_loading_guard_enabled": True}
+    flow.verify_preplay_recovery = lambda: None
     return flow
 
 
@@ -87,7 +88,7 @@ def test_room_preparation_trial_raises_after_180_seconds_without_jump(monkeypatc
     assert clock[0] == 180
 
 
-@pytest.mark.parametrize("stop_at", [1, 3, None])
+@pytest.mark.parametrize("stop_at", [1, 3, 5])
 def test_room_timeout_budget_checks_stop_before_failure(monkeypatch, stop_at):
     flow = _bare_flow()
     flow.room_recovery_trial = True
@@ -100,10 +101,10 @@ def test_room_timeout_budget_checks_stop_before_failure(monkeypatch, stop_at):
     flow.run_attempt = attempt
     flow.recover_room_preparation_timeout = recoveries.append
     monkeypatch.setattr(cooperative_action, "record_failure_reason", failures.append)
-    assert flow.run() is (stop_at is not None)
-    assert len(attempts) == (stop_at or 3)
-    assert len(recoveries) == (stop_at - 1 if stop_at else 2)
-    assert failures == ([] if stop_at else ["preparation timeout"])
+    assert flow.run() is True
+    assert len(attempts) == stop_at
+    assert len(recoveries) == stop_at - 1
+    assert failures == []
 
 
 def test_completed_round_resets_room_and_member_exit_budgets(monkeypatch):
@@ -928,7 +929,7 @@ def test_normal_entry_ignores_stale_room_code_and_stay_setting():
     assert should_stay_in_room(settings) is False
 
 
-def test_wait_for_preparation_jumps_after_song_choice_entry_timeout(monkeypatch):
+def test_wait_for_preparation_classifies_only_preplay_timeout(monkeypatch):
     clock = [0.0]
     flow = _bare_flow()
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
@@ -944,12 +945,10 @@ def test_wait_for_preparation_jumps_after_song_choice_entry_timeout(monkeypatch)
     flow.jump_after_startup_failure = jump
     monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: clock[0])
 
-    with pytest.raises(JumpOutUnavailable, match="180秒"):
+    with pytest.raises(RoomPreparationTimeout, match="180秒"):
         flow.wait_for_preparation()
 
-    assert reasons == [
-        "进入协力房间后180秒内未出现不指定歌曲或准备页，已退后台返回游戏"
-    ]
+    assert reasons == []
 
 
 def test_wait_for_preparation_gives_ready_page_independent_60_seconds(monkeypatch):
@@ -958,12 +957,14 @@ def test_wait_for_preparation_gives_ready_page_independent_60_seconds(monkeypatc
     clicks = []
     flow = _bare_flow()
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
-    flow.click = clicks.append
+    flow.guarded_song_choice_click = lambda point: clicks.append(point) or True
 
     def wait_for(names, timeout):
         if not song_selected[0]:
             clock[0] = 179.0
             song_selected[0] = True
+            return "song_unspecified", np.zeros((1, 1, 3))
+        if cooperative_action.COOPERATIVE_SONG_CONFIRM_POINT not in clicks:
             return "song_unspecified", np.zeros((1, 1, 3))
         ready_at = 230.0
         if clock[0] + timeout >= ready_at:
@@ -1035,7 +1036,7 @@ def test_song_choice_clicks_requested_option_and_pauses_only_once(monkeypatch, c
 
     flow.pause_for_song_filter = observed_pause
     flow.wait_for = lambda *args, **kwargs: (page[0], None)
-    flow.click = click
+    flow.guarded_song_choice_click = lambda point: click(point) or True
     monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(cooperative_action.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
     for _ in range(2):
@@ -1064,7 +1065,7 @@ def test_first_round_already_ready_does_not_defer_filter_pause_to_later_round(mo
         if point == cooperative_action.COOPERATIVE_SONG_CONFIRM_POINT:
             page[0] = "ready_button"
 
-    flow.click = click
+    flow.guarded_song_choice_click = lambda point: click(point) or True
     monkeypatch.setattr(cooperative_action.time, "sleep", lambda seconds: None)
     flow.wait_for_preparation()
     page[0] = "song_unspecified"
@@ -1146,8 +1147,7 @@ def test_cooperative_play_continues_to_the_jump_out_gate_after_depletion():
         {
             "difficulty": "Hard",
             "debug_recording": False,
-            "diagnostic_trace": False,
-        }
+            "diagnostic_trace": False, "opening_recording": False}
     )
     assert MEMBER_DOWNLOAD_TIMEOUT_SECONDS == 60.0
     assert cooperative_action.ROOM_SONG_CHOICE_TIMEOUT_SECONDS == 180.0
@@ -1167,8 +1167,7 @@ def test_cooperative_play_uses_effective_fallback_difficulty():
         {
             "difficulty": "Special",
             "debug_recording": False,
-            "diagnostic_trace": False,
-        },
+            "diagnostic_trace": False, "opening_recording": False},
         effective_difficulty="Expert",
     )
 
@@ -1196,7 +1195,7 @@ def test_cooperative_prepare_falls_back_special_to_effective_expert(monkeypatch)
     class PerformanceGate:
         def run(self, _context, argv):
             performance_params.append(json.loads(argv.custom_action_param))
-            update_live_run(cooperative_prestart_image=cached)
+            update_live_run(cooperative_prestart_image=cached, cooperative_prestart_captured_at=42.5)
             return True
 
     monkeypatch.setattr(
@@ -1209,8 +1208,7 @@ def test_cooperative_prepare_falls_back_special_to_effective_expert(monkeypatch)
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
     flow.settings = {
         "difficulty": "Special",
-        "debug_recording": False,
-    }
+        "debug_recording": False, "opening_recording": False}
     flow.ensure_performance_mode_off = lambda initial_image=None: (
         reused.append(("mode", initial_image)),
         initial_image,
@@ -1220,7 +1218,9 @@ def test_cooperative_prepare_falls_back_special_to_effective_expert(monkeypatch)
         "black",
     )[1]
 
+    flow._last_capture_timestamp=9.0
     flow.prepare()
+    assert flow._last_capture_timestamp==42.5
 
     assert difficulty_params[0]["fallback_difficulties"] == ["Expert"]
     assert difficulty_params[0]["song_title_roi"] == [105, 535, 430, 52]
@@ -1238,10 +1238,10 @@ def test_cooperative_interface_exposes_requested_modes_and_five_difficulties():
         "CooperativeEntryMethod",
         "CooperativeDifficulty",
         "CooperativeCount",
-        "CooperativeMemberExitPolicy",
         "CooperativeSongChoice",
         "CooperativeDebug",
         "CooperativeDisconnectJump",
+        "CooperativeLiveStaminaRefill",
     ]
     options = interface["option"]
     assert [case["name"] for case in options["CooperativeEntryMethod"]["cases"]] == [
@@ -1294,7 +1294,7 @@ def test_cooperative_interface_exposes_requested_modes_and_five_difficulties():
     debug = options["CooperativeDebug"]
     assert debug["default_case"] == "Light"
     assert [case["name"] for case in debug["cases"]] == [
-        "Light", "Off", "Full",
+        "Light", "Off", "Full", "Opening",
     ]
     params = {
         case["name"]: case["pipeline_override"]["CooperativeDebugConfigure"][
@@ -1303,9 +1303,10 @@ def test_cooperative_interface_exposes_requested_modes_and_five_difficulties():
         for case in debug["cases"]
     }
     assert params == {
-        "Light": {"debug_recording": False, "diagnostic_trace": True},
-        "Off": {"debug_recording": False, "diagnostic_trace": False},
-        "Full": {"debug_recording": True, "diagnostic_trace": True},
+        "Light": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": False},
+        "Off": {"debug_recording": False, "diagnostic_trace": False, "opening_recording": False},
+        "Full": {"debug_recording": True, "diagnostic_trace": True, "opening_recording": False},
+        "Opening": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": True},
     }
     room_code = options["CooperativeRoomCode"]
     assert "description" not in room_code
@@ -1406,17 +1407,21 @@ def test_cooperative_templates_are_deployed_and_nonempty():
     )
 
 
-def test_member_exit_default_confirms_and_fails_without_reconnect():
+def test_member_exit_old_fail_policy_recovers_without_round_credit():
     flow = _bare_flow()
     flow.settings = {"member_exit_policy": "fail", "max_reconnects": 3}
     calls = []
-    flow.run_attempt = lambda reuse_room=False: (
-        _ for _ in ()
-    ).throw(MemberExited())
+    outcomes = iter([MemberExited(), True])
+    def attempt(reuse_room=False):
+        result = next(outcomes)
+        if isinstance(result, Exception):
+            raise result
+        return result
+    flow.run_attempt = attempt
     flow.dismiss_member_exit = lambda: calls.append("dismiss")
-    flow.ensure_room_page = lambda timeout=15.0: calls.append("reconnect")
-    assert flow.run() is False
-    assert calls == ["dismiss"]
+    flow.return_to_room_selection = lambda: calls.append("reconnect")
+    assert flow.run() is True
+    assert calls == ["dismiss", "reconnect"]
 
 
 def test_member_exit_reconnect_is_bounded_and_reuses_original_route():
@@ -1455,7 +1460,7 @@ def test_member_exit_reconnect_recovers_via_home_when_result_pages_stuck():
     flow.return_to_room_selection = lambda: (
         _ for _ in ()
     ).throw(RuntimeError("未识别协力房间选择页"))
-    flow.recover_after_play_failure = lambda reason: recoveries.append(reason)
+    flow.recover_room_preparation_timeout = lambda reason: recoveries.append(reason)
 
     assert flow.run() is True
     assert len(recoveries) == 1

@@ -50,6 +50,8 @@ class LiveRunContext:
     # 协力跳过设置页时保留最新准备页截图，供模式确认和准备按钮立即复用；
     # 与身份取证截图分开，避免打开过设置页后误用旧画面。
     cooperative_prestart_image: object | None = None
+    cooperative_prestart_captured_at: float | None = None
+    opening_observed_frames: tuple = ()
     # 漏掉短黑场但已确认最终封面时，把同一帧和解析结果交给演奏入口；
     # 这些对象只在本局内存中传递，不进入结果 JSON。
     startup_final_cover_image: object | None = None
@@ -192,3 +194,29 @@ def append_current_run_event(
         status,
         details=details,
     )
+
+
+def retain_opening_observation(image, captured_at, phase, metadata=None):
+    """只交接已有截图；时间戳为截图完成上界，不是入队或重播时间。"""
+    global _CURRENT_LIVE_RUN
+    if captured_at is None:
+        return
+    with _LOCK:
+        if _CURRENT_LIVE_RUN is None:
+            return
+        frames = _CURRENT_LIVE_RUN.opening_observed_frames
+        if frames and frames[-1][1] == captured_at:
+            return
+        entry = (image.copy(), float(captured_at), phase, dict(metadata or {}))
+        all_frames = frames + (entry,)
+        pinned = {}
+        for row in all_frames:
+            key = ("preparation" if row[2] == "preparation-identity" else
+                   "ready" if row[2] == "ready-before-click" else
+                   "black" if row[3].get("black") is True else None)
+            if key is not None:
+                pinned.setdefault(key, row)
+        pinned_ids = {id(row) for row in pinned.values()}
+        tail = [row for row in all_frames if id(row) not in pinned_ids][-(12-len(pinned)):]
+        kept = sorted((*pinned.values(), *tail), key=lambda row: row[1])
+        _CURRENT_LIVE_RUN = replace(_CURRENT_LIVE_RUN, opening_observed_frames=tuple(kept))

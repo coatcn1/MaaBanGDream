@@ -102,3 +102,36 @@ def test_only_confirmed_special_to_expert_fallback_reaches_later_nodes():
         prepared_for_play=True,
     )
     assert effective_difficulty_for_current_run("Special") == "Special"
+
+
+def test_opening_existing_frames_keep_capture_times_and_bounded_round_local_buffer():
+    import numpy as np
+    from agent.realtime.live_session import retain_opening_observation
+    reset_live_run(mode="versus",difficulty="Expert")
+    image=np.zeros((2,2,3),np.uint8)
+    for stamp in range(20):
+        retain_opening_observation(image,stamp,"ready-transition",{"timestamp_kind":"capture-completed-upper-bound"})
+    retain_opening_observation(image,19,"duplicate")
+    frames=current_live_run().opening_observed_frames
+    assert len(frames)==12
+    assert [row[1] for row in frames]==list(range(8,20))
+    image[:]=255
+    assert frames[-1][0].max()==0
+    reset_live_run(mode="versus",difficulty="Expert")
+    assert current_live_run().opening_observed_frames==()
+
+
+def test_opening_buffer_pins_first_preparation_ready_and_black_before_many_wait_frames():
+    import numpy as np
+    from agent.realtime.live_session import retain_opening_observation
+    reset_live_run(mode="versus",difficulty="Expert")
+    image=np.zeros((2,2,3),np.uint8)
+    retain_opening_observation(image,1,"preparation-identity")
+    retain_opening_observation(image,2,"ready-before-click")
+    retain_opening_observation(image,3,"ready-transition",{"black":True})
+    for stamp in range(4,40):retain_opening_observation(image,stamp,"ready-transition",{"black":False})
+    frames=current_live_run().opening_observed_frames
+    assert len(frames)==12
+    assert [row[1] for row in frames[:3]]==[1,2,3]
+    assert [row[1] for row in frames]==sorted(row[1] for row in frames)
+    assert frames[-1][1]==39

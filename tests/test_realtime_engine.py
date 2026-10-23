@@ -108,6 +108,26 @@ def build(fail=False):
     return engine, clock, planner, touch, capture
 
 
+@pytest.mark.parametrize("source", ["record", "trace_state"])
+def test_diagnostic_callback_failure_keeps_real_input_and_cleanup(source):
+    engine, _, planner, touch, capture = build()
+    class BrokenRecorder:
+        def record(self, *args, **kwargs):
+            if source == "record":
+                raise OSError("disk full")
+        def close(self):
+            pass
+    engine.debug_recorder = BrokenRecorder()
+    if source == "trace_state":
+        touch.trace_state = lambda: (_ for _ in ()).throw(ValueError("diagnostic copy"))
+    stats = engine.run(capture, lambda: planner.updates == 5, duration_seconds=1, target_fps=60)
+    assert stats.stopped
+    assert planner.updates == 5
+    assert stats.dispatched_actions == 5
+    assert touch.closed == 1
+    assert touch.batches[-1][0].kind == ActionKind.UP
+
+
 def test_engine_normal_exit_releases_planner_and_dispatcher_state():
     engine, _, planner, touch, capture = build()
 
@@ -536,7 +556,7 @@ def test_engine_records_numeric_life_and_post_dispatch_touch_state():
 
     engine.run(
         capture,
-        lambda: planner.updates == 1,
+        lambda: len(recorder.records) == 1,
         duration_seconds=1,
         target_fps=60,
     )
@@ -670,13 +690,16 @@ def test_engine_reports_hot_path_stage_percentiles():
             return None
 
     class TimedRecorder:
+        calls = 0
         def record(self, *args):
             clock.value += .007
+            self.calls += 1
 
         def close(self):
             pass
 
     planner = TimedPlanner()
+    recorder = TimedRecorder()
     engine = RealtimeEngine(
         TimedDetector(),
         planner,
@@ -684,7 +707,7 @@ def test_engine_reports_hot_path_stage_percentiles():
         clock,
         life_detector=TimedLifeDetector(),
         life_guard=LifeGuard(confirm_frames=1),
-        debug_recorder=TimedRecorder(),
+        debug_recorder=recorder,
         timing_feedback_detector=TimedFeedbackDetector(),
         timing_controller=TimedFeedbackController(),
     )
@@ -695,7 +718,7 @@ def test_engine_reports_hot_path_stage_percentiles():
 
     stats = engine.run(
         capture,
-        lambda: planner.updates == 2,
+        lambda: recorder.calls == 2,
         duration_seconds=10,
         target_fps=60,
     )
@@ -1018,11 +1041,11 @@ def test_engine_records_bounded_life_monitor_evidence_without_changing_outcome()
     )
     assert stats.life_monitor_diagnostics == {
         "enabled": True,
-        "visible_samples": 5,
+        "visible_samples": 4,
         "invisible_samples": 0,
         "minimum_value": 15,
-        "low_life_candidate_samples": 2,
-        "max_low_life_streak": 2,
+        "low_life_candidate_samples": 1,
+        "max_low_life_streak": 1,
         "final_zero_streak": 2,
         "alive_confirmed": True,
         "dead_confirmed": False,
@@ -1369,10 +1392,12 @@ def test_accepted_feedback_records_only_observed_input_attribution():
     class Recorder:
         def __init__(self):
             self.diagnostics = []
+            self.frames = 0
 
         def record(self, image, timestamp, notes, actions, life_status,
                    diagnostics, timing_state, life_value=None, touch_state=None):
             self.diagnostics.extend(diagnostics)
+            self.frames += 1
 
         def close(self):
             pass
@@ -1383,7 +1408,7 @@ def test_accepted_feedback_records_only_observed_input_attribution():
     engine.timing_feedback_detector = detector
     engine.timing_controller = FeedbackController()
     engine.run(
-        capture, lambda: detector.calls >= 3, duration_seconds=1, target_fps=60,
+        capture, lambda: recorder.frames >= 3, duration_seconds=1, target_fps=60,
     )
 
     accepted = [
@@ -1398,3 +1423,44 @@ def test_accepted_feedback_records_only_observed_input_attribution():
     assert accepted[1]["input_reason"] == ""
     assert accepted[1]["dispatcher_started_at"] is not None
     assert accepted[1]["dispatcher_finished_at"] is not None
+
+
+def test_optional_first_note_marker_error_does_not_change_legacy_completion(monkeypatch):
+    import sys
+    original=RealtimeEngine
+    calls=[]
+    class Recorder:
+        def mark_first_note(self,stamp):calls.append(stamp);raise OSError('optional marker failed')
+        def record(self,*a,**kw):pass
+        def record_phase(self,*a,**kw):pass
+        def close(self):pass
+    def construct(*a,**kw):
+        kw['debug_recorder']=Recorder()
+        return original(*a,**kw)
+    monkeypatch.setattr(sys.modules[__name__],'RealtimeEngine',construct)
+    test_engine_can_gate_and_complete_without_numeric_life_detection()
+    assert len(calls)==1
+
+
+@pytest.mark.parametrize("stop_error", [False, True])
+def test_native_terminal_metadata_failure_does_not_skip_stop(monkeypatch, stop_error):
+    engine, clock, planner, touch, capture = build()
+    class Backend:
+        exclusive = True
+        stopped = 0
+        def arm(self): pass
+        def observe_start_frame(self, image, now): return now
+        def start(self, now): pass
+        def poll(self, now): pass
+        def set_terminal_reason(self, reason): raise OSError("metadata")
+        def stop(self):
+            self.stopped += 1
+            if stop_error: raise OSError("real-stop-failure")
+        def report(self): return {}
+    backend = Backend()
+    engine.native_backend = backend
+    monkeypatch.setattr("agent.realtime.engine.time.sleep", lambda seconds: setattr(clock, "value", clock.value + seconds))
+    stats = engine.run(capture, lambda: False, duration_seconds=1, target_fps=60)
+    assert backend.stopped == touch.closed == 1
+    assert stats.cleanup_failed is stop_error
+    assert planner.updates == 0

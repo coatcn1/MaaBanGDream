@@ -24,9 +24,7 @@
     "recognition": "DirectHit",
     "action": "Custom",
     "custom_action": "ProcessConflictGuard",
-    "next": [
-      "AutoLiveRecover"
-    ],
+    "next": ["AutoLiveStaminaRefillConfigure"],
     "on_error": [
       "AutoLiveFailure"
     ],
@@ -294,7 +292,7 @@
     "template": "home_live.png",
     "threshold": 0.82,
     "action": "Custom",
-    "custom_action": "ForegroundClick",
+    "custom_action": "StaminaHomeEntry",
     "target": [
       1085,
       580,
@@ -844,5 +842,22 @@
         ]
       }
     }
+  },
+  "AutoLiveStaminaRefillConfigure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "StaminaRefillConfigure",
+    "custom_action_param": {
+      "task_mode": "AutoLive",
+      "stamina_refill_enabled": false,
+      "stamina_refill_small_enabled": true,
+      "stamina_refill_large_enabled": true
+    },
+    "next": [
+      "AutoLiveRecover"
+    ],
+    "on_error": [
+      "AutoLiveFailure"
+    ]
   }
 }

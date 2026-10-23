@@ -506,6 +506,7 @@ def test_skipped_gate_caches_fresh_cooperative_preparation_image(monkeypatch):
 
     run = current_live_run()
     assert run is not None
+    assert run.cooperative_prestart_captured_at is not None
     assert run.cooperative_prestart_image is not frame
     assert np.array_equal(run.cooperative_prestart_image, frame)
 

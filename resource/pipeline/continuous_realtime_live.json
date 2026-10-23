@@ -11,7 +11,7 @@
     "action": "Custom",
     "custom_action": "ProcessConflictGuard",
     "next": [
-      "ContinuousRealtimeDifficultyConfigure"
+      "ContinuousRealtimeLiveStaminaRefillConfigure"
     ],
     "on_error": [
       "ContinuousRealtimeFailure"
@@ -38,10 +38,11 @@
     "custom_action": "ContinuousRealtimeLiveConfigure",
     "custom_action_param": {
       "debug_recording": false,
-      "diagnostic_trace": true
+      "diagnostic_trace": true,
+      "opening_recording": false
     },
     "next": [
-      "ContinuousRealtimeWatcher"
+      "ContinuousRealtimeStaminaHomeGate"
     ],
     "on_error": [
       "ContinuousRealtimeFailure"
@@ -97,5 +98,33 @@
       "reason": "一键实时演奏流程未完成",
       "reason_source": "latest"
     }
+  },
+  "ContinuousRealtimeStaminaHomeGate": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "StaminaPassiveHomeGate",
+    "next": [
+      "ContinuousRealtimeWatcher"
+    ],
+    "on_error": [
+      "ContinuousRealtimeFailure"
+    ]
+  },
+  "ContinuousRealtimeLiveStaminaRefillConfigure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "StaminaRefillConfigure",
+    "custom_action_param": {
+      "task_mode": "ContinuousRealtimeLive",
+      "stamina_refill_enabled": false,
+      "stamina_refill_small_enabled": true,
+      "stamina_refill_large_enabled": true
+    },
+    "next": [
+      "ContinuousRealtimeDifficultyConfigure"
+    ],
+    "on_error": [
+      "ContinuousRealtimeFailure"
+    ]
   }
 }

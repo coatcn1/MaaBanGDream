@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+# 日志通道是附加功能，输出故障不得改变演出、停止或清理结果。
+from .optional_diagnostics import safe_print as print, safe_traceback, OptionalDiagnostics
+
 import json
 import statistics
 import traceback
@@ -34,6 +37,7 @@ from .runtime_options import (
     calibration_song_mode,
     debug_enabled,
     diagnostic_trace_enabled,
+    opening_recording_enabled,
 )
 from .difficulty_action import DIFFICULTY_TARGETS
 from .live_session import append_current_run_event, current_song_id, current_live_run, update_live_run
@@ -101,6 +105,7 @@ def calibration_round_plan(
     song_mode: str = "current",
     excluded_song_ids: list[str] | None = None,
     diagnostic_trace: bool = True,
+    opening_recording: bool = False,
 ) -> tuple[dict, dict]:
     """Build the self-contained pipeline override for one calibration round."""
     play_params = {
@@ -108,6 +113,7 @@ def calibration_round_plan(
         "target_fps": 60, "timing_offset_ms": offset,
         "debug_recording": calibration_debug,
         "diagnostic_trace": diagnostic_trace,
+        "opening_recording": opening_recording,
         "duration_seconds": 600, "dpi": 240, "game_fps": 60,
         "render_quality": "standard", "note_speed": note_speed,
         "settings_gate_required": True,
@@ -143,6 +149,7 @@ def calibration_round_plan(
                 ),
                 "note_speed": note_speed,
                 "debug_recording": calibration_debug,
+                "opening_recording": opening_recording,
             }
         },
         "RealtimeLiveFormalSettingsGate": {
@@ -211,6 +218,17 @@ def latest_result_report_since(
         result = json.loads(path.read_text(encoding="utf-8"))
         return {**result, "song_id": song_id, "survived": True, "completed": True}
     raise RuntimeError("校准单轮未找到本轮已保存的结算报告")
+
+
+def _persistence_failure(error):
+    # Profile Store 会把读取错误包装为 ValueError；只沿原始原因识别实际 IO。
+    seen = set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        if isinstance(error, (OSError, json.JSONDecodeError)):
+            return True
+        error = error.__cause__ or error.__context__
+    return False
 
 
 def result_from_mapping(value: dict) -> LiveResult:
@@ -306,7 +324,9 @@ class CalibrationRunner:
 class RealtimeCalibration(CustomAction):
     def run(self, context: Context, argv: CustomAction.RunArg) -> bool:
         try:
-            return self._run(context, json.loads(argv.custom_action_param or "{}"))
+            params = json.loads(argv.custom_action_param or "{}")
+            params["opening_recording"] = opening_recording_enabled(argv)
+            return self._run(context, params)
         except InterruptedError as exc:
             if context.tasker.stopping:
                 print(
@@ -314,12 +334,14 @@ class RealtimeCalibration(CustomAction):
                     flush=True,
                 )
                 return True
-            traceback.print_exc()
+            safe_traceback()
             record_failure_reason(f"实时演奏校准中断：{exc}")
             print(f"RealtimeCalibration failed=InterruptedError: {exc}", flush=True)
             return False
         except Exception as exc:
-            traceback.print_exc()
+            if context.tasker.stopping:
+                return True
+            safe_traceback()
             record_failure_reason(
                 f"实时演奏校准异常：{type(exc).__name__}: {exc}"
             )
@@ -392,12 +414,19 @@ class RealtimeCalibration(CustomAction):
                 f"entry={CALIBRATION_ROUND_ENTRY} offset={offset}ms",
                 flush=True,
             )
-            reports_before = result_report_snapshot(PROJECT_ROOT / "screencap")
+            if current_live_run() is not None:
+                update_live_run(play_completed=False)
+            try:
+                reports_before = result_report_snapshot(PROJECT_ROOT / "screencap")
+            except OSError as exc:
+                reports_before = None
+                print(f"RealtimeCalibration report_baseline_warning={exc}", flush=True)
             play_params, override = calibration_round_plan(
                 difficulty=difficulty,
                 note_speed=note_speed,
                 calibration_debug=calibration_debug,
                 diagnostic_trace=calibration_trace,
+                opening_recording=bool(params.get("opening_recording",False)),
                 formal=formal,
                 play_node=play_node,
                 offset=offset,
@@ -405,8 +434,6 @@ class RealtimeCalibration(CustomAction):
                 song_mode=song_mode,
                 excluded_song_ids=list(session.get("used_song_ids", [])),
             )
-            if current_live_run() is not None:
-                update_live_run(play_completed=False)
             detail = context.run_task(CALIBRATION_ROUND_ENTRY, override)
             if context.tasker.stopping:
                 raise InterruptedError("校准已停止")
@@ -432,6 +459,8 @@ class RealtimeCalibration(CustomAction):
                     "technical_reason": f"校准单轮 Maa 任务执行失败: {status}",
                 }
             try:
+                if not report_path.exists() and reports_before is None:
+                    raise OSError("缺少本轮报告且历史报告基线不可用，拒绝复用旧报告")
                 report = (
                     json.loads(report_path.read_text(encoding="utf-8"))
                     if report_path.exists()
@@ -465,12 +494,22 @@ class RealtimeCalibration(CustomAction):
                     "screencap/calibration-round-"
                     f"{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.json"
                 )
-                session = session_store.begin_round(
-                    session,
-                    stage,
-                    offset,
-                    report_path=str(report_path),
-                )
+                try:
+                    session = session_store.begin_round(
+                        session,
+                        stage,
+                        offset,
+                        report_path=str(report_path),
+                    )
+                except Exception as exc:
+                    if context.tasker.stopping:
+                        return True
+                    if not _persistence_failure(exc):
+                        raise
+                    pending = session.get("attempts", [])
+                    if not pending or pending[-1].get("status") != "running" or pending[-1].get("stage") != stage:
+                        raise
+                    print(f"RealtimeCalibration begin_round_warning={type(exc).__name__}: {exc}; memory_stage={stage}", flush=True)
                 record = None
                 for play_attempt in range(1, play_failure_retry_count + 2):
                     attempt_report_path = (
@@ -493,7 +532,7 @@ class RealtimeCalibration(CustomAction):
                     except Exception as exc:
                         record = {
                             "valid": False,
-                            "completed": False,
+                            "completed": bool(current_live_run() and current_live_run().play_completed),
                             "technical_reason": (
                                 f"{type(exc).__name__}: {exc}"
                             ),
@@ -502,10 +541,8 @@ class RealtimeCalibration(CustomAction):
                     record["play_attempt_limit"] = play_failure_retry_count + 1
                     if record.get("life_failed"):
                         break
-                    if (
-                        record.get("valid") is not False
-                        and record.get("completed") is True
-                    ):
+                    if record.get("completed") is True:
+                        # 演出完成凭据独立于成绩；不能为了重写报告重演已完成的歌曲。
                         break
                     if play_attempt <= play_failure_retry_count:
                         retry_reason = (
@@ -542,20 +579,33 @@ class RealtimeCalibration(CustomAction):
                 assert record is not None
                 suggested = offset
                 if record.get("valid") is not False and record.get("completed") is True:
-                    result = result_from_mapping(record)
-                    if not formal:
-                        effective = int(record.get("timing_offset_ms", offset))
-                        raw = adjusted_timing_offset(effective, result)
-                        suggested = max(offset - 60, min(offset + 60, raw))
-                session = session_store.finish_round(
-                    session,
-                    stage,
-                    record,
-                    suggested_offset_ms=suggested,
-                    termination_reason=(
-                        record.get("technical_reason") or record.get("reason")
-                    ),
-                )
+                    try:
+                        result = result_from_mapping(record)
+                        if not formal:
+                            effective = int(record.get("timing_offset_ms", offset))
+                            raw = adjusted_timing_offset(effective, result)
+                            suggested = max(offset - 60, min(offset + 60, raw))
+                    except (KeyError, TypeError, ValueError) as exc:
+                        record["valid"] = False
+                        record["technical_reason"] = f"成绩报告字段不可用：{type(exc).__name__}: {exc}"
+                try:
+                    session = session_store.finish_round(
+                        session,
+                        stage,
+                        record,
+                        suggested_offset_ms=suggested,
+                        termination_reason=(
+                            record.get("technical_reason") or record.get("reason")
+                        ),
+                    )
+                except Exception as exc:
+                    if context.tasker.stopping:
+                        return True
+                    if not _persistence_failure(exc):
+                        raise
+                    # finish_round 已更新内存阶段；必要身份/死亡分支仍由下方状态判断。
+                    print(f"RealtimeCalibration persistence_warning={type(exc).__name__}: {exc}; "
+                          f"pending_stage={session.get('next_stage')}; continuing_in_memory=true", flush=True)
                 if session["status"] == "paused":
                     reason = str(
                         session.get("terminal_reason")
@@ -580,7 +630,7 @@ class RealtimeCalibration(CustomAction):
                     )
                     return False
         except InterruptedError:
-            session_store.stop(session)
+            OptionalDiagnostics().call("calibration-stop-save", lambda: session_store.stop(session), during_cleanup=True)
             raise
 
         accepted = session.get("status") == "accepted"
@@ -611,11 +661,23 @@ class RealtimeCalibration(CustomAction):
                     "候选 Profile 已保留但未接受"
                 )
         else:
-            activated_profile = _activate_accepted_profile(
-                store,
-                session,
-                difficulty,
-            )
+            if context.tasker.stopping:
+                return True
+            try:
+                # 最终候选必须真实落盘并读回接受凭据；内存 accepted 不能直接驱动 pin。
+                session_store._update_candidate(session)
+                persisted = store.load(session["candidate_profile"])
+                if persisted.get("accepted") is not True or persisted.get("calibration_session") != session.get("session_id"):
+                    raise RuntimeError("候选 Profile 未读回本会话的正式验证接受凭据")
+                activated_profile = _activate_accepted_profile(store, session, difficulty)
+            except Exception as exc:
+                if context.tasker.stopping:
+                    return True
+                if not _persistence_failure(exc):
+                    raise
+                print(f"RealtimeCalibration activation_warning={type(exc).__name__}: {exc}; "
+                      "正式验证已完成，Profile 未确认写入或启用，请检查保存状态", flush=True)
+                return True
             log_task(
                 "实时演奏校准",
                 "结束",
