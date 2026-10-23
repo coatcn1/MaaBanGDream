@@ -147,6 +147,22 @@ class LiveBoostGate:
             self.sleep(0.1)
         raise RuntimeError("体力消耗页面或唯一选中状态未能连续稳定确认")
 
+    def close_panel(self, attempts: int = 3) -> None:
+        """点 OK 关闭体力面板，确认回到选择演出页。
+
+        面板开启动画尚未结束时，OK 点击可能被游戏吞掉（点击回执成功但面板
+        不关）。这里按「面板是否已消失」有界重试，而不是一次点击后直接
+        等待页面稳定；2026-10-23 22:40 竞演实测就卡在这一步。
+        """
+        for _ in range(max(1, attempts)):
+            self.click(640, 640)
+            for _ in range(15):
+                self.stopped()
+                if self.detector.page(self.capture(self.context)):
+                    return
+                self.sleep(0.1)
+        raise RuntimeError("体力消耗页面关闭失败：OK 点击未生效")
+
     def ensure(self, target):
         if type(target) is not int or not 0 <= target <= 3:
             raise ValueError("live_boost_target 必须是 0..3 的整数")
@@ -156,13 +172,11 @@ class LiveBoostGate:
         if current != target:
             self.click(1002, ROWS[target])
             self.stable(True, target)
-        self.click(640, 640)
-        self.stable(False)
+        self.close_panel()
         # 关闭后重开读回，避免把仅改变高亮、尚未保存当成设置完成。
         self.click(1110, 145)
         self.stable(True, target)
-        self.click(640, 640)
-        self.stable(False)
+        self.close_panel()
         print(f"LiveBoostGate current={current} target={target} corrected={str(current != target).lower()} verified=true", flush=True)
         return True
 
