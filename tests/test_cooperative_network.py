@@ -5,6 +5,7 @@ import pytest
 from agent.realtime.cooperative_network import (
     GameNetworkGate,
     GAME_PACKAGE,
+    UidBlackholeGate,
     resolve_game_uid,
 )
 
@@ -140,3 +141,129 @@ def test_gate_fails_closed_without_su_on_unrooted_shell():
     assert gate.block() is False
     assert gate.last_error is not None
     assert gate.restore() is True
+
+
+def _fake_uid_rule_shell(
+    uid: int | None = 10046,
+    *,
+    root: bool = True,
+    su_available: bool = True,
+    deny_ip: bool = False,
+):
+    calls: list[tuple[str, ...]] = []
+    rules_v4: set[str] = set()
+    rules_v6: set[str] = set()
+
+    def shell(args):
+        calls.append(tuple(args))
+        if args[0] == "dumpsys":
+            return (0, f"userId={uid}" if uid is not None else "")
+        if args[0] == "id":
+            return (0, "0" if root else "2000")
+        if args[0] == "su":
+            if not su_available:
+                return (127, "su: not found")
+            return shell(tuple(args[2].strip('"').split()))
+        if args[0] == "ip":
+            if deny_ip:
+                return (127, "Permission denied")
+            ipv6 = args[1] == "-6"
+            rest = args[2:] if ipv6 else args[1:]
+            store = rules_v6 if ipv6 else rules_v4
+            if rest[:2] == ("rule", "add"):
+                store.add(rest[3])
+                return (0, "")
+            if rest[:2] == ("rule", "del"):
+                if rest[2] == "uidrange":
+                    store.discard(rest[3])
+                elif rest[2] == "pref":
+                    store.clear()
+                return (0, "")
+            if rest[:2] == ("rule", "show"):
+                return (
+                    0,
+                    "\n".join(
+                        f"100:\tfrom all uidrange {rule} blackhole"
+                        for rule in sorted(store)
+                    ),
+                )
+        return (0, "")
+
+    return shell, calls, rules_v4, rules_v6
+
+
+def test_uid_gate_uses_cached_uid_without_resolving_during_jump():
+    """跳车时控制器可能已失效；任务入口缓存 UID 后不再依赖 dumpsys。"""
+    shell, calls, rules_v4, _ = _fake_uid_rule_shell(uid=None)
+    gate = UidBlackholeGate(shell, uid=10046)
+
+    assert gate.block() is True
+    assert any("10046-10046" in rule for rule in rules_v4)
+    assert not any(call[0] == "dumpsys" for call in calls)
+
+
+def test_uid_blackhole_gate_blocks_and_restores():
+    shell, _, rules_v4, rules_v6 = _fake_uid_rule_shell()
+    gate = UidBlackholeGate(shell)
+
+    assert gate.block() is True
+    assert rules_v4 == {"10046-10046"}
+    assert rules_v6 == {"10046-10046"}
+    # 幂等
+    assert gate.block() is True
+
+    assert gate.restore() is True
+    assert rules_v4 == set()
+    assert rules_v6 == set()
+    assert gate._blocked is False
+
+
+def test_uid_blackhole_gate_cleanup_stale_removes_leftovers():
+    shell, _, rules_v4, rules_v6 = _fake_uid_rule_shell()
+    rules_v4.add("99999-99999")
+    rules_v6.add("99999-99999")
+    gate = UidBlackholeGate(shell)
+
+    assert gate.cleanup_stale() is True
+    assert rules_v4 == set()
+    assert rules_v6 == set()
+
+
+def test_uid_blackhole_gate_fails_without_uid():
+    gate = UidBlackholeGate(_fake_uid_rule_shell(uid=None)[0])
+
+    assert gate.block() is False
+    assert gate.last_error == "无法解析游戏 UID"
+    assert gate.restore() is True
+
+
+def test_uid_blackhole_gate_fails_closed_without_root_permission():
+    shell, _, rules_v4, _ = _fake_uid_rule_shell(deny_ip=True)
+    gate = UidBlackholeGate(shell)
+
+    assert gate.block() is False
+    assert gate.last_error is not None
+    assert rules_v4 == set()
+
+
+def test_uid_blackhole_gate_escalates_via_su():
+    shell, calls, rules_v4, _ = _fake_uid_rule_shell(root=False)
+    gate = UidBlackholeGate(shell)
+
+    assert gate.block() is True
+    assert rules_v4 == {"10046-10046"}
+    assert any(call[0] == "su" for call in calls)
+
+
+def test_uid_blackhole_gate_restores_via_context_manager_on_exception():
+    shell, _, rules_v4, rules_v6 = _fake_uid_rule_shell()
+    gate = UidBlackholeGate(shell)
+
+    with pytest.raises(RuntimeError):
+        with gate:
+            assert gate._blocked is True
+            raise RuntimeError("boom")
+
+    assert gate._blocked is False
+    assert rules_v4 == set()
+    assert rules_v6 == set()

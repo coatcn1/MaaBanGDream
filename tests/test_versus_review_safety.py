@@ -153,6 +153,130 @@ def test_life_failure_uses_same_cooperative_jump_and_stop_order(monkeypatch, mod
 
 
 @pytest.mark.parametrize("module", MODULES)
+def test_disconnect_jump_templates_are_present(module):
+    """自动跳车模板必须同时有 PNG 和位置，否则 disconnect_jump_out 直接失败。"""
+    image_dir = module.PROJECT_ROOT / "resource" / "image" / (
+        "cooperative" if module is coop else "versus"
+    )
+    for name in ("disconnect_continue_body", "disconnect_confirm_body"):
+        assert (image_dir / f"{name}.png").is_file(), f"缺少模板：{name}"
+        assert name in module.TEMPLATE_POSITIONS, f"缺少模板位置：{name}"
+
+
+@pytest.mark.parametrize("module", MODULES)
+@pytest.mark.parametrize(
+    "auto_result, expected_error, expected_message",
+    [
+        ("continue", "RoundContinued", "继续下一局"),
+        ("stop", "JumpOutUnavailable", "任务结束"),
+    ],
+)
+def test_life_depletion_uses_auto_disconnect_jump_when_enabled(
+    monkeypatch, module, auto_result, expected_error, expected_message
+):
+    """生命归零必须先按跳车选项尝试自动断网跳车，而不是直接结束任务。"""
+    flow = bare_flow(module)
+    flow.action_argv = lambda params: params
+    flow.settings.update(
+        auto_disconnect_jump=True,
+        auto_jump_continue=auto_result == "continue",
+    )
+    calls = []
+    flow.auto_disconnect_jump = lambda reason: calls.append(reason) or auto_result
+
+    class Play:
+        def run_for_flow(self, *args):
+            return False
+
+    monkeypatch.setattr(module, "RealtimeProfilePlay", Play)
+    monkeypatch.setattr(
+        module,
+        "current_live_run",
+        lambda: SimpleNamespace(disconnect_jump_requested=True),
+    )
+
+    with pytest.raises(getattr(module, expected_error)) as caught:
+        flow.play()
+    assert calls == ["生命归零"]
+    assert expected_message in str(caught.value)
+
+
+@pytest.mark.parametrize("module", MODULES)
+def test_life_depletion_falls_back_to_manual_when_auto_jump_fails(
+    monkeypatch, module
+):
+    """自动跳车失败返回 None 时仍执行原有的 HOME → 切回 → 手动提示。"""
+    flow = bare_flow(module)
+    flow.action_argv = lambda params: params
+    flow.settings["auto_disconnect_jump"] = True
+    flow.auto_disconnect_jump = lambda reason: None
+    calls = []
+
+    class Job:
+        def wait(self):
+            return self
+
+    class Controller:
+        def post_click_key(self, key):
+            calls.append(("key", key))
+            return Job()
+
+        def post_start_app(self, package):
+            calls.append(("start", package))
+            return Job()
+
+    class Play:
+        def run_for_flow(self, *args):
+            return False
+
+    flow.context.tasker.controller = Controller()
+    monkeypatch.setattr(module, "RealtimeProfilePlay", Play)
+    monkeypatch.setattr(module.time, "sleep", lambda *a: None)
+    monkeypatch.setattr(
+        module,
+        "current_live_run",
+        lambda: SimpleNamespace(disconnect_jump_requested=True),
+    )
+
+    with pytest.raises(module.JumpOutUnavailable) as caught:
+        flow.play()
+    assert str(caught.value) == "生命归零，请手动跳车后重试"
+    assert calls == [("key", 3), ("start", module.GAME_PACKAGE)]
+
+
+@pytest.mark.parametrize("module", MODULES)
+def test_auto_jump_continue_returns_to_room_and_continues(monkeypatch, module):
+    """自动跳车并继续：失败局不计数，回到房间选择页后重试下一局。"""
+    flow = bare_flow(module)
+    flow.settings.update(count=1)
+    attempts = []
+
+    def run_attempt(reuse_room=False):
+        attempts.append(reuse_room)
+        if len(attempts) == 1:
+            raise module.RoundContinued(
+                "生命归零；自动断网跳车完成，继续下一局"
+            )
+        return True
+
+    flow.run_attempt = run_attempt
+    nav = []
+    nav_name = (
+        "navigate_to_cooperative_room_selection"
+        if module is coop
+        else "navigate_to_versus_room_selection"
+    )
+    setattr(flow, nav_name, lambda origin: nav.append(origin))
+    # 成功局之后的结算导航由各自既有测试覆盖，这里只验证跳车后的续跑。
+    flow.return_to_room_selection = lambda: None
+    monkeypatch.setattr(module, "record_failure_reason", lambda *a, **k: None)
+
+    assert flow.run() is True
+    assert attempts == [False, False]
+    assert nav == ["auto-jump"]
+
+
+@pytest.mark.parametrize("module", MODULES)
 def test_life_jump_ends_entire_task_without_retry_or_round_credit(monkeypatch, module):
     flow = bare_flow(module)
     flow.settings.update(count=3, play_failure_retry_count=99)
@@ -180,7 +304,30 @@ def test_multiplayer_jump_options_share_manual_wording_and_compatible_keys():
     assert expected["default_case"] == "Off"
     assert expected["cases"][1]["label"] == "生命归零后手动跳车"
     assert "请手动跳车" in expected["description"]
-    assert "断网" not in json.dumps(expected, ensure_ascii=False)
+    manual = expected["cases"][1]["pipeline_override"][
+        "VersusDisconnectJumpConfigure"
+    ]["custom_action_param"]
+    assert manual == {
+        "disconnect_jump_enabled": True,
+        "auto_disconnect_jump": False,
+        "auto_jump_continue": False,
+    }
+    auto_end = expected["cases"][2]["pipeline_override"][
+        "VersusDisconnectJumpConfigure"
+    ]["custom_action_param"]
+    auto_continue = expected["cases"][3]["pipeline_override"][
+        "VersusDisconnectJumpConfigure"
+    ]["custom_action_param"]
+    assert auto_end == {
+        "disconnect_jump_enabled": True,
+        "auto_disconnect_jump": True,
+        "auto_jump_continue": False,
+    }
+    assert auto_continue == {
+        "disconnect_jump_enabled": True,
+        "auto_disconnect_jump": True,
+        "auto_jump_continue": True,
+    }
     task_options = {
         name for task in interface["task"] for name in task.get("option", [])
         if name.endswith("DisconnectJump")
