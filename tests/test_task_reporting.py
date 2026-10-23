@@ -406,7 +406,10 @@ print('real-loop-ok')
     result = subprocess.run(
         [sys.executable, "-c", code],
         input=json.dumps({"root": str(tmp_path), "total": total}),
-        text=True, capture_output=True, timeout=30,
+        # MaaFramework 原生日志按 UTF-8 写 stdout；Windows 父进程默认用
+        # GBK 解码会抛 UnicodeDecodeError，导致 stdout 变成 None。
+        text=True, encoding="utf-8", errors="replace",
+        capture_output=True, timeout=30,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "real-loop-ok" in result.stdout
