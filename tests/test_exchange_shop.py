@@ -685,11 +685,11 @@ def test_manual_not_executed_resolution_preserves_pending_audit(tmp_path):
 
 @pytest.mark.parametrize("cost,amount", (("消费蓝色礼物币100枚",10),("消费红币50枚",5),("活动兑换用礼物币100枚",10)))
 def test_currency_name_and_color_are_not_used_in_confirmation(cost,amount):
-    reader=ExchangeReader()
-    reader.page=lambda *args:True
-    values=iter([cost,f"领取礼物{amount}个奖品。","确认吗？","1000",str(1000-amount*10)])
+    reader,image,_=confirmation_reader()
+    balance=str(1000-amount*10)
+    values=iter([cost,f"领取礼物{amount}个奖品。","确认吗？","1000",balance,balance])
     reader.ocr=lambda *args,**kwargs:SimpleNamespace(text=next(values),confidence=.99)
-    assert reader.draw_confirmation(None) == (amount,amount*10,1000,1000-amount*10)
+    assert reader.draw_confirmation(image) == (amount,amount*10,1000,1000-amount*10)
 
 
 @pytest.mark.parametrize("cost", ("消费第2种礼物币100枚","消费礼物币1000枚","消费礼物币100","消费礼物币10.0枚","消费礼物币-100枚"))
@@ -947,3 +947,158 @@ def test_real_delivery_failure_is_new_box_main_and_not_contents():
     assert reader.main(image) == (29,180,180,1,19522)
     assert not reader.page(image,"contents")
     with pytest.raises(ValueError):reader.contents(image)
+
+
+CONFIRM_FAILURE=Path(__file__).resolve().parents[1]/"debug/exchange-shop/1792889140576223500/failure.png"
+
+
+@pytest.mark.skipif(not CONFIRM_FAILURE.exists(),reason="本地真实确认失败图不入库")
+def test_real_confirmation_four_digit_balance_reads_then_reconciles():
+    from agent.realtime.song_title_ocr import recognize_song_title
+    from agent.realtime.vision_io import imread_unicode
+    image=imread_unicode(CONFIRM_FAILURE)
+    original=recognize_song_title(image,roi=(733,425,106,33))
+    assert original is not None and original.confidence < .90
+    reader=ExchangeReader()
+    assert reader.draw_confirmation(image) == (10,100,10022,9922)
+    assert reader.readings["confirm_after"]["confidence"] >= .90
+    assert reader.readings["confirm_after"]["roi"] == (759,429,57,24)
+    validate_draw(state(box=37,remaining=100,cans=6,special=0,currency=10022),
+                  state(box=37,remaining=90,cans=6,special=0,currency=9922),10)
+
+
+def confirmation_reader(after="9922", *, original_after="9922", original_confidence=.87, tight_confidence=.999):
+    image=np.full((720,1280,3),255,np.uint8)
+    # 合成墨迹仅验证裁剪与消费门禁，真实 OCR 精度由本地截图回归覆盖。
+    width=len(after)*8-4
+    left=733+(106-width)//2
+    for index in range(len(after)):
+        image[432:450,left+index*8:left+index*8+4]=(255,170,80)
+    calls=[]
+    fixed={
+        (460,251,360,31):"消费礼物币100枚",
+        (528,281,221,31):"领取礼物10个奖品。",
+        (586,311,115,30):"确认吗？",
+        (454,425,105,33):"10022",
+    }
+    def ocr(image, *, roi):
+        calls.append(roi)
+        if roi == (733,425,106,33):
+            return SimpleNamespace(text=original_after,confidence=original_confidence)
+        return SimpleNamespace(text=fixed.get(roi,after),confidence=.999 if roi in fixed else tight_confidence)
+    reader=ExchangeReader(ocr=ocr)
+    reader.page=lambda *args:True
+    return reader,image,calls
+
+
+@pytest.mark.parametrize("after", ("0","22","122","9922","10022","999999999"))
+def test_confirmation_ink_crop_handles_full_integer_widths(after):
+    reader,image,calls=confirmation_reader(after,original_after=after)
+    assert reader.draw_confirmation(image) == (10,100,10022,int(after))
+    x,y,w,h=calls[-1]
+    assert (x,y,w,h) != (733,425,106,33)
+    assert np.all(image[y:y+h,x:x+w][[0,-1]] == 255)
+    assert reader.readings["confirm_after_original"]["confidence"] == .87
+    assert reader.readings["confirm_after"]["method"] == "complete_ink_crop"
+
+
+@pytest.mark.parametrize("original,tight", (("9922","9923"),("0","9922"),("10022","9922")))
+def test_confirmation_high_confidence_disagreement_is_rejected(original,tight):
+    reader,image,_=confirmation_reader(tight,original_after=original,original_confidence=.999)
+    with pytest.raises(ValueError,match="高置信读数冲突"):reader.draw_confirmation(image)
+
+
+@pytest.mark.parametrize("invalid", ("-9922","99.22","9O22","9922枚","1000000000",""))
+@pytest.mark.parametrize("original_confidence", (.87,.999))
+def test_confirmation_requires_complete_integer_from_every_high_confidence_read(invalid,original_confidence):
+    reader,image,_=confirmation_reader("9922",original_after=invalid,original_confidence=original_confidence)
+    if original_confidence < .90:
+        original_ocr=reader.ocr
+        reader.ocr=lambda image,*,roi: (SimpleNamespace(text=invalid,confidence=.999)
+            if roi not in ((460,251,360,31),(528,281,221,31),(586,311,115,30),
+                           (454,425,105,33),(733,425,106,33)) else original_ocr(image,roi=roi))
+    with pytest.raises(ValueError,match="余额.*无效"):reader.draw_confirmation(image)
+
+
+@pytest.mark.parametrize("confidence", (.0,.45,.899999))
+def test_confirmation_does_not_lower_tight_ocr_threshold(confidence):
+    reader,image,_=confirmation_reader(tight_confidence=confidence)
+    with pytest.raises(ValueError,match="低置信"):reader.draw_confirmation(image)
+
+
+def test_confirmation_keeps_exact_point_nine_threshold():
+    reader,image,_=confirmation_reader(tight_confidence=.90)
+    assert reader.draw_confirmation(image) == (10,100,10022,9922)
+
+
+def test_confirmation_ocr_exception_does_not_use_stale_reading_or_try_crop():
+    reader,image,calls=confirmation_reader()
+    reader.draw_confirmation(image)
+    original_ocr=reader.ocr
+    def fail_original(image,*,roi):
+        if roi == (733,425,106,33):raise ValueError("识别器异常")
+        return original_ocr(image,roi=roi)
+    reader.ocr=fail_original
+    calls.clear()
+    with pytest.raises(ValueError,match="识别器异常"):reader.draw_confirmation(image)
+    assert len(calls) == 4 and "confirm_after" not in reader.readings
+    assert "confirm_after_original" not in reader.readings
+
+
+@pytest.mark.parametrize("damage", ("blank","left","right","top","bottom","overlay"))
+def test_confirmation_empty_or_border_ink_cannot_authorize_consumption(damage):
+    reader,image,calls=confirmation_reader(original_confidence=.999)
+    if damage == "blank":image[425:458,733:839]=255
+    elif damage == "left":image[434:448,733:735]=0
+    elif damage == "right":image[434:448,837:839]=0
+    elif damage == "top":image[425:427,765:775]=0
+    elif damage == "bottom":image[456:458,765:775]=0
+    else:image[425:458,733:839]=80
+    with pytest.raises(ValueError,match="墨迹"):reader.draw_confirmation(image)
+    assert calls[-1] == (733,425,106,33)
+
+
+def test_confirmation_ink_crop_keeps_nonblue_marks_instead_of_selecting_digits():
+    reader,image,calls=confirmation_reader()
+    image[434:446,738:741]=0
+    reader.draw_confirmation(image)
+    x,_,w,_=calls[-1]
+    assert x < 738 and x+w > 741
+
+
+def test_stop_after_original_balance_ocr_prevents_tight_ocr():
+    reader,image,calls=confirmation_reader()
+    stopped=False
+    original_ocr=reader.ocr
+    def ocr(image,*,roi):
+        nonlocal stopped
+        value=original_ocr(image,roi=roi)
+        if roi == (733,425,106,33):stopped=True
+        return value
+    def stop():
+        if stopped:raise ExchangeStopped()
+    reader.ocr=ocr;reader.stopped=stop
+    with pytest.raises(ExchangeStopped):reader.draw_confirmation(image)
+    assert calls[-1] == (733,425,106,33)
+
+
+def test_tight_confirmation_requires_two_equal_frames_and_exact_balance_before_click():
+    reader,image,_=confirmation_reader()
+    context=SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    captures=[];clicks=[]
+    ui=ExchangeUI(context,reader=reader,capture=lambda context:captures.append(True) or image,
+                  sleep=lambda seconds:None)
+    assert ui.stable("draw_confirm",reader.draw_confirmation) == (10,100,10022,9922)
+    assert len(captures) == 2
+    ui.current_state=state(box=37,remaining=100,cans=6,special=0,currency=10022)
+    real_stable=ui.stable
+    ui.stable=lambda page,read=None,**kwargs: ((37,100,180,0,10022) if read == reader.main
+        else (10,100) if read == reader.draw_offer else real_stable(page,read,**kwargs))
+    ui.click=lambda *point:clicks.append(point)
+    ui.finish_draw_result=lambda *args:None
+    ui.draw_once(10)
+    assert clicks == [(1025,618),(770,525)]
+    reader,image,_=confirmation_reader("9923",original_after="9923")
+    ui.reader=reader
+    with pytest.raises(RuntimeError,match="余额冲突"):ui.draw_once(10)
+    assert clicks == [(1025,618),(770,525),(1025,618)]
