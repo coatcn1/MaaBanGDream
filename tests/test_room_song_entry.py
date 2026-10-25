@@ -15,6 +15,79 @@ MODES = [(cooperative, cooperative.CooperativeLiveFlow, "COOPERATIVE"),
          (versus, versus.VersusLiveFlow, "VERSUS")]
 
 
+@pytest.mark.parametrize("page", ["loading", "unknown", "failed-on-home"])
+def test_post_jump_home_is_passive_and_bounded(monkeypatch, page):
+    clock, inputs, captures = [0.0], [], []
+    flow = SimpleNamespace(stopped=lambda: False)
+    flow.capture = lambda: captures.append(clock[0]) or page
+    flow.visible = lambda image, name, *args: (
+        page == "loading" and name == "now_loading"
+    ) or (page == "failed-on-home" and name == "connect_failed_body")
+    flow.pipeline_box = lambda image, node: [1, 1, 1, 1] if page == "failed-on-home" else None
+    flow.click = lambda *args: inputs.append(args)
+    flow.context = SimpleNamespace(run_task=lambda *args: pytest.fail("禁止恢复或重启任务"))
+    monkeypatch.setattr(entry.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(entry.time, "sleep", lambda value: clock.__setitem__(0, clock[0] + value))
+    assert entry.wait_for_post_jump_home(flow, "HomeMarker") is False
+    assert inputs == [] and captures
+    assert 15.0 <= clock[0] <= 15.000001
+    assert all(value < 15.0 for value in captures)
+
+
+def test_post_jump_home_requires_two_clean_consecutive_frames(monkeypatch):
+    pages = iter(["home", "failed-on-home", "home", "loading-on-home", "home", "unknown", "home", "home"])
+    clock, captures = [0.0], []
+    flow = SimpleNamespace(stopped=lambda: False)
+    flow.capture = lambda: captures.append(next(pages)) or captures[-1]
+    flow.visible = lambda image, name, *args: (
+        image == "failed-on-home" and name == "connect_failed_body"
+    ) or (image == "loading-on-home" and name == "now_loading")
+    flow.pipeline_box = lambda image, node: [1, 1, 1, 1] if image != "unknown" else None
+    monkeypatch.setattr(entry.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(entry.time, "sleep", lambda value: clock.__setitem__(0, clock[0] + value))
+    assert entry.wait_for_post_jump_home(flow, "HomeMarker") is True
+    assert len(captures) == 8
+
+
+@pytest.mark.parametrize("stop_at", ["before", "capture", "loading", "failed", "home"])
+def test_post_jump_home_stop_blocks_next_observation(monkeypatch, stop_at):
+    calls, state = [], {"stopping": stop_at == "before"}
+    flow = SimpleNamespace(stopped=lambda: state["stopping"])
+    def observe(kind, result):
+        assert not state["stopping"], "停止后不能继续观察"
+        calls.append(kind)
+        if stop_at == kind:
+            state["stopping"] = True
+        return result
+    flow.capture = lambda: observe("capture", "home")
+    flow.visible = lambda image, name, *args: observe("loading" if name == "now_loading" else "failed", False)
+    flow.pipeline_box = lambda image, node: observe("home", [1, 1, 1, 1])
+    monkeypatch.setattr(entry.time, "sleep", lambda value: pytest.fail("停止后不能等待"))
+    with pytest.raises(InterruptedError):
+        entry.wait_for_post_jump_home(flow, "HomeMarker")
+    assert calls == {"before": [], "capture": ["capture"], "loading": ["capture", "loading"],
+        "failed": ["capture", "loading", "failed"], "home": ["capture", "loading", "failed", "home"]}[stop_at]
+
+
+@pytest.mark.parametrize("expires_at", ["capture", "loading", "failed", "home"])
+def test_post_jump_home_deadline_prevents_further_observation(monkeypatch, expires_at):
+    clock, calls = [0.0], []
+    flow = SimpleNamespace(stopped=lambda: False)
+    def observe(kind, result):
+        assert clock[0] < 15.0
+        calls.append(kind)
+        if kind == expires_at:
+            clock[0] = 15.0
+        return result
+    flow.capture = lambda: observe("capture", "home")
+    flow.visible = lambda image, name, *args: observe("loading" if name == "now_loading" else "failed", False)
+    flow.pipeline_box = lambda image, node: observe("home", [1, 1, 1, 1])
+    monkeypatch.setattr(entry.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(entry.time, "sleep", lambda value: pytest.fail("到期后不能继续等待"))
+    assert entry.wait_for_post_jump_home(flow, "HomeMarker") is False
+    assert calls[-1] == expires_at
+
+
 @pytest.mark.parametrize("module,cls,prefix", MODES)
 def test_option_transition_to_ready_prepares_before_ready_input(monkeypatch, module, cls, prefix):
     flow = object.__new__(cls)

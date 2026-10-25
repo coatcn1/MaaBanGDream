@@ -65,7 +65,9 @@ def jump_flow(monkeypatch, module, *, restores=(True, True), dismiss=True, home=
         return SimpleNamespace(wait=lambda: None)
     flow.context.tasker.controller = SimpleNamespace(post_click_key=key,
         post_start_app=lambda _: calls.append("start") or SimpleNamespace(wait=lambda: None))
-    monkeypatch.setattr(module.time, "sleep", lambda _: None)
+    clock = [0.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(module.time, "sleep", lambda value: clock.__setitem__(0, clock[0] + value))
     return flow, calls
 
 
@@ -94,6 +96,34 @@ def test_final_restore_unknown_never_completes(monkeypatch, module):
 def test_unknown_page_never_completes(monkeypatch, module):
     flow, _ = jump_flow(monkeypatch, module, home=False)
     assert flow.disconnect_jump_out() is False
+
+
+@pytest.mark.parametrize("transition", [
+    ["loading", "home", "home"],
+    ["home", "popup", "home", "home"],
+])
+def test_post_jump_reconnect_waits_through_black_and_comic_loading(monkeypatch, module, transition):
+    """真实重连只保证弹窗消失；后续漫画加载结束才确认跳车完成。"""
+    flow, system_calls = jump_flow(monkeypatch, module)
+    clock, captures, clicks = [0.0], [], []
+    frames = iter(["popup", "black", *transition])
+    flow.dismiss_connect_failed = type(flow).dismiss_connect_failed.__get__(flow)
+    def capture():
+        image = next(frames)
+        captures.append(image)
+        return image
+    flow.capture = capture
+    flow.visible = lambda image, name, *args: (
+        image == "popup" and name == "connect_failed_body"
+    ) or (image == "loading" and name == "now_loading")
+    flow.pipeline_box = lambda image, node: [1, 1, 1, 1] if image == "home" else None
+    flow.click = clicks.append
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(module.time, "sleep", lambda value: clock.__setitem__(0, clock[0] + value))
+    assert flow.disconnect_jump_out() is True
+    assert captures == ["popup", "black", *transition]
+    assert clicks == [(748, 527)]
+    assert system_calls == ["home", "start"]
 
 
 @pytest.mark.parametrize("manual_enabled", [False, True])

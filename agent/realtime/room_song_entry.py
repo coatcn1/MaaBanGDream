@@ -81,6 +81,42 @@ def wait_for_connection_retry(flow, *, timeout: float = CONNECT_FAILED_TIMEOUT_S
     return not flow.visible(image, "connect_failed_body", 0.90)
 
 
+def wait_for_post_jump_home(flow, home_node, timeout: float = 15.0) -> bool:
+    """自动跳车重连后只观察主页，加载过渡及未知页不授权任何输入。"""
+    deadline = time.monotonic() + float(timeout)
+    stable_home = 0
+    while time.monotonic() < deadline:
+        check_stopping(flow)
+        image = flow.capture()
+        check_stopping(flow)
+        if time.monotonic() >= deadline:
+            return False
+        loading = flow.visible(image, "now_loading", 0.90)
+        check_stopping(flow)
+        if time.monotonic() >= deadline:
+            return False
+        connection_failed = flow.visible(image, "connect_failed_body", 0.90)
+        check_stopping(flow)
+        if time.monotonic() >= deadline:
+            return False
+        if not loading and not connection_failed:
+            home = flow.pipeline_box(image, home_node) is not None
+            check_stopping(flow)
+            if time.monotonic() >= deadline:
+                return False
+            stable_home = stable_home + 1 if home else 0
+            # 弹窗消失可能先到黑场或漫画页；只接受两个新截图上的干净主页。
+            if stable_home >= 2:
+                return True
+        else:
+            stable_home = 0
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(0.25, remaining))
+    check_stopping(flow)
+    return False
+
+
 def rematch_backoff(flow, failures):
     # 累计次数只影响重匹配节奏；安全页面已经恢复时不能据此结束任务。
     deadline = time.monotonic() + min(2.0, max(0, failures - 3) * 0.25)

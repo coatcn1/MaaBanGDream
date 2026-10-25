@@ -55,7 +55,7 @@ from .startup_diagnostics import CooperativeStartupRecorder, cover_diagnostic
 from .room_song_entry import (RoomEntryEvidence, RoomEntryTransient, guarded_song_choice_click,
                               select_song_and_wait, rematch_backoff, wait_for_preplay_recovery_page,
                               check_preplay_connection_failed,
-                              wait_for_connection_retry, CONNECT_FAILED_TIMEOUT_S,
+                              wait_for_connection_retry, wait_for_post_jump_home, CONNECT_FAILED_TIMEOUT_S,
                               CONNECT_FAILED_RETRY_POINT)
 from .profile_play_action import RealtimeProfilePlay
 from .profile_store import (
@@ -98,7 +98,8 @@ TEMPLATE_POSITIONS = {
     "sss_guide_close": (856, 610),
     # 跳车：真实弹窗正文（2026-09-07 雷电录像提取）。
     "disconnect_continue_body": (488, 313),
-    "disconnect_confirm_body": (495, 307),
+    # 当前真实确认正文与竞演同字号，模板与坐标须配套使用。
+    "disconnect_confirm_body": (478, 300),
     # 「连接失败」弹窗右下角的 NOW LOADING 框；存在时游戏仍在重连。
     "now_loading": (865, 620),
     # 「匹配中／正在寻找房间」弹窗正文；网络卡住时它会一直盖在房间选择页上。
@@ -808,13 +809,7 @@ class CooperativeLiveFlow:
         if not self.dismiss_connect_failed():
             print("AutoDisconnectJump reconnect_unconfirmed=true", flush=True)
             return False
-        if self.stopped():
-            raise InterruptedError("用户已停止任务")
-        image = self.capture()
-        if self.stopped():
-            raise InterruptedError("用户已停止任务")
-        if (self.visible(image, "now_loading", 0.90)
-            or self.pipeline_box(image, "CooperativeHomeMarker") is None):
+        if not wait_for_post_jump_home(self, "CooperativeHomeMarker"):
             print("AutoDisconnectJump home_unconfirmed=true", flush=True)
             return False
         return True

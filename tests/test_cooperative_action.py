@@ -410,16 +410,21 @@ def _fake_jump_flow(
     )
     monkeypatch.setattr(cooperative_action, "record_pending_network_recovery", lambda *a: None)
     flow._game_uid = 10001
-    flow.pipeline_box = lambda *a: [1, 1, 1, 1]
+    phase = {"dismissed": False}
+    flow.pipeline_box = lambda *a: [1, 1, 1, 1] if phase["dismissed"] else None
     flow.templates = dict(templates)
     clicks: list[tuple[int, int]] = []
     dismiss_calls: list[bool] = []
     flow.capture = lambda: np.zeros((720, 1280, 3), dtype=np.uint8)
     flow.visible = (
-        lambda image, name, threshold=0.9: visible_results.get(name, False)
+        lambda image, name, threshold=0.9: not phase["dismissed"] and visible_results.get(name, False)
     )
     flow.click = clicks.append
-    flow.dismiss_connect_failed = lambda: dismiss_calls.append(True) or True
+    def dismiss():
+        dismiss_calls.append(True)
+        phase["dismissed"] = True
+        return True
+    flow.dismiss_connect_failed = dismiss
 
     pending_blocks = list(block_results) if block_results is not None else None
 

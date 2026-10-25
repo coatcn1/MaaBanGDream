@@ -53,7 +53,7 @@ from .startup_diagnostics import CooperativeStartupRecorder, cover_diagnostic
 from .room_song_entry import (RoomEntryEvidence, RoomEntryTransient, guarded_song_choice_click,
                               select_song_and_wait, rematch_backoff, wait_for_preplay_recovery_page,
                               check_preplay_connection_failed,
-                              wait_for_connection_retry, CONNECT_FAILED_TIMEOUT_S,
+                              wait_for_connection_retry, wait_for_post_jump_home, CONNECT_FAILED_TIMEOUT_S,
                               CONNECT_FAILED_RETRY_POINT)
 from .profile_play_action import RealtimeProfilePlay
 from .profile_store import (
@@ -812,13 +812,7 @@ class VersusLiveFlow:
         if not self.dismiss_connect_failed():
             print("AutoDisconnectJump reconnect_unconfirmed=true", flush=True)
             return False
-        if self.stopped():
-            raise InterruptedError("用户已停止任务")
-        image = self.capture()
-        if self.stopped():
-            raise InterruptedError("用户已停止任务")
-        if (self.visible(image, "now_loading", 0.90)
-            or self.pipeline_box(image, "VersusHomeMarker") is None):
+        if not wait_for_post_jump_home(self, "VersusHomeMarker"):
             print("AutoDisconnectJump home_unconfirmed=true", flush=True)
             return False
         return True
