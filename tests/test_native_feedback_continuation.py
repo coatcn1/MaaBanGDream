@@ -19,8 +19,8 @@ def publish_outcome(sampler, backend, state, *, due=None, chunk=2, reason=None, 
 def separated_pair(sampler, direction, start, *, chunk=2):
     for now in (start - .10, start - .05):
         frame(sampler, None, now, chunk=chunk)
-    for now, kind in ((start, direction), (start + .05, direction),
-                      (start + .10, None), (start + .15, None),
+    for now, kind in ((start, direction), (start + .05, None),
+                      (start + .10, direction), (start + .15, None),
                       (start + .20, direction), (start + .25, direction)):
         frame(sampler, kind, now, chunk=chunk)
 
@@ -37,8 +37,8 @@ def test_expired_request_requires_two_new_events_and_does_not_extend_old_ttl():
     assert sampler.summary["requests"] == 2
 
 
-@pytest.mark.parametrize("problem", ["missing-effect", "old-chunk", "old-token", "old-planned", "prefetch", "no-post-blank"])
-def test_post_effect_requires_causal_affected_down_and_two_blank_frames(problem):
+@pytest.mark.parametrize("problem", ["missing-effect", "old-chunk", "old-token", "old-planned", "prefetch"])
+def test_post_effect_requires_causal_affected_down(problem):
     sampler, backend, _ = sampler_fixture()
     two_events(sampler)
     publish_outcome(sampler, backend, "applied", due=None if problem == "missing-effect" else .3)
@@ -51,9 +51,8 @@ def test_post_effect_requires_causal_affected_down_and_two_blank_frames(problem)
         frame(sampler, kind, now, chunk=chunk,
               request=now - (.06 if problem == "prefetch" else .01),
               actual=now - .02 if problem == "prefetch" else None)
-    if problem != "no-post-blank":
-        emit(None, .4)
-        emit(None, .45)
+    emit(None, .4)
+    emit(None, .45)
     for now, kind in ((.5, TimingFeedback.FAST), (.55, TimingFeedback.FAST),
                       (.6, None), (.65, None), (.7, TimingFeedback.FAST), (.75, TimingFeedback.FAST)):
         emit(kind, now)
@@ -94,7 +93,7 @@ def test_same_run_foreign_sequence_cannot_clear_our_pending():
     two_events(sampler)
     status = backend.phase_status_snapshot()
     backend._publish_phase_status(replace(status, request_sequence=99,
-        state="expired", original_observed_s=.25), "foreign")
+        state="expired", original_observed_s=status.original_observed_s), "foreign")
     assert not sampler.refresh_phase_status(.4)
     assert sampler._pending_sequence == 1
     separated_pair(sampler, TimingFeedback.FAST, .6)
@@ -143,9 +142,9 @@ def test_request_cooldown_never_retries_from_timer_or_old_blank_frames():
     sampler, backend, _ = sampler_fixture()
     two_events(sampler)
     publish_outcome(sampler, backend, "expired", reason="expired", cumulative=0)
-    for now, kind in ((.28, None), (.31, None), (.34, TimingFeedback.FAST),
+    for now, kind in ((.28, None), (.31, None), (.36, TimingFeedback.FAST),
                       (.39, TimingFeedback.FAST), (.42, None), (.45, None),
-                      (.48, TimingFeedback.FAST), (.53, TimingFeedback.FAST),
+                      (.50, TimingFeedback.FAST), (.53, TimingFeedback.FAST),
                       (.56, None), (.61, None)):
         frame(sampler, kind, now)
     assert sampler.summary["requests"] == 1

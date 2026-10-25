@@ -7,6 +7,7 @@ import pytest
 from agent.realtime.native_life_feedback import NativeLifeFeedback
 from agent.realtime.native_play import NativeFeedbackInput, NativePhaseStatus
 from agent.realtime.timing_feedback import TimingFeedback
+from agent.realtime.native_feedback_ticket import FeedbackObservationState, FeedbackObservationTicket
 from test_native_life_feedback import _phase_backend, _feedback_image
 
 
@@ -15,6 +16,10 @@ def sampler_fixture():
     backend._feedback_input_snapshot = (-.03, -10)
     backend._feedback_input_history = ()
     sampler = NativeLifeFeedback(backend)
+    backend._test_ticket_state = FeedbackObservationState()
+    backend.feedback_observation_snapshot = lambda: backend._test_ticket_state
+    backend._test_direction = None
+    backend._test_tokens = set()
     sampler.observe_scene(0, visible=True)
     return sampler, backend, applied
 
@@ -24,10 +29,19 @@ def frame(sampler, direction, now, *, eligible=True, request=None, token=None, c
     request = now - .01 if request is None else request
     token = sampler.last_sequence + 2 if token is None else token
     source = SimpleNamespace(run_id="test", planned_s=request - .02,
-                             actual_s=request - .02 if actual is None else actual, action_token=token,
+                             actual_s=now - .04 if actual is None else actual, action_token=token,
                              chunk_sequence=chunk, clock_uncertainty_ms=.5)
     backend._feedback_input_history = (*backend._feedback_input_history, source)[-64:]
     backend._feedback_input_snapshot = (source.actual_s, -10 if eligible else now)
+    if direction is not None and direction != backend._test_direction:
+        state = backend._test_ticket_state
+        sequence = state.judgement_sequence + 1
+        ticket = (FeedbackObservationTicket("test", token, chunk, source.planned_s, source.actual_s, .5, sequence)
+                  if eligible and token not in backend._test_tokens else None)
+        backend._test_ticket_state = FeedbackObservationState(ticket, sequence, source.actual_s, .5)
+        backend._test_tokens.add(token)
+    backend._test_direction = direction
+    sampler.capture_due(now)
     assert sampler.fresh({"sequence": sampler.last_sequence + 1,
                           "request_s": request, "reused": False}, now)
     sampler.observe_scene(now, visible=True)
@@ -39,22 +53,25 @@ def frame(sampler, direction, now, *, eligible=True, request=None, token=None, c
 
 
 def two_events(sampler, direction=TimingFeedback.FAST, start=0):
+    # 沿用旧帮助函数名称以限制差异，实际已改为三个独立目标按键。
+    frame(sampler, None, start - .05)
     frame(sampler, direction, start)
-    frame(sampler, direction, start + .05)
-    frame(sampler, None, start + .10)
+    frame(sampler, None, start + .05)
+    frame(sampler, direction, start + .10)
     frame(sampler, None, start + .15)
     frame(sampler, direction, start + .20)
     frame(sampler, direction, start + .25)
 
 
 @pytest.mark.parametrize("direction,delta", [(TimingFeedback.FAST, 15), (TimingFeedback.SLOW, -15)])
-def test_two_separated_same_direction_events_request_production_step(direction, delta):
+def test_three_single_tap_tickets_request_production_step(direction, delta):
     sampler, backend, _ = sampler_fixture()
     two_events(sampler, direction)
     assert backend._phase_slot is not None
     assert backend._phase_slot[3] == delta
-    assert sampler.summary["distinct_events"] == 2
-    assert sampler.summary["eligible_events"] == 2
+    assert sampler.summary["single_tap_observations"] == 3
+    assert sampler.summary["distinct_events"] == 0
+    assert sampler.summary["eligible_events"] == 3
 
 
 def test_one_sustained_glyph_with_new_down_tokens_never_requests():
@@ -62,7 +79,7 @@ def test_one_sustained_glyph_with_new_down_tokens_never_requests():
     for index in range(60):
         frame(sampler, TimingFeedback.FAST, index * .05)
     assert backend._phase_slot is None
-    assert sampler.summary["distinct_events"] == 1
+    assert sampler.summary["distinct_events"] == 0
 
 
 @pytest.mark.parametrize("reason", ["reverse", "mixed", "scene", "reused", "terminal", "stop"])
@@ -126,12 +143,13 @@ def test_duplicate_input_token_cannot_qualify_two_events():
     assert backend._phase_slot is None
 
 
-def test_one_blank_flicker_does_not_rearm_sustained_glyph():
+def test_two_tickets_after_one_blank_cannot_reach_three_votes():
     sampler, backend, _ = sampler_fixture()
     for now, kind in ((0, TimingFeedback.FAST), (.05, TimingFeedback.FAST),
                       (.1, None), (.15, TimingFeedback.FAST), (.2, TimingFeedback.FAST)):
         frame(sampler, kind, now)
-    assert sampler.summary["distinct_events"] == 1
+    assert sampler.summary["single_tap_observations"] == 2
+    assert sampler.summary["distinct_events"] == 0
     assert backend._phase_slot is None
 
 
@@ -231,16 +249,16 @@ def test_receipt_window_keeps_precise_1500ms_500ms_1ms_and_40ms_guards(problem, 
         assert diagnostic["signed_execution_residual_median_ms"] == -40
 
 
-@pytest.mark.parametrize("gap,accepted", [(1.0, True), (1.000001, False)])
-def test_same_direction_event_gap_has_one_second_boundary(gap, accepted):
+@pytest.mark.parametrize("gap", [1.0, 1.2, 4.1])
+def test_vote_count_is_by_target_keys_without_time_window(gap):
     sampler, backend, _ = sampler_fixture()
-    frame(sampler, TimingFeedback.FAST, 0)
-    frame(sampler, TimingFeedback.FAST, .05)
-    for now in (.1, .15, .35, .55, .75, .95):
-        frame(sampler, None, now)
-    frame(sampler, TimingFeedback.FAST, gap)
-    frame(sampler, TimingFeedback.FAST, gap + .05)
-    assert (backend._phase_slot is not None) is accepted
+    for index in range(3):
+        at = index * gap
+        for tick in range(int(gap / .2)):
+            frame(sampler, None, at - gap + tick * .2)
+        frame(sampler, None, at - .05)
+        frame(sampler, TimingFeedback.FAST, at)
+    assert backend._phase_slot is not None
 
 
 def test_real_owner_publishes_only_executed_down_history_and_unique_commit_residuals(monkeypatch):

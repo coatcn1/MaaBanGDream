@@ -21,6 +21,7 @@ from .native_minitouch import NativeMinitouchDevice
 from .playfield_monitor import LANE_CENTERS, PlayfieldDetector
 from .prepare_popup import CooperativePreparePopupDetector
 from .native_start_evidence import shared_start_evidence_writer
+from .native_feedback_ticket import FeedbackTicketStream, SingleTapEligibility
 from .runtime_flags import (
     native_timing_compensation_enabled,
     native_wait_jitter_trial_enabled,
@@ -1028,6 +1029,15 @@ class NativeMinitouchBackend:
             },
         )
         self.life_feedback_enabled = bool(life_feedback_enabled)
+        self._feedback_tickets = None
+        self._feedback_single_taps = None
+        self._feedback_ticket_disabled_reason = None
+        if self.life_feedback_enabled:
+            try:
+                self._feedback_tickets = FeedbackTicketStream(self._run_id)
+                self._feedback_single_taps = SingleTapEligibility(self._actions)
+            except Exception as exc:
+                self._feedback_ticket_disabled_reason = f"init:{type(exc).__name__}: {exc}"
         if self.life_feedback_enabled and not all(callable(method) for method in (
             getattr(self._session, "apply_future_phase", None),
             getattr(self._compiler, "phase_boundary_safe", None),
@@ -1038,6 +1048,8 @@ class NativeMinitouchBackend:
         self._phase_lock = threading.Lock()
         self._phase_closed = False
         self._visual_phase_guard = False
+        self._visual_phase_guard_requested = False
+        self._visual_phase_guard_epoch = 0
         self._phase_owner_totals = {"feedback": 0.0, "game-clock": 0.0}
         self._phase_slot: tuple[str, int, float, float, float] | None = None
         self._phase_sequence = 0
@@ -1054,6 +1066,7 @@ class NativeMinitouchBackend:
         self._feedback_input_snapshot = (float("-inf"), float("-inf"))
         self._feedback_transient_snapshot = (None, None, None, None)
         self._phase_status = NativePhaseStatus(self._run_id)
+        self._phase_last_applied_status = None
         self._state = "idle"
         self._early_start_trial_requested = (
             str(start_gate_mode).strip().lower() in ("cooperative", "versus")
@@ -1767,6 +1780,13 @@ class NativeMinitouchBackend:
                             planned_s - self._first_action_anchor_s,
                             (actual_s - planned_s) * 1000.0,
                         ))
+                tickets = getattr(self, "_feedback_tickets", None)
+                if tickets is not None and not getattr(self, "_feedback_ticket_disabled_reason", None):
+                    try:
+                        tickets.observe_commit(expected.receipts, actual_s, expected.chunk_sequence,
+                            self._clock_uncertainty_ms if self._clock_basis == "probe-midpoint" else None)
+                    except Exception as exc:
+                        self._disable_feedback_tickets("observe-commit", exc)
             if expected.last_in_chunk:
                 self._complete_observed_chunk(expected)
         if self._playback_observation_started:
@@ -2143,9 +2163,23 @@ class NativeMinitouchBackend:
                     sequence, mapping_end_s=self._diagnostic_clock_s()
                 )
             receipt_by_commit: dict[int, list[dict[str, object]]] = {}
+            eligibility = getattr(self, "_feedback_single_taps", None)
+            eligible_due = set()
+            if eligibility is not None:
+                try:
+                    for item in chunk.get("actions", []):
+                        if eligibility.eligible(item["action"]):
+                            eligible_due.add(round(float(item["engine_due_s"]), 6))
+                except Exception as exc:
+                    self._disable_feedback_tickets("eligibility", exc)
+                    eligible_due.clear()
             receipt_source_lines: set[int] = set()
             new_tokens: set[int] = set()
             for receipt in self._execution_receipts():
+                receipt = dict(receipt)
+                receipt["feedback_single_tap"] = (receipt.get("action_kind") == "tap"
+                    and receipt.get("command") == "d"
+                    and round(float(receipt["planned_engine_s"]), 6) in eligible_due)
                 line_index = int(receipt["line_index"])
                 token = int(receipt["action_token"])
                 if line_index < 0 or line_index >= len(commands):
@@ -2268,6 +2302,13 @@ class NativeMinitouchBackend:
                             if "success" in values else None
                         ),
                     )
+            tickets = getattr(self, "_feedback_tickets", None)
+            if tickets is not None and not getattr(self, "_feedback_ticket_disabled_reason", None):
+                try:
+                    tickets.publish_receipts([receipt for rows in receipt_by_commit.values() for receipt in rows],
+                        published_until_s=float(chunk["window_end_s"]), final_chunk=bool(chunk.get("final_chunk", False)))
+                except Exception as exc:
+                    self._disable_feedback_tickets("publish-receipts", exc)
             self._expected_commands.extend(records)
             phase_event = getattr(self, "_phase_applied_pending", None)
             if phase_event is not None and actions:
@@ -2598,6 +2639,35 @@ class NativeMinitouchBackend:
         transient_at, release_at = self._feedback_input_snapshot
         return 0 <= now - transient_at <= .6 and now - release_at >= .15
 
+    def feedback_observation_snapshot(self):
+        tickets = getattr(self, "_feedback_tickets", None)
+        return tickets.snapshot() if tickets is not None and not getattr(self, "_feedback_ticket_disabled_reason", None) else None
+
+    def _disable_feedback_tickets(self, stage, exc):
+        if getattr(self, "_feedback_ticket_disabled_reason", None):
+            return
+        self._feedback_ticket_disabled_reason = f"{stage}:{type(exc).__name__}: {exc}"
+        self._feedback_single_taps = None
+        # 附加观察异常只撤销自己的未应用请求，不能中断已发布输入或视觉来源。
+        try:
+            self.revoke_future_phase("ticket-observer-error")
+        except Exception:
+            pass
+        safe_print("NativeFeedback disabled=" + self._feedback_ticket_disabled_reason, flush=True)
+
+    def _feedback_ticket_report(self):
+        tickets = getattr(self, "_feedback_tickets", None)
+        if tickets is None:
+            return {}
+        try:
+            return tickets.report()
+        except Exception as exc:
+            reason = f"{type(exc).__name__}: {exc}"
+            if not getattr(self, "_feedback_ticket_report_error", None):
+                safe_print("NativeFeedback report_warning=" + reason, flush=True)
+            self._feedback_ticket_report_error = reason
+            return {"report_error": reason}
+
     def feedback_input_snapshot(self, request_s: float, now: float) -> NativeFeedbackInput | None:
         """仅取截图开始前已执行的最近 DOWN；缺证据时不借用 latest 状态兜底。"""
         uncertainty = self._clock_uncertainty_ms
@@ -2626,6 +2696,10 @@ class NativeMinitouchBackend:
         return replace(status, transient_planned_s=planned, transient_actual_s=actual,
                        transient_action_token=token, transient_chunk_sequence=chunk)
 
+    def phase_effect_snapshot(self):
+        """最近一次实际应用及补齐后的效果边界，不被后续请求终态覆盖。"""
+        return getattr(self, "_phase_last_applied_status", None)
+
     def _publish_phase_status(self, status: NativePhaseStatus, event: str, **details) -> None:
         # 方向回执的 revision 不因独立到达的输入回执变化，避免 waiting 状态刷屏。
         status = replace(status, transient_planned_s=None, transient_actual_s=None,
@@ -2635,6 +2709,8 @@ class NativeMinitouchBackend:
             return
         cursor = (current.event_cursor if current is not None else 0) + 1
         self._phase_status = replace(status, event_cursor=cursor)
+        if status.state == "applied":
+            self._phase_last_applied_status = self._phase_status
         if not hasattr(self, "_phase_events"):
             self._phase_events = deque(maxlen=128)
         self._phase_events.append({"event": event, "sequence": status.request_sequence,
@@ -2650,7 +2726,22 @@ class NativeMinitouchBackend:
 
     def set_visual_phase_guard(self, active: bool) -> None:
         """可信视觉目标独占请求；旧反馈仍可观测，但不能叠加相位。"""
-        self._visual_phase_guard = bool(active)
+        requested = bool(active)
+        if requested != getattr(self, "_visual_phase_guard_requested", getattr(self, "_visual_phase_guard", False)):
+            self._visual_phase_guard_requested = requested
+            self._visual_phase_guard_epoch = getattr(self, "_visual_phase_guard_epoch", 0) + 1
+        # intent 立即拒绝新请求；effective 与真实 apply 在同一把锁内线性化。
+        # 已接受槽位保留原 owner 与 TTL；视觉声明不能撤销另一来源的合法请求。
+        if not self._phase_lock.acquire(False):
+            return
+        try:
+            self._sync_visual_phase_guard_locked()
+        finally:
+            self._phase_lock.release()
+
+    def _sync_visual_phase_guard_locked(self):
+        self._visual_phase_guard = bool(getattr(self, "_visual_phase_guard_requested",
+                                              getattr(self, "_visual_phase_guard", False)))
 
     def phase_owner_cumulative(self, owner: str) -> float:
         """读取 owner 已应用增量；未知窗口内其他来源的修正不会被视觉归还。"""
@@ -2658,18 +2749,29 @@ class NativeMinitouchBackend:
 
     def request_future_phase(self, delta_ms: float, observed_s: float, *, owner: str = "feedback") -> bool:
         """非阻塞单槽请求，不等待 owner，也不触碰 C++ 会话。"""
-        if not self.life_feedback_enabled or not self._phase_lock.acquire(False):
+        self._phase_request_rejection_reason = None
+        if not self.life_feedback_enabled:
+            self._phase_request_rejection_reason = "disabled"
+            return False
+        if not self._phase_lock.acquire(False):
+            self._phase_request_rejection_reason = "owner-lock-busy"
             return False
         try:
             if owner not in {"feedback", "game-clock"}:
+                self._phase_request_rejection_reason = "invalid-owner"
                 return False
-            if owner == "feedback" and getattr(self, "_visual_phase_guard", False):
+            requested_guard = bool(getattr(self, "_visual_phase_guard_requested", getattr(self, "_visual_phase_guard", False)))
+            if owner == "feedback" and requested_guard:
+                self._phase_request_rejection_reason = "visual-owner-active"
                 return False
-            if owner == "game-clock" and not getattr(self, "_visual_phase_guard", False):
+            if owner == "game-clock" and not requested_guard:
+                self._phase_request_rejection_reason = "visual-owner-inactive"
                 return False
             if self._phase_closed or self._state != "running" or self._phase_slot is not None:
+                self._phase_request_rejection_reason = "closed-not-running-or-slot-busy"
                 return False
             if delta_ms not in {-15.0, 15.0} or not math.isfinite(observed_s):
+                self._phase_request_rejection_reason = "invalid-request"
                 return False
             self._phase_sequence += 1
             self._phase_slot = (self._run_id, self._phase_sequence, observed_s,
@@ -2689,6 +2791,7 @@ class NativeMinitouchBackend:
         if not getattr(self, "life_feedback_enabled", False):
             return
         with self._phase_lock:
+            self._sync_visual_phase_guard_locked()
             candidate = self._phase_slot
             if candidate is None:
                 return
@@ -2759,9 +2862,16 @@ class NativeMinitouchBackend:
                                                "waiting-execution-receipts", applied_s=now)
                     return
                 else:
+                    contact_available_s = self._compiler.contact_available_s()
+                    self._sync_visual_phase_guard_locked()
+                    if self._phase_slot is None:
+                        return
                     reason = str(self._session.apply_future_phase(
-                        delta_ms, self._compiler.contact_available_s()))
+                        delta_ms, contact_available_s))
                     if reason == "unsafe-gap":
+                        self._sync_visual_phase_guard_locked()
+                        if self._phase_slot is None:
+                            return
                         self._publish_phase_status(replace(self.phase_status_snapshot(), state="waiting-gap"),
                                                    "waiting-gap", applied_s=now)
                         return
@@ -2783,6 +2893,7 @@ class NativeMinitouchBackend:
             # 原报告继续持有同一事件，由首个受影响切片补齐效果边界。
             if reason == "applied":
                 self._phase_applied_pending = self._phase_events[-1]
+            self._sync_visual_phase_guard_locked()
 
     def revoke_future_phase(self, reason: str, *, owner: str = "feedback") -> None:
         status = self.phase_status_snapshot()
@@ -3103,11 +3214,24 @@ class NativeMinitouchBackend:
             "run_id": self._run_id,
             "life_feedback": {"enabled": getattr(self, "life_feedback_enabled", False),
                               "summary": getattr(self, "_life_feedback_summary", {}),
-                              "model": "distinct-judgement-events-v2",
+                              "model": "continuous-single-tap-observations-v5",
+                              "distinct_visual_events_measured": False,
+                              "continuation": getattr(self, "_life_feedback_sniff", {}).get("continuation", {}),
+                              "tickets": self._feedback_ticket_report(),
+                              "visual_guard": {"requested": getattr(self, "_visual_phase_guard_requested", False),
+                                  "effective": getattr(self, "_visual_phase_guard", False),
+                                  "epoch": getattr(self, "_visual_phase_guard_epoch", 0)},
+                              "ignored_reasons": getattr(self, "_life_feedback_sniff", {}).get("ignored_reasons", {}),
+                              "disabled_reason": (getattr(self, "_life_feedback_disabled_reason", None)
+                                  or getattr(self, "_feedback_ticket_disabled_reason", None)),
                               "stat_units": {"sightings": "fresh-frames-with-colour",
-                                  "debounced_reports": "distinct-visual-events",
-                                  "fast_votes": "eligible-fast-events", "slow_votes": "eligible-slow-events",
-                                  "direction_votes": "eligible-events"},
+                                  "debounced_reports": "post-single-tap-direction-observations",
+                                  "single_tap_observations": "post-independent-executed-single-taps",
+                                  "fast_observations": "post-single-tap-fast-observations",
+                                  "slow_observations": "post-single-tap-slow-observations",
+                                  "fast_votes": "eligible-fast-single-tap-observations",
+                                  "slow_votes": "eligible-slow-single-tap-observations",
+                                  "direction_votes": "eligible-single-tap-observations"},
                               "sampling_events_capacity": 128,
                               "sampling_events_dropped": getattr(self, "_life_feedback_summary", {}).get("events_dropped", 0),
                               "sniff": getattr(self, "_life_feedback_sniff", {}),
@@ -3126,6 +3250,8 @@ class NativeMinitouchBackend:
                               "phase_events": list(getattr(self, "_phase_events", [])),
                               "game_clock": getattr(self, "_game_clock_report", {}),
                               "phase_owner_totals_ms": dict(getattr(self, "_phase_owner_totals", {})),
+                              "last_applied_effect": (asdict(self.phase_effect_snapshot())
+                                  if self.phase_effect_snapshot() is not None else None),
                               "phase_status": asdict(self.phase_status_snapshot())},
             "state": self._state,
             "session_state": self._session_state,

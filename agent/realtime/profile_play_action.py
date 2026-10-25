@@ -90,6 +90,7 @@ from .native_prearm import (
 )
 from .playfield_monitor import PlayfieldDetector, PlayfieldLifecycleMonitor
 from .performance_state import performance_window
+from .native_feedback_audit import save_native_feedback_audit
 
 
 REWARD_CONFIRM_TEMPLATE = PROJECT_ROOT / "resource" / "image" / "result_reward_confirm.png"
@@ -3166,6 +3167,8 @@ class RealtimeProfilePlay(CustomAction):
                     ),
                     startup_timeout_seconds=startup_timeout_seconds,
                 )
+            save_native_feedback_audit(PROJECT_ROOT, stats, live_run, timing_offset_ms,
+                                       stopping=context.tasker.stopping)
             if run_mode == "challenge":
                 if stats.stopped or context.tasker.stopping:
                     return True
@@ -3246,6 +3249,9 @@ class RealtimeProfilePlay(CustomAction):
                 confirm_completed()
         except Exception as exc:
             error_stats = getattr(exc, "realtime_stats", None)
+            if error_stats is not locals().get("stats"):
+                save_native_feedback_audit(PROJECT_ROOT, error_stats, live_run, timing_offset_ms,
+                                           stopping=context.tasker.stopping)
             if run_mode == "challenge":
                 if context.tasker.stopping or (error_stats is not None and error_stats.stopped):
                     return True
