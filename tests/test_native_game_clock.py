@@ -52,6 +52,55 @@ def test_claim_does_not_revoke_foreign_pending_request_or_extend_its_expiry():
     assert backend.phase_owner_cumulative("game-clock") == 0
 
 
+def test_foreign_feedback_effect_waits_for_real_execution_and_three_new_visual_frames():
+    backend, calls = _phase_backend()
+    backend._first_action_anchor_s = 0
+    assert backend.request_future_phase(15, .75)
+    original = backend._phase_slot
+    controller = NativeGameClockController(backend, matcher=Matcher(30))
+    for sequence, now in enumerate((.8, .85, .9)):
+        emit(controller, now, sequence)
+    assert controller.pending_sequence is None and backend._phase_slot == original
+    backend._consume_phase_candidate()
+    assert calls == [(15, .5)]
+    emit(controller, 1.1, 3)
+    assert backend._phase_slot is None
+    assert not controller.samples
+    assert controller.summary["waiting-foreign-effect"] == 1
+    status = backend.phase_status_snapshot()
+    backend._publish_phase_status(replace(status, first_adjusted_due_s=1.2,
+        first_affected_chunk_sequence=2, first_affected_action_token=8), "effect-published")
+    backend._feedback_transient_snapshot = (1., 1., 7, 1)
+    emit(controller, 1.15, 4)
+    assert backend._phase_slot is None and not controller.samples
+    backend._feedback_transient_snapshot = (1.25, 1.251, 8, 2)
+    emit(controller, 1.3, 5)
+    emit(controller, 1.4, 6)
+    assert backend._phase_slot is None and len(controller.samples) == 2
+    emit(controller, 1.5, 7)
+    assert backend._phase_slot[3] == 15
+    assert backend.phase_status_snapshot().owner == "game-clock"
+    assert backend.phase_owner_cumulative("feedback") == 15
+    assert backend.phase_owner_cumulative("game-clock") == 0
+    assert [row for row in controller.events if row["reason"] == "trusted-target"][-1]["target_ms"] == 45
+
+
+def test_foreign_applied_effect_cannot_hide_behind_later_expired_status():
+    backend, calls = _phase_backend()
+    backend._first_action_anchor_s = 0
+    assert backend.request_future_phase(15, .75)
+    controller = NativeGameClockController(backend, matcher=Matcher(30))
+    for sequence, now in enumerate((.8, .85, .9)):
+        emit(controller, now, sequence)
+    backend._consume_phase_candidate()
+    status = backend.phase_status_snapshot()
+    backend._publish_phase_status(replace(status, state="expired", request_sequence=99,
+        terminal_reason="expired"), "later-request-expired")
+    emit(controller, 1.1, 3)
+    assert calls == [(15, .5)] and backend._phase_slot is None
+    assert not controller.samples
+
+
 class Matcher:
     def __init__(self, lag=130):
         self.lag = lag

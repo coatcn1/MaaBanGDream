@@ -23,6 +23,10 @@ class NativeGameClockController:
         self.last_frame_s = None
         self.pending_sequence = None
         self.applied_effect = None
+        effect_reader = getattr(backend, "phase_effect_snapshot", None)
+        initial_effect = effect_reader() if callable(effect_reader) else None
+        self._foreign_effect_epoch = self._effect_epoch(initial_effect) if initial_effect is not None else None
+        self._foreign_effect_pending = None
         self.trusted_at = None
         self.trusted_lag_ms = None
         self._matcher_reset = (0, 0)
@@ -137,6 +141,50 @@ class NativeGameClockController:
         self.samples.clear()
         return True
 
+    @staticmethod
+    def _effect_epoch(effect):
+        return (effect.run_id, effect.request_sequence, effect.cumulative_phase_ms,
+                effect.first_adjusted_due_s, effect.first_affected_chunk_sequence,
+                effect.first_affected_action_token)
+
+    def _foreign_effect_ready(self, now, request_s):
+        reader = getattr(self.backend, "phase_effect_snapshot", None)
+        effect = reader() if callable(reader) else None
+        if effect is not None and effect.run_id == self.run_id and effect.owner != "game-clock":
+            epoch = self._effect_epoch(effect)
+            if epoch != self._foreign_effect_epoch:
+                self._foreign_effect_epoch = epoch
+                self._foreign_effect_pending = effect
+                self.samples.clear()
+                self.trusted_at = self.trusted_lag_ms = None
+                # 外来合法请求保留原槽位与 TTL；只撤下已过期的视觉观测声明。
+                self.backend.set_visual_phase_guard(False)
+                self._event("foreign-effect-changed", now, sequence=effect.request_sequence)
+        pending = self._foreign_effect_pending
+        if pending is None:
+            return True
+        latest = self.backend.phase_status_snapshot()
+        due, chunk = pending.first_adjusted_due_s, pending.first_affected_chunk_sequence
+        uncertainty = getattr(self.backend, "_clock_uncertainty_ms", None)
+        # 复用本方效果的执行门禁，不能用 apply 回执代替受影响输入与新截图。
+        if (due is None or chunk is None or latest.transient_actual_s is None
+            or latest.transient_planned_s is None or latest.transient_chunk_sequence is None
+            or uncertainty is None or not math.isfinite(uncertainty) or not 0 <= uncertainty <= 1
+            or latest.transient_actual_s + uncertainty / 1000 > request_s
+            or latest.transient_actual_s < due
+            or round(latest.transient_planned_s * 1e9) < round(due * 1e9)
+            or latest.transient_chunk_sequence < chunk
+            or (pending.first_affected_action_token is not None
+                and (latest.transient_action_token is None
+                     or latest.transient_action_token < pending.first_affected_action_token))):
+            self.samples.clear()
+            self._event("waiting-foreign-effect", now, sequence=pending.request_sequence)
+            return False
+        self._foreign_effect_pending = None
+        self.samples.clear()
+        self._event("foreign-effect-observed", now, sequence=pending.request_sequence)
+        return True
+
     def _accept(self, result, metadata, observed_s, now):
         reason = result.get("reason", "unknown-match")
         if reason.startswith("observer-error"):
@@ -154,6 +202,8 @@ class NativeGameClockController:
             or any(type(value) not in {int, float} or not math.isfinite(value) for value in bounds)
             or bounds[0] > lag or bounds[1] < lag):
             self.invalidate(now, "invalid-capture-bounds")
+            return
+        if not self._foreign_effect_ready(now, metadata["request_s"]):
             return
         if not self._effect_ready(now, metadata["request_s"]):
             if self.trusted_lag_ms is None or abs(lag - self.trusted_lag_ms) > 20:

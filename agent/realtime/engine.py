@@ -321,14 +321,19 @@ class RealtimeEngine:
             if native_feedback is not None and callable(getattr(self.native_backend, "set_visual_phase_guard", None)) else None)
         def feedback_call(callback, default=None):
             nonlocal native_feedback
-            if native_feedback is None or stopping():
+            if native_feedback is None or native_feedback.disabled_reason or stopping():
                 return default
             try:
                 return callback()
             except Exception as exc:
                 if isinstance(exc, InterruptedError) and stopping():
                     raise
-                native_feedback = None
+                reason = f"{type(exc).__name__}: {exc}"
+                try:
+                    native_feedback.disable(self.clock(), reason)
+                except Exception:
+                    native_feedback.disabled_reason = reason
+                self.native_backend._life_feedback_disabled_reason = reason
                 optional_diagnostics.call("native-feedback-revoke", lambda: self.native_backend.revoke_future_phase("feedback-error"), during_cleanup=True)
                 if not stopping():
                     warning(f"NativeLifeFeedback disabled=true error={type(exc).__name__}: {exc}")
@@ -627,18 +632,30 @@ class RealtimeEngine:
                             for action in due_now
                         ):
                             last_transient_action_at = now
-                if now < next_frame:
-                    if native_feedback is not None and native_started and next_frame - now <= .060:
+                capture_deadline = next_frame
+                ticket_due = None
+                if native_feedback is not None and native_started:
+                    ticket_due = feedback_call(lambda: native_feedback.capture_due(now))
+                    if ticket_due is not None:
+                        prefetch = getattr(capture, "prefetch_fresh", None)
+                        if callable(prefetch) and feedback_call(lambda: native_feedback.capture_request_due(now), False):
+                            feedback_call(lambda: prefetch(now))
+                            feedback_call(lambda: native_feedback.capture_requested(now))
+                            ticket_due = feedback_call(lambda: native_feedback.capture_due(now))
+                        if ticket_due is not None:
+                            capture_deadline = min(next_frame, ticket_due)
+                if now < capture_deadline:
+                    if native_feedback is not None and native_started and ticket_due is None and next_frame - now <= .060:
                         prefetch = getattr(capture, "prefetch_fresh", None)
                         if callable(prefetch):
-                            prefetch(next_frame)
+                            feedback_call(lambda: prefetch(next_frame))
                     # Pace BEFORE capturing. Capturing first and then
                     # discarding the frame whenever the loop is early wastes
                     # a full screenshot; once per-frame work crosses the
                     # 60 Hz budget that waste halves the effective rate.
                     # 等待目标取下一帧与最早到期按压的较小者，确保到期
                     # 按压在计时器粒度内派发。
-                    wait_target = next_frame
+                    wait_target = capture_deadline
                     if scheduled_actions:
                         wait_target = min(
                             wait_target,
@@ -647,12 +664,14 @@ class RealtimeEngine:
                     time.sleep(min(0.002, wait_target - now))
                     continue
                 capture_interval = (
-                    (native_feedback.SAMPLE_INTERVAL_SECONDS if native_feedback is not None and feedback_call(lambda: native_feedback.active(now), False) else .2)
+                    .2
                     if native_exclusive and native_started else interval
                 )
-                next_frame += capture_interval
-                if now - next_frame > capture_interval:
-                    next_frame = now + capture_interval
+                if not (native_exclusive and native_started) or now >= next_frame:
+                    next_frame += capture_interval
+                    if now - next_frame > capture_interval:
+                        next_frame = now + capture_interval
+                feedback_capture_ready = ticket_due is None or now >= ticket_due
                 stage_started = self.clock()
                 image = capture()
                 now = self.clock()
@@ -712,7 +731,7 @@ class RealtimeEngine:
                     if native_feedback is not None:
                         enable_prefetch = getattr(capture, "enable_fresh_prefetch", None)
                         if callable(enable_prefetch):
-                            enable_prefetch()
+                            feedback_call(enable_prefetch)
                     if self.playfield_monitor is not None:
                         self.playfield_monitor.mark_active(now)
                     # 首拍之后截图只服务生命和终态识别，固定降到约 5Hz。
@@ -911,10 +930,10 @@ class RealtimeEngine:
                             # 观察器清理自身异常也不能让视觉租约继续压制旧反馈。
                             optional_diagnostics.call("native-game-clock-release", lambda: self.native_backend.set_visual_phase_guard(False), during_cleanup=True)
                             game_clock = None
-                    if native_feedback is not None:
+                    if native_feedback is not None and feedback_capture_ready:
                         feedback_call(lambda: native_feedback.refresh_phase_status(now))
                         fresh_feedback_frame = feedback_call(lambda: native_feedback.fresh(frame_metadata, now), False)
-                        # 先复核场景、死亡与停止；基础新帧和候选加密帧共用独立事件入口。
+                        # 目标已在截图前绑定；基础图仅建立空白基准，不产生方向票。
                         if native_feedback is not None and (fresh_feedback_frame or not native_feedback_scene_valid):
                             feedback_call(lambda: native_feedback.observe_scene(now, visible=native_feedback_scene_valid))
                         if native_feedback is not None and fresh_feedback_frame and native_feedback.scene_valid:

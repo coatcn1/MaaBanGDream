@@ -242,7 +242,7 @@ def test_old_binary_api_fails_before_input_and_environment_does_not_override_ui(
         NativeMinitouchBackend(chart, adb_path="adb", serial="test", life_feedback_enabled=True)
 
 
-def _virtual_feedback_engine(monkeypatch, *, terminal=None, enabled=True, early_glyph=False, glyph_mode="static", recording=True):
+def _virtual_feedback_engine(monkeypatch, *, terminal=None, enabled=True, early_glyph=False, glyph_mode="static", recording=True, async_capture=False, capture_fault=None, ticket_report_fault=False):
     from agent.realtime import engine as engine_module
     from agent.realtime.life_monitor import LifeGuard, LifeReading
     clock = [.007]
@@ -259,14 +259,16 @@ def _virtual_feedback_engine(monkeypatch, *, terminal=None, enabled=True, early_
                 stopping[0] = True
             direction = TimingFeedback.FAST
             if glyph_mode == "events":
-                direction = TimingFeedback.FAST if .1 <= now < .27 or .5 <= now < .67 else None
+                direction = TimingFeedback.FAST if any(at + .025 <= now < at + .18 for at in (.3, 1.1, 1.9)) else None
             if early_glyph and data["windows"] and now - data["windows"][-1] >= .15:
                 direction = None
             return _feedback_image(direction)
         def enable_fresh_prefetch(self):
-            pass
+            if capture_fault == "enable":
+                raise RuntimeError("enable prefetch unavailable")
         def prefetch_fresh(self, target):
-            pass
+            if capture_fault == "prefetch":
+                raise RuntimeError("prefetch unavailable")
     class Life:
         def detect(self, _image):
             data["life"].append(clock[0])
@@ -300,11 +302,22 @@ def _virtual_feedback_engine(monkeypatch, *, terminal=None, enabled=True, early_
         def stop(self):
             pass
         def report(self):
+            if ticket_report_fault:
+                return {"life_feedback": {"tickets": NativeMinitouchBackend._feedback_ticket_report(self)}}
             return {}
         def feedback_input_snapshot(self, request_s, now):
             from agent.realtime.native_play import NativeFeedbackInput
             return NativeFeedbackInput("test", request_s - .02, request_s - .02,
                                        len(data["captures"]), 1, .5)
+        def feedback_observation_snapshot(self):
+            from agent.realtime.native_feedback_ticket import FeedbackObservationState, FeedbackObservationTicket
+            executed = [(index, at) for index, at in enumerate((.3, 1.1, 1.9), 1) if clock[0] >= at]
+            if not executed:
+                return FeedbackObservationState(next_judgement_lower_s=.26)
+            index, at = executed[-1]
+            ticket = FeedbackObservationTicket("test", index, 1, at, at, .5, index)
+            return FeedbackObservationState(ticket, index, at, .5,
+                (1.1, 1.9)[index - 1] - .04 if index < 3 else None)
         def feedback_input_eligible(self, now):
             return True
         def request_future_phase(self, delta, source):
@@ -326,11 +339,33 @@ def _virtual_feedback_engine(monkeypatch, *, terminal=None, enabled=True, early_
         def observe(self, image, now):
             return terminal == "life-failed" and data["finish_at"] is not None and now >= data["finish_at"]
     backend = Backend()
+    if ticket_report_fault:
+        def fail_report():
+            raise OSError("ticket report unavailable")
+        backend._feedback_tickets = SimpleNamespace(report=fail_report)
     planner = SimpleNamespace(timing_offset_ms=13, update=lambda *_args: pytest.fail("Native 不使用 Legacy planner"))
     engine = engine_module.RealtimeEngine(SimpleNamespace(), planner, SimpleNamespace(close=lambda: None),
         clock=lambda: clock[0], native_backend=backend, life_detector=Life(), life_guard=LifeGuard(confirm_frames=1),
         playfield_monitor=Monitor(), live_failed_detector=Failed(), debug_recorder=Recorder() if recording else None)
-    stats = engine.run(Capture(), lambda: stopping[0], duration_seconds=7.3, target_fps=60)
+    capture = Capture()
+    if async_capture:
+        monkeypatch.setattr("agent.realtime.profile_play_action.time.perf_counter", lambda: clock[0])
+        source_capture = capture
+        class Job:
+            def __init__(self):
+                self.requested = clock[0]
+                self.image = source_capture()
+            @property
+            def done(self):
+                return clock[0] >= self.requested + .012
+            def get(self):
+                assert self.done
+                return self.image
+            def wait(self):
+                clock[0] = max(clock[0], self.requested + .012)
+                return self
+        capture = StallSafeCapture(SimpleNamespace(post_screencap=Job))
+    stats = engine.run(capture, lambda: stopping[0], duration_seconds=7.3, target_fps=60)
     return stats, data, backend
 
 
@@ -342,30 +377,33 @@ def test_engine_terminal_checks_precede_second_independent_event(monkeypatch, te
     assert stats.completed is (terminal == "completed")
     assert stats.life_failed is (terminal == "life-failed")
     assert stats.stopped is (terminal == "stop")
-    assert backend._life_feedback_summary["distinct_events"] == 1
+    assert backend._life_feedback_summary["single_tap_observations"] == 1
+    assert backend._life_feedback_summary.get("distinct_events", 0) == 0
     assert backend._life_feedback_sniff["records"]
 
 
-def test_actual_engine_sustained_glyph_never_becomes_two_events(monkeypatch):
+def test_actual_engine_sustained_glyph_can_request_once_without_claiming_visual_events(monkeypatch):
     stats, data, backend = _virtual_feedback_engine(monkeypatch)
-    assert data["requests"] == []
-    assert backend._life_feedback_summary["distinct_events"] == 1
-    assert stats.timing_feedback_fast == stats.timing_feedback_valid == 1
-    assert stats.timing_feedback_reports == 1
+    assert len(data["requests"]) == 1
+    assert backend._life_feedback_summary.get("distinct_events", 0) == 0
+    assert stats.timing_feedback_fast == stats.timing_feedback_valid == 3
+    assert stats.timing_feedback_reports == 3
+    assert backend._life_feedback_sniff["continuation"]["pending_sequence"] == 1
     assert stats.initial_timing_offset_ms == stats.final_timing_offset_ms == 13
     assert len(data["captures"]) < 60
     assert 32 <= len(data["life"]) <= 41
     assert 32 <= len(data["terminal"]) <= 41
 
 
-def test_actual_engine_two_events_request_and_sniff_survives_without_recorder(monkeypatch):
+def test_actual_engine_three_target_keys_request_and_sniff_survives_without_recorder(monkeypatch):
     stats, data, backend = _virtual_feedback_engine(monkeypatch, glyph_mode="events", recording=False)
     assert len(data["requests"]) == 1
     assert data["requests"][0][0] == 15
-    assert stats.timing_feedback_valid == stats.timing_feedback_fast == 2
-    assert stats.timing_feedback_reports == backend._life_feedback_summary["distinct_events"] == 2
+    assert stats.timing_feedback_valid == stats.timing_feedback_fast == 3
+    assert stats.timing_feedback_reports == backend._life_feedback_summary["single_tap_observations"] == 3
+    assert backend._life_feedback_summary.get("distinct_events", 0) == 0
     sniff = backend._life_feedback_sniff
-    assert sniff["capacity"] == 4096 and sniff["dropped"] == 0
+    assert sniff["capacity"] == 256 and sniff["dropped"] == 0
     assert any(record["decision"] == "requested" for record in sniff["records"])
     assert any(record["input"] is not None for record in sniff["records"])
 
@@ -376,6 +414,36 @@ def test_engine_disabled_feedback_retains_native_five_hz_baseline(monkeypatch):
     assert not hasattr(backend, "_life_feedback_summary")
     assert stats.timing_feedback_fast == stats.timing_feedback_valid == 0
     assert len(data["captures"]) <= 43
+
+
+def test_real_stall_safe_async_capture_preserves_blank_until_ticket_frame_is_ready(monkeypatch):
+    stats, data, backend = _virtual_feedback_engine(monkeypatch, glyph_mode="events", recording=False,
+                                                   async_capture=True)
+    assert len(data["requests"]) == 1
+    assert stats.timing_feedback_valid == 3
+    assert backend._life_feedback_sniff["ignored_reasons"].get("no-blank-baseline", 0) == 0
+    eligible = [row for row in backend._life_feedback_sniff["records"] if row["decision"] in {"eligible-single-tap", "requested"}]
+    assert len(eligible) == 3
+    assert all(row["request_s"] + 1e-9 >= row["input"]["actual_s"] + .0255 for row in eligible)
+
+
+@pytest.mark.parametrize("fault", ["enable", "prefetch"])
+def test_optional_capture_prefetch_failure_disables_feedback_and_preserves_engine(monkeypatch, fault):
+    stats, data, backend = _virtual_feedback_engine(monkeypatch, glyph_mode="events", capture_fault=fault)
+    assert stats.processed_frames >= 30
+    assert not stats.cleanup_failed and not stats.stopped
+    assert not data["requests"]
+    assert "prefetch unavailable" in backend._life_feedback_disabled_reason
+    assert backend._life_feedback_sniff["disabled_reason"] == backend._life_feedback_disabled_reason
+    assert backend._life_feedback_sniff["ignored_reasons"]["observer-disabled"] == 1
+
+
+def test_ticket_report_failure_preserves_complete_engine_result_and_cleanup(monkeypatch):
+    stats, _, backend = _virtual_feedback_engine(monkeypatch, terminal="completed", glyph_mode="events",
+                                                 ticket_report_fault=True)
+    assert stats.completed and not stats.cleanup_failed and not stats.cleanup_errors
+    assert "ticket report unavailable" in stats.native_report["life_feedback"]["tickets"]["report_error"]
+    assert backend._life_feedback_summary["direction_votes"] == 1
 
 
 def test_real_eighth_round_receipt_staleness_waits_for_fresh_receipt_with_original_ttl():
