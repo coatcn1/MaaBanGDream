@@ -875,7 +875,7 @@ def test_endpoint_room_selection_swipes_directly_without_resetting_carousel(
     clicks = []
     flow.click = clicks.append
     verifications = []
-    flow.verify_room_entry = verifications.append
+    flow.verify_room_entry = lambda reason, **kwargs: verifications.append((reason, kwargs))
     swipes = []
     monkeypatch.setattr(
         cooperative_action,
@@ -2398,7 +2398,10 @@ def test_room_entry_recovers_stalled_match_popup(monkeypatch):
     clock = [0.0]
     flow = _bare_flow()
     flow.room_recovery_trial = False
-    flow.capture = lambda: "frame"
+    flow.capture = lambda: room_frame(90)
+    flow.settings["room_tier"] = "free"
+    flow.context.tasker.controller = object()
+    monkeypatch.setattr(cooperative_action, "require_game_foreground", lambda _c: None)
     state = {"popup": True, "lobby": False}
 
     def visible(_image, name, *args):
@@ -2422,6 +2425,10 @@ def test_room_entry_recovers_stalled_match_popup(monkeypatch):
             state["lobby"] = True
 
     flow.click = click
+    flow.context.run_task = lambda node, override: (
+        click(tuple(override[node]["target"][:2]))
+        or SimpleNamespace(status=SimpleNamespace(succeeded=True))
+    )
     monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(
         cooperative_action.time,
@@ -2473,7 +2480,9 @@ def test_room_entry_falls_back_to_android_back_when_cancel_ineffective(
     clock = [0.0]
     flow = _bare_flow()
     flow.room_recovery_trial = False
-    flow.capture = lambda: "frame"
+    flow.capture = lambda: room_frame(90)
+    flow.settings["room_tier"] = "free"
+    monkeypatch.setattr(cooperative_action, "require_game_foreground", lambda _c: None)
     state = {"popup": True, "lobby": False}
 
     def visible(_image, name, *args):
@@ -2481,6 +2490,8 @@ def test_room_entry_falls_back_to_android_back_when_cancel_ineffective(
             return state["popup"]
         if name == "room_wait":
             return state["lobby"]
+        if name == "room_search":
+            return not state["popup"] and not state["lobby"]
         return False
 
     flow.visible = visible
@@ -2493,11 +2504,14 @@ def test_room_entry_falls_back_to_android_back_when_cancel_ineffective(
             state["lobby"] = True
 
     flow.click = click
-    flow.context.tasker.controller = SimpleNamespace(
-        post_click_key=lambda key: SimpleNamespace(
-            wait=lambda: keys.append((round(clock[0], 2), key))
-        )
+    flow.context.run_task = lambda node, override: (
+        click(tuple(override[node]["target"][:2]))
+        or SimpleNamespace(status=SimpleNamespace(succeeded=True))
     )
+    def back(key):
+        state["popup"] = False
+        return SimpleNamespace(wait=lambda: keys.append((round(clock[0], 2), key)), succeeded=True)
+    flow.context.tasker.controller = SimpleNamespace(post_click_key=back)
     monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(
         cooperative_action.time,
@@ -2521,11 +2535,15 @@ def test_room_entry_match_stall_recovery_is_bounded(monkeypatch):
     clock = [0.0]
     flow = _bare_flow()
     flow.room_recovery_trial = False
-    flow.capture = lambda: "frame"
+    flow.capture = lambda: room_frame(90)
+    flow.settings["room_tier"] = "free"
+    flow.context.tasker.controller = object()
+    monkeypatch.setattr(cooperative_action, "require_game_foreground", lambda _c: None)
     state = {"popup": True}
 
     def visible(_image, name, *args):
-        return state["popup"] if name == "room_match_wait" else False
+        return (state["popup"] if name == "room_match_wait"
+                else not state["popup"] if name == "room_search" else False)
 
     flow.visible = visible
     clicks = []
@@ -2538,6 +2556,10 @@ def test_room_entry_match_stall_recovery_is_bounded(monkeypatch):
             state["popup"] = True
 
     flow.click = click
+    flow.context.run_task = lambda node, override: (
+        click(tuple(override[node]["target"][:2]))
+        or SimpleNamespace(status=SimpleNamespace(succeeded=True))
+    )
     monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(
         cooperative_action.time,

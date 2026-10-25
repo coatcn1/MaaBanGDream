@@ -777,6 +777,8 @@ class VersusLiveFlow:
         departed_frames = 0
         match_popup_since: float | None = None
         match_recoveries = 0
+        # 见过匹配弹窗后必须拿到可信房间标记，未知页不能再走三帧离页捷径。
+        match_seen = False
         while time.monotonic() < deadline:
             if self.stopped():
                 raise InterruptedError("用户已停止任务")
@@ -799,6 +801,7 @@ class VersusLiveFlow:
             if self.visible(
                 image, "room_match_wait", ROOM_MATCH_POPUP_THRESHOLD
             ):
+                match_seen = True
                 departed_frames = 0
                 now = time.monotonic()
                 if match_popup_since is None:
@@ -814,25 +817,27 @@ class VersusLiveFlow:
                         f"stalled={now - match_popup_since:.1f}s",
                         flush=True,
                     )
-                    self.recover_room_match_stall(confirm_point)
-                    # 重进本身需要时间，把超时预算顺延一段；次数上限保证有界。
-                    deadline = max(deadline, time.monotonic() + 12.0)
+                    outcome = self.recover_room_match_stall(confirm_point, deadline=deadline)
+                    print("VersusLive room_entry=match-stall "
+                          f"outcome={outcome} recovery={match_recoveries}", flush=True)
+                    if outcome == "entered":
+                        return
                     match_popup_since = None
                     departed_frames = 0
-                time.sleep(0.25)
+                time.sleep(min(0.25, max(0.0, deadline - time.monotonic())))
                 continue
             match_popup_since = None
             if self.visible(image, "room_search"):
                 departed_frames = 0
                 # 仅仍停在选择页时才允许重按「确定」，加载页不能复用该坐标。
-                if trial and confirm_point is not None and reclicks < 2 and time.monotonic() >= next_reclick_at:
+                if not match_seen and trial and confirm_point is not None and reclicks < 2 and time.monotonic() >= next_reclick_at:
                     reclicks += 1
                     next_reclick_at = time.monotonic() + 12.0
                     print(f"VersusLive room_entry=reclick attempt={reclicks}/2", flush=True)
                     self.click(confirm_point)
             else:
                 departed_frames += 1
-                if departed_frames >= 3:
+                if not match_seen and departed_frames >= 3:
                     # 匹配/加载/成员收集页都是瞬态且随账号网络变化；稳定离开
                     # 选择页即视为进入，更长的推进判断交给 wait_for_preparation。
                     print(
@@ -842,49 +847,116 @@ class VersusLiveFlow:
                     )
                     return
             time.sleep(0.25)
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
         raise RoomEntryTransient(failure_reason)
 
     def recover_room_match_stall(
-        self, confirm_point: tuple[int, int] | None
-    ) -> None:
-        """「匹配中」弹窗卡死：取消回到选择页，再点「确定」重新入房。
+        self, confirm_point: tuple[int, int] | None, *, deadline: float | None = None,
+    ) -> str:
+        """只按本次新画面恢复匹配，未知页面被动等待，不复用旧页面坐标。"""
+        started = time.monotonic()
+        deadline = min(deadline if deadline is not None else started + 9.0, started + 9.0)
+        cancel_deadline = started + 6.0
+        cancelled = False
+        backed = False
 
-        优先点弹窗自带的「取消」；它没在预算内关掉弹窗时改用 Android BACK，
-        覆盖取消按钮本身没响应的情况。两步都失败也保留现场，由外层继续
-        观察，不在这里无限重试。
-        """
-        point = (
-            confirm_point if confirm_point is not None else VERSUS_CONFIRM_POINT
-        )
-        self.click(ROOM_MATCH_CANCEL_POINT)
-        deadline = time.monotonic() + 6.0
-        dismissed = False
-        while time.monotonic() < deadline:
+        def check_stop() -> None:
             if self.stopped():
                 raise InterruptedError("用户已停止任务")
-            if not self.visible(
-                self.capture(), "room_match_wait", ROOM_MATCH_POPUP_THRESHOLD
-            ):
-                dismissed = True
-                break
-            time.sleep(0.25)
-        if not dismissed:
-            print(
-                "VersusLive room_entry=match-stall cancel_ineffective=true",
-                flush=True,
+
+        def guard_input() -> None:
+            check_stop()
+            require_game_foreground(self.controller)
+            # 前台核验可能耗时或替换控制器，返回后必须重新检查停止。
+            check_stop()
+
+        def observe() -> str:
+            check_stop()
+            image = self.capture()
+            check_preplay_connection_failed(self, image)
+            if self.visible(image, "member_exit_title", 0.93):
+                raise MemberExited("竞演成员退出房间")
+            if any(self.visible(image, name) for name in
+                   ("room_together", "song_unspecified", "ready_button")):
+                return "entered"
+            if self.visible(image, "room_match_wait", ROOM_MATCH_POPUP_THRESHOLD):
+                return "popup"
+            valid_point = (
+                isinstance(confirm_point, tuple) and len(confirm_point) == 2
+                and all(isinstance(value, int) and not isinstance(value, bool)
+                        for value in confirm_point)
+                and 0 <= confirm_point[0] < 1280 and 0 <= confirm_point[1] < 720
             )
-            self.android_back()
-            time.sleep(0.6)
-        time.sleep(0.3)
-        self.click(point)
-        print("VersusLive room_entry=match-stall reconfirm=true", flush=True)
+            if (valid_point and self.visible(image, "room_search")
+                    and self.settings.get("room_type") in ROOM_TYPE_INDEX
+                    and classify_room_type(image) == self.settings.get("room_type")):
+                return "selection"
+            return "pending"
+
+        while True:
+            check_stop()
+            if time.monotonic() >= deadline:
+                return "pending"
+            state = observe()
+            if state == "entered":
+                return state
+            action = None
+            if state == "popup" and not cancelled:
+                action = "cancel"
+            elif state == "popup" and not backed and time.monotonic() >= cancel_deadline:
+                action = "back"
+            elif state == "selection":
+                action = "reconfirm"
+            if action is not None:
+                guard_input()
+                # 保护期间可能已匹配成功或切页；输入仅消费保护后的新画面。
+                latest = observe()
+                check_stop()
+                if latest == "entered":
+                    return latest
+                if time.monotonic() >= deadline:
+                    return "pending"
+                if latest != state:
+                    continue
+                if action == "back":
+                    self.android_back()
+                    backed = True
+                else:
+                    # 通用 click 会再次做耗时前台核验；这里直接消费刚复核的页面，
+                    # 避免第二次保护期间停止或入房后仍派发旧坐标。
+                    point = ROOM_MATCH_CANCEL_POINT if action == "cancel" else confirm_point
+                    detail = self.context.run_task(
+                        "RealtimeSettingsClick",
+                        {"RealtimeSettingsClick": {"target": [point[0], point[1], 1, 1]}},
+                    )
+                    check_stop()
+                    if not detail or not detail.status.succeeded:
+                        raise RuntimeError("匹配恢复点击作业失败")
+                    cancelled = True
+                    if action == "cancel":
+                        cancel_deadline = time.monotonic() + 6.0
+                guard_input()
+                print(
+                    "VersusLive room_entry=match-stall "
+                    f"action={action} page={latest}",
+                    flush=True,
+                )
+                if action == "reconfirm":
+                    return "reconfirmed"
+                continue
+            time.sleep(min(0.25, max(0.0, deadline - time.monotonic())))
 
     def android_back(self) -> None:
-        """发送 Android BACK；测试替身没有 controller 时静默跳过。"""
-        controller = getattr(self, "controller", None)
-        if controller is None:
-            return
-        controller.post_click_key(4).wait()
+        """调用方已复核前台和页面；此处重取代理并验证本次作业回执。"""
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
+        job = self.controller.post_click_key(4)
+        job.wait()
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
+        if not job.succeeded:
+            raise RuntimeError("匹配恢复 Android BACK 作业失败")
 
     def enter_room(self) -> None:
         # 竞演目前只支持「选房型卡 + 确定」入房。
