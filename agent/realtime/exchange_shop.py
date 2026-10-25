@@ -362,8 +362,9 @@ class ExchangeUI:
     consumption_verified = True
     reset_verified = True
 
-    def __init__(self, context, *, reader=None, capture=capture_image, sleep=time.sleep):
+    def __init__(self, context, *, reader=None, capture=capture_image, sleep=time.sleep, monotonic=time.monotonic):
         self.context, self.capture, self.sleep = context, capture, sleep
+        self.monotonic=monotonic
         self.reader = reader or ExchangeReader(self.stopped)
         self.last_frame = None
         self.stage = "start"
@@ -579,14 +580,71 @@ class ExchangeUI:
         expected_currency=before.currency-amount*10 if before.currency is not None else None
         if confirmation != (amount, amount * 10, before.currency, expected_currency):
             raise RuntimeError("交换确认与本次预算或余额冲突，未发送确认")
-        # 提交前先推进内存阶段；作业异常或停止不能重新发送同一笔确认。
+        self.submit_draw(confirmation)
+        self.stage = "draw_result"
+        self.finish_draw_result(expected_currency, before if amount == before.remaining else None)
+
+    def submit_draw(self, expected):
+        """确认窗持续稳定后只提交一次；仍停原窗不是再次提交的授权。"""
+        operation=self.operation
+        if operation is not None and operation["phase"]!="prepared":
+            raise RuntimeError("本笔抽取阶段不符，禁止重复提交")
+        started=self.monotonic()
+        deadline=started+4.0
+        window={"started_local_seconds":started,"required_seconds":.8,"maximum_seconds":4.0,
+                "first_observation":self.observation+1,"elapsed_seconds":0.0}
+        if operation is not None:
+            operation["submit_stability"]=window
+
+        def observe_confirmation():
+            self.capture_new()
+            try:
+                if not self.reader.page(self.last_frame,"draw_confirm"):
+                    raise RuntimeError("提交前确认窗已变化，禁止提交")
+                observed=self.reader.draw_confirmation(self.last_frame)
+                if observed!=expected:
+                    raise RuntimeError("提交前确认数量或费用变化，禁止提交")
+            finally:
+                self.stopped()
+            if self.monotonic()>=deadline:
+                raise RuntimeError("提交前确认窗稳定预算耗尽，禁止提交")
+
+        stable_since=None
+        for _ in range(40):
+            observe_confirmation()
+            now=self.monotonic()
+            if stable_since is None:
+                stable_since=now
+                window["stable_since_local_seconds"]=now
+            window["elapsed_seconds"]=now-stable_since
+            window["last_observation"]=self.observation
+            if now-stable_since>=.8:
+                break
+            self.stopped()
+            self.sleep(min(.1,max(0.0,deadline-now)))
+        else:
+            raise RuntimeError("提交前确认窗未持续稳定，禁止提交")
+        self.stopped()
+        require_game_foreground(self.context.tasker.controller)
+        self.stopped()
+        # 前台核验可能耗时或切页，只允许消费保护后重新采集的本笔确认画面。
+        observe_confirmation()
+        self.stopped()
+        gesture={"point":[770,525],"duration_ms":150,"attempts":1,"succeeded":None}
         if operation is not None:
             operation["observations"]["confirmation_verified"]=self.observation
             operation["phase"]="submitted"
             operation["observations"]["submitted"]=self.observation
-        self.click(770, 525)
-        self.stage = "draw_result"
-        self.finish_draw_result(expected_currency, before if amount == before.remaining else None)
+            operation["submit_gesture"]=gesture
+        # 明确时长的同点手势由控制器管理触点；不手工拆成DOWN／等待／UP。
+        try:
+            job=self.context.tasker.controller.post_swipe(770,525,770,525,150)
+            job.wait()
+        finally:
+            self.stopped()
+        gesture["succeeded"]=bool(job.succeeded)
+        if not gesture["succeeded"]:
+            raise RuntimeError("抽取提交手势作业失败，保留未决并禁止重复提交")
 
     def finish_draw_result(self, expected_currency, emptied=None):
         operation=self.operation

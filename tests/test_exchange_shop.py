@@ -313,6 +313,7 @@ def test_complete_draw_only_clicks_right_result_close():
     ui=ExchangeUI(context);ui.current_state=state()
     values=iter([(19,180,180,1,30822),(10,100),(10,100,30822,30722),30722,(19,170,180,1,30722)])
     clicks=[];ui.stable=lambda *a,**k:next(values);ui.click=lambda *p:clicks.append(p)
+    ui.submit_draw=lambda expected:ui.click(770,525)
     ui.draw_once(10)
     assert clicks == [(1025,618),(770,525),(1068,648)]
 
@@ -1143,6 +1144,7 @@ def test_tight_confirmation_requires_two_equal_frames_and_exact_balance_before_c
         else (10,100) if read == reader.draw_offer else real_stable(page,read,**kwargs))
     ui.click=lambda *point:clicks.append(point)
     ui.finish_draw_result=lambda *args:None
+    ui.submit_draw=lambda expected:ui.click(770,525)
     ui.draw_once(10)
     assert clicks == [(1025,618),(770,525)]
     wrong="10023" if balance_field=="confirm_before" else "9923"
@@ -1248,7 +1250,8 @@ def test_currency_budget_strict_type_and_bounds(value):
 
 def production_budget_ui(*, initial_currency=200, failure=None):
     reader=ExchangeReader()
-    current={"page":"main","remaining":180,"cans":10,"special":1,"balance_reads":0}
+    current={"page":"main","box":19,"remaining":180,"cans":10,"special":1,"balance_reads":0,"gestures":[]}
+    clock=[0.0]
     clicks=[]
     image=np.full((720,1280,3),255,np.uint8)
     reader.page=lambda image,page:current["page"]==page
@@ -1260,7 +1263,7 @@ def production_budget_ui(*, initial_currency=200, failure=None):
             if not current.get("allow_initial"):pytest.fail("用户预算或初始化后不得OCR余额")
             return SimpleNamespace(text=str(initial_currency)+"枚",confidence=.999)
         if roi[1]==425:pytest.fail("不得OCR确认前后余额")
-        values={(666,184,103,39):"第19箱",(853,184,100,38):f'{current["remaining"]}/180',
+        values={(666,184,103,39):f'第{current["box"]}箱',(853,184,100,38):f'{current["remaining"]}/180',
                 (875,377,49,29):f'{current["special"]}/1',
                 (989,599,128,31):"10个交换",(1030,635,94,31):"100枚",
                 (460,251,360,31):"消费礼物币100枚",(528,281,221,31):"领取礼物10个奖品。",
@@ -1268,7 +1271,9 @@ def production_budget_ui(*, initial_currency=200, failure=None):
         return SimpleNamespace(text=values[roi],confidence=.999)
     reader.ocr=ocr
     context=SimpleNamespace(tasker=SimpleNamespace(stopping=False))
-    ui=ExchangeUI(context,reader=reader,capture=lambda context:image,sleep=lambda seconds:None)
+    ui=ExchangeUI(context,reader=reader,capture=lambda context:image,sleep=lambda seconds:clock.__setitem__(0,clock[0]+seconds))
+    ui.monotonic=lambda:clock[0]
+    current["clock"]=clock
     original_initialize=ui.initialize_budget
     def initialize(automatic):
         current["allow_initial"]=automatic
@@ -1282,8 +1287,11 @@ def production_budget_ui(*, initial_currency=200, failure=None):
         elif (x,y)==(640,603):current["page"]="main"
         elif (x,y)==(1029,465):current["page"]="contents"
         elif (x,y)==(640,642):current["page"]="main"
-        elif (x,y)==(1025,618):current["page"]="unknown" if failure=="insufficient" else "draw_confirm"
+        elif (x,y)==(1025,618):
+            current["page"]="unknown" if failure=="insufficient" else "draw_confirm"
+            current["popup_opened_at"]=clock[0]
         elif (x,y)==(770,525):
+            if clock[0]-current["popup_opened_at"]<current.get("interactive_after",0):return
             current["remaining"]-=11 if failure=="delta" else 10
             current["cans"]-=1
             current["page"]="unknown" if failure=="result" else "draw_result"
@@ -1292,6 +1300,12 @@ def production_budget_ui(*, initial_currency=200, failure=None):
                 ui.stopped()
         elif (x,y)==(1068,648):current["page"]="main"
         else:pytest.fail(f"意外输入{(x,y)}")
+    def swipe(x1,y1,x2,y2,duration):
+        current["gestures"].append((x1,y1,x2,y2,duration))
+        return SimpleNamespace(wait=lambda:click(x1,y1),succeeded=True)
+    shell_job=SimpleNamespace(get=lambda:"mCurrentFocus=Window com.bilibili.star.bili/Main")
+    shell_job.wait=lambda:shell_job
+    context.tasker.controller=SimpleNamespace(post_swipe=swipe,post_shell=lambda *args:shell_job)
     ui.click=click
     return ui,current,clicks
 
@@ -1484,12 +1498,12 @@ def test_real_input_failed_receipt_keeps_budget_pending_and_sends_no_result_work
     ui,current,clicks=production_budget_ui()
     original=ui.click
     context=ui.context
-    def post(x,y):
+    def post(x,y,x2,y2,duration):
         clicks.append((x,y))
         def wait():
             if stopped:context.tasker.stopping=True
         return SimpleNamespace(wait=wait,succeeded=False)
-    context.tasker.controller=SimpleNamespace(post_click=post)
+    context.tasker.controller=SimpleNamespace(post_swipe=post)
     monkeypatch.setattr("agent.realtime.exchange_shop.require_game_foreground",lambda controller:None)
     def click(x,y):
         if (x,y)==(770,525):ExchangeUI.click(ui,x,y)
@@ -1500,3 +1514,152 @@ def test_real_input_failed_receipt_keeps_budget_pending_and_sends_no_result_work
     assert clicks.count((770,525))==1 and (1068,648) not in clicks
     assert f.budget.spent_draws==0 and ui.operation["phase"]=="submitted"
     assert json.loads((tmp_path/"ledger.json").read_text(encoding="utf-8"))["status"]=="pending"
+
+
+def test_animation_can_ignore_old_short_submit_but_one_guarded_hold_completes(tmp_path):
+    ui,current,clicks=production_budget_ui()
+    current["interactive_after"]=.8
+    f=flow(ui,tmp_path,max_draws=10)
+    assert f.run() and f.draws==10
+    assert current["gestures"]==[(770,525,770,525,150)]
+    assert clicks.count((770,525))==1
+    data=json.loads((tmp_path/"ledger.json").read_text(encoding="utf-8"))
+    assert data["receipt"]["submit_stability"]["elapsed_seconds"]>=.8
+    assert data["receipt"]["submit_gesture"]["succeeded"] is True
+
+
+@pytest.mark.parametrize("change", ("guard_page","guard_stop","read_stop","amount","fee","reused","reverse","timeout"))
+def test_submit_gate_rejects_new_page_stop_changed_fields_or_stale_frames(tmp_path,monkeypatch,change):
+    ui,current,clicks=production_budget_ui()
+    original_capture=ui.capture
+    original_read=ui.reader.draw_confirmation
+    sequence=[0]
+    def capture(context):
+        image=original_capture(context)
+        sequence[0]+=1
+        if ui.operation is not None and "submit_stability" in ui.operation:
+            if change=="timeout":current["clock"][0]+=4.1
+            if change=="reused":return {"image":image,"sequence":sequence[0],"reused":True}
+            if change=="reverse":return {"image":image,"sequence":sequence[0]-2}
+        return {"image":image,"sequence":sequence[0]}
+    ui.capture=capture
+    def read(image):
+        value=original_read(image)
+        if ui.operation is not None and "submit_stability" in ui.operation:
+            if change=="read_stop":ui.context.tasker.stopping=True
+            if change=="amount":return (9,100,None,None)
+            if change=="fee":return (10,90,None,None)
+        return value
+    ui.reader.draw_confirmation=read
+    def guard(controller):
+        if change=="guard_page":current["page"]="draw_result"
+        if change=="guard_stop":ui.context.tasker.stopping=True
+    monkeypatch.setattr("agent.realtime.exchange_shop.require_game_foreground",guard)
+    f=flow(ui,tmp_path,max_draws=10)
+    with pytest.raises((RuntimeError,ExchangeStopped)):f.run()
+    assert current["gestures"]==[] and (770,525) not in clicks
+    assert f.budget.spent_draws==0
+    assert json.loads((tmp_path/"ledger.json").read_text(encoding="utf-8"))["status"]=="pending"
+
+
+def test_successful_gesture_receipt_with_original_confirmation_still_visible_is_never_retried(tmp_path):
+    ui,current,clicks=production_budget_ui()
+    def swipe(*parameters):
+        current["gestures"].append(parameters)
+        return SimpleNamespace(wait=lambda:clicks.append((770,525)),succeeded=True)
+    ui.context.tasker.controller.post_swipe=swipe
+    f=flow(ui,tmp_path,max_draws=10)
+    with pytest.raises(RuntimeError,match="draw_result未稳定"):f.run()
+    assert current["page"]=="draw_confirm" and f.budget.spent_draws==0
+    assert current["gestures"]==[(770,525,770,525,150)]
+    with pytest.raises(RuntimeError,match="禁止重复确认"):ui.draw_once(10)
+    assert len(current["gestures"])==1
+    assert ui.operation["submit_gesture"]["succeeded"] is True
+
+
+def test_gate_stays_bounded_even_when_injected_clock_does_not_advance(tmp_path):
+    ui,current,clicks=production_budget_ui()
+    ui.monotonic=lambda:0.0
+    f=flow(ui,tmp_path,max_draws=10)
+    with pytest.raises(RuntimeError,match="未持续稳定"):f.run()
+    assert current["gestures"]==[] and current["clock"][0]<20
+
+
+@pytest.mark.parametrize("ignore_tenth", (False,True))
+def test_nonfull_box_six_draws_then_reset_then_three_draws_keep_transaction_identity(tmp_path,monkeypatch,ignore_tenth):
+    from agent.realtime.exchange_shop_policy import Decision
+    ui,current,clicks=production_budget_ui()
+    current.update(box=37,remaining=90,cans=6,special=0)
+    original_click=ui.click
+    def click(x,y):
+        if (x,y)==(773,465):
+            clicks.append((x,y));current["page"]="reset_confirm"
+        elif (x,y)==(769,526):
+            clicks.append((x,y));current.update(box=38,remaining=180,cans=10,special=1,page="main")
+        else:original_click(x,y)
+    ui.click=click
+    ui.reader.matches=lambda image,name:name=="main_reset_enabled"
+    ui.reader.reset_confirmation=lambda image:current["page"]=="reset_confirm"
+    # 此回归固定已观测的随机掉落路径，只检查连续导航／提交，不替代策略数学测试。
+    monkeypatch.setattr("agent.realtime.exchange_shop.decide",lambda state,budget,stopped:
+        Decision("stop") if budget<10 else Decision("reset") if state.cans==0 else Decision("draw",10))
+    original_swipe=ui.context.tasker.controller.post_swipe
+    def swipe(*parameters):
+        if ignore_tenth and len(current["gestures"])==9:
+            current["gestures"].append(parameters)
+            return SimpleNamespace(wait=lambda:clicks.append((770,525)),succeeded=True)
+        return original_swipe(*parameters)
+    ui.context.tasker.controller.post_swipe=swipe
+    f=flow(ui,tmp_path,max_draws=100 if ignore_tenth else 90)
+    if ignore_tenth:
+        with pytest.raises(RuntimeError,match="draw_result未稳定"):f.run()
+    else:assert f.run()
+    assert f.draws==90 and f.budget.spent_draws==90
+    assert current["box"]==38 and current["remaining"]==150 and current["cans"]==7
+    assert clicks.count((769,526))==1
+    assert len(current["gestures"])==(10 if ignore_tenth else 9)
+    data=json.loads((tmp_path/"ledger.json").read_text(encoding="utf-8"))
+    assert data["status"]==("pending" if ignore_tenth else "confirmed")
+    assert data["budget"]["estimated_spent_currency"]==900
+
+
+def test_actual_maafw_custom_controller_keeps_same_point_150ms_and_failed_job_contract(tmp_path):
+    import subprocess
+    import sys
+    code="""
+from maa.controller import CustomController
+from maa.toolkit import Toolkit
+import sys,time
+import numpy as np
+Toolkit.init_option(sys.argv[1])
+class Memory(CustomController):
+    def connect(self):return True
+    def request_uuid(self):return 'offline-exchange-submit'
+    def screencap(self):return np.zeros((720,1280,3),np.uint8)
+    def swipe(self,x1,y1,x2,y2,duration):
+        raise AssertionError('core should manage the touch sequence')
+    def touch_down(self,contact,x,y,pressure):
+        self.calls.append(('down',contact,x,y,time.monotonic()))
+        return self.result
+    def touch_move(self,contact,x,y,pressure):
+        self.calls.append(('move',contact,x,y,time.monotonic()))
+        return self.result
+    def touch_up(self,contact):
+        self.calls.append(('up',contact,None,None,time.monotonic()))
+        return self.result
+for result in (True,False):
+    controller=Memory();controller.calls=[];controller.result=result
+    assert controller.post_connection().wait().succeeded
+    assert controller.post_screencap().wait().succeeded
+    job=controller.post_swipe(770,525,770,525,150)
+    job.wait()
+    assert bool(job.succeeded)==result,(result,controller.calls)
+    assert controller.calls[0][0]=='down' and controller.calls[-1][0]=='up',controller.calls
+    assert all(call[2:4]==(770,525) for call in controller.calls if call[0]!='up')
+    assert controller.calls[-1][-1]-controller.calls[0][-1]>=.12
+print('same-point-150ms-job-contract')
+"""
+    result=subprocess.run([sys.executable,"-c",code,str(tmp_path/"maa-logs")],cwd=tmp_path,
+                          capture_output=True,text=True,timeout=20)
+    assert result.returncode==0,result.stdout+result.stderr
+    assert "same-point-150ms-job-contract" in result.stdout
