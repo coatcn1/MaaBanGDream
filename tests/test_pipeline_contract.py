@@ -67,6 +67,49 @@ def test_all_count_inputs_accept_zero_and_reject_out_of_range():
             assert re.fullmatch(pattern, invalid) is None
 
 
+def test_exchange_shop_is_independent_and_defaults_to_preview():
+    interface = load(ROOT / "interface.json")
+    nodes = load(ROOT / "resource/pipeline/exchange_shop.json")
+    assert nodes["ExchangeShop"]["next"] == ["ExchangeShopProcessConflictGuard"]
+    assert nodes["ExchangeShopProcessConflictGuard"]["custom_action"] == "ProcessConflictGuard"
+    assert not any(node.get("custom_action") == "CommonRecover" for node in nodes.values())
+    assert not any("Live" in target or "Home" in target or "Recover" in target
+                   for node in nodes.values() for target in node.get("next", []))
+    assert nodes["ExchangeShopModeConfigure"]["custom_action_param"] == {"reset": True, "mode": "auto"}
+    assert nodes["ExchangeShopExecutionConfigure"]["custom_action_param"] == {"execute": False}
+    assert nodes["ExchangeShopBudgetConfigure"]["custom_action_param"] == {"max_draws": 0}
+    assert interface["option"]["ExchangeShopExecution"]["default_case"] == "Preview"
+    assert nodes["ExchangeShopRun"]["next"] == ["ExchangeShopComplete"]
+
+
+def test_exchange_option_overrides_are_complete_in_real_maafw(tmp_path):
+    import subprocess
+    import sys
+
+    interface = load(ROOT / "interface.json")
+    pipeline = load(ROOT / "resource/pipeline/exchange_shop.json")
+    overrides = {}
+    for name in ("ExchangeShopMode", "ExchangeShopExecution"):
+        for case in interface["option"][name]["cases"]:
+            node, override = next(iter(case["pipeline_override"].items()))
+            overrides[name + case["name"]] = {"node": node, "override": override}
+    code = """
+import json, sys
+from maa.resource import Resource
+from maa.toolkit import Toolkit
+data=json.load(sys.stdin)
+Toolkit.init_option(data['log_dir'])
+r=Resource()
+assert r.override_pipeline(data['pipeline'])
+for value in data['overrides'].values():
+    assert r.override_pipeline({value['node']:value['override']})
+    actual=r.get_node_data(value['node'])['action']['param']['custom_action_param']
+    assert actual == value['override']['custom_action_param'], (actual,value)
+"""
+    subprocess.run([sys.executable,"-c",code], input=json.dumps({"log_dir":str(tmp_path),
+        "pipeline":pipeline,"overrides":overrides}), text=True,capture_output=True,check=True)
+
+
 def test_all_pipeline_clicks_use_the_foreground_guard():
     for path in (ROOT / "resource/pipeline").glob("*.json"):
         for name, node in load(path).items():
@@ -83,7 +126,7 @@ def test_interface_references_existing_entry_and_resource():
     assert [task["name"] for task in interface["task"]] == [
         "AutoLive", "RealtimeLive", "CooperativeLive", "VersusLive",
         "ContinuousRealtimeLive",
-        "RealtimeCalibration", "DailyFreeGacha", "ChallengeLive",
+        "RealtimeCalibration", "DailyFreeGacha", "ExchangeShop", "ChallengeLive",
         "MedleyLive", "ManualFlowRecording",
     ]
     assert {
@@ -96,6 +139,7 @@ def test_interface_references_existing_entry_and_resource():
         "ContinuousRealtimeLive": "⚡ 一键实时演奏",
         "RealtimeCalibration": "🎯 实时演奏校准",
         "DailyFreeGacha": "🎁 每日免费抽卡",
+        "ExchangeShop": "🎁 交换所抽箱",
         "ChallengeLive": "🏆 挑战演出",
         "MedleyLive": "🎼 组曲演奏",
         "ManualFlowRecording": "📹 手动流程录像",

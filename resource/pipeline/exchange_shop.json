@@ -1,0 +1,96 @@
+{
+  "ExchangeShop": {
+    "recognition": "DirectHit",
+    "action": "DoNothing",
+    "next": [
+      "ExchangeShopProcessConflictGuard"
+    ]
+  },
+  "ExchangeShopProcessConflictGuard": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "ProcessConflictGuard",
+    "next": [
+      "ExchangeShopModeConfigure"
+    ],
+    "on_error": [
+      "ExchangeShopFailure"
+    ]
+  },
+  "ExchangeShopModeConfigure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "ExchangeShopConfigure",
+    "custom_action_param": {
+      "reset": true,
+      "mode": "auto"
+    },
+    "next": [
+      "ExchangeShopBudgetConfigure"
+    ],
+    "on_error": [
+      "ExchangeShopFailure"
+    ]
+  },
+  "ExchangeShopBudgetConfigure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "ExchangeShopConfigure",
+    "custom_action_param": {
+      "max_draws": 0
+    },
+    "next": [
+      "ExchangeShopExecutionConfigure"
+    ],
+    "on_error": [
+      "ExchangeShopFailure"
+    ]
+  },
+  "ExchangeShopExecutionConfigure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "ExchangeShopConfigure",
+    "custom_action_param": {
+      "execute": false
+    },
+    "next": [
+      "ExchangeShopRun"
+    ],
+    "on_error": [
+      "ExchangeShopFailure"
+    ]
+  },
+  "ExchangeShopRun": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "ExchangeShopRun",
+    "next": [
+      "ExchangeShopComplete"
+    ],
+    "on_error": [
+      "ExchangeShopFailure"
+    ]
+  },
+  "ExchangeShopComplete": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "TaskOutcome",
+    "custom_action_param": {
+      "task_name": "ExchangeShop",
+      "label": "交换所抽箱",
+      "status": "success"
+    }
+  },
+  "ExchangeShopFailure": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "TaskOutcome",
+    "custom_action_param": {
+      "task_name": "ExchangeShop",
+      "label": "交换所抽箱",
+      "status": "failure",
+      "reason": "交换所抽箱未完成",
+      "reason_source": "latest"
+    }
+  }
+}
