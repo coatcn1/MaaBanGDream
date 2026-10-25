@@ -34,6 +34,7 @@ import realtime.cooperative_action  # noqa: F401 - registration happens at impor
 import realtime.versus_action  # noqa: F401 - registration happens at import time
 import realtime.medley_action  # noqa: F401 - registration happens at import time
 import realtime.daily_free_gacha  # noqa: F401 - registration happens at import time
+import realtime.exchange_shop  # noqa: F401 - 注册独立交换所抽箱任务
 
 
 def main() -> None:

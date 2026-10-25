@@ -1,0 +1,949 @@
+from dataclasses import replace
+from types import SimpleNamespace
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from agent.realtime.exchange_shop import (
+    ExchangeFlow, ExchangeJournal, ExchangeReader, ExchangeShopConfigure, ExchangeShopRun,
+    ExchangeStopped, ExchangeUI, validate_options, _OPTIONS,
+)
+from agent.realtime.exchange_shop_policy import BoxState, THRESHOLDS, decide, validate_draw, validate_reset
+
+
+def state(**changes):
+    return replace(BoxState(19, 180, 180, 10, 1, 30822), **changes)
+
+
+@pytest.mark.parametrize("total", (180, 230))
+@pytest.mark.parametrize("y", (1, 2, 3, 4, 5, 6, 7, 8))
+def test_long_run_threshold_continues_through_maximum(total, y):
+    threshold = THRESHOLDS[total][y-1]
+    base = state(total=total, remaining=threshold, cans=y, special=0)
+    assert decide(replace(base, remaining=threshold-1)).action == "draw"
+    assert decide(base).action == "draw"
+    assert decide(replace(base, remaining=threshold+1)).action == "reset"
+
+
+@pytest.mark.parametrize("y", (9, 10))
+def test_many_cans_only_requests_next_ten(y):
+    assert decide(state(cans=y)).amount == 10
+    assert decide(state(cans=y)).max_steps is None
+
+
+def test_zero_cans_requires_special_unlock_and_empty_box_waits():
+    assert decide(state(cans=0, special=0)).action == "reset"
+    assert decide(state(cans=0, special=1)).action == "draw"
+    assert decide(state(remaining=0, cans=0, special=0)).action == "wait"
+    assert decide(state(remaining=5, cans=1, special=1)).amount == 5
+
+
+def test_no_obsolete_n_countdown():
+    assert decide(state(remaining=50,cans=1,special=0),budget=20).max_steps is None
+
+
+@pytest.mark.parametrize("changes", ({"remaining":181}, {"cans":11}, {"special":2},
+    {"currency":-1}, {"box":0}, {"remaining":5,"cans":6}, {"total":200}, {"cans":True}))
+def test_bad_state_rejected(changes):
+    with pytest.raises(ValueError):
+        decide(state(**changes))
+
+
+class UI:
+    consumption_verified = True
+    reset_verified = True
+
+    def __init__(self, states, fail_draw=False):
+        self.states = iter(states)
+        self.actions = []
+        self.fail_draw = fail_draw
+
+    def stopped(self):
+        pass
+
+    def check_settings(self):
+        self.actions.append("settings")
+
+    def read_state(self):
+        self.actions.append("read")
+        return next(self.states)
+
+    def draw_once(self, amount):
+        self.actions.append(("draw",amount))
+        if self.fail_draw:
+            raise TimeoutError("unknown draw result")
+
+    def reset_once(self):
+        self.actions.append("reset")
+
+
+def flow(ui, tmp_path, **options):
+    return ExchangeFlow(ui, {"execute":True} | options, journal=ExchangeJournal(tmp_path / "ledger.json"), report=lambda text:None)
+
+
+def test_preview_performs_zero_consumption(tmp_path):
+    ui = UI([state()])
+    assert flow(ui,tmp_path,execute=False).run()
+    assert ui.actions == ["settings","read"]
+    assert not (tmp_path/"ledger.json").exists()
+
+
+def test_budget_cumulative_and_each_ten_reads_again(tmp_path):
+    ui = UI([state(),state(remaining=170,currency=30722,cans=9),state(remaining=160,currency=30622,cans=8)])
+    f=flow(ui,tmp_path,max_draws=25)
+    assert f.run()
+    assert f.draws == 20
+    assert ui.actions.count(("draw",10)) == 2
+    assert ui.actions.count("read") == 3
+
+
+@pytest.mark.parametrize("amount,budget", ((10,9),(5,4)))
+def test_no_single_draw_to_fill_budget(tmp_path,amount,budget):
+    ui=UI([state(remaining=amount,cans=1)])
+    assert flow(ui,tmp_path,max_draws=budget).run()
+    assert not any(isinstance(a,tuple) for a in ui.actions)
+
+
+def test_tail_cost_and_insufficient_currency_keep_balance(tmp_path):
+    ui=UI([state(remaining=5,cans=1,currency=50),state(box=20,currency=0)])
+    assert flow(ui,tmp_path,max_draws=5).run()
+    assert ("draw",5) in ui.actions
+    ui=UI([state(currency=99)])
+    assert flow(ui,tmp_path).run()
+    assert ("draw",10) not in ui.actions
+
+
+def test_special_zero_unlocks_reset_then_draws_are_rechecked(tmp_path):
+    ui=UI([state(cans=0,special=0),state(box=20),state(box=20,remaining=170,cans=9,currency=30722)])
+    assert flow(ui,tmp_path,max_draws=10).run()
+    assert ui.actions == ["settings","read","reset","read",("draw",10),"read"]
+
+
+def test_unknown_draw_never_retried_and_next_run_is_blocked(tmp_path):
+    ui=UI([state()],fail_draw=True)
+    with pytest.raises(TimeoutError):
+        flow(ui,tmp_path).run()
+    assert ui.actions.count(("draw",10)) == 1
+    with pytest.raises(RuntimeError, match="上次"):
+        flow(UI([state()]),tmp_path).run()
+
+
+@pytest.mark.parametrize("changes", ({"currency":30723}, {"remaining":169}, {"box":20}, {"cans":10,"special":1}))
+def test_unreconciled_result_preserves_pending(tmp_path,changes):
+    before=state(cans=9,special=0)
+    after=replace(before, **({"remaining":170,"currency":30722}|changes))
+    with pytest.raises(RuntimeError):
+        flow(UI([before,after]),tmp_path,max_draws=10).run()
+    with pytest.raises(RuntimeError):
+        ExchangeJournal(tmp_path/"ledger.json").check_unresolved()
+
+
+def test_reset_conflict_does_not_confirm_ledger(tmp_path):
+    with pytest.raises(RuntimeError):
+        flow(UI([state(cans=0,special=0),state(box=19)]),tmp_path).run()
+    with pytest.raises(RuntimeError):
+        ExchangeJournal(tmp_path/"ledger.json").check_unresolved()
+
+
+@pytest.mark.parametrize("changes", ({"box":19},{"box":21},{"currency":30821},{"remaining":179},
+    {"cans":9},{"special":0},{"total":230,"remaining":230}))
+def test_reset_requires_next_full_box_and_unchanged_currency(tmp_path,changes):
+    before=state(cans=0,special=0)
+    after=replace(state(box=20),**changes)
+    with pytest.raises(RuntimeError):
+        flow(UI([before,after]),tmp_path,max_draws=10).run()
+    with pytest.raises(RuntimeError):
+        ExchangeJournal(tmp_path/"ledger.json").check_unresolved()
+
+
+def test_unverified_production_protocol_blocks_before_consumption(tmp_path):
+    ui=UI([state()]);ui.consumption_verified=False
+    with pytest.raises(RuntimeError,match="消费输入前"):
+        flow(ui,tmp_path).run()
+    assert ui.actions == ["settings","read"]
+
+
+def test_unverified_reset_stops_before_any_reset_input(tmp_path):
+    ui=UI([state(cans=0,special=0)]);ui.reset_verified=False
+    with pytest.raises(RuntimeError,match="换箱输入前"):
+        flow(ui,tmp_path).run()
+    assert ui.actions == ["settings","read"]
+
+
+def test_mode_conflict_refuses_consumption(tmp_path):
+    ui=UI([state()])
+    with pytest.raises(RuntimeError,match="容量冲突"):
+        flow(ui,tmp_path,mode="five230").run()
+    assert ui.actions == ["settings","read"]
+
+
+def test_ledger_exclusive_lock(tmp_path):
+    journal=ExchangeJournal(tmp_path/"ledger.json")
+    with journal.locked():
+        with pytest.raises(RuntimeError,match="锁"):
+            with ExchangeJournal(journal.path).locked():
+                pass
+
+
+@pytest.mark.parametrize("options", ({"execute":1},{"max_draws":True},{"max_draws":-1},{"mode":"other"}))
+def test_options_strict(options):
+    with pytest.raises(ValueError):validate_options(options)
+
+
+def test_reader_rejects_wrong_page_and_dimmed_overlay():
+    reader=ExchangeReader()
+    with pytest.raises(ValueError):reader.main(np.zeros((720,1280,3),np.uint8))
+    with pytest.raises(ValueError):reader.contents(np.zeros((720,1280,3),np.uint8))
+
+
+def test_low_confidence_and_invalid_ocr_are_not_guessed():
+    reader=ExchangeReader(ocr=lambda *a,**k:SimpleNamespace(text="10/10",confidence=.89))
+    with pytest.raises(ValueError):reader.ratio(None,"cans",(0,0,10,10),(10,))
+    reader.ocr=lambda *a,**k:SimpleNamespace(text="1O/10",confidence=.999)
+    with pytest.raises(ValueError):reader.ratio(None,"cans",(0,0,10,10),(10,))
+
+
+def test_stop_before_capture_recognition_and_callback_is_neutral(tmp_path):
+    context=SimpleNamespace(tasker=SimpleNamespace(stopping=True))
+    captures=[]
+    ui=ExchangeUI(context,capture=lambda context:captures.append(True))
+    with pytest.raises(ExchangeStopped):ui.stable("main")
+    assert captures == []
+    assert ExchangeShopRun().run(context,SimpleNamespace())
+    assert ExchangeShopConfigure().run(context,SimpleNamespace())
+
+
+def test_stop_after_foreground_check_does_not_click(monkeypatch):
+    clicks=[]
+    context=SimpleNamespace(tasker=SimpleNamespace(stopping=False,controller=SimpleNamespace(post_click=lambda *p:clicks.append(p))))
+    ui=ExchangeUI(context)
+    def foreground(controller):context.tasker.stopping=True
+    monkeypatch.setattr("agent.realtime.exchange_shop.require_game_foreground",foreground)
+    with pytest.raises(ExchangeStopped):ui.click(1,2)
+    assert clicks == []
+
+
+def test_stop_during_capture_prevents_recognition():
+    context=SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    recognition=[]
+    reader=SimpleNamespace(page=lambda *args:recognition.append(True),readings={})
+    def capture(context):
+        context.tasker.stopping=True
+        return np.zeros((720,1280,3),np.uint8)
+    ui=ExchangeUI(context,reader=reader,capture=capture)
+    with pytest.raises(ExchangeStopped):ui.stable("main")
+    assert recognition == []
+
+
+def test_stop_during_consumption_keeps_pending_and_no_followup(tmp_path):
+    ui=UI([state()])
+    def draw(amount):
+        ui.actions.append(("draw",amount))
+        raise ExchangeStopped()
+    ui.draw_once=draw
+    with pytest.raises(ExchangeStopped):flow(ui,tmp_path).run()
+    assert ui.actions == ["settings","read",("draw",10)]
+    with pytest.raises(RuntimeError):ExchangeJournal(tmp_path/"ledger.json").check_unresolved()
+
+
+def test_stable_requires_two_matching_new_frames():
+    context=SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    captures=[]
+    reader=SimpleNamespace(page=lambda image,name:True,readings={})
+    ui=ExchangeUI(context,reader=reader,capture=lambda context:captures.append(True),sleep=lambda seconds:None)
+    reads=iter([1,2,2])
+    assert ui.stable("main",lambda image:next(reads)) == 2
+    assert len(captures)==3
+
+
+def test_config_is_current_task_only_and_run_cleans_it(monkeypatch):
+    context=SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    argv=SimpleNamespace(task_detail=SimpleNamespace(task_id=1701),custom_action_param='{"reset":true,"mode":"auto"}')
+    assert ExchangeShopConfigure().run(context,argv)
+    argv.custom_action_param='{"max_draws":30}'
+    assert ExchangeShopConfigure().run(context,argv)
+    assert _OPTIONS[1701]=={"mode":"auto","execute":False,"max_draws":30}
+    def stop_ui(context):raise ExchangeStopped()
+    monkeypatch.setattr("agent.realtime.exchange_shop.ExchangeUI",stop_ui)
+    assert ExchangeShopRun().run(context,argv)
+    assert 1701 not in _OPTIONS
+
+
+def test_unknown_confirmation_is_never_clicked(monkeypatch):
+    context=SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    ui=ExchangeUI(context);ui.current_state=state()
+    clicks=[]
+    values=iter([(19,180,180,1,30822),(10,100),RuntimeError("unknown popup")])
+    def stable(*args,**kwargs):
+        value=next(values)
+        if isinstance(value,Exception):raise value
+        return value
+    ui.stable=stable;ui.click=lambda *p:clicks.append(p)
+    with pytest.raises(RuntimeError):ui.draw_once(10)
+    assert clicks == [(1025,618)]
+
+
+def test_confirmation_balance_mismatch_is_never_confirmed():
+    context=SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    ui=ExchangeUI(context);ui.current_state=state()
+    clicks=[];values=iter([(19,180,180,1,30822),(10,100),(10,100,30822,30723)])
+    ui.stable=lambda *a,**k:next(values);ui.click=lambda *p:clicks.append(p)
+    with pytest.raises(RuntimeError):ui.draw_once(10)
+    assert clicks == [(1025,618)]
+
+
+def test_complete_draw_only_clicks_right_result_close():
+    context=SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    ui=ExchangeUI(context);ui.current_state=state()
+    values=iter([(19,180,180,1,30822),(10,100),(10,100,30822,30722),30722,(19,170,180,1,30722)])
+    clicks=[];ui.stable=lambda *a,**k:next(values);ui.click=lambda *p:clicks.append(p)
+    ui.draw_once(10)
+    assert clicks == [(1025,618),(770,525),(1068,648)]
+
+
+def test_policy_logs_explain_unlimited_and_rechecking(tmp_path):
+    messages=[]
+    assert ExchangeFlow(UI([state()]),{"execute":False},report=messages.append).run()
+    assert "可用预算=3082抽" in messages[0] and "重读并重算" in messages[0]
+    assert "N=" not in messages[0]
+    assert "抽数上限=不限" in messages[0]
+    assert "None" not in "".join(messages)
+
+
+def reset_ui(frames):
+    context=SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    def page(image,name):
+        if name=="main":return isinstance(image,tuple)
+        if name=="reset_done":return isinstance(image,str) and image in ("done","wrong_done")
+        return True
+    reader=SimpleNamespace(main=lambda image:image,page=page,matches=lambda *args:True,
+        reset_confirmation=lambda image:True,reset_done=lambda image:image=="done",readings={})
+    sequence=iter(frames);captures=[]
+    def capture(context):
+        value=next(sequence);captures.append(value);return value
+    ui=ExchangeUI(context,reader=reader,capture=capture,sleep=lambda seconds:None)
+    ui.current_state=state(remaining=140,cans=7,special=0,currency=30422)
+    clicks=[];ui.click=lambda *p:clicks.append(p)
+    return ui,clicks,captures
+
+
+def test_reset_waits_through_two_old_box_frames_then_new_box():
+    old=(19,140,180,0,30422);new=(20,180,180,1,30422)
+    ui,clicks,captures=reset_ui([old,old,True,True,old,old,new,new])
+    ui.reset_once()
+    assert clicks == [(773,465),(769,526)]
+    assert len(captures)==8 and captures[-2:]==[new,new]
+
+
+def test_reset_wait_exhaustion_never_resends_confirmation():
+    old=(19,140,180,0,30422)
+    ui,clicks,captures=reset_ui([old,old,True,True]+[old]*100)
+    with pytest.raises(RuntimeError,match="未稳定"):ui.reset_once()
+    assert clicks == [(773,465),(769,526)]
+    assert len(captures)==104
+
+
+@pytest.mark.parametrize("box", (state(remaining=140,cans=7,special=1),state(remaining=0,cans=0,special=0)))
+def test_reset_refuses_locked_special_or_empty_box(box):
+    ui,clicks,captures=reset_ui([]);ui.current_state=box
+    with pytest.raises(RuntimeError,match="不允许手动换箱"):ui.reset_once()
+    assert clicks == [] and captures == []
+
+
+def test_reset_main_change_or_disabled_button_blocks_before_open():
+    ui,clicks,_=reset_ui([(19,130,180,0,30422)]*2)
+    with pytest.raises(RuntimeError,match="主页面已变化"):ui.reset_once()
+    assert clicks == []
+    ui,clicks,_=reset_ui([(19,140,180,0,30422)]*2)
+    ui.reader.matches=lambda *args:False
+    with pytest.raises(RuntimeError,match="按钮未确认可用"):ui.reset_once()
+    assert clicks == []
+
+
+def test_unknown_reset_popup_never_confirms():
+    old=(19,140,180,0,30422)
+    ui,clicks,_=reset_ui([old,old]+[False]*10)
+    def reject(image):raise ValueError("这是交换确认")
+    ui.reader.reset_confirmation=reject
+    with pytest.raises(RuntimeError):ui.reset_once()
+    assert clicks == [(773,465)]
+
+
+@pytest.mark.parametrize("stop_at", ((773,465),(769,526)))
+def test_reset_stop_sends_no_followup_input(stop_at):
+    old=(19,140,180,0,30422)
+    ui,clicks,_=reset_ui([old,old,True,True])
+    def click(*target):
+        clicks.append(target)
+        if target==stop_at:ui.context.tasker.stopping=True
+    ui.click=click
+    with pytest.raises(ExchangeStopped):ui.reset_once()
+    assert clicks[-1]==stop_at
+
+
+def test_reset_stop_preserves_pending_ledger(tmp_path):
+    ui=UI([state(cans=0,special=0)])
+    def reset():
+        ui.actions.append("reset")
+        raise ExchangeStopped()
+    ui.reset_once=reset
+    with pytest.raises(ExchangeStopped):flow(ui,tmp_path).run()
+    assert ui.actions == ["settings","read","reset"]
+    with pytest.raises(RuntimeError):ExchangeJournal(tmp_path/"ledger.json").check_unresolved()
+
+
+def test_reset_success_prompt_acknowledges_once_then_checks_new_main():
+    old=(19,140,180,0,30422);new=(20,180,180,1,30422)
+    ui,clicks,captures=reset_ui([old,old,True,True,"done","done",new,new])
+    ui.reset_once()
+    assert clicks == [(773,465),(769,526),(640,448)]
+    assert captures[-2:]==[new,new]
+
+
+def test_finish_reset_only_acknowledges_and_never_sends_reset_confirmation():
+    new=(20,180,180,1,30422)
+    ui,clicks,_=reset_ui(["done","done",new,new])
+    assert ui.finish_reset_result(ui.current_state)==new
+    assert clicks == [(640,448)]
+
+
+def test_reset_without_success_prompt_still_accepts_new_main():
+    new=(20,180,180,1,30422)
+    ui,clicks,_=reset_ui([new,new])
+    assert ui.finish_reset_result(ui.current_state)==new
+    assert clicks == []
+
+
+def test_repeated_reset_done_only_acknowledged_once():
+    new=(20,180,180,1,30422)
+    ui,clicks,_=reset_ui(["done"]*4+[new,new])
+    assert ui.finish_reset_result(ui.current_state)==new
+    assert clicks == [(640,448)]
+    ui,clicks,_=reset_ui(["done"]*100)
+    with pytest.raises(RuntimeError,match="未稳定"):ui.finish_reset_result(ui.current_state)
+    assert clicks == [(640,448)]
+
+
+def test_wrong_or_unknown_reset_done_sends_no_acknowledgement():
+    for frame in ("wrong_done","unknown"):
+        ui,clicks,_=reset_ui([frame]*100)
+        with pytest.raises(RuntimeError,match="未稳定"):ui.finish_reset_result(ui.current_state)
+        assert clicks == []
+
+
+def test_stop_before_reset_ack_sends_no_input():
+    ui,clicks,_=reset_ui(["done","done"])
+    capture=ui.capture;count=0
+    def stop_capture(context):
+        nonlocal count
+        count+=1
+        image=capture(context)
+        if count==2:context.tasker.stopping=True
+        return image
+    ui.capture=stop_capture
+    with pytest.raises(ExchangeStopped):ui.finish_reset_result(ui.current_state)
+    assert clicks == []
+
+
+def test_stop_during_reset_ack_prevents_followup_capture_or_input():
+    ui,clicks,captures=reset_ui(["done","done"])
+    def click(*target):
+        clicks.append(target);ui.context.tasker.stopping=True
+    ui.click=click
+    with pytest.raises(ExchangeStopped):ui.finish_reset_result(ui.current_state)
+    assert clicks == [(640,448)] and len(captures)==2
+
+
+FIXTURES=Path(__file__).resolve().parents[1]/".local/exchange-shop-20261024"
+
+
+@pytest.mark.skipif(not (FIXTURES/"contents-page.png").exists(),reason="本地真实截图不入库")
+def test_local_real_pages_use_production_ocr():
+    from agent.realtime.vision_io import imread_unicode
+    reader=ExchangeReader()
+    main=imread_unicode(FIXTURES/"main-after-contents.png")
+    assert reader.main(main)==(19,180,180,1,30822)
+    assert reader.contents(imread_unicode(FIXTURES/"contents-page.png"))==(180,180,10,1)
+    assert reader.settings(imread_unicode(FIXTURES/"settings-page.png"))==(True,True)
+    with pytest.raises(ValueError):reader.main((main.astype(float)*.6).astype(np.uint8))
+
+
+@pytest.mark.skipif(not (FIXTURES/"ten-01-result.png").exists(),reason="本地消费样本不入库")
+def test_local_real_confirmation_and_result_exclude_animation():
+    from agent.realtime.vision_io import imread_unicode
+    reader=ExchangeReader()
+    for file in ("ten-01-early.png","ten-01-late.png"):
+        assert reader.draw_confirmation(imread_unicode(FIXTURES/file))==(10,100,30822,30722)
+    assert reader.draw_result(imread_unicode(FIXTURES/"ten-01-result.png"))==30722
+    for file in ("main-after-contents.png","ten-01-early.png","ten-01-reward-early.png","ten-01-reward-late.png"):
+        with pytest.raises(ValueError):reader.draw_result(imread_unicode(FIXTURES/file))
+
+
+@pytest.mark.skipif(not (FIXTURES/"ten-01-main-stable.png").exists(),reason="本地消费样本不入库")
+def test_local_post_draw_reconciliation_rejects_sliding_panel():
+    from agent.realtime.vision_io import imread_unicode
+    reader=ExchangeReader()
+    assert reader.main(imread_unicode(FIXTURES/"ten-01-main-stable.png"))==(19,170,180,1,30722)
+    assert reader.contents(imread_unicode(FIXTURES/"ten-01-contents.png"))==(170,180,10,1)
+    with pytest.raises(ValueError):reader.main(imread_unicode(FIXTURES/"ten-01-main.png"))
+    validate_draw(state(),state(remaining=170,currency=30722),10)
+
+
+@pytest.mark.skipif(not (FIXTURES/"replay/device-v3-failure.png").exists(),reason="本地特别礼物已获得截图不入库")
+def test_local_special_zero_uses_tight_roi_without_lowering_confidence():
+    from agent.realtime.song_title_ocr import recognize_song_title
+    from agent.realtime.vision_io import imread_unicode
+    image=imread_unicode(FIXTURES/"replay/device-v3-failure.png")
+    old=recognize_song_title(image,roi=(424,291,57,31))
+    assert old is not None and old.confidence < .90
+    reader=ExchangeReader()
+    assert reader.contents(image)==(150,180,9,0)
+    assert reader.readings["contents_special"]["roi"]==(433,295,42,23)
+    assert reader.readings["contents_special"]["confidence"] >= .90
+    validate_draw(state(remaining=160,currency=30622),state(remaining=150,cans=9,special=0,currency=30522),10)
+
+
+@pytest.mark.skipif(not (FIXTURES/"reset-confirm-b.png").exists(),reason="本地换箱确认截图不入库")
+def test_local_reset_confirmation_is_specific_and_draw_is_rejected():
+    from agent.realtime.vision_io import imread_unicode
+    reader=ExchangeReader()
+    for file in ("reset-confirm-a.png","reset-confirm-b.png"):
+        image=imread_unicode(FIXTURES/file)
+        assert reader.reset_confirmation(image) is True
+        with pytest.raises(ValueError):reader.draw_confirmation(image)
+    for file in ("ten-01-early.png","ten-01-late.png","contents-page.png","settings-page.png","ten-01-result.png"):
+        with pytest.raises(ValueError):reader.reset_confirmation(imread_unicode(FIXTURES/file))
+    main=imread_unicode(FIXTURES/"reset-before-main.png")
+    assert reader.main(main)==(19,140,180,0,30422)
+    assert reader.matches(main,"main_reset_enabled")
+    assert not reader.matches(imread_unicode(FIXTURES/"main-after-contents.png"),"main_reset_enabled")
+
+
+@pytest.mark.skipif(not (FIXTURES/"replay/device-v5-failure.png").exists(),reason="本地已重置提示截图不入库")
+def test_local_reset_done_requires_specific_title_body_and_ack():
+    from agent.realtime.vision_io import imread_unicode
+    reader=ExchangeReader()
+    image=imread_unicode(FIXTURES/"replay/device-v5-failure.png")
+    assert reader.reset_done(image) is True
+    for file in ("reset-done-a.png","reset-done-b.png"):
+        assert reader.reset_done(imread_unicode(FIXTURES/file)) is True
+    for file in ("reset-confirm-a.png","reset-confirm-b.png","ten-01-early.png","ten-01-result.png","contents-page.png","settings-page.png"):
+        with pytest.raises(ValueError):reader.reset_done(imread_unicode(FIXTURES/file))
+    partial=image.copy();partial[324:355,519:762]=255
+    with pytest.raises(ValueError):reader.reset_done(partial)
+
+
+def test_regression_finite_budget_can_reverse_long_run_choice():
+    assert decide(state(remaining=20,cans=1,special=0), budget=10).action == "reset"
+    assert decide(state(remaining=10,cans=1,special=0), budget=10).action == "draw"
+
+
+@pytest.mark.parametrize("amount", (5,10))
+def test_regression_empty_box_automatically_advances(amount):
+    before=state(remaining=amount,cans=1,special=0,currency=1000)
+    after=state(box=20,currency=1000-10*amount)
+    validate_draw(before,after,amount)
+
+
+def test_regression_long_run_high_density_continues():
+    assert decide(state(remaining=20,cans=1,special=0)).action == "draw"
+    assert decide(state(remaining=60,cans=1,special=0)).action == "reset"
+
+
+@pytest.mark.parametrize("total", (180,230))
+def test_finite_dp_matches_independent_fraction_bellman(total):
+    from fractions import Fraction
+    from functools import lru_cache
+    from math import comb
+    from agent.realtime.exchange_shop_policy import FiniteBudgetPolicy
+
+    @lru_cache(None)
+    def exact(b,x,y,s):
+        if x == 0:
+            return exact(b,total,10,1)
+        n=min(10,x)
+        draw=Fraction(0)
+        if b >= n:
+            for got in range(min(n,y)+1):
+                for special in range(s+1):
+                    other=n-got-special
+                    if 0 <= other <= x-y-s:
+                        p=Fraction(comb(y,got)*comb(s,special)*comb(x-y-s,other),comb(x,n))
+                        draw+=p*(got+exact(b-n,x-n,y-got,s-special))
+        return max(draw,exact(b,total,10,1)) if s == 0 else draw
+
+    policy=FiniteBudgetPolicy(total)
+    probes=((7,1,0),(10,1,0),(17,1,0),(20,1,0),(30,1,0),(20,2,1),(total,10,1))
+    for budget in (0,7,10,17,20,30):
+        policy.extend(budget,lambda:None)
+        for probe in probes:
+            actual=policy.values[budget%11][policy.index[probe]]
+            assert actual == pytest.approx(float(exact(budget,*probe)),abs=2e-13)
+            decision=decide(state(total=total,remaining=probe[0],cans=probe[1],special=probe[2]),budget)
+            reset_value=exact(budget,total,10,1)
+            if decision.action == "reset":
+                assert probe[2] == 0 and reset_value == exact(budget,*probe)
+
+
+@pytest.mark.parametrize("total,expected", ((180,172.73183118016208),(230,135.74040279370951)))
+def test_normal_balance_dp_matches_independent_decimal_benchmark(total,expected):
+    from agent.realtime.exchange_shop_policy import FiniteBudgetPolicy
+    policy=FiniteBudgetPolicy(total)
+    policy.extend(2812,lambda:None)
+    assert policy.values[2812%11][policy.full] == pytest.approx(expected,abs=1e-10)
+
+
+@pytest.mark.parametrize("budget,action", ((10,"reset"),(20,"reset"),(50,"draw"),(200,"reset"),(2810,"draw")))
+def test_finite_policy_does_not_assume_large_budget_monotonicity(budget,action):
+    assert decide(state(total=230,remaining=30,cans=1,special=0),budget).action == action
+
+
+def test_dp_cancel_is_immediate_and_cache_resumes_completed_layers():
+    from agent.realtime.exchange_shop_policy import FiniteBudgetPolicy
+    policy=FiniteBudgetPolicy(180)
+    calls=[]
+    def stopped():
+        calls.append(True)
+        if len(calls)==4:raise ExchangeStopped()
+    with pytest.raises(ExchangeStopped):policy.extend(100,stopped)
+    assert policy.horizon == 3
+    policy.extend(10,lambda:None)
+    assert policy.horizon == 10 and len(policy.actions)==11
+
+
+def test_exact_budget_limit_and_no_reward_stop_do_not_consume(tmp_path):
+    ui=UI([state(currency=100010)])
+    with pytest.raises(ValueError,match="预算过大"):flow(ui,tmp_path).run()
+    assert ui.actions == ["settings","read"] and not (tmp_path/"ledger.json").exists()
+    assert decide(state(remaining=20,cans=0,special=0),budget=9).action == "stop"
+
+
+def test_flow_uses_smaller_of_coin_and_cumulative_draw_budget(tmp_path):
+    before=state(remaining=20,cans=1,special=0,currency=100)
+    after=state(box=20,currency=100)
+    end=state(box=20,remaining=170,currency=0)
+    ui=UI([before,after,end])
+    messages=[]
+    f=flow(ui,tmp_path,max_draws=100)
+    f.report=messages.append
+    assert f.run() and f.draws == 10
+    assert ui.actions == ["settings","read","reset","read",("draw",10),"read"]
+    assert "可用预算=10抽" in messages[0]
+
+
+@pytest.mark.parametrize("changes", ({"box":21},{"remaining":179},{"cans":9},{"special":0},{"currency":899},
+    {"total":230,"remaining":230}))
+def test_auto_new_box_requires_exact_next_full_state(changes):
+    with pytest.raises(RuntimeError):
+        validate_draw(state(remaining=10,cans=1,special=0,currency=1000),replace(state(box=20,currency=900),**changes),10)
+    with pytest.raises(RuntimeError):
+        validate_draw(state(remaining=20,cans=1,special=0,currency=1000),state(box=20,currency=900),10)
+
+
+@pytest.mark.parametrize("amount", (5,10))
+def test_last_batch_passively_waits_and_only_closes_result_and_optional_done(amount):
+    old=(19,0,180,0,1000-10*amount);new=(20,180,180,1,1000-10*amount)
+    ui,clicks,_=reset_ui([old,old,"done","done","done",new,new])
+    ui.stable=lambda *args,**kwargs:1000-10*amount
+    ui.reader.draw_result=lambda image:1000-10*amount
+    ui.finish_draw_result(1000-10*amount,state(remaining=amount,cans=1,special=0,currency=1000))
+    assert clicks == [(1068,648),(640,448)]
+
+
+def test_empty_start_waits_for_auto_new_box_before_opening_contents():
+    old=(19,0,180,0,30422);new=(20,180,180,1,30422)
+    ui,clicks,captures=reset_ui([old,old,new,new,"contents","contents",new,new])
+    ui.reader.contents=lambda image:(180,180,10,1)
+    assert ui.read_state() == state(box=20,currency=30422)
+    assert clicks == [(1029,465),(640,642)]
+    assert captures[:4]==[old,old,new,new]
+
+
+def test_auto_new_box_timeout_never_clicks_next_or_confirms_reset():
+    old=(19,0,180,0,30422)
+    ui,clicks,_=reset_ui([old]*100)
+    with pytest.raises(RuntimeError,match="未稳定"):ui.wait_new_box(old,30422)
+    assert clicks == []
+
+
+def test_manual_not_executed_resolution_preserves_pending_audit(tmp_path):
+    import json
+    journal=ExchangeJournal(tmp_path/"ledger.json")
+    before=state(remaining=60,cans=6,special=0,currency=28122)
+    journal.reserve(before,decide(before,budget=2812))
+    original=json.loads(journal.path.read_text(encoding="utf-8"))
+    with pytest.raises(RuntimeError):journal.resolve_not_executed(replace(before,currency=28121),{"main":"frames"})
+    with pytest.raises(ValueError):journal.resolve_not_executed(before,{})
+    journal.resolve_not_executed(before,{"main":["new-1","new-2"],"contents":["new-3","new-4"]})
+    resolved=json.loads(journal.path.read_text(encoding="utf-8"))
+    assert resolved["status"] == "resolved_not_executed"
+    assert all(resolved[key] == original[key] for key in ("before","decision","created_ns"))
+    assert resolved["after"] == resolved["before"] and resolved["resolution"]["manual"]
+    journal.check_unresolved()
+
+
+@pytest.mark.parametrize("cost,amount", (("消费蓝色礼物币100枚",10),("消费红币50枚",5),("活动兑换用礼物币100枚",10)))
+def test_currency_name_and_color_are_not_used_in_confirmation(cost,amount):
+    reader=ExchangeReader()
+    reader.page=lambda *args:True
+    values=iter([cost,f"领取礼物{amount}个奖品。","确认吗？","1000",str(1000-amount*10)])
+    reader.ocr=lambda *args,**kwargs:SimpleNamespace(text=next(values),confidence=.99)
+    assert reader.draw_confirmation(None) == (amount,amount*10,1000,1000-amount*10)
+
+
+@pytest.mark.parametrize("cost", ("消费第2种礼物币100枚","消费礼物币1000枚","消费礼物币100","消费礼物币10.0枚","消费礼物币-100枚"))
+def test_confirmation_requires_one_unsigned_integer_cost_and_unit(cost):
+    reader=ExchangeReader();reader.page=lambda *args:True
+    values=iter([cost,"领取礼物10个奖品。","确认吗？"])
+    reader.ocr=lambda *args,**kwargs:SimpleNamespace(text=next(values),confidence=.99)
+    with pytest.raises(ValueError):reader.draw_confirmation(None)
+
+
+@pytest.mark.skipif(not (FIXTURES/"ten-01-result.png").exists(),reason="本地真实截图不入库")
+def test_synthetic_currency_color_and_label_changes_keep_numeric_contract():
+    from agent.realtime.vision_io import imread_unicode
+    reader=ExchangeReader()
+    for file,kind,expected in (("main-after-contents.png","main",(19,180,180,1,30822)),
+                               ("ten-01-early.png","draw_confirm",(10,100,30822,30722)),
+                               ("ten-01-result.png","draw_result",30722)):
+        image=imread_unicode(FIXTURES/file)
+        # 合成变更仅证明签名不绑定货币外观，不冒充另一活动真机样本。
+        regions=((554,387,153,30),) if kind == "draw_confirm" else ((671,540,192,30),)
+        for x,y,w,h in regions:
+            image[y:y+h,x:x+w]=[31,80,220]
+        read={"main":reader.main,"draw_confirm":reader.draw_confirmation,"draw_result":reader.draw_result}[kind]
+        assert read(image)==expected
+
+
+def manual_clear_evidence():
+    return {"operator_confirmed_manual_full_clear":True,
+            "fresh_main_frames":["main-a.png","main-b.png"],
+            "fresh_contents_frames":["contents-a.png","contents-b.png"]}
+
+
+def test_manual_external_full_clear_is_narrow_audited_terminal(tmp_path):
+    import json
+    from agent.realtime.exchange_shop_policy import Decision
+    journal=ExchangeJournal(tmp_path/"ledger.json")
+    before=state(box=22,remaining=60,cans=6,special=0,currency=28122)
+    journal.reserve(before,Decision("reset"))
+    original=json.loads(journal.path.read_text(encoding="utf-8"))
+    after=state(box=23,currency=27522)
+    journal.resolve_external_full_clear(after,manual_clear_evidence())
+    resolved=json.loads(journal.path.read_text(encoding="utf-8"))
+    assert all(resolved[key] == original[key] for key in ("before","decision","created_ns"))
+    assert resolved["status"] == "resolved_external_full_clear"
+    assert resolved["resolution"]["old_reset"] == "not_executed"
+    assert resolved["resolution"]["actual_draws"] == 60
+    assert resolved["resolution"]["actual_cost"] == 600
+    journal.check_unresolved()
+    resolved["resolution"]["actual_cost"]=0
+    journal.path.write_text(json.dumps(resolved),encoding="utf-8")
+    with pytest.raises(RuntimeError):journal.check_unresolved()
+
+
+@pytest.mark.parametrize("changes", ({"box":22},{"box":24},{"currency":28122},{"currency":27521},
+    {"remaining":179},{"cans":9},{"special":0},{"total":230,"remaining":230}))
+def test_manual_external_clear_rejects_other_states_without_changing_pending(tmp_path,changes):
+    from agent.realtime.exchange_shop_policy import Decision
+    journal=ExchangeJournal(tmp_path/"ledger.json")
+    journal.reserve(state(box=22,remaining=60,cans=6,special=0,currency=28122),Decision("reset"))
+    original=journal.path.read_bytes()
+    with pytest.raises(RuntimeError):
+        journal.resolve_external_full_clear(replace(state(box=23,currency=27522),**changes),manual_clear_evidence())
+    assert journal.path.read_bytes() == original
+
+
+@pytest.mark.parametrize("changes", ({"operator_confirmed_manual_full_clear":False},
+    {"operator_confirmed_manual_full_clear":1},{"fresh_main_frames":[]},
+    {"fresh_contents_frames":["one"]},{"fresh_main_frames":["same","same"]}))
+def test_manual_external_clear_requires_declaration_and_two_distinct_frames(tmp_path,changes):
+    from agent.realtime.exchange_shop_policy import Decision
+    journal=ExchangeJournal(tmp_path/"ledger.json")
+    journal.reserve(state(box=22,remaining=60,cans=6,special=0,currency=28122),Decision("reset"))
+    original=journal.path.read_bytes()
+    with pytest.raises(ValueError):
+        journal.resolve_external_full_clear(state(box=23,currency=27522),manual_clear_evidence()|changes)
+    assert journal.path.read_bytes() == original
+
+
+def test_manual_external_clear_cannot_resolve_draw_pending(tmp_path):
+    from agent.realtime.exchange_shop_policy import Decision
+    journal=ExchangeJournal(tmp_path/"ledger.json")
+    journal.reserve(state(box=22,remaining=60,cans=6,special=0,currency=28122),Decision("draw",10))
+    with pytest.raises(RuntimeError):journal.resolve_external_full_clear(state(box=23,currency=27522),manual_clear_evidence())
+
+
+@pytest.mark.parametrize("total", (180,230))
+@pytest.mark.parametrize("remaining", (10,180))
+def test_zero_can_locked_box_does_not_spend_last_batch_for_zero_reward(total,remaining):
+    box=state(total=total,remaining=remaining,cans=0,special=1,currency=1000)
+    assert decide(box,budget=10).action == "stop"
+    assert decide(box,budget=20).action == "draw"
+
+
+def test_zero_reward_stop_sends_no_consumption_and_does_not_create_pending(tmp_path):
+    ui=UI([state(remaining=180,cans=0,special=1,currency=100)])
+    assert flow(ui,tmp_path).run()
+    assert ui.actions == ["settings","read"]
+    assert not (tmp_path/"ledger.json").exists()
+
+
+def navigation_ui(frames):
+    context=SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    sequence=iter(frames);captures=[];clicks=[]
+    def page(image,name):
+        return isinstance(image,tuple) if name == "main" else image == name
+    reader=SimpleNamespace(page=page,main=lambda image:image,contents=lambda image:(180,180,10,1),
+        settings=lambda image:(True,True),reset_confirmation=lambda image:True,
+        matches=lambda *args:True,readings={"contents_remaining":{"text":"30/180"},"cans":{"text":"0/10"}})
+    def capture(context):
+        value=next(sequence)
+        captures.append(value)
+        if isinstance(value,Exception):raise value
+        return value
+    ui=ExchangeUI(context,reader=reader,capture=capture,sleep=lambda seconds:None)
+    ui.click=lambda *point:clicks.append(point)
+    return ui,clicks,captures
+
+
+def test_contents_open_retries_delivery_after_unchanged_main_then_reads_new_box():
+    main=(29,180,180,1,19522)
+    ui,clicks,captures=navigation_ui([main]*14+["contents"]*2+[main]*2)
+    assert ui.read_state() == state(box=29,currency=19522)
+    assert clicks == [(1029,465),(1029,465),(640,642)]
+    assert len(captures) == 18
+
+
+def test_contents_open_three_misses_only_retries_non_consuming_entry():
+    main=(29,180,180,1,19522)
+    ui,clicks,captures=navigation_ui([main]*36)
+    with pytest.raises(RuntimeError,match="入口未稳定"):ui.read_state()
+    assert clicks == [(1029,465)]*3 and len(captures)==36
+    assert ui.navigation["attempt"] == 3 and not ui.navigation["target_seen"]
+    assert "contents_remaining" not in ui.reader.readings and "cans" not in ui.reader.readings
+
+
+@pytest.mark.parametrize("changed", ((30,180,180,1,19522),(29,170,180,1,19522),
+    (29,180,230,1,19522),(29,180,180,0,19522),(29,180,180,1,19422)))
+def test_contents_open_changed_main_stops_before_retry(changed):
+    main=(29,180,180,1,19522)
+    ui,clicks,captures=navigation_ui([main]*2+[changed])
+    with pytest.raises(RuntimeError,match="主页面已变化"):ui.read_state()
+    assert clicks == [(1029,465)] and len(captures)==3
+
+
+def test_unknown_opening_animation_can_only_wait_for_target_not_retry_entry():
+    main=(29,180,180,1,19522)
+    ui,clicks,_=navigation_ui([main]*2+["unknown"]+["contents"]*2+[main]*2)
+    assert ui.read_state() == state(box=29,currency=19522)
+    assert clicks == [(1029,465),(640,642)]
+    ui,clicks,_=navigation_ui([main]*2+["unknown"]+[main]*9)
+    with pytest.raises(RuntimeError,match="入口未稳定"):ui.read_state()
+    assert clicks == [(1029,465)]
+
+
+@pytest.mark.parametrize("guard", ("unknown",(29,180,180,1,19422)))
+def test_retry_requires_two_extra_new_frames_of_exact_original_main(guard):
+    main=(29,180,180,1,19522)
+    ui,clicks,captures=navigation_ui([main]*12+[main,guard])
+    with pytest.raises(RuntimeError):ui.read_state()
+    assert clicks == [(1029,465)] and len(captures)==14
+
+
+def test_target_arrives_during_retry_guard_no_second_opener_is_sent():
+    main=(29,180,180,1,19522)
+    ui,clicks,_=navigation_ui([main]*12+["contents"]*3+[main]*2)
+    assert ui.read_state() == state(box=29,currency=19522)
+    assert clicks == [(1029,465),(640,642)]
+
+
+def test_target_signature_seen_but_bad_ocr_never_reopens_or_uses_old_contents():
+    main=(29,180,180,1,19522)
+    ui,clicks,_=navigation_ui([main]*2+["contents"]*10)
+    def bad_ocr(image):raise ValueError("本次数字低置信")
+    ui.reader.contents=bad_ocr
+    with pytest.raises(RuntimeError,match="本次数字低置信"):ui.read_state()
+    assert clicks == [(1029,465)] and ui.navigation["target_seen"]
+    assert ui.reader.readings == {}
+    ui,clicks,_=navigation_ui([main]*2+["contents"]+[main]*9)
+    with pytest.raises(RuntimeError):ui.read_state()
+    assert clicks == [(1029,465)] and ui.navigation["target_seen"]
+
+
+def test_unreadable_main_in_wait_never_authorizes_retry():
+    main=(29,180,180,1,19522)
+    ui,clicks,_=navigation_ui([main]*12)
+    original=ui.reader.main;reads=0
+    def fail_new_main(image):
+        nonlocal reads
+        reads+=1
+        if reads>2:raise ValueError("主页面数字低置信")
+        return original(image)
+    ui.reader.main=fail_new_main
+    with pytest.raises(RuntimeError,match="入口未稳定"):ui.read_state()
+    assert clicks == [(1029,465)]
+
+
+def test_capture_exception_after_opener_never_retries():
+    main=(29,180,180,1,19522)
+    ui,clicks,captures=navigation_ui([main]*2+[RuntimeError("截图框架错误")])
+    with pytest.raises(RuntimeError,match="截图框架错误"):ui.read_state()
+    assert clicks == [(1029,465)] and len(captures)==3
+
+
+@pytest.mark.parametrize("stop_phase", ("before","after_click","during_capture","retry_guard"))
+def test_open_navigation_stop_prevents_any_followup_input_or_capture(stop_phase):
+    main=(29,180,180,1,19522)
+    ui,clicks,captures=navigation_ui([main]*14)
+    if stop_phase == "before":
+        ui.context.tasker.stopping=True
+    elif stop_phase == "after_click":
+        def click(*point):
+            clicks.append(point);ui.context.tasker.stopping=True
+        ui.click=click
+    elif stop_phase == "during_capture":
+        original=ui.capture
+        def capture(context):
+            image=original(context)
+            if len(captures)==3:context.tasker.stopping=True
+            return image
+        ui.capture=capture
+    else:
+        original=ui.reader.main
+        def stop_main(image):
+            if len(captures)==14:ui.context.tasker.stopping=True
+            return original(image)
+        ui.reader.main=stop_main
+    with pytest.raises(ExchangeStopped):ui.read_state()
+    assert len(captures) == {"before":0,"after_click":2,"during_capture":3,"retry_guard":14}[stop_phase]
+    assert clicks == ([] if stop_phase == "before" else [(1029,465)])
+
+
+def test_settings_opener_uses_same_delivery_retry_without_changing_options():
+    main=(29,180,180,1,19522)
+    ui,clicks,_=navigation_ui([main]*14+["settings"]*2+[main]*2)
+    ui.check_settings()
+    assert clicks == [(1068,127),(1068,127),(640,603)]
+
+
+def test_manual_reset_only_retries_opener_and_confirm_stays_single():
+    main=(28,30,180,0,19522);new=(29,180,180,1,19522)
+    ui,clicks,_=navigation_ui([main]*14+["reset_confirm"]*2+[new]*2)
+    ui.current_state=state(box=28,remaining=30,cans=0,special=0,currency=19522)
+    ui.reset_once()
+    assert clicks == [(773,465),(773,465),(769,526)]
+
+
+DELIVERY_FAILURE=Path(__file__).resolve().parents[1]/"debug/exchange-shop/1792863019256890400/failure.png"
+
+
+@pytest.mark.skipif(not DELIVERY_FAILURE.exists(),reason="本地真实导航失败图不入库")
+def test_real_delivery_failure_is_new_box_main_and_not_contents():
+    from agent.realtime.vision_io import imread_unicode
+    reader=ExchangeReader()
+    image=imread_unicode(DELIVERY_FAILURE)
+    assert reader.main(image) == (29,180,180,1,19522)
+    assert not reader.page(image,"contents")
+    with pytest.raises(ValueError):reader.contents(image)
