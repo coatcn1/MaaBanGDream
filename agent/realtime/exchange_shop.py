@@ -196,6 +196,40 @@ class ExchangeReader:
             raise ValueError("抽取按钮数量或礼物币费用无效")
         return int(a[1]), int(c[1])
 
+    def confirmation_after(self, image):
+        roi = (733, 425, 106, 33)
+        self.readings.pop("confirm_after", None)
+        self.readings.pop("confirm_after_original", None)
+        try:
+            original = self.text(image, "confirm_after_original", roi)
+        except ValueError:
+            # 仅容许已记录的低置信结果，识别器异常不能被裁剪重试掩盖。
+            if "confirm_after_original" not in self.readings:
+                raise
+            original = None
+        self.stopped()
+        if original is not None and not re.fullmatch(r"[0-9]{1,9}", original):
+            raise ValueError("交换确认余额原始读数无效")
+        x, y, w, h = roi
+        region = image[y:y+h, x:x+w, :3]
+        # 只收紧本字段留白，保留全部非白墨迹及原彩色像素，不筛掉符号或遮挡。
+        ys, xs = np.where(region.min(axis=2) < 240)
+        if not xs.size:
+            raise ValueError("交换确认余额没有完整墨迹")
+        left, top, right, bottom = int(xs.min()), int(ys.min()), int(xs.max())+1, int(ys.max())+1
+        padding = 2
+        # 触边时无法证明数字完整，不能把被截断的高置信子串作为消费凭据。
+        if left < padding or top < padding or right > w-padding or bottom > h-padding:
+            raise ValueError("交换确认余额墨迹触边或被遮挡")
+        tight_roi = (x+left-padding, y+top-padding, right-left+2*padding, bottom-top+2*padding)
+        text = self.text(image, "confirm_after", tight_roi)
+        self.readings["confirm_after"].update(source_roi=roi, method="complete_ink_crop")
+        if not re.fullmatch(r"[0-9]{1,9}", text):
+            raise ValueError("交换确认余额无效")
+        if original is not None and original != text:
+            raise ValueError("交换确认余额高置信读数冲突")
+        return text
+
     def draw_confirmation(self, image):
         if not self.page(image, "draw_confirm"):
             raise ValueError("不是已验证的礼物币交换确认页")
@@ -208,7 +242,7 @@ class ExchangeReader:
             raise ValueError("交换确认金额、数量或正文不匹配")
         values = []
         for key, roi in (("confirm_before", (454, 425, 105, 33)), ("confirm_after", (733, 425, 106, 33))):
-            text = self.text(image, key, roi)
+            text = self.confirmation_after(image) if key == "confirm_after" else self.text(image, key, roi)
             if not re.fullmatch(r"[0-9]{1,9}", text):
                 raise ValueError("交换确认余额无效")
             values.append(int(text))
