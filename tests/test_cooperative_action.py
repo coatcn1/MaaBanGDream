@@ -875,7 +875,7 @@ def test_endpoint_room_selection_swipes_directly_without_resetting_carousel(
     clicks = []
     flow.click = clicks.append
     verifications = []
-    flow.verify_room_entry = verifications.append
+    flow.verify_room_entry = lambda reason, **kwargs: verifications.append((reason, kwargs))
     swipes = []
     monkeypatch.setattr(
         cooperative_action,
@@ -1399,6 +1399,7 @@ def test_cooperative_templates_are_deployed_and_nonempty():
         "sss_guide_close.png",
         "disconnect_continue_body.png",
         "disconnect_confirm_body.png",
+        "room_match_wait.png",
     }
     assert required == {path.name for path in image_dir.glob("*.png")}
     assert all(
@@ -2390,3 +2391,190 @@ def test_manual_song_choice_interface_preserves_unspecified_default():
     params.update(manual["pipeline_override"]["CooperativeSongChoiceConfigure"]["custom_action_param"])
     assert params == {"song_choice": "manual"}
     assert DEFAULT_SETTINGS["song_choice"] == "unspecified"
+
+
+def test_room_entry_recovers_stalled_match_popup(monkeypatch):
+    """「匹配中」弹窗长时间不消失：取消 → 重新确定，而不是等到超时。"""
+    clock = [0.0]
+    flow = _bare_flow()
+    flow.room_recovery_trial = False
+    flow.capture = lambda: room_frame(90)
+    flow.settings["room_tier"] = "free"
+    flow.context.tasker.controller = object()
+    monkeypatch.setattr(cooperative_action, "require_game_foreground", lambda _c: None)
+    state = {"popup": True, "lobby": False}
+
+    def visible(_image, name, *args):
+        if name == "room_match_wait":
+            return state["popup"]
+        if name == "room_search":
+            return not state["lobby"]
+        if name == "room_wait":
+            return state["lobby"]
+        return False
+
+    flow.visible = visible
+    clicks = []
+
+    def click(point):
+        clicks.append((round(clock[0], 2), point))
+        if point == cooperative_action.ROOM_MATCH_CANCEL_POINT:
+            state["popup"] = False
+        elif point == cooperative_action.ROOM_CONFIRM_POINT:
+            state["popup"] = False
+            state["lobby"] = True
+
+    flow.click = click
+    flow.context.run_task = lambda node, override: (
+        click(tuple(override[node]["target"][:2]))
+        or SimpleNamespace(status=SimpleNamespace(succeeded=True))
+    )
+    monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        cooperative_action.time,
+        "sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+
+    flow.verify_room_entry(
+        "entry timeout", confirm_point=cooperative_action.ROOM_CONFIRM_POINT
+    )
+
+    assert [point for _, point in clicks] == [
+        cooperative_action.ROOM_MATCH_CANCEL_POINT,
+        cooperative_action.ROOM_CONFIRM_POINT,
+    ]
+    assert clicks[0][0] == 12.0
+
+
+def test_room_entry_ignores_transient_match_popup(monkeypatch):
+    """匹配弹窗在阈值内自行消失时不能误触发取消重进。"""
+    clock = [0.0]
+    flow = _bare_flow()
+    flow.room_recovery_trial = False
+    flow.capture = lambda: "frame"
+    flow.visible = lambda _image, name, *args: (
+        (name == "room_match_wait" and clock[0] < 5.0)
+        or (name == "room_wait" and clock[0] >= 6.0)
+    )
+    clicks = []
+    flow.click = lambda point: clicks.append(point)
+    monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        cooperative_action.time,
+        "sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+
+    flow.verify_room_entry(
+        "entry timeout", confirm_point=cooperative_action.ROOM_CONFIRM_POINT
+    )
+
+    assert clicks == []
+
+
+def test_room_entry_falls_back_to_android_back_when_cancel_ineffective(
+    monkeypatch,
+):
+    """「取消」没能关掉弹窗时改用 Android BACK，再重新确定。"""
+    clock = [0.0]
+    flow = _bare_flow()
+    flow.room_recovery_trial = False
+    flow.capture = lambda: room_frame(90)
+    flow.settings["room_tier"] = "free"
+    monkeypatch.setattr(cooperative_action, "require_game_foreground", lambda _c: None)
+    state = {"popup": True, "lobby": False}
+
+    def visible(_image, name, *args):
+        if name == "room_match_wait":
+            return state["popup"]
+        if name == "room_wait":
+            return state["lobby"]
+        if name == "room_search":
+            return not state["popup"] and not state["lobby"]
+        return False
+
+    flow.visible = visible
+    clicks, keys = [], []
+
+    def click(point):
+        clicks.append((round(clock[0], 2), point))
+        if point == cooperative_action.ROOM_CONFIRM_POINT:
+            state["popup"] = False
+            state["lobby"] = True
+
+    flow.click = click
+    flow.context.run_task = lambda node, override: (
+        click(tuple(override[node]["target"][:2]))
+        or SimpleNamespace(status=SimpleNamespace(succeeded=True))
+    )
+    def back(key):
+        state["popup"] = False
+        return SimpleNamespace(wait=lambda: keys.append((round(clock[0], 2), key)), succeeded=True)
+    flow.context.tasker.controller = SimpleNamespace(post_click_key=back)
+    monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        cooperative_action.time,
+        "sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+
+    flow.verify_room_entry(
+        "entry timeout", confirm_point=cooperative_action.ROOM_CONFIRM_POINT
+    )
+
+    assert keys == [(18.0, 4)]
+    assert [point for _, point in clicks] == [
+        cooperative_action.ROOM_MATCH_CANCEL_POINT,
+        cooperative_action.ROOM_CONFIRM_POINT,
+    ]
+
+
+def test_room_entry_match_stall_recovery_is_bounded(monkeypatch):
+    """弹窗一直不消失时只重试固定次数，之后仍按原超时失败。"""
+    clock = [0.0]
+    flow = _bare_flow()
+    flow.room_recovery_trial = False
+    flow.capture = lambda: room_frame(90)
+    flow.settings["room_tier"] = "free"
+    flow.context.tasker.controller = object()
+    monkeypatch.setattr(cooperative_action, "require_game_foreground", lambda _c: None)
+    state = {"popup": True}
+
+    def visible(_image, name, *args):
+        return (state["popup"] if name == "room_match_wait"
+                else not state["popup"] if name == "room_search" else False)
+
+    flow.visible = visible
+    clicks = []
+
+    def click(point):
+        clicks.append(point)
+        if point == cooperative_action.ROOM_MATCH_CANCEL_POINT:
+            state["popup"] = False
+        elif point == cooperative_action.ROOM_CONFIRM_POINT:
+            state["popup"] = True
+
+    flow.click = click
+    flow.context.run_task = lambda node, override: (
+        click(tuple(override[node]["target"][:2]))
+        or SimpleNamespace(status=SimpleNamespace(succeeded=True))
+    )
+    monkeypatch.setattr(cooperative_action.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        cooperative_action.time,
+        "sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+
+    with pytest.raises(RuntimeError, match="entry timeout"):
+        flow.verify_room_entry(
+            "entry timeout", confirm_point=cooperative_action.ROOM_CONFIRM_POINT
+        )
+
+    cancels = [
+        point
+        for point in clicks
+        if point == cooperative_action.ROOM_MATCH_CANCEL_POINT
+    ]
+    assert len(cancels) == cooperative_action.ROOM_MATCH_RECOVERY_LIMIT

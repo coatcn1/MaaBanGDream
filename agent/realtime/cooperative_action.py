@@ -96,6 +96,8 @@ TEMPLATE_POSITIONS = {
     # 跳车：真实弹窗正文（2026-09-07 雷电录像提取）。
     "disconnect_continue_body": (488, 313),
     "disconnect_confirm_body": (495, 307),
+    # 「匹配中／正在寻找房间」弹窗正文；网络卡住时它会一直盖在房间选择页上。
+    "room_match_wait": (448, 426),
 }
 
 DEFAULT_SETTINGS: dict[str, object] = {
@@ -148,6 +150,14 @@ COOPERATIVE_SONG_CHOICE_PAUSE_SECONDS = 10.0
 ROOM_RECOVERY_TRIAL_ENV = "MAABANGDREAM_COOPERATIVE_ROOM_RECOVERY_TRIAL"
 ROOM_CONFIRM_POINT = (1060, 650)
 ROOM_PREPARATION_RETRY_LIMIT = 2
+# 「匹配中」转圈弹窗：正常匹配会自行消失，网络卡住时它会一直不关，
+# 房间选择页被盖住但页面标记仍在，旧逻辑只能等到超时失败。
+# 连续可见超过阈值才判定卡死，避免误伤正常匹配。
+ROOM_MATCH_STALL_SECONDS = 12.0
+ROOM_MATCH_RECOVERY_LIMIT = 2
+ROOM_MATCH_POPUP_THRESHOLD = 0.90
+# 弹窗底部居中「取消」按钮（1280×720 标定，取自 2026-10-12 截图）。
+ROOM_MATCH_CANCEL_POINT = (637, 525)
 
 
 def _frame_is_black_transition(image: np.ndarray) -> bool:
@@ -763,10 +773,7 @@ class CooperativeLiveFlow:
         )
         self.click(ROOM_CONFIRM_POINT)
         failure_reason = "点击所选协力房间后仍停留在房间选择页，未开始匹配"
-        if getattr(self, "room_recovery_trial", False):
-            self.verify_room_entry(failure_reason, confirm_point=ROOM_CONFIRM_POINT)
-        else:
-            self.verify_room_entry(failure_reason)
+        self.verify_room_entry(failure_reason, confirm_point=ROOM_CONFIRM_POINT)
         print(
             "CooperativeLive select_room room_entry_confirmed "
             f"elapsed={time.monotonic() - started:.2f}s",
@@ -782,6 +789,10 @@ class CooperativeLiveFlow:
         next_reclick_at = started + 12.0
         reclicks = 0
         departed_frames = 0
+        match_popup_since: float | None = None
+        match_recoveries = 0
+        # 见过匹配弹窗后必须拿到可信房间标记，未知页不能再走三帧离页捷径。
+        match_seen = False
         while time.monotonic() < deadline:
             if self.stopped():
                 raise InterruptedError("用户已停止任务")
@@ -798,17 +809,49 @@ class CooperativeLiveFlow:
                     flush=True,
                 )
                 return
+            # 「匹配中」弹窗盖住选择页时页面标记可能仍然可见，但游戏已经
+            # 不再响应点击。必须单独判定：连续可见超过阈值就取消重进，
+            # 不能把它当成「仍停留在选择页」继续等。
+            if self.visible(
+                image, "room_match_wait", ROOM_MATCH_POPUP_THRESHOLD
+            ):
+                match_seen = True
+                departed_frames = 0
+                now = time.monotonic()
+                if match_popup_since is None:
+                    match_popup_since = now
+                elif (
+                    match_recoveries < ROOM_MATCH_RECOVERY_LIMIT
+                    and now - match_popup_since >= ROOM_MATCH_STALL_SECONDS
+                ):
+                    match_recoveries += 1
+                    print(
+                        "CooperativeLive room_entry=match-stall "
+                        f"recovery={match_recoveries}/{ROOM_MATCH_RECOVERY_LIMIT} "
+                        f"stalled={now - match_popup_since:.1f}s",
+                        flush=True,
+                    )
+                    outcome = self.recover_room_match_stall(confirm_point, deadline=deadline)
+                    print("CooperativeLive room_entry=match-stall "
+                          f"outcome={outcome} recovery={match_recoveries}", flush=True)
+                    if outcome == "entered":
+                        return
+                    match_popup_since = None
+                    departed_frames = 0
+                time.sleep(min(0.25, max(0.0, deadline - time.monotonic())))
+                continue
+            match_popup_since = None
             if self.visible(image, "room_search"):
                 departed_frames = 0
                 # 仅普通房间仍有选择页证据时重按，加载页不能复用该坐标。
-                if trial and confirm_point is not None and reclicks < 2 and time.monotonic() >= next_reclick_at:
+                if not match_seen and trial and confirm_point is not None and reclicks < 2 and time.monotonic() >= next_reclick_at:
                     reclicks += 1
                     next_reclick_at = time.monotonic() + 12.0
                     print(f"CooperativeLive room_entry=reclick attempt={reclicks}/2", flush=True)
                     self.click(confirm_point)
             else:
                 departed_frames += 1
-                if departed_frames >= 3:
+                if not match_seen and departed_frames >= 3:
                     # Matchmaking/loading/member collection layouts are
                     # transient and account/network dependent.  Stable
                     # departure from the selection page is sufficient here;
@@ -820,7 +863,116 @@ class CooperativeLiveFlow:
                     )
                     return
             time.sleep(0.25)
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
         raise RoomEntryTransient(failure_reason)
+
+    def recover_room_match_stall(
+        self, confirm_point: tuple[int, int] | None, *, deadline: float | None = None,
+    ) -> str:
+        """只按本次新画面恢复匹配，未知页面被动等待，不复用旧页面坐标。"""
+        started = time.monotonic()
+        deadline = min(deadline if deadline is not None else started + 9.0, started + 9.0)
+        cancel_deadline = started + 6.0
+        cancelled = False
+        backed = False
+
+        def check_stop() -> None:
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
+
+        def guard_input() -> None:
+            check_stop()
+            require_game_foreground(self.controller)
+            # 前台核验可能耗时或替换控制器，返回后必须重新检查停止。
+            check_stop()
+
+        def observe() -> str:
+            check_stop()
+            image = self.capture()
+            check_preplay_connection_failed(self, image)
+            if self.visible(image, "member_exit_title", 0.93):
+                raise MemberExited("协力成员退出房间")
+            if any(self.visible(image, name) for name in
+                   ("room_wait", "song_unspecified", "ready_button")):
+                return "entered"
+            if self.visible(image, "room_match_wait", ROOM_MATCH_POPUP_THRESHOLD):
+                return "popup"
+            valid_point = (
+                isinstance(confirm_point, tuple) and len(confirm_point) == 2
+                and all(isinstance(value, int) and not isinstance(value, bool)
+                        for value in confirm_point)
+                and 0 <= confirm_point[0] < 1280 and 0 <= confirm_point[1] < 720
+            )
+            if (valid_point and self.visible(image, "room_search")
+                    and self.settings.get("room_tier") in ROOM_TIER_INDEX
+                    and classify_room_tier(image) == self.settings.get("room_tier")):
+                return "selection"
+            return "pending"
+
+        while True:
+            check_stop()
+            if time.monotonic() >= deadline:
+                return "pending"
+            state = observe()
+            if state == "entered":
+                return state
+            action = None
+            if state == "popup" and not cancelled:
+                action = "cancel"
+            elif state == "popup" and not backed and time.monotonic() >= cancel_deadline:
+                action = "back"
+            elif state == "selection":
+                action = "reconfirm"
+            if action is not None:
+                guard_input()
+                # 保护期间可能已匹配成功或切页；输入仅消费保护后的新画面。
+                latest = observe()
+                check_stop()
+                if latest == "entered":
+                    return latest
+                if time.monotonic() >= deadline:
+                    return "pending"
+                if latest != state:
+                    continue
+                if action == "back":
+                    self.android_back()
+                    backed = True
+                else:
+                    # 通用 click 会再次做耗时前台核验；这里直接消费刚复核的页面，
+                    # 避免第二次保护期间停止或入房后仍派发旧坐标。
+                    point = ROOM_MATCH_CANCEL_POINT if action == "cancel" else confirm_point
+                    detail = self.context.run_task(
+                        "RealtimeSettingsClick",
+                        {"RealtimeSettingsClick": {"target": [point[0], point[1], 1, 1]}},
+                    )
+                    check_stop()
+                    if not detail or not detail.status.succeeded:
+                        raise RuntimeError("匹配恢复点击作业失败")
+                    cancelled = True
+                    if action == "cancel":
+                        cancel_deadline = time.monotonic() + 6.0
+                guard_input()
+                print(
+                    "CooperativeLive room_entry=match-stall "
+                    f"action={action} page={latest}",
+                    flush=True,
+                )
+                if action == "reconfirm":
+                    return "reconfirmed"
+                continue
+            time.sleep(min(0.25, max(0.0, deadline - time.monotonic())))
+
+    def android_back(self) -> None:
+        """调用方已复核前台和页面；此处重取代理并验证本次作业回执。"""
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
+        job = self.controller.post_click_key(4)
+        job.wait()
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
+        if not job.succeeded:
+            raise RuntimeError("匹配恢复 Android BACK 作业失败")
 
     def open_room_search(self) -> None:
         self.ensure_room_page()
