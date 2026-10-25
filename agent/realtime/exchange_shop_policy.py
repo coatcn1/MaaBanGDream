@@ -21,14 +21,15 @@ class BoxState:
     total: int
     cans: int
     special: int
-    currency: int
+    currency: int | None
 
     def validate(self):
-        if any(type(value) is not int for value in self.__dict__.values()):
+        if (any(type(value) is not int for key,value in self.__dict__.items() if key != "currency")
+                or self.currency is not None and type(self.currency) is not int):
             raise ValueError("抽箱读数必须是整数")
         if (self.total not in THRESHOLDS or self.box < 1
                 or not 0 <= self.remaining <= self.total or not 0 <= self.cans <= 10
-                or self.special not in (0, 1) or self.currency < 0
+                or self.special not in (0, 1) or (self.currency is not None and self.currency < 0)
                 or self.cans + self.special > self.remaining):
             raise ValueError("抽箱读数范围或剩余物品关系冲突")
         return self
@@ -134,7 +135,9 @@ def validate_draw(before: BoxState, after: BoxState, amount: int):
     before.validate()
     after.validate()
     common=(amount == min(10,before.remaining) and amount > 0
-            and after.total == before.total and after.currency == before.currency-10*amount)
+            and after.total == before.total
+            and ((before.currency is None and after.currency is None)
+                 or (before.currency is not None and after.currency == before.currency-10*amount)))
     automatic=(amount == before.remaining and after.box == before.box+1
                and after.remaining == after.total and after.cans == 10 and after.special == 1)
     ordinary=(amount < before.remaining and after.box == before.box

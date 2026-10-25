@@ -77,7 +77,7 @@ def test_exchange_shop_is_independent_and_defaults_to_preview():
                    for node in nodes.values() for target in node.get("next", []))
     assert nodes["ExchangeShopModeConfigure"]["custom_action_param"] == {"reset": True, "mode": "auto"}
     assert nodes["ExchangeShopExecutionConfigure"]["custom_action_param"] == {"execute": False}
-    assert nodes["ExchangeShopBudgetConfigure"]["custom_action_param"] == {"max_draws": 0}
+    assert nodes["ExchangeShopBudgetConfigure"]["custom_action_param"] == {"max_draws": 0, "currency_budget": 0}
     assert interface["option"]["ExchangeShopExecution"]["default_case"] == "Preview"
     assert nodes["ExchangeShopRun"]["next"] == ["ExchangeShopComplete"]
 
@@ -93,6 +93,12 @@ def test_exchange_option_overrides_are_complete_in_real_maafw(tmp_path):
         for case in interface["option"][name]["cases"]:
             node, override = next(iter(case["pipeline_override"].items()))
             overrides[name + case["name"]] = {"node": node, "override": override}
+    budget=interface["option"]["ExchangeShopBudget"]
+    assert {value["name"] for value in budget["inputs"]}=={"Count","Currency"}
+    for maximum,currency in ((0,100),(10,0),(20,150),(0,0)):
+        override=json.loads(json.dumps(budget["pipeline_override"]["ExchangeShopBudgetConfigure"])
+                            .replace('"{Count}"',str(maximum)).replace('"{Currency}"',str(currency)))
+        overrides[f"Budget{maximum}-{currency}"]={"node":"ExchangeShopBudgetConfigure","override":override}
     code = """
 import json, sys
 from maa.resource import Resource
