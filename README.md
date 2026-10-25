@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.4.12-ff6f9f" alt="Version"></a>
+  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.5.0-ff6f9f" alt="Version"></a>
   <img src="https://img.shields.io/badge/MaaFramework-5.10.2-4c8bf5" alt="MaaFramework">
   <img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?logo=windows11&logoColor=white" alt="Windows">
@@ -22,7 +22,7 @@
 
 ---
 
-v1.4.12 修正演出设置与 Profile 管理器的管道编码：旧 Profile 中的特殊字符可能使 JSON 无法解析，导致列表为空、设置显示默认值或无法保存，原文件仍然保留。输入、输出和错误管道统一 UTF-8，异常及时清理子进程，并记录加载及保存错误；本次不新增演奏行为。详见[本版本发行说明](docs/release-notes-v1.4.12.md)。
+v1.5.0 整合候选包含交换所抽箱、自动跳车安全门禁、LIVE BOOST 面板与匹配恢复调整；自动化验证与真实环境验收分开记录，当前候选仍待相关真机验收。详见[本版本发行说明](docs/release-notes-v1.5.0.md)。
 
 体力补充修复候选（2026-10-24）：定制 MFA 自行为每次客户端进程生成独立会话身份，并在启动 Agent 时显式传递；直接运行 EXE 也能提供体力账本所需的可信身份。同一客户端的多实例、Agent 和重连共享本进程身份，新客户端不复用历史环境值。消费未决保护、补充计划及库存判断保持，尚待真实环境验收。
 
@@ -232,7 +232,7 @@ Special 只有确认不可选时才允许显式回退 Expert；实时校准要�
 .\scripts\setup.ps1
 & '..\.tools\Miniconda3\envs\maabangdream\python.exe' `
   -m pip install -r .\requirements-release.txt
-.\scripts\build-windows-release.ps1 -Version 1.4.12
+.\scripts\build-windows-release.ps1 -Version 1.5.0
 ```
 
 发布包须保持定制 MFA 与 Core 一致、依赖完整、路径可迁移，并排除本机用户配置。
