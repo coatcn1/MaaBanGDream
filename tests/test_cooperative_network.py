@@ -16,6 +16,50 @@ from agent.realtime.cooperative_network import (
 )
 
 
+def test_iptables_gate_uses_preflight_uid_without_package_query():
+    shell, calls, _ = _fake_shell(None)
+    gate = GameNetworkGate(shell, uid=10123)
+    assert gate.block() is True
+    assert not any(command[0] in {"dumpsys", "pidof"} for command in calls)
+    assert gate.restore() is True
+
+
+@pytest.mark.parametrize("gate_type", [GameNetworkGate, UidBlackholeGate])
+@pytest.mark.parametrize("stop_at", ["root-query", "first-create"])
+def test_stop_blocks_new_rules_but_allows_owned_cleanup(gate_type, stop_at):
+    if gate_type is UidBlackholeGate:
+        shell = RuleShell()
+        calls = shell.calls
+    else:
+        shell, calls, _ = _fake_shell(10123)
+    state = {"stopped": False}
+    def stopped_shell(args):
+        result = shell(args)
+        is_create = (args[0] == "iptables" and args[1] == "-N"
+                     or args[:3] == ("ip", "rule", "add"))
+        if (stop_at == "root-query" and args == ("id", "-u")) or (stop_at == "first-create" and is_create):
+            state["stopped"] = True
+        return result
+    gate = gate_type(stopped_shell, uid=10123, stopped=lambda: state["stopped"])
+    with pytest.raises(InterruptedError): gate.block()
+    creates = [command for command in calls if (command[0] in {"iptables", "ip6tables"} and command[1] in {"-N", "-A", "-I"})
+               or command[:3] == ("ip", "rule", "add") or command[:4] == ("ip", "-6", "rule", "add")]
+    assert len(creates) == (0 if stop_at == "root-query" else 1)
+    assert gate.restore() is True
+
+
+def test_uid_preflight_stop_prevents_proc_fallback_queries():
+    state = {"stopped": False}
+    calls = []
+    def shell(args):
+        calls.append(args)
+        state["stopped"] = True
+        return -1, "dumpsys failed during stop"
+    with pytest.raises(InterruptedError):
+        resolve_game_uid(shell, stopped=lambda: state["stopped"])
+    assert calls == [("dumpsys", "package", GAME_PACKAGE)]
+
+
 def _fake_shell(
     uid: int | None,
     *,

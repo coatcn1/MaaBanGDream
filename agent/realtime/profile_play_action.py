@@ -3425,6 +3425,19 @@ class RealtimeProfilePlay(CustomAction):
             })
 
         if stats.jump_requested:
+            if stats.stopped or context.tasker.stopping:
+                return True
+            # 跳车信号早于收尾结果，Legacy 同样必须确认 UP/reset/close 完整性。
+            # 保留演奏首因及原始收尾错误，不把失败回执交给外层导航或自动续跑。
+            if stats.cleanup_failed:
+                reason = (
+                    f"{stats.terminal_reason or '实时演奏引擎未完成'}；"
+                    "跳车前触点收尾失败："
+                    + ("; ".join(stats.cleanup_errors) or "cleanup_failed=true")
+                )
+                record_failure_reason(reason)
+                print(f"[任务][实时演奏][演奏][ERROR] {reason}", flush=True)
+                return False
             # 联机“跳车”：本局以“请求跳车”结束，不做结算解析与退出
             # 导航；跳车流程由外层协力流程读取 live run 信号后执行。
             print(

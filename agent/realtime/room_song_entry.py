@@ -56,12 +56,9 @@ CONNECT_FAILED_RETRY_GAP_S = 0.8
 
 
 def wait_for_connection_retry(flow, *, timeout: float = CONNECT_FAILED_TIMEOUT_S) -> bool:
-    """「连接失败」弹窗：等 NOW LOADING 消失后再点「重试」。
-
-    每个可点窗口最多点两次，覆盖一次点击被吞掉的情况；点完若加载框重新
-    出现，就退回等待而不是继续连点。返回弹窗是否已消失。
-    """
+    """等待加载结束再重试，每个可点窗口最多两次；每次输入后停止优先。"""
     deadline = time.monotonic() + float(timeout)
+    clicks_in_window = 0
     while time.monotonic() < deadline:
         check_stopping(flow)
         image = flow.capture()
@@ -69,18 +66,18 @@ def wait_for_connection_retry(flow, *, timeout: float = CONNECT_FAILED_TIMEOUT_S
         if not flow.visible(image, "connect_failed_body", 0.90):
             return True
         if flow.visible(image, "now_loading", 0.90):
+            clicks_in_window = 0
             time.sleep(CONNECT_FAILED_POLL_S)
             continue
-        flow.click(CONNECT_FAILED_RETRY_POINT)
-        time.sleep(CONNECT_FAILED_RETRY_GAP_S)
-        image = flow.capture()
-        if not flow.visible(image, "connect_failed_body", 0.90):
-            return True
-        if not flow.visible(image, "now_loading", 0.90):
+        if clicks_in_window < 2:
+            check_stopping(flow)
             flow.click(CONNECT_FAILED_RETRY_POINT)
+            check_stopping(flow)
+            clicks_in_window += 1
         time.sleep(CONNECT_FAILED_RETRY_GAP_S)
     check_stopping(flow)
     image = flow.capture()
+    check_stopping(flow)
     return not flow.visible(image, "connect_failed_body", 0.90)
 
 

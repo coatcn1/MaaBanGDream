@@ -64,7 +64,7 @@ from .profile_store import (
 from .rehearsal_action import frame_resolution
 from .native_prearm import discard_prearmed_backend
 from .stamina_task import (prepare_stamina_round, allocate_flow_home, mark_uncertain, mark_stamina_settled, StaminaTaskError)
-from .cooperative_network import (GameNetworkGate, UidBlackholeGate, run_network_shell, resolve_game_uid)
+from .cooperative_network import (GameNetworkGate, UidBlackholeGate, BoundNetworkShell, NetworkRecoveryPending, DeviceIntegrityFailure, record_pending_network_recovery, validate_network_device, run_network_shell, resolve_game_uid)
 from .result_navigation import (
     RESULT_ANIMATION_SKIP_POINT,
     accelerated_back,
@@ -297,6 +297,14 @@ def configure_versus_settings(params: dict[str, object]) -> dict[str, object]:
         if song_choice not in VERSUS_SONG_CHOICES:
             raise ValueError("竞演歌曲选择必须是 unspecified/random/current 之一")
         candidate["song_choice"] = song_choice
+        for key in ("disconnect_jump_enabled", "auto_disconnect_jump", "auto_jump_continue"):
+            if type(candidate[key]) is not bool:
+                raise ValueError(f"{key} 必须是布尔值")
+        # 切回旧 On/Off 时清掉先前自动档的附属状态。
+        if not candidate["disconnect_jump_enabled"]:
+            candidate["auto_disconnect_jump"] = False
+        if not candidate["auto_disconnect_jump"]:
+            candidate["auto_jump_continue"] = False
         room_type = str(candidate.get("room_type", "free"))
         if room_type not in ROOM_TYPE_INDEX:
             raise ValueError("竞演房型必须是 activity/free 之一")
@@ -607,7 +615,8 @@ class VersusLiveFlow:
 
     def _adb_shell(self, args) -> tuple[int, str]:
         """核验本次 Maa 作业和远端退出码后再返回网络命令结果。"""
-        return run_network_shell(self.controller, args)
+        transport = getattr(self, "_network_shell", None)
+        return transport(args) if transport is not None else run_network_shell(self.controller, args)
 
     def _wait_for_template(
         self, name: str, timeout: float, threshold: float = 0.90
@@ -636,6 +645,8 @@ class VersusLiveFlow:
             image = self.capture()
             if self.visible(image, name, 0.93):
                 self.click(point)
+                if self.stopped():
+                    raise InterruptedError("用户已停止任务")
                 return True
             time.sleep(0.35)
         return False
@@ -649,98 +660,158 @@ class VersusLiveFlow:
         “连接失败。”弹窗有界点“重试”直到回主页。任何一步失败都在 finally
         恢复网络（fail-closed），绝不把模拟器留在网络隔离状态。
         """
-        gate = UidBlackholeGate(self._adb_shell)
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
+        transport = getattr(self, "_network_shell", None)
+        if transport is not None:
+            validate_network_device(transport, self.stopped)
+        gate = UidBlackholeGate(self._adb_shell, uid=getattr(self, "_game_uid", None), stopped=self.stopped)
+        self._active_network_gate = gate
+        pending_error = None
+        result = False
         try:
-            required = {
-                "disconnect_continue_body",
-                "disconnect_confirm_body",
-            }
-            if not required.issubset(self.templates):
-                # 模板未提取时不做任何网络/前台扰动，直接 fail-closed。
+            result = self._disconnect_jump_with_gate(gate, popup_timeout_s)
+        except BaseException as exc:
+            pending_error = exc
+        gate = self._active_network_gate
+        try:
+            restored = gate.restore()
+        except Exception as restore_error:
+            restored = False
+            gate.last_error = f"恢复通道异常：{restore_error}"
+        if not restored:
+            try:
+                record_pending_network_recovery(gate, transport, PROJECT_ROOT,
+                    f"{pending_error or '自动跳车'}；{gate.last_error or 'unknown'}")
+            except Exception as evidence_error:
+                # 附加诊断失败不能阻止人工停止或吞掉必要恢复失败。
+                print(f"AutoDisconnectJump pending_network_evidence_warning={type(evidence_error).__name__}", flush=True)
+        # 停止优先；finally 仍尽力恢复自有规则，但不能再截图或切换应用。
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
+        if not restored:
+            raise NetworkRecoveryPending(
+                f"{pending_error or '自动跳车'}；网络恢复未确认：{gate.last_error or 'unknown'}；需人工核验"
+            ) from pending_error
+        if pending_error is not None:
+            raise pending_error
+        if result:
+            print("VersusDisconnectJump completed=true", flush=True)
+        return result
+
+    def _disconnect_jump_with_gate(self, gate, popup_timeout_s):
+        required = {
+            "disconnect_continue_body",
+            "disconnect_confirm_body",
+        }
+        if not required.issubset(self.templates):
+            # 模板未提取时不做任何网络/前台扰动，直接 fail-closed。
+            print(
+                "VersusDisconnectJump popup_template_missing=true",
+                flush=True,
+            )
+            return False
+        # MuMu 12 的内核没有 iptables owner 模块，uidrange 是唯一可用
+        # 的后端；老环境写入失败时回退到 iptables owner。
+        if not gate.cleanup_stale():
+            print(
+                "VersusDisconnectJump network_cleanup_unconfirmed=true "
+                f"reason={gate.last_error or 'unknown'}",
+                flush=True,
+            )
+            return False
+        if gate.block():
+            print(
+                "VersusDisconnectJump gate_backend=uidrange",
+                flush=True,
+            )
+        else:
+            if not gate.restore():
                 print(
-                    "VersusDisconnectJump popup_template_missing=true",
-                    flush=True,
-                )
-                return False
-            # MuMu 12 的内核没有 iptables owner 模块，uidrange 是唯一可用
-            # 的后端；老环境写入失败时回退到 iptables owner。
-            if not gate.cleanup_stale():
-                print(
-                    "VersusDisconnectJump network_cleanup_unconfirmed=true "
+                    "VersusDisconnectJump network_restore_failed=true "
                     f"reason={gate.last_error or 'unknown'}",
                     flush=True,
                 )
                 return False
-            if gate.block():
+            gate = GameNetworkGate(self._adb_shell, uid=getattr(self, "_game_uid", None), stopped=self.stopped)
+            self._active_network_gate = gate
+            if not gate.block():
                 print(
-                    "VersusDisconnectJump gate_backend=uidrange",
-                    flush=True,
-                )
-            else:
-                if not gate.restore():
-                    print(
-                        "VersusDisconnectJump network_restore_failed=true "
-                        f"reason={gate.last_error or 'unknown'}",
-                        flush=True,
-                    )
-                    return False
-                gate = GameNetworkGate(self._adb_shell)
-                if not gate.block():
-                    print(
-                        "VersusDisconnectJump gate_block_failed=true "
-                        f"reason={gate.last_error or 'unknown'}",
-                        flush=True,
-                    )
-                    return False
-                print(
-                    "VersusDisconnectJump gate_backend=iptables-owner",
-                    flush=True,
-                )
-            # 退后台再切回；网络隔离状态下切回会触发“是否切换到单人演奏”弹窗。
-            self.controller.post_click_key(3).wait()
-            time.sleep(0.6)
-            self.controller.post_start_app(GAME_PACKAGE).wait()
-            if not self._wait_and_click(
-                "disconnect_continue_body",
-                DISCONNECT_CONTINUE_INTERRUPT_POINT,
-                popup_timeout_s,
-            ):
-                print(
-                    "VersusDisconnectJump continue_popup_missed=true",
+                    "VersusDisconnectJump gate_block_failed=true "
+                    f"reason={gate.last_error or 'unknown'}",
                     flush=True,
                 )
                 return False
-            if not self._wait_and_click(
-                "disconnect_confirm_body",
-                DISCONNECT_CONFIRM_INTERRUPT_POINT,
-                10.0,
-            ):
-                print(
-                    "VersusDisconnectJump confirm_popup_missed=true",
-                    flush=True,
-                )
-                return False
-            # 继续保持断网，直到「连接失败」弹窗出现。提前恢复网络会被游戏
-            # 判定为中途退出并施加功能限制（2026-10-23 真机实测）。
-            if not self._wait_for_template("connect_failed_body", 30.0):
-                print(
-                    "VersusDisconnectJump connect_failed_timeout=true",
-                    flush=True,
-                )
-                return False
-            # 弹窗已出现，此时才恢复网络；恢复后再点“重试”。
-            if not gate.restore():
-                print(
-                    "VersusDisconnectJump network_restore_failed=true",
-                    flush=True,
-                )
-                return False
-            time.sleep(0.3)
-            self.dismiss_connect_failed()
-            print("VersusDisconnectJump completed=true", flush=True)
-            return True
-        finally:
-            gate.restore()
+            print(
+                "VersusDisconnectJump gate_backend=iptables-owner",
+                flush=True,
+            )
+        # 退后台再切回；网络隔离状态下切回会触发“是否切换到单人演奏”弹窗。
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
+        transport = getattr(self, "_network_shell", None)
+        if transport is not None:
+            validate_network_device(transport, self.stopped)
+        self.controller.post_click_key(3).wait()
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
+        time.sleep(0.6)
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
+        self.controller.post_start_app(GAME_PACKAGE).wait()
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
+        if not self._wait_and_click(
+            "disconnect_continue_body",
+            DISCONNECT_CONTINUE_INTERRUPT_POINT,
+            popup_timeout_s,
+        ):
+            print(
+                "VersusDisconnectJump continue_popup_missed=true",
+                flush=True,
+            )
+            return False
+        if not self._wait_and_click(
+            "disconnect_confirm_body",
+            DISCONNECT_CONFIRM_INTERRUPT_POINT,
+            10.0,
+        ):
+            print(
+                "VersusDisconnectJump confirm_popup_missed=true",
+                flush=True,
+            )
+            return False
+        # 继续保持断网，直到「连接失败」弹窗出现。提前恢复网络会被游戏
+        # 判定为中途退出并施加功能限制（2026-10-23 真机实测）。
+        if not self._wait_for_template("connect_failed_body", 30.0):
+            print(
+                "VersusDisconnectJump connect_failed_timeout=true",
+                flush=True,
+            )
+            return False
+        # 弹窗已出现，此时才恢复网络；恢复后再点“重试”。
+        if not gate.restore():
+            print(
+                "VersusDisconnectJump network_restore_failed=true",
+                flush=True,
+            )
+            return False
+        time.sleep(0.3)
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
+        if not self.dismiss_connect_failed():
+            print("AutoDisconnectJump reconnect_unconfirmed=true", flush=True)
+            return False
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
+        image = self.capture()
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
+        if (self.visible(image, "now_loading", 0.90)
+            or self.pipeline_box(image, "VersusHomeMarker") is None):
+            print("AutoDisconnectJump home_unconfirmed=true", flush=True)
+            return False
+        return True
 
     def ensure_room_page(self, timeout: float = 15.0) -> np.ndarray:
         state, image = self.wait_for(("room_search",), timeout=timeout)
@@ -1315,6 +1386,8 @@ class VersusLiveFlow:
         if self.stopped():
             raise InterruptedError("用户已停止任务")
         self.controller.post_click_key(3).wait()
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
         time.sleep(0.6)
         if self.stopped():
             raise InterruptedError("用户已停止任务")
@@ -1351,13 +1424,26 @@ class VersusLiveFlow:
             return None
         if self.stopped():
             raise InterruptedError("用户已停止任务")
+        transport = getattr(self, "_network_shell", None)
+        if transport is not None:
+            validate_network_device(transport, self.stopped)
+        if getattr(self, "_game_uid", None) is None:
+            return None
         streak = int(getattr(self, "_auto_jump_streak", 0))
         print(
             "VersusLive auto_jump=start "
             f"streak={streak}/{AUTO_JUMP_STREAK_LIMIT} reason={reason}",
             flush=True,
         )
-        if not self.disconnect_jump_out():
+        try:
+            jumped = self.disconnect_jump_out()
+        except (InterruptedError, NetworkRecoveryPending):
+            raise
+        except Exception as exc:
+            # 仅在恢复已确认后才会透出普通异常；保留生命归零原因并退手动路径。
+            print(f"AutoDisconnectJump flow_failed={type(exc).__name__}: {exc}", flush=True)
+            jumped = False
+        if not jumped:
             print("VersusLive auto_jump=failed", flush=True)
             return None
         self._auto_jump_streak = streak + 1
@@ -1402,6 +1488,10 @@ class VersusLiveFlow:
         if self.stopped():
             raise InterruptedError("用户已停止任务")
         run = current_live_run()
+        if run is not None and bool(run.disconnect_jump_requested) and not success:
+            # 请求信号先于必要释放门禁写入，不能作为释放成功的凭据。
+            self._input_integrity_failed = True
+            return False
         if run is not None and bool(run.disconnect_jump_requested):
             # 生命归零：先按「跳车」选项尝试自动断网跳车。关闭或跳车失败时
             # 回退旧路径（回主页 → 切回游戏 → 结束任务，提示手动跳车）。
@@ -1413,10 +1503,14 @@ class VersusLiveFlow:
                     "生命归零；自动断网跳车完成，任务结束"
                 )
             self.controller.post_click_key(3).wait()
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
             time.sleep(0.6)
             if self.stopped():
                 raise InterruptedError("用户已停止任务")
             self.controller.post_start_app(GAME_PACKAGE).wait()
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
             time.sleep(0.8)
             if self.stopped():
                 raise InterruptedError("用户已停止任务")
@@ -1847,29 +1941,56 @@ class VersusLiveFlow:
         room_timeouts = 0
         # 自动断网跳车的连续触发计数按任务重置。
         self._auto_jump_streak = 0
-        # 任务入口控制器空闲，先解析并缓存游戏 UID；引擎停止后再解析会失败。
-        try:
-            self._game_uid = resolve_game_uid(self._adb_shell)
-        except Exception as exc:  # noqa: BLE001 - 解析失败退回跳车时重试
-            self._game_uid = None
-            print(
-                "VersusLive game_uid_resolve_warning="
-                f"{type(exc).__name__}: {exc}",
-                flush=True,
-            )
-        if self._game_uid is None:
-            print("VersusLive game_uid_resolve=failed", flush=True)
-        try:
-            # 清理上次崩溃可能遗留的 uidrange 规则，避免游戏一直没网。
-            UidBlackholeGate(
-                self._adb_shell, uid=self._game_uid
-            ).cleanup_stale()
-        except Exception as exc:  # noqa: BLE001 - 清理失败不能阻断任务
-            print(
-                "VersusLive network_cleanup_warning="
-                f"{type(exc).__name__}: {exc}",
-                flush=True,
-            )
+        self._input_integrity_failed = False
+        self._game_uid = None
+        self._network_shell = None
+        # 关闭和手动档完全不查询或清理网络；自动档仅核验本任务设备。
+        if self.settings.get("auto_disconnect_jump", False):
+            if self.stopped():
+                return True
+            try:
+                transport = BoundNetworkShell(lambda: self.controller, stopped=self.stopped)
+                if self.stopped():
+                    return True
+                self._network_shell = transport
+                uid = resolve_game_uid(transport, stopped=self.stopped)
+                if self.stopped():
+                    return True
+                root_code, root_output = transport(("id", "-u"))
+                if self.stopped():
+                    return True
+                if root_code != 0 or root_output.strip() != "0":
+                    root_code, root_output = transport(("su", "-c", "id -u"))
+                    if self.stopped():
+                        return True
+                validate_network_device(transport, self.stopped)
+                if uid is None or root_code != 0 or root_output.strip() != "0":
+                    raise RuntimeError("游戏 UID 或 root 权限未确认，保留手动跳车")
+            except DeviceIntegrityFailure as exc:
+                if self.stopped():
+                    return True
+                record_failure_reason(str(exc))
+                return False
+            except Exception as exc:
+                if self.stopped():
+                    return True
+                # root/UID 能力不足不作废已取得的设备基线；自动档退手动前仍须核验。
+                print(f"VersusLive auto_jump_preflight=unavailable reason={exc}", flush=True)
+            else:
+                self._game_uid = uid
+                gate = UidBlackholeGate(self._adb_shell, uid=uid, stopped=self.stopped)
+                try:
+                    cleanup_confirmed = gate.cleanup_stale()
+                except DeviceIntegrityFailure as exc:
+                    if self.stopped():
+                        return True
+                    record_failure_reason(str(exc))
+                    return False
+                if self.stopped():
+                    return True
+                if not cleanup_confirmed:
+                    record_failure_reason(f"网络恢复未确认：{gate.last_error}；需人工核验")
+                    return False
         retry_count = max(
             0,
             min(99, int(self.settings.get("play_failure_retry_count", 0))),
@@ -1933,6 +2054,11 @@ class VersusLiveFlow:
                     )
                     return False
                 continue
+            except NetworkRecoveryPending as exc:
+                if self.stopped():
+                    return True
+                record_failure_reason(f"生命归零；{exc}")
+                return False
             except JumpOutUnavailable as exc:
                 if self.stopped():
                     return True
@@ -2035,6 +2161,9 @@ class VersusLiveFlow:
             if self.context.tasker.stopping:
                 return True
             if not success:
+                if getattr(self, "_input_integrity_failed", False):
+                    # 原演奏层已记录必要完整性首因；不覆盖、不恢复或重试输入。
+                    return False
                 if play_failures >= retry_count:
                     return False
                 play_failures += 1

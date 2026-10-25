@@ -122,6 +122,45 @@ class Tasker:
         return self._controller
 
 
+@pytest.mark.parametrize("stopped", [False, True])
+def test_legacy_jump_receipt_requires_cleanup_and_preserves_stop(monkeypatch, tmp_path, stopped):
+    reset_live_run(mode="cooperative", difficulty="Easy", prepared_for_play=True)
+    tasker = Tasker()
+    context = SimpleNamespace(tasker=tasker)
+    settings = SimpleNamespace(target_fps=60, timing_offset_ms=0, note_speed=5.0,
+                               profile_path=SimpleNamespace(name="easy.json"))
+    monkeypatch.setattr(profile_play_action, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(profile_play_action.RealtimeProfileStore, "resolve_latest", lambda *a, **k: settings)
+    monkeypatch.setattr(profile_play_action.RealtimeProfileStore, "runtime_options", lambda *a, **k: {"native_realtime_enabled": False})
+    monkeypatch.setattr(profile_play_action, "require_game_foreground", lambda *a: None)
+    monkeypatch.setattr(profile_play_action, "debug_recording_enabled", lambda *a: False)
+    monkeypatch.setattr(profile_play_action, "diagnostic_trace_enabled", lambda: False)
+    monkeypatch.setattr(profile_play_action, "ControllerTouchDispatcher", lambda *a, **k: object())
+    errors = []
+    monkeypatch.setattr(profile_play_action, "record_failure_reason", errors.append)
+
+    class Engine:
+        def __init__(self, *a, **k): pass
+        def run(self, capture, stopping, **kwargs):
+            kwargs["on_life_depleted"](SimpleNamespace(value=0))
+            tasker.stopping = stopped
+            return EngineStats(3, 2, stopped, life_depleted=True, jump_requested=True,
+                cleanup_failed=True, cleanup_errors=("cleanup_dispatch=UP failed", "touch_close=reset failed"),
+                terminal_reason="生命归零；原始演奏首因", engine_mode="legacy")
+
+    monkeypatch.setattr(profile_play_action, "RealtimeEngine", Engine)
+    argv = SimpleNamespace(custom_action_param=json.dumps({"difficulty": "Easy", "run_mode": "cooperative",
+        "life_depleted_jump_request": True, "confirm_final_cover": False}))
+    assert RealtimeProfilePlay().run_for_flow(context, argv) is stopped
+    assert current_live_run().disconnect_jump_requested is True
+    if stopped:
+        assert errors == []
+        assert not (tmp_path / "screencap").exists()
+    else:
+        assert len(errors) == 1
+        assert all(text in errors[0] for text in ("原始演奏首因", "cleanup_dispatch=UP failed", "touch_close=reset failed"))
+
+
 def test_native_execution_gate_requires_complete_lossless_evidence():
     valid_report = {
         "planned": 637,

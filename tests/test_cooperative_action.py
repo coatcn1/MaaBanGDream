@@ -175,6 +175,7 @@ def test_auto_disconnect_jump_disabled_does_nothing():
 
 def test_auto_disconnect_jump_continue_then_stop_at_limit():
     flow = _bare_flow()
+    flow._game_uid = 10001
     flow.settings.update(auto_disconnect_jump=True, auto_jump_continue=True)
     flow._auto_jump_streak = 0
     calls = []
@@ -188,6 +189,7 @@ def test_auto_disconnect_jump_continue_then_stop_at_limit():
 
 def test_auto_disconnect_jump_end_mode_stops_on_first_trigger():
     flow = _bare_flow()
+    flow._game_uid = 10001
     flow.settings.update(auto_disconnect_jump=True, auto_jump_continue=False)
     flow._auto_jump_streak = 0
     flow.disconnect_jump_out = lambda: True
@@ -197,6 +199,7 @@ def test_auto_disconnect_jump_end_mode_stops_on_first_trigger():
 
 def test_auto_disconnect_jump_failure_falls_back_without_counting():
     flow = _bare_flow()
+    flow._game_uid = 10001
     flow.settings.update(auto_disconnect_jump=True, auto_jump_continue=True)
     flow._auto_jump_streak = 0
     flow.disconnect_jump_out = lambda: False
@@ -405,6 +408,9 @@ def _fake_jump_flow(
     flow.context = SimpleNamespace(
         tasker=SimpleNamespace(stopping=False, controller=controller)
     )
+    monkeypatch.setattr(cooperative_action, "record_pending_network_recovery", lambda *a: None)
+    flow._game_uid = 10001
+    flow.pipeline_box = lambda *a: [1, 1, 1, 1]
     flow.templates = dict(templates)
     clicks: list[tuple[int, int]] = []
     dismiss_calls: list[bool] = []
@@ -413,12 +419,12 @@ def _fake_jump_flow(
         lambda image, name, threshold=0.9: visible_results.get(name, False)
     )
     flow.click = clicks.append
-    flow.dismiss_connect_failed = lambda: dismiss_calls.append(True)
+    flow.dismiss_connect_failed = lambda: dismiss_calls.append(True) or True
 
     pending_blocks = list(block_results) if block_results is not None else None
 
     class Gate:
-        def __init__(self, shell):
+        def __init__(self, shell, **kwargs):
             self.shell = shell
             self.restored = 0
             self.last_error = None
@@ -438,7 +444,7 @@ def _fake_jump_flow(
 
     gates = []
 
-    def gate_factory(shell):
+    def gate_factory(shell, **kwargs):
         gate = Gate(shell)
         gates.append(gate)
         return gate
@@ -608,10 +614,15 @@ def test_network_cleanup_failure_blocks_backend_fallback(monkeypatch, versus, fa
     if versus:
         from agent.realtime import versus_action
 
+        monkeypatch.setattr(versus_action, "record_pending_network_recovery", lambda *a: None)
         monkeypatch.setattr(versus_action, "UidBlackholeGate", cooperative_action.UidBlackholeGate)
         monkeypatch.setattr(versus_action, "GameNetworkGate", cooperative_action.GameNetworkGate)
         flow.disconnect_jump_out = versus_action.VersusLiveFlow.disconnect_jump_out.__get__(flow)
-    assert flow.disconnect_jump_out() is False
+    if failed_step == "restore":
+        with pytest.raises(cooperative_action.NetworkRecoveryPending):
+            flow.disconnect_jump_out()
+    else:
+        assert flow.disconnect_jump_out() is False
     assert len(gates) == 1
     assert controller.keys == []
     assert controller.started == []
@@ -690,10 +701,10 @@ class _FakeJob:
         return self
 
 
-def _make_play_flow(monkeypatch, *, jump_requested):
+def _make_play_flow(monkeypatch, *, jump_requested, success=False):
     class Play:
         def run_for_flow(self, context, params):
-            return False
+            return success
 
     monkeypatch.setattr(cooperative_action, "RealtimeProfilePlay", Play)
     monkeypatch.setattr(
@@ -723,7 +734,7 @@ def _make_play_flow(monkeypatch, *, jump_requested):
 
 
 def test_play_ends_task_when_live_run_requests_jump(monkeypatch):
-    flow, keys, started = _make_play_flow(monkeypatch, jump_requested=True)
+    flow, keys, started = _make_play_flow(monkeypatch, jump_requested=True, success=True)
 
     with pytest.raises(JumpOutUnavailable):
         flow.play()

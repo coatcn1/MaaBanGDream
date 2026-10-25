@@ -136,7 +136,7 @@ def test_life_failure_uses_same_cooperative_jump_and_stop_order(monkeypatch, mod
             return Job()
     class Play:
         def run_for_flow(self, *args):
-            return False
+            return True
     flow.context.tasker.controller = Controller()
     monkeypatch.setattr(module, "RealtimeProfilePlay", Play)
     monkeypatch.setattr(module, "current_live_run", lambda: SimpleNamespace(disconnect_jump_requested=True))
@@ -186,7 +186,7 @@ def test_life_depletion_uses_auto_disconnect_jump_when_enabled(
 
     class Play:
         def run_for_flow(self, *args):
-            return False
+            return True
 
     monkeypatch.setattr(module, "RealtimeProfilePlay", Play)
     monkeypatch.setattr(
@@ -227,7 +227,7 @@ def test_life_depletion_falls_back_to_manual_when_auto_jump_fails(
 
     class Play:
         def run_for_flow(self, *args):
-            return False
+            return True
 
     flow.context.tasker.controller = Controller()
     monkeypatch.setattr(module, "RealtimeProfilePlay", Play)

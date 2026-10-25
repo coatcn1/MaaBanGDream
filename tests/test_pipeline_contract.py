@@ -54,6 +54,40 @@ print(json.dumps(effective))
     }
 
 
+def test_multiplayer_jump_modes_replace_all_flags_in_real_maafw(tmp_path):
+    import subprocess
+    import sys
+
+    interface = load(ROOT / "interface.json")
+    modes = {}
+    for mode, prefix in (("cooperative", "Cooperative"), ("versus", "Versus")):
+        node = prefix + "DisconnectJumpConfigure"
+        base = load(ROOT / f"resource/pipeline/{mode}_live.json")[node]
+        option = interface["option"][prefix + "DisconnectJump"]
+        assert option["default_case"] == "Off"
+        assert [case["name"] for case in option["cases"]] == ["Off", "On", "AutoEnd", "AutoContinue"]
+        flags = {"disconnect_jump_enabled": False, "auto_disconnect_jump": False, "auto_jump_continue": False}
+        assert base["custom_action_param"] == flags
+        modes[node] = {"base": base, "overrides": {case["name"]: case["pipeline_override"][node] for case in option["cases"]}}
+    code = """
+import json,sys
+from maa.resource import Resource
+from maa.toolkit import Toolkit
+data=json.load(sys.stdin)
+Toolkit.init_option(data['log_dir'])
+r=Resource()
+for node,mode in data['modes'].items():
+    assert r.override_pipeline({node:mode['base']})
+    for name in ('AutoEnd','AutoContinue','On','Off','AutoContinue','Off'):
+        override=mode['overrides'][name]
+        assert r.override_pipeline({node:override})
+        actual=r.get_node_data(node)['action']['param']['custom_action_param']
+        assert actual == override['custom_action_param'], (name, actual)
+"""
+    subprocess.run([sys.executable, "-c", code], input=json.dumps({"log_dir": str(tmp_path), "modes": modes}),
+                   text=True, capture_output=True, check=True)
+
+
 def test_all_count_inputs_accept_zero_and_reject_out_of_range():
     import re
 

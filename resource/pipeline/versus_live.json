@@ -180,7 +180,9 @@
     "action": "Custom",
     "custom_action": "VersusLiveConfigure",
     "custom_action_param": {
-      "disconnect_jump_enabled": false
+      "disconnect_jump_enabled": false,
+      "auto_disconnect_jump": false,
+      "auto_jump_continue": false
     },
     "next": [
       "VersusSpeedSettingsGate"
