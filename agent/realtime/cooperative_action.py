@@ -63,7 +63,7 @@ from .profile_store import (
 from .rehearsal_action import frame_resolution
 from .native_prearm import discard_prearmed_backend
 from .stamina_task import (prepare_stamina_round, allocate_flow_home, mark_uncertain, mark_stamina_settled, StaminaTaskError)
-from .cooperative_network import GameNetworkGate, UidBlackholeGate
+from .cooperative_network import GameNetworkGate, UidBlackholeGate, run_network_shell
 from .result_navigation import (
     RESULT_ANIMATION_SKIP_POINT,
     accelerated_back,
@@ -586,13 +586,8 @@ class CooperativeLiveFlow:
         return retry_connection_failed(self, attempts)
 
     def _adb_shell(self, args) -> tuple[int, str]:
-        """把 MaaFramework 控制器 shell 通道适配成 (returncode, output)。"""
-        command = " ".join(str(part) for part in args)
-        try:
-            output = self.controller.post_shell(command, 8000).wait().get()
-            return 0, str(output or "")
-        except Exception as exc:  # noqa: BLE001 - 任何失败都要 fail-closed
-            return -1, str(exc)
+        """核验本次 Maa 作业和远端退出码后再返回网络命令结果。"""
+        return run_network_shell(self.controller, args)
 
     def _wait_and_click(
         self,
@@ -636,14 +631,26 @@ class CooperativeLiveFlow:
                 return False
             # MuMu 12 的内核没有 iptables owner 模块，uidrange 是唯一可用
             # 的后端；老环境写入失败时回退到 iptables owner。
-            gate.cleanup_stale()
+            if not gate.cleanup_stale():
+                print(
+                    "CooperativeDisconnectJump network_cleanup_unconfirmed=true "
+                    f"reason={gate.last_error or 'unknown'}",
+                    flush=True,
+                )
+                return False
             if gate.block():
                 print(
                     "CooperativeDisconnectJump gate_backend=uidrange",
                     flush=True,
                 )
             else:
-                gate.restore()
+                if not gate.restore():
+                    print(
+                        "CooperativeDisconnectJump network_restore_failed=true "
+                        f"reason={gate.last_error or 'unknown'}",
+                        flush=True,
+                    )
+                    return False
                 gate = GameNetworkGate(self._adb_shell)
                 if not gate.block():
                     print(

@@ -239,6 +239,8 @@ def _fake_jump_flow(
     visible_results,
     gate_block,
     block_results=None,
+    cleanup_result=True,
+    restore_result=True,
 ):
     """构造只含历史跳车实现所需成员的 CooperativeLiveFlow 与假控制器。"""
     class Job:
@@ -299,11 +301,11 @@ def _fake_jump_flow(
             return self.block_result
 
         def cleanup_stale(self):
-            return True
+            return cleanup_result
 
         def restore(self):
             self.restored += 1
-            return True
+            return restore_result
 
     gates = []
 
@@ -431,6 +433,97 @@ def test_disconnect_jump_out_restores_network_when_popup_times_out(
     assert clicks == []
     assert dismiss_calls == []
     assert gates[0].restored == 1
+
+
+@pytest.mark.parametrize("versus", [False, True])
+@pytest.mark.parametrize("failed_step", ["cleanup", "restore"])
+def test_network_cleanup_failure_blocks_backend_fallback(monkeypatch, versus, failed_step):
+    flow, controller, clicks, _, gates = _fake_jump_flow(
+        monkeypatch,
+        templates={"disconnect_continue_body": True, "disconnect_confirm_body": True},
+        visible_results={},
+        gate_block=False,
+        cleanup_result=failed_step != "cleanup",
+        restore_result=failed_step != "restore",
+    )
+    if versus:
+        from agent.realtime import versus_action
+
+        monkeypatch.setattr(versus_action, "UidBlackholeGate", cooperative_action.UidBlackholeGate)
+        monkeypatch.setattr(versus_action, "GameNetworkGate", cooperative_action.GameNetworkGate)
+        flow.disconnect_jump_out = versus_action.VersusLiveFlow.disconnect_jump_out.__get__(flow)
+    assert flow.disconnect_jump_out() is False
+    assert len(gates) == 1
+    assert controller.keys == []
+    assert controller.started == []
+    assert clicks == []
+
+
+@pytest.mark.parametrize("versus", [False, True])
+@pytest.mark.parametrize("response", [
+    "nonzero", "missing", "stale", "body_marker", "failed", "decode_error",
+    "duplicate", "truncated", "body_only", "timeout", "success",
+])
+def test_network_shell_requires_current_receipt_and_remote_exitcode(versus, response):
+    import re
+    from agent.realtime import versus_action
+
+    class Job:
+        succeeded = response != "failed"
+        failed = response == "failed"
+
+        def wait(self):
+            if response == "timeout":
+                raise TimeoutError("shell timed out")
+            return self
+
+        def get(self):
+            controller.get_called = True
+            if response == "decode_error":
+                return b"\xff"
+            if response in {"missing", "failed"}:
+                return "0: from all lookup local\n"
+            if response == "stale":
+                return "0: from all lookup local\n\n__MBD_SHELL_OLD__:0\n"
+            marker = re.search(r"__MBD_SHELL_[0-9a-f]+__", controller.command)
+            if marker is None:
+                return "0: from all lookup local\n"
+            status = 13 if response == "nonzero" else 0
+            body = "old __MBD_SHELL_OLD__:0\n" if response == "body_marker" else "Permission denied"
+            if response == "success":
+                body = ""
+            if response == "duplicate":
+                body = f"{marker[0]}:0"
+            if response == "truncated":
+                return f"{body}\n{marker[0]}:"
+            if response == "body_only":
+                return f"{marker[0]}:0\nmore output"
+            return f"{body}\n{marker[0]}:{status}\n"
+
+    class Controller:
+        def post_shell(self, command, timeout):
+            self.command = command
+            assert timeout == 8000
+            return Job()
+
+    controller = Controller()
+    controller.get_called = False
+    flow = SimpleNamespace(controller=controller)
+    flow_type = versus_action.VersusLiveFlow if versus else cooperative_action.CooperativeLiveFlow
+    code, output = flow_type._adb_shell(flow, ("ip", "rule", "show"))
+    if response == "nonzero":
+        assert code == 13
+        assert output == "Permission denied"
+    elif response == "body_marker":
+        assert code == 0
+        assert output == "old __MBD_SHELL_OLD__:0\n"
+    elif response == "success":
+        assert code == 0
+        assert output == ""
+    else:
+        assert code == -1
+    if response in {"failed", "timeout"}:
+        assert controller.get_called is False
 
 
 class _FakeJob:
