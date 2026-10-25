@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 import json
+import os
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -418,6 +420,110 @@ def test_preview_bounded_variants_require_high_confidence_consensus(monkeypatch,
         with pytest.raises(ValueError,match="冲突"):refill.read_number(image,key)
     else:assert refill.read_number(image,key)==expected
     assert len(refill.readings[key]['variants'])==2
+
+
+def test_preview_conflict_reports_raw_evidence_and_never_confirms_consumption(monkeypatch, tmp_path):
+    import agent.realtime.stamina_refill as module
+    context = FakeContext(current=1)
+    image = np.zeros((720, 1280, 3), np.uint8)
+    monkeypatch.setattr(module, "recognize_song_title", lambda crop, **_kwargs: SimpleNamespace(
+        text="1" if crop.shape[:2] == (30, 38) else "11",
+        confidence=.96 if crop.shape[:2] == (30, 38) else .99,
+    ))
+    refill = StaminaRefill(context, detector=SimpleNamespace(page=lambda _im, page: context.state == page),
+        capture=lambda _context: image, foreground=lambda _controller: None, sleep=lambda _seconds: None)
+    refill.ocr = lambda frame, key: refill.read_number(frame, key) if key == "preview" else context.ocr(frame, key)
+    journal = RefillJournal(tmp_path, 913)
+    with pytest.raises(RuntimeError, match="数字未稳定") as error:
+        refill.ensure(3, options(), journal)
+    message = str(error.value)
+    assert "preview" in message and "体力读数冲突" in message
+    assert "raw-tight text='1' confidence=0.96 roi=[825, 476, 38, 30]" in message
+    assert "pink-mask text='11' confidence=0.99 roi=[817, 473, 45, 35]" in message
+    assert (770, 603) not in context.clicks and (770, 449) not in context.clicks
+    assert journal.load()["reserved_points"] == 0 and not journal.pending_path.exists()
+
+
+def test_preview_waits_for_two_consecutive_equal_frames():
+    context = FakeContext()
+    context.state = "items"
+    refill = runner(context)
+    readings = iter((11, 12, 12))
+    refill.ocr = lambda _image, _key: next(readings)
+    assert refill.stable("items", ("preview",), attempts=3) == (12,)
+    assert len(refill.history) == 3 and not context.clicks
+
+
+def test_changing_preview_reports_the_specific_field_without_input():
+    context = FakeContext()
+    context.state = "items"
+    refill = runner(context)
+    readings = iter((11, 12, 11, 12))
+    refill.ocr = lambda _image, _key: next(readings)
+    with pytest.raises(RuntimeError, match="连续帧读数变化 preview=11->12"):
+        refill.stable("items", ("preview",), attempts=4)
+    assert not context.clicks
+
+
+@pytest.mark.parametrize("answer", [None, ("11", .899), ("bad", .999)])
+def test_preview_missing_low_confidence_or_bad_digits_never_become_stable(monkeypatch, answer):
+    import agent.realtime.stamina_refill as module
+    reading = None if answer is None else SimpleNamespace(text=answer[0], confidence=answer[1])
+    monkeypatch.setattr(module, "recognize_song_title", lambda *_args, **_kwargs: reading)
+    context = FakeContext()
+    context.state = "items"
+    image = np.zeros((720, 1280, 3), np.uint8)
+    refill = StaminaRefill(context, detector=SimpleNamespace(page=lambda *_args: True),
+        capture=lambda _context: image, sleep=lambda _seconds: None)
+    with pytest.raises(RuntimeError, match="preview.*confidence="):
+        refill.stable("items", ("preview",), attempts=2)
+    assert not context.clicks
+
+
+def test_stop_between_preview_frames_does_not_capture_or_click_again():
+    context = FakeContext()
+    context.state = "items"
+    refill = runner(context)
+    refill.sleep = lambda _seconds: setattr(context.tasker, "stopping", True)
+    with pytest.raises(ScreenRefreshCancelled):
+        refill.stable("items", ("preview",), attempts=3)
+    assert len(refill.history) == 1 and not context.clicks
+
+
+def _preview_fixture_cases():
+    manifest = os.environ.get("MAABANGDREAM_STAMINA_PREVIEW_FIXTURES")
+    if not manifest:
+        return [pytest.param(None, None, marks=pytest.mark.skip(reason="未指定本地体力预览真实截图清单"))]
+    path = Path(manifest)
+    cases = json.loads(path.read_text(encoding="utf-8"))["cases"]
+    if not cases:
+        raise ValueError("体力预览真实截图清单不能为空")
+    return [pytest.param(path.parent / item["path"], item["expected"], id=f"preview-{index}-{item['expected']}")
+            for index, item in enumerate(cases)]
+
+
+@pytest.mark.parametrize("image_path,expected", _preview_fixture_cases())
+def test_real_preview_fixture_preserves_consensus_and_two_frame_gate(monkeypatch, image_path, expected):
+    import agent.realtime.stamina_refill as module
+    # 真实截图仅通过环境变量引入，不把用户截图或本机路径加入仓库。
+    image = module.imread_unicode(image_path)
+    assert image is not None and image.shape[:2] == (720, 1280)
+    assert type(expected) is int and 0 <= expected <= 99
+    context = FakeContext()
+    refill = StaminaRefill(context, detector=SimpleNamespace(page=lambda *_args: True),
+        capture=lambda _context: image, sleep=lambda _seconds: None)
+    if expected == 11:
+        with monkeypatch.context() as old_crop:
+            old_crop.setitem(module.NUMBER_REGIONS, "preview", (815, 470, 60, 40))
+            with pytest.raises(ValueError, match="冲突"):
+                refill.read_number(image, "preview")
+            assert {variant["value"] for variant in refill.readings["preview"]["variants"]} == {1, 11}
+    assert refill.stable("items", ("preview",), attempts=2) == (expected,)
+    assert len(refill.history) == 2 and not context.clicks
+    for frame in refill.history:
+        variants = frame["readings"]["preview"]["variants"]
+        assert [variant["roi"] for variant in variants] == [[825, 476, 38, 30], [817, 473, 45, 35]]
+        assert all(variant["confidence"] >= .90 and variant["value"] == expected for variant in variants)
 
 
 def test_choose_to_items_retries_only_when_first_successful_click_has_not_delivered(tmp_path):
