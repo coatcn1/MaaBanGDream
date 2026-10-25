@@ -51,7 +51,7 @@ NUMBER_REGIONS = {
     "small_count": (647, 209, 34, 41),
     "large_count": (647, 357, 34, 41),
     "current": (716, 473, 48, 37),
-    "preview": (815, 470, 60, 40),
+    "preview": (825, 476, 38, 30),
     "success_points": (500, 326, 290, 43),
 }
 
@@ -287,11 +287,14 @@ class StaminaRefill:
             variants = []
             values = set()
             # 原色与粉色掩膜只做有界交叉校验，冲突时不猜测消费数量。
-            candidates = (("raw-expanded", crop), ("pink-mask", mask)) if key == "preview" else (
-                ("raw-expanded", crop), ("raw-original", image[24:55, 979:1008, :3]))
-            for name, candidate in candidates:
+            # 收紧原色裁剪，避免已复现的双 1 漏位。
+            candidates = (("raw-tight", crop, NUMBER_REGIONS[key]),
+                          ("pink-mask", mask, (817, 473, 45, 35))) if key == "preview" else (
+                ("raw-expanded", crop, NUMBER_REGIONS[key]),
+                ("raw-original", image[24:55, 979:1008, :3], (979, 24, 29, 31)))
+            for name, candidate, roi in candidates:
                 reading = recognize_song_title(candidate, roi=(0, 0, candidate.shape[1], candidate.shape[0]))
-                detail = {"variant": name, "roi": list(NUMBER_REGIONS[key] if name == "raw-expanded" else (817, 473, 45, 35) if key == "preview" else (979, 24, 29, 31)), "text": reading.text if reading else None,
+                detail = {"variant": name, "roi": list(roi), "text": reading.text if reading else None,
                           "confidence": float(reading.confidence) if reading else None}
                 variants.append(detail)
                 if reading is not None and reading.confidence >= .90:
@@ -351,6 +354,7 @@ class StaminaRefill:
     def stable(self, page, keys=(), *, attempts=10):
         self.stage = page
         previous = None
+        differences = []
         for attempt in range(attempts):
             self.stopped()
             image = self.capture(self.context)
@@ -377,9 +381,27 @@ class StaminaRefill:
                 if page == "menu" and keys == ("top",):
                     self.last_known_current = value[0]
                 return value
+            differences = ([f"{key}={before}->{after}" for key, before, after in zip(keys, previous, value)
+                            if before != after] if value is not None and previous is not None else [])
             previous = value
             self.sleep(.12)
-        raise RuntimeError(f"体力补充{'数字未稳定' if matched else '页面未送达'}：{page}")
+        details = []
+        if matched:
+            for key in keys:
+                reading = self.readings.get(key, {})
+                if "error" not in reading:
+                    continue
+                variants = reading.get("variants", [reading])
+                evidence = ", ".join(
+                    f"{variant.get('variant', 'raw')} text={variant.get('text')!r} "
+                    f"confidence={variant.get('confidence')} roi={variant.get('roi')}"
+                    for variant in variants
+                )
+                details.append(f"{key}: {reading['error']} ({evidence})")
+            if not details and differences:
+                details.append("连续帧读数变化 " + ", ".join(differences))
+        suffix = "；" + "；".join(details) if details else ""
+        raise RuntimeError(f"体力补充{'数字未稳定' if matched else '页面未送达'}：{page}{suffix}")
 
     def deliver_items_page(self):
         """仅重试非消费导航；已送达物品页或未知页面均不重复点击。"""
