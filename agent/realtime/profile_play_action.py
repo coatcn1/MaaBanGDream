@@ -89,6 +89,7 @@ from .native_prearm import (
     resolve_confirmed_chart,
 )
 from .playfield_monitor import PlayfieldDetector, PlayfieldLifecycleMonitor
+from .performance_state import performance_window
 
 
 REWARD_CONFIRM_TEMPLATE = PROJECT_ROOT / "resource" / "image" / "result_reward_confirm.png"
@@ -3152,18 +3153,19 @@ class RealtimeProfilePlay(CustomAction):
             def request_disconnect_jump(_reading) -> None:
                 update_live_run(disconnect_jump_requested=True)
 
-            stats = engine.run(
-                stall_safe_capture,
-                lambda: context.tasker.stopping,
-                duration_seconds=duration_seconds,
-                target_fps=target_fps,
-                continue_after_life_depleted=continue_after_depleted,
-                on_life_depleted=(
-                    request_disconnect_jump
-                    if disconnect_jump_request else None
-                ),
-                startup_timeout_seconds=startup_timeout_seconds,
-            )
+            with performance_window(argv):
+                stats = engine.run(
+                    stall_safe_capture,
+                    lambda: context.tasker.stopping,
+                    duration_seconds=duration_seconds,
+                    target_fps=target_fps,
+                    continue_after_life_depleted=continue_after_depleted,
+                    on_life_depleted=(
+                        request_disconnect_jump
+                        if disconnect_jump_request else None
+                    ),
+                    startup_timeout_seconds=startup_timeout_seconds,
+                )
             if run_mode == "challenge":
                 if stats.stopped or context.tasker.stopping:
                     return True

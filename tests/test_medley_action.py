@@ -809,6 +809,8 @@ def test_play_requires_final_cover_title_when_earlier_reads_failed(monkeypatch):
         title_confidence=0.0,
     )
     flow = _bare_flow()
+    task_detail = SimpleNamespace(task_id=71)
+    flow.argv = SimpleNamespace(task_detail=task_detail)
     flow.settings = {"debug_recording": False, "diagnostic_trace": True, "opening_recording": False}
     flow.context = SimpleNamespace(
         tasker=SimpleNamespace(stopping=False),
@@ -838,6 +840,7 @@ def test_play_requires_final_cover_title_when_earlier_reads_failed(monkeypatch):
 
     class ProfilePlay:
         def run(self, _context, argv):
+            assert argv.task_detail is task_detail
             captured.update(
                 medley_action.parse_custom_action_params(
                     argv.custom_action_param

@@ -878,9 +878,11 @@ class VersusLiveFlow:
             raise InterruptedError("用户已停止任务")
         raise RoomPreparationTimeout("进入竞演房间后180秒内未出现不指定歌曲或准备页")
 
-    @staticmethod
-    def action_argv(params: dict[str, object]):
-        return SimpleNamespace(custom_action_param=json.dumps(params, ensure_ascii=False))
+    def action_argv(self, params: dict[str, object]):
+        return SimpleNamespace(
+            custom_action_param=json.dumps(params, ensure_ascii=False),
+            task_detail=getattr(getattr(self, "stamina_argv", None), "task_detail", None),
+        )
 
     def prepare(self) -> None:
         difficulty = str(self.settings["difficulty"])

@@ -1739,7 +1739,9 @@ class MedleyFlow:
         }
         if not RealtimeProfilePlay().run(
             self.context,
-            self.action_argv(play_params),
+            self.action_argv(
+                play_params, task_detail=getattr(getattr(self, "argv", None), "task_detail", None),
+            ),
         ):
             if self.context.tasker.stopping:
                 raise ScreenRefreshCancelled("task is stopping")

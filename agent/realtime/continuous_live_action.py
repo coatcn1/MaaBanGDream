@@ -646,7 +646,8 @@ class ContinuousRealtimeLive(CustomAction):
                 custom_action_param=json.dumps(
                     current_song_params,
                     ensure_ascii=False,
-                )
+                ),
+                task_detail=getattr(argv, "task_detail", None),
             )
             return RealtimeProfilePlay()._run(context, song_argv)
 
