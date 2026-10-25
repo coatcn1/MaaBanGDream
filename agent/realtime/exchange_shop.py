@@ -3,17 +3,19 @@ from __future__ import annotations
 
 import json
 from contextlib import contextmanager
+from dataclasses import dataclass
 import os
 from pathlib import Path
 import re
 import time
+from uuid import uuid4
 
 import cv2
 import numpy as np
 from maa.agent.agent_server import AgentServer
 from maa.custom_action import CustomAction
 
-from .exchange_shop_policy import BoxState, decide, validate_draw, validate_reset
+from .exchange_shop_policy import BoxState, MAX_EXACT_BUDGET, decide, validate_draw, validate_reset
 from .song_title_ocr import recognize_song_title
 from .vision_io import imread_unicode, imwrite_unicode
 
@@ -69,13 +71,49 @@ def validate_options(values):
     mode = values.get("mode", "auto")
     execute = values.get("execute", False)
     maximum = values.get("max_draws", 0)
+    currency_budget = values.get("currency_budget", 0)
     if mode not in ("auto", "versus180", "five230"):
         raise ValueError("未知抽箱策略")
     if type(execute) is not bool:
         raise ValueError("执行方式必须是布尔值")
     if type(maximum) is not int or not 0 <= maximum <= 999999:
         raise ValueError("最大抽数必须是0..999999整数")
-    return {"mode": mode, "execute": execute, "max_draws": maximum}
+    if type(currency_budget) is not int or not 0 <= currency_budget <= 999999999:
+        raise ValueError("活动币预算必须是0..999999999整数")
+    return {"mode": mode, "execute": execute, "max_draws": maximum, "currency_budget": currency_budget}
+
+
+@dataclass
+class ExchangeBudget:
+    source: str
+    total_draws: int
+    spent_draws: int = 0
+
+    @classmethod
+    def from_options(cls, options, initial_currency):
+        limits=[value for value in (options["max_draws"],) if value]
+        if options["currency_budget"]:
+            limits.append(options["currency_budget"]//10)
+        source="user_budget" if limits else "initial_balance_ocr"
+        if not limits:
+            if type(initial_currency) is not int or initial_currency < 0:
+                raise ValueError("自动预算缺少可信初始余额")
+            limits=[initial_currency//10]
+        total=min(limits)
+        if total > MAX_EXACT_BUDGET:
+            raise ValueError(f"本次预算过大，请将抽数或活动币预算设为{MAX_EXACT_BUDGET}抽以内")
+        return cls(source,total)
+
+    @property
+    def remaining(self):
+        return self.total_draws-self.spent_draws
+
+    def snapshot(self, additional=0):
+        spent=self.spent_draws+additional
+        if type(additional) is not int or additional < 0 or spent > self.total_draws:
+            raise RuntimeError("抽取数量超出本任务预算")
+        return {"source":self.source,"total_draws":self.total_draws,"spent_draws":spent,
+                "estimated_spent_currency":spent*10,"remaining_draws":self.total_draws-spent}
 
 
 def _task_id(argv):
@@ -90,6 +128,7 @@ class ExchangeReader:
         self.stopped = stopped
         self.ocr = ocr
         self.readings = {}
+        self.read_currency = True
         self.templates = {}
         for name in REGIONS:
             for base in (ROOT / "resource/image", ROOT / "resource/resource/image"):
@@ -152,11 +191,8 @@ class ExchangeReader:
             raise ValueError("箱号读取失败")
         remaining, total = self.ratio(image, "remaining", (853, 184, 100, 38), (180, 230))
         special, _ = self.ratio(image, "special", (875, 377, 49, 29), (1,))
-        currency_text = self.text(image, "currency", (1017, 539, 111, 31))
-        match_currency = re.fullmatch(r"([0-9]{1,9})枚?", currency_text)
-        if not match_currency:
-            raise ValueError("活动礼物币余额读取失败")
-        return int(match[1]), remaining, total, special, int(match_currency[1])
+        currency = self.initial_balance(image) if self.read_currency else None
+        return int(match[1]), remaining, total, special, int(currency) if currency is not None else None
 
     def contents(self, image):
         if not self.page(image, "contents"):
@@ -196,20 +232,42 @@ class ExchangeReader:
             raise ValueError("抽取按钮数量或礼物币费用无效")
         return int(a[1]), int(c[1])
 
-    def confirmation_after(self, image):
-        roi = (733, 425, 106, 33)
-        self.readings.pop("confirm_after", None)
-        self.readings.pop("confirm_after_original", None)
+    def initial_balance(self, image):
+        # 主页面为深色背景，不用确认窗的非白墨迹裁剪；候选均包含完整原字段。
+        # 同一张图首个高置信合法值即返回，候选耗尽时由用户预算绕开识别。
+        rois=((1017,539,111,31),(1015,537,115,35),(1013,535,119,39),(1017,535,111,39))
+        for index,roi in enumerate(rois):
+            key=f"initial_currency_path_{index}"
+            self.readings.pop(key,None)
+            try:
+                text=self.text(image,key,roi)
+            except ValueError:
+                if key not in self.readings:
+                    raise
+                continue
+            finally:
+                self.stopped()
+            if re.fullmatch(r"[0-9]{1,9}枚?",text):
+                self.readings[key]["method"]="complete_field_roi"
+                return int(text.removesuffix("枚"))
+        raise ValueError("初始活动币余额多路径均未确认，请填写最大抽数或活动币预算")
+
+    def confirmation_balance(self, image, key, roi):
+        self.readings.pop(key, None)
+        self.readings.pop(f"{key}_original", None)
         try:
-            original = self.text(image, "confirm_after_original", roi)
+            original = self.text(image, f"{key}_original", roi)
         except ValueError:
             # 仅容许已记录的低置信结果，识别器异常不能被裁剪重试掩盖。
-            if "confirm_after_original" not in self.readings:
+            if f"{key}_original" not in self.readings:
                 raise
             original = None
-        self.stopped()
-        if original is not None and not re.fullmatch(r"[0-9]{1,9}", original):
-            raise ValueError("交换确认余额原始读数无效")
+        finally:
+            self.stopped()
+        pattern=r"[0-9]{1,9}"
+        if original is not None:
+            if not re.fullmatch(pattern, original):
+                raise ValueError("交换确认余额原始读数无效")
         x, y, w, h = roi
         region = image[y:y+h, x:x+w, :3]
         # 只收紧本字段留白，保留全部非白墨迹及原彩色像素，不筛掉符号或遮挡。
@@ -222,13 +280,20 @@ class ExchangeReader:
         if left < padding or top < padding or right > w-padding or bottom > h-padding:
             raise ValueError("交换确认余额墨迹触边或被遮挡")
         tight_roi = (x+left-padding, y+top-padding, right-left+2*padding, bottom-top+2*padding)
-        text = self.text(image, "confirm_after", tight_roi)
-        self.readings["confirm_after"].update(source_roi=roi, method="complete_ink_crop")
-        if not re.fullmatch(r"[0-9]{1,9}", text):
+        try:
+            text = self.text(image, key, tight_roi)
+        finally:
+            # OCR 返回或抛错时停止均优先，不继续生成消费凭据。
+            self.stopped()
+        self.readings[key].update(source_roi=roi, method="complete_ink_crop")
+        if not re.fullmatch(pattern, text):
             raise ValueError("交换确认余额无效")
         if original is not None and original != text:
             raise ValueError("交换确认余额高置信读数冲突")
         return text
+
+    def confirmation_after(self, image):
+        return self.confirmation_balance(image, "confirm_after", (733, 425, 106, 33))
 
     def draw_confirmation(self, image):
         if not self.page(image, "draw_confirm"):
@@ -240,9 +305,11 @@ class ExchangeReader:
         c, a = re.fullmatch(r"[^0-9+−.\-]*([0-9]{1,3})枚", cost), re.fullmatch(r"领取礼物([0-9]{1,2})个奖品[。.]?", amount)
         if not c or not a or prompt not in ("确认吗?", "确认吗？"):
             raise ValueError("交换确认金额、数量或正文不匹配")
+        if not self.read_currency:
+            return int(a[1]), int(c[1]), None, None
         values = []
         for key, roi in (("confirm_before", (454, 425, 105, 33)), ("confirm_after", (733, 425, 106, 33))):
-            text = self.confirmation_after(image) if key == "confirm_after" else self.text(image, key, roi)
+            text = self.confirmation_balance(image, key, roi)
             if not re.fullmatch(r"[0-9]{1,9}", text):
                 raise ValueError("交换确认余额无效")
             values.append(int(text))
@@ -251,6 +318,8 @@ class ExchangeReader:
     def draw_result(self, image):
         if not self.page(image, "draw_result"):
             raise ValueError("抽取动画尚未结束或结果页未识别")
+        if not self.read_currency:
+            return True
         text = self.text(image, "result_currency", (1017, 539, 111, 31))
         match = re.fullmatch(r"([0-9]{1,9})枚", text)
         if not match:
@@ -299,6 +368,59 @@ class ExchangeUI:
         self.last_frame = None
         self.stage = "start"
         self.navigation = None
+        self.operation = None
+        self.observation = 0
+        self.capture_sequence = None
+
+    def capture_new(self):
+        self.stopped()
+        result=self.capture(self.context)
+        self.stopped()
+        # 原生刷新只返回图像；只有调用方实际提供元数据时才检查设备序号。
+        metadata=result if isinstance(result,dict) else {}
+        reused=metadata.get("reused",getattr(result,"reused",False))
+        sequence=metadata.get("sequence",getattr(result,"sequence",None))
+        if reused or sequence is not None and (type(sequence) is not int
+                or self.capture_sequence is not None and sequence<=self.capture_sequence):
+            raise RuntimeError("抽箱截图复用或序号未前进，禁止推进消费阶段")
+        if sequence is not None:
+            self.capture_sequence=sequence
+        self.last_frame=metadata.get("image",getattr(result,"image",result))
+        self.observation+=1
+        return self.last_frame
+
+    def begin_operation(self, operation_id, before, decision, budget):
+        self.stopped()
+        if self.operation is not None and self.operation["phase"]!="completed":
+            raise RuntimeError("上一笔操作尚未确认，禁止复用或重新提交")
+        if self.operation is not None and self.operation["operation_id"]==operation_id:
+            raise RuntimeError("禁止复用旧操作回执")
+        self.operation={"operation_id":operation_id,"phase":"prepared",
+                        "before":before.__dict__,"action":decision.action,
+                        "amount":decision.amount,"cost":decision.amount*10,
+                        "budget":budget,"observations":{"prepared":self.observation}}
+
+    def complete_operation(self, after):
+        self.stopped()
+        operation=self.operation
+        expected="result_closed" if operation["action"]=="draw" else "reset_closed"
+        if operation["phase"]!=expected:
+            raise RuntimeError("缺少本笔提交后的结果关闭凭据，禁止确认")
+        operation["phase"]="pool_verified"
+        operation["after"]=after.__dict__
+        operation["observations"]["pool_verified"]=self.observation
+        return dict(operation)
+
+    def commit_operation(self):
+        self.operation["phase"]="completed"
+
+    def initialize_budget(self, automatic):
+        """只有自动预算读取初始余额；后续随机奖品状态与预算推算分开保存。"""
+        self.stopped()
+        self.reader.read_currency=bool(automatic)
+        initial=self.stable("main",self.reader.main)[4] if automatic else None
+        self.reader.read_currency=False
+        return initial
 
     def stopped(self):
         if self.context.tasker.stopping:
@@ -309,12 +431,12 @@ class ExchangeUI:
         error = "页面未送达"
         for _ in range(attempts):
             self.stopped()
-            self.last_frame = self.capture(self.context)
-            self.stopped()
+            self.capture_new()
             try:
                 if not self.reader.page(self.last_frame, page):
                     raise ValueError("页面签名不匹配")
                 value = read(self.last_frame) if read else True
+                self.stopped()
                 if previous == value:
                     return value
                 previous = value
@@ -329,8 +451,11 @@ class ExchangeUI:
         require_game_foreground(self.context.tasker.controller)
         self.stopped()
         # 前台保护可能触发重连，输入前重新获取代理。
-        self.context.tasker.controller.post_click(x, y).wait()
+        job=self.context.tasker.controller.post_click(x, y)
+        job.wait()
         self.stopped()
+        if not job.succeeded:
+            raise RuntimeError("抽箱输入作业失败，保留未决并禁止重复消费")
 
     def open_from_main(self, page, read, before, point, *, available=None):
         """仅重试未送达的非消费入口；每次重发都重新确认原主页面。"""
@@ -342,8 +467,7 @@ class ExchangeUI:
 
         def capture_new():
             self.stopped()
-            self.last_frame = self.capture(self.context)
-            self.stopped()
+            self.capture_new()
 
         def same_main():
             observed = self.reader.main(self.last_frame)
@@ -441,6 +565,10 @@ class ExchangeUI:
     def draw_once(self, amount):
         self.stage = "draw_confirm"
         before = self.current_state
+        operation=self.operation
+        if operation is not None and (operation["phase"]!="prepared" or operation["action"]!="draw"
+                or operation["amount"]!=amount or operation["before"]!=before.__dict__):
+            raise RuntimeError("本笔抽取阶段或预算不符，禁止重复确认")
         if self.stable("main", self.reader.main) != (before.box, before.remaining, before.total, before.special, before.currency):
             raise RuntimeError("抽取前主页面已变化，拒绝消费")
         offer = self.stable("main", self.reader.draw_offer)
@@ -448,27 +576,44 @@ class ExchangeUI:
             raise RuntimeError("抽取按钮数量或费用与计划冲突")
         self.click(1025, 618)
         confirmation = self.stable("draw_confirm", self.reader.draw_confirmation)
-        if confirmation != (amount, amount * 10, before.currency, before.currency - amount * 10):
+        expected_currency=before.currency-amount*10 if before.currency is not None else None
+        if confirmation != (amount, amount * 10, before.currency, expected_currency):
             raise RuntimeError("交换确认与本次预算或余额冲突，未发送确认")
-        # 仅确认已核对的本次消费；超时或任何未知页面都不重发。
+        # 提交前先推进内存阶段；作业异常或停止不能重新发送同一笔确认。
+        if operation is not None:
+            operation["observations"]["confirmation_verified"]=self.observation
+            operation["phase"]="submitted"
+            operation["observations"]["submitted"]=self.observation
         self.click(770, 525)
         self.stage = "draw_result"
-        self.finish_draw_result(before.currency - amount * 10, before if amount == before.remaining else None)
+        self.finish_draw_result(expected_currency, before if amount == before.remaining else None)
 
     def finish_draw_result(self, expected_currency, emptied=None):
+        operation=self.operation
+        if operation is not None and operation["phase"]!="submitted":
+            raise RuntimeError("结果页缺少本笔唯一提交凭据")
         observed = self.stable("draw_result", self.reader.draw_result, attempts=200)
-        if observed != expected_currency:
+        if (expected_currency is None and observed is not True) or (expected_currency is not None and observed != expected_currency):
             raise RuntimeError("抽取结果余额不符，保留未决账本并禁止重试")
+        if operation is not None:
+            operation["phase"]="result_verified"
+            operation["observations"]["result_verified"]=self.observation
         # 结果左侧是“再次交换”消费按钮，唯一可关闭按钮位于右侧。
         self.click(1068, 648)
         if emptied is not None:
             self.wait_new_box((emptied.box, 0, emptied.total, 0, expected_currency), expected_currency)
         else:
             self.stable("main", self.reader.main)
+        if operation is not None:
+            operation["phase"]="result_closed"
+            operation["observations"]["result_closed"]=self.observation
 
     def reset_once(self):
         self.stage = "reset_confirm"
         before = self.current_state.validate()
+        if self.operation is not None and (self.operation["phase"]!="prepared"
+                or self.operation["action"]!="reset"):
+            raise RuntimeError("本笔换箱阶段不符，禁止重复确认")
         if before.special != 0 or before.remaining == 0:
             raise RuntimeError("尚未获得特别礼物或空箱不允许手动换箱")
         current = (before.box, before.remaining, before.total, before.special, before.currency)
@@ -480,8 +625,14 @@ class ExchangeUI:
         if self.open_from_main("reset_confirm", self.reader.reset_confirmation, current, (773, 465),
                                available="main_reset_enabled") is not True:
             raise RuntimeError("礼物箱重置确认未完整送达")
+        if self.operation is not None:
+            self.operation["phase"]="submitted"
+            self.operation["observations"]["submitted"]=self.observation
         self.click(769, 526)
         self.finish_reset_result(before)
+        if self.operation is not None:
+            self.operation["phase"]="reset_closed"
+            self.operation["observations"]["reset_closed"]=self.observation
 
     def finish_reset_result(self, before):
         """仅收取本次已提交换箱的回执，不打开或确认另一笔换箱。"""
@@ -499,8 +650,7 @@ class ExchangeUI:
         error = "新礼物箱尚未送达"
         for _ in range(100):
             self.stopped()
-            self.last_frame = self.capture(self.context)
-            self.stopped()
+            self.capture_new()
             try:
                 if self.reader.page(self.last_frame, "main"):
                     observed = self.reader.main(self.last_frame)
@@ -540,7 +690,7 @@ class ExchangeUI:
             if self.last_frame is not None:
                 imwrite_unicode(folder / "failure.png", self.last_frame)
             (folder / "failure.json").write_text(json.dumps({"stage": self.stage, "error": str(error),
-                "readings": self.reader.readings, "navigation":self.navigation}, ensure_ascii=False, indent=2), encoding="utf-8")
+                "readings": self.reader.readings, "navigation":self.navigation,"operation":self.operation}, ensure_ascii=False, indent=2), encoding="utf-8")
             return str(folder)
         except Exception:
             return "诊断保存失败"
@@ -551,9 +701,13 @@ class ExchangeFlow:
         self.ui, self.options = ui, validate_options(options)
         self.journal, self.report = journal, report or (lambda text: log_task("交换所抽箱", "策略", "INFO", text))
         self.draws = 0
+        self.run_id=uuid4().hex
 
     def run(self):
         self.ui.stopped()
+        automatic=not self.options["max_draws"] and not self.options["currency_budget"]
+        initial_currency=self.ui.initialize_budget(automatic)
+        self.budget=ExchangeBudget.from_options(self.options,initial_currency)
         self.ui.check_settings()
         state = self.ui.read_state()
         while True:
@@ -561,14 +715,13 @@ class ExchangeFlow:
             total = {"auto": state.total, "versus180": 180, "five230": 230}[self.options["mode"]]
             if total != state.total:
                 raise RuntimeError("所选策略与实读箱容量冲突")
-            maximum = self.options["max_draws"]
-            budget = min(state.currency // 10, max(0, maximum-self.draws)) if maximum else state.currency // 10
+            budget = self.budget.remaining
             decision = decide(state, budget=budget, stopped=self.ui.stopped)
             action = {"reset":"换箱", "draw":"抽取", "stop":"结束", "wait":"等待自动换箱"}[decision.action]
             amount = str(decision.amount) if decision.action == "draw" else "不适用"
             limit = str(self.options["max_draws"]) if self.options["max_draws"] else "不限"
             self.report(f"第{state.box}箱 x={state.remaining}/{state.total} y={state.cans}/10 "
-                        f"special={state.special}/1 活动礼物币={state.currency} 可用预算={budget}抽 "
+                        f"special={state.special}/1 预算来源={self.budget.source} 可用预算={budget}抽 "
                         f"下一步={action} 数量={amount} "
                         f"{decision.reason}；每次抽取后重读并重算；"
                         f"累计抽数={self.draws}，抽数上限={limit}")
@@ -588,7 +741,10 @@ class ExchangeFlow:
                 raise RuntimeError("缺少消费未决保护，拒绝执行")
             self.ui.stopped()
             self.journal.check_unresolved()
-            self.journal.reserve(state, decision)
+            if decision.action=="draw":
+                self.budget.snapshot(decision.amount)
+            operation_id=self.journal.reserve(state, decision, budget=self.budget.snapshot(),run_id=self.run_id)
+            self.ui.begin_operation(operation_id,state,decision,self.budget.snapshot())
             if decision.action == "draw":
                 self.ui.draw_once(decision.amount)
             else:
@@ -597,11 +753,15 @@ class ExchangeFlow:
             after = self.ui.read_state()
             if decision.action == "draw":
                 validate_draw(state, after, decision.amount)
-                self.draws += decision.amount
             else:
                 validate_reset(state, after)
             self.ui.stopped()
-            self.journal.confirm(after)
+            spent=decision.amount if decision.action=="draw" else 0
+            receipt=self.ui.complete_operation(after)
+            self.journal.confirm(after,budget=self.budget.snapshot(spent),receipt=receipt)
+            self.ui.commit_operation()
+            self.budget.spent_draws+=spent
+            self.draws+=spent
             state = after
 
 
@@ -653,15 +813,32 @@ class ExchangeJournal:
             os.fsync(handle.fileno())
         temporary.replace(self.path)
 
-    def reserve(self, state, decision):
+    def reserve(self, state, decision, *, budget=None, run_id=None):
         self.pending = {"status": "pending", "before": state.__dict__, "decision": decision.__dict__,
-                        "created_ns": time.time_ns()}
+                        "created_ns": time.time_ns(),"operation_id":uuid4().hex,"run_id":run_id}
+        if budget is not None:
+            self.pending["budget"]=budget
         self._save(self.pending)
+        return self.pending["operation_id"]
 
-    def confirm(self, state):
+    def confirm(self, state, *, budget=None, receipt=None):
         if self.pending is None:
             raise RuntimeError("缺少本次消费预留")
-        self._save(self.pending | {"status": "confirmed", "after": state.__dict__})
+        reserved_budget=self.pending.get("budget")
+        if reserved_budget is not None:
+            spent=self.pending["decision"]["amount"] if self.pending["decision"]["action"]=="draw" else 0
+            expected=reserved_budget | {"spent_draws":reserved_budget["spent_draws"]+spent,
+                "estimated_spent_currency":reserved_budget["estimated_spent_currency"]+spent*10,
+                "remaining_draws":reserved_budget["remaining_draws"]-spent}
+            if receipt is None or budget!=expected:
+                raise RuntimeError("本笔完成凭据或预算变更不完整，禁止确认")
+        if receipt is not None and (receipt.get("operation_id")!=self.pending.get("operation_id")
+                or receipt.get("phase")!="pool_verified" or receipt.get("before")!=self.pending["before"]
+                or receipt.get("after")!=state.__dict__):
+            raise RuntimeError("操作回执不属于本笔完整结果，禁止确认")
+        self._save(self.pending | {"status": "confirmed", "after": state.__dict__}
+                   | ({"budget":budget} if budget is not None else {})
+                   | ({"receipt":receipt | {"phase":"confirmed","run_id":self.pending["run_id"]}} if receipt is not None else {}))
         self.pending = None
 
     def resolve_not_executed(self, after, evidence):
@@ -683,7 +860,7 @@ class ExchangeJournal:
         if (data.get("decision", {}).get("action") != "reset" or before.special != 0 or before.remaining <= 0
                 or after.box != before.box+1 or after.total != before.total or after.remaining != before.total
                 or after.cans != 10 or after.special != 1
-                or after.currency != before.currency-10*before.remaining):
+                or before.currency is None or after.currency != before.currency-10*before.remaining):
             raise RuntimeError("外部手动清空必须与原始未决换箱、下一满箱和精确扣款一致")
         if not isinstance(evidence, dict) or evidence.get("operator_confirmed_manual_full_clear") is not True:
             raise ValueError("缺少用户明确手动抽光原箱的声明")

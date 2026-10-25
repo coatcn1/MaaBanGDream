@@ -1,4 +1,6 @@
 from dataclasses import replace
+import json
+import os
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -7,7 +9,7 @@ import pytest
 
 from agent.realtime.exchange_shop import (
     ExchangeFlow, ExchangeJournal, ExchangeReader, ExchangeShopConfigure, ExchangeShopRun,
-    ExchangeStopped, ExchangeUI, validate_options, _OPTIONS,
+    ExchangeStopped, ExchangeUI, ExchangeBudget, validate_options, _OPTIONS,
 )
 from agent.realtime.exchange_shop_policy import BoxState, THRESHOLDS, decide, validate_draw, validate_reset
 
@@ -55,6 +57,7 @@ class UI:
     reset_verified = True
 
     def __init__(self, states, fail_draw=False):
+        self.initial_currency=states[0].currency
         self.states = iter(states)
         self.actions = []
         self.fail_draw = fail_draw
@@ -62,12 +65,24 @@ class UI:
     def stopped(self):
         pass
 
+    def initialize_budget(self, automatic):
+        return self.initial_currency if automatic else None
+
     def check_settings(self):
         self.actions.append("settings")
 
     def read_state(self):
         self.actions.append("read")
         return next(self.states)
+
+    def begin_operation(self,operation_id,before,decision,budget):
+        self.operation={"operation_id":operation_id,"before":before.__dict__,"phase":"pool_verified"}
+
+    def complete_operation(self,after):
+        return self.operation | {"after":after.__dict__}
+
+    def commit_operation(self):
+        pass
 
     def draw_once(self, amount):
         self.actions.append(("draw",amount))
@@ -263,7 +278,7 @@ def test_config_is_current_task_only_and_run_cleans_it(monkeypatch):
     assert ExchangeShopConfigure().run(context,argv)
     argv.custom_action_param='{"max_draws":30}'
     assert ExchangeShopConfigure().run(context,argv)
-    assert _OPTIONS[1701]=={"mode":"auto","execute":False,"max_draws":30}
+    assert _OPTIONS[1701]=={"mode":"auto","execute":False,"max_draws":30,"currency_budget":0}
     def stop_ui(context):raise ExchangeStopped()
     monkeypatch.setattr("agent.realtime.exchange_shop.ExchangeUI",stop_ui)
     assert ExchangeShopRun().run(context,argv)
@@ -615,7 +630,7 @@ def test_dp_cancel_is_immediate_and_cache_resumes_completed_layers():
 def test_exact_budget_limit_and_no_reward_stop_do_not_consume(tmp_path):
     ui=UI([state(currency=100010)])
     with pytest.raises(ValueError,match="预算过大"):flow(ui,tmp_path).run()
-    assert ui.actions == ["settings","read"] and not (tmp_path/"ledger.json").exists()
+    assert ui.actions == [] and not (tmp_path/"ledger.json").exists()
     assert decide(state(remaining=20,cans=0,special=0),budget=9).action == "stop"
 
 
@@ -625,7 +640,7 @@ def test_flow_uses_smaller_of_coin_and_cumulative_draw_budget(tmp_path):
     end=state(box=20,remaining=170,currency=0)
     ui=UI([before,after,end])
     messages=[]
-    f=flow(ui,tmp_path,max_draws=100)
+    f=flow(ui,tmp_path,max_draws=100,currency_budget=100)
     f.report=messages.append
     assert f.run() and f.draws == 10
     assert ui.actions == ["settings","read","reset","read",("draw",10),"read"]
@@ -687,7 +702,7 @@ def test_manual_not_executed_resolution_preserves_pending_audit(tmp_path):
 def test_currency_name_and_color_are_not_used_in_confirmation(cost,amount):
     reader,image,_=confirmation_reader()
     balance=str(1000-amount*10)
-    values=iter([cost,f"领取礼物{amount}个奖品。","确认吗？","1000",balance,balance])
+    values=iter([cost,f"领取礼物{amount}个奖品。","确认吗？","1000","1000",balance,balance])
     reader.ocr=lambda *args,**kwargs:SimpleNamespace(text=next(values),confidence=.99)
     assert reader.draw_confirmation(image) == (amount,amount*10,1000,1000-amount*10)
 
@@ -967,122 +982,154 @@ def test_real_confirmation_four_digit_balance_reads_then_reconciles():
                   state(box=37,remaining=90,cans=6,special=0,currency=9922),10)
 
 
-def confirmation_reader(after="9922", *, original_after="9922", original_confidence=.87, tight_confidence=.999):
+BALANCE_ROIS = {"confirm_before": (454,425,105,33), "confirm_after": (733,425,106,33)}
+
+
+def confirmation_reader(after="9922", *, original_after="9922", original_confidence=.87, tight_confidence=.999,
+                        field="confirm_after"):
     image=np.full((720,1280,3),255,np.uint8)
-    # 合成墨迹仅验证裁剪与消费门禁，真实 OCR 精度由本地截图回归覆盖。
-    width=len(after)*8-4
-    left=733+(106-width)//2
-    for index in range(len(after)):
-        image[432:450,left+index*8:left+index*8+4]=(255,170,80)
+    values={"confirm_before":"10022","confirm_after":"9922"}
+    values[field]=after
+    # 两个字段都保留完整墨迹，避免固定高置信的另一字段掩盖遗漏。
+    for key,(x,y,w,h) in BALANCE_ROIS.items():
+        width=len(values[key])*8-4
+        left=x+(w-width)//2
+        for index in range(len(values[key])):
+            image[y+7:y+25,left+index*8:left+index*8+4]=(255,170,80)
     calls=[]
-    fixed={
-        (460,251,360,31):"消费礼物币100枚",
-        (528,281,221,31):"领取礼物10个奖品。",
-        (586,311,115,30):"确认吗？",
-        (454,425,105,33):"10022",
-    }
+    fixed={(460,251,360,31):"消费礼物币100枚",
+           (528,281,221,31):"领取礼物10个奖品。",(586,311,115,30):"确认吗？"}
     def ocr(image, *, roi):
         calls.append(roi)
-        if roi == (733,425,106,33):
+        if roi in fixed:return SimpleNamespace(text=fixed[roi],confidence=.999)
+        key=next(key for key,(x,y,w,h) in BALANCE_ROIS.items() if x <= roi[0] < x+w)
+        if roi == BALANCE_ROIS[field]:
             return SimpleNamespace(text=original_after,confidence=original_confidence)
-        return SimpleNamespace(text=fixed.get(roi,after),confidence=.999 if roi in fixed else tight_confidence)
+        return SimpleNamespace(text=values[key],confidence=tight_confidence if key==field else .999)
     reader=ExchangeReader(ocr=ocr)
     reader.page=lambda *args:True
     return reader,image,calls
 
 
-@pytest.mark.parametrize("after", ("0","22","122","9922","10022","999999999"))
-def test_confirmation_ink_crop_handles_full_integer_widths(after):
-    reader,image,calls=confirmation_reader(after,original_after=after)
-    assert reader.draw_confirmation(image) == (10,100,10022,int(after))
+@pytest.mark.parametrize("field", BALANCE_ROIS)
+def test_confirmation_low_confidence_balance_failure_pattern(field):
+    reader,image,_=confirmation_reader("9922",field=field,original_confidence=.841663)
+    expected=(10,100,9922,9922) if field=="confirm_before" else (10,100,10022,9922)
+    assert reader.draw_confirmation(image)==expected
+    assert reader.readings[field]["method"]=="complete_ink_crop"
+
+
+@pytest.fixture(params=BALANCE_ROIS)
+def balance_field(request):
+    return request.param
+
+
+def read_balance(reader,image,field):
+    return reader.confirmation_balance(image,field,BALANCE_ROIS[field])
+
+
+@pytest.mark.parametrize("value", ("0","22","122","9922","10022","999999999"))
+def test_confirmation_ink_crop_handles_full_integer_widths(balance_field,value):
+    field=balance_field
+    reader,image,calls=confirmation_reader(value,original_after=value,field=field)
+    assert read_balance(reader,image,field)==value
     x,y,w,h=calls[-1]
-    assert (x,y,w,h) != (733,425,106,33)
-    assert np.all(image[y:y+h,x:x+w][[0,-1]] == 255)
-    assert reader.readings["confirm_after_original"]["confidence"] == .87
-    assert reader.readings["confirm_after"]["method"] == "complete_ink_crop"
+    assert (x,y,w,h)!=BALANCE_ROIS[field]
+    assert np.all(image[y:y+h,x:x+w][[0,-1]]==255)
+    assert reader.readings[field+"_original"]["confidence"]==.87
+    assert reader.readings[field]["method"]=="complete_ink_crop"
 
 
 @pytest.mark.parametrize("original,tight", (("9922","9923"),("0","9922"),("10022","9922")))
-def test_confirmation_high_confidence_disagreement_is_rejected(original,tight):
-    reader,image,_=confirmation_reader(tight,original_after=original,original_confidence=.999)
-    with pytest.raises(ValueError,match="高置信读数冲突"):reader.draw_confirmation(image)
+def test_confirmation_high_confidence_disagreement_is_rejected(balance_field,original,tight):
+    reader,image,_=confirmation_reader(tight,original_after=original,original_confidence=.999,field=balance_field)
+    with pytest.raises(ValueError,match="高置信读数冲突"):read_balance(reader,image,balance_field)
 
 
 @pytest.mark.parametrize("invalid", ("-9922","99.22","9O22","9922枚","1000000000",""))
 @pytest.mark.parametrize("original_confidence", (.87,.999))
-def test_confirmation_requires_complete_integer_from_every_high_confidence_read(invalid,original_confidence):
-    reader,image,_=confirmation_reader("9922",original_after=invalid,original_confidence=original_confidence)
+def test_confirmation_requires_complete_integer_from_every_high_confidence_read(balance_field,invalid,original_confidence):
+    field=balance_field
+    reader,image,_=confirmation_reader("9922",original_after=invalid,original_confidence=original_confidence,field=field)
     if original_confidence < .90:
         original_ocr=reader.ocr
-        reader.ocr=lambda image,*,roi: (SimpleNamespace(text=invalid,confidence=.999)
-            if roi not in ((460,251,360,31),(528,281,221,31),(586,311,115,30),
-                           (454,425,105,33),(733,425,106,33)) else original_ocr(image,roi=roi))
-    with pytest.raises(ValueError,match="余额.*无效"):reader.draw_confirmation(image)
+        reader.ocr=lambda image,*,roi:(SimpleNamespace(text=invalid,confidence=.999)
+            if roi!=BALANCE_ROIS[field] else original_ocr(image,roi=roi))
+    with pytest.raises(ValueError,match="余额.*无效"):read_balance(reader,image,field)
 
 
 @pytest.mark.parametrize("confidence", (.0,.45,.899999))
-def test_confirmation_does_not_lower_tight_ocr_threshold(confidence):
-    reader,image,_=confirmation_reader(tight_confidence=confidence)
-    with pytest.raises(ValueError,match="低置信"):reader.draw_confirmation(image)
+def test_confirmation_does_not_lower_tight_ocr_threshold(balance_field,confidence):
+    reader,image,_=confirmation_reader(tight_confidence=confidence,field=balance_field)
+    with pytest.raises(ValueError,match="低置信"):read_balance(reader,image,balance_field)
 
 
-def test_confirmation_keeps_exact_point_nine_threshold():
-    reader,image,_=confirmation_reader(tight_confidence=.90)
-    assert reader.draw_confirmation(image) == (10,100,10022,9922)
+def test_confirmation_keeps_exact_point_nine_threshold(balance_field):
+    reader,image,_=confirmation_reader(tight_confidence=.90,field=balance_field)
+    assert read_balance(reader,image,balance_field)=="9922"
 
 
-def test_confirmation_ocr_exception_does_not_use_stale_reading_or_try_crop():
-    reader,image,calls=confirmation_reader()
-    reader.draw_confirmation(image)
+@pytest.mark.parametrize("phase", ("original","tight"))
+def test_confirmation_ocr_exception_does_not_use_stale_reading_or_try_crop(balance_field,phase):
+    field=balance_field
+    reader,image,calls=confirmation_reader(field=field)
+    read_balance(reader,image,field)
     original_ocr=reader.ocr
-    def fail_original(image,*,roi):
-        if roi == (733,425,106,33):raise ValueError("识别器异常")
+    def fail(image,*,roi):
+        if (roi==BALANCE_ROIS[field])==(phase=="original"):raise ValueError("识别器异常")
         return original_ocr(image,roi=roi)
-    reader.ocr=fail_original
-    calls.clear()
-    with pytest.raises(ValueError,match="识别器异常"):reader.draw_confirmation(image)
-    assert len(calls) == 4 and "confirm_after" not in reader.readings
-    assert "confirm_after_original" not in reader.readings
+    reader.ocr=fail;calls.clear()
+    with pytest.raises(ValueError,match="识别器异常"):read_balance(reader,image,field)
+    assert field not in reader.readings
+    assert (field+"_original" in reader.readings)==(phase=="tight")
+    assert len(calls)==(0 if phase=="original" else 1)
 
 
 @pytest.mark.parametrize("damage", ("blank","left","right","top","bottom","overlay"))
-def test_confirmation_empty_or_border_ink_cannot_authorize_consumption(damage):
-    reader,image,calls=confirmation_reader(original_confidence=.999)
-    if damage == "blank":image[425:458,733:839]=255
-    elif damage == "left":image[434:448,733:735]=0
-    elif damage == "right":image[434:448,837:839]=0
-    elif damage == "top":image[425:427,765:775]=0
-    elif damage == "bottom":image[456:458,765:775]=0
-    else:image[425:458,733:839]=80
-    with pytest.raises(ValueError,match="墨迹"):reader.draw_confirmation(image)
-    assert calls[-1] == (733,425,106,33)
+def test_confirmation_empty_or_border_ink_cannot_authorize_consumption(balance_field,damage):
+    reader,image,calls=confirmation_reader(original_confidence=.999,field=balance_field)
+    x,y,w,h=BALANCE_ROIS[balance_field]
+    region=image[y:y+h,x:x+w]
+    if damage=="blank":region[:]=255
+    elif damage=="left":region[9:23,:2]=0
+    elif damage=="right":region[9:23,-2:]=0
+    elif damage=="top":region[:2,32:42]=0
+    elif damage=="bottom":region[-2:,32:42]=0
+    else:region[:]=80
+    with pytest.raises(ValueError,match="墨迹"):read_balance(reader,image,balance_field)
+    assert calls==[BALANCE_ROIS[balance_field]]
 
 
-def test_confirmation_ink_crop_keeps_nonblue_marks_instead_of_selecting_digits():
-    reader,image,calls=confirmation_reader()
-    image[434:446,738:741]=0
-    reader.draw_confirmation(image)
-    x,_,w,_=calls[-1]
-    assert x < 738 and x+w > 741
+def test_confirmation_ink_crop_keeps_nonblue_marks_instead_of_selecting_digits(balance_field):
+    reader,image,calls=confirmation_reader(field=balance_field)
+    x,y,_,_=BALANCE_ROIS[balance_field]
+    image[y+9:y+21,x+5:x+8]=0
+    read_balance(reader,image,balance_field)
+    left,_,width,_=calls[-1]
+    assert left < x+5 and left+width > x+8
 
 
-def test_stop_after_original_balance_ocr_prevents_tight_ocr():
-    reader,image,calls=confirmation_reader()
+@pytest.mark.parametrize("phase", ("original","tight"))
+@pytest.mark.parametrize("error", (None,ValueError,RuntimeError))
+def test_stop_during_balance_ocr_has_priority(balance_field,phase,error):
+    reader,image,calls=confirmation_reader(field=balance_field)
     stopped=False
     original_ocr=reader.ocr
     def ocr(image,*,roi):
         nonlocal stopped
         value=original_ocr(image,roi=roi)
-        if roi == (733,425,106,33):stopped=True
+        if (roi==BALANCE_ROIS[balance_field])==(phase=="original"):
+            stopped=True
+            if error:raise error("识别器异常")
         return value
     def stop():
         if stopped:raise ExchangeStopped()
     reader.ocr=ocr;reader.stopped=stop
-    with pytest.raises(ExchangeStopped):reader.draw_confirmation(image)
-    assert calls[-1] == (733,425,106,33)
+    with pytest.raises(ExchangeStopped):read_balance(reader,image,balance_field)
+    assert len(calls)==(1 if phase=="original" else 2)
 
 
-def test_tight_confirmation_requires_two_equal_frames_and_exact_balance_before_click():
+def test_tight_confirmation_requires_two_equal_frames_and_exact_balance_before_click(balance_field):
     reader,image,_=confirmation_reader()
     context=SimpleNamespace(tasker=SimpleNamespace(stopping=False))
     captures=[];clicks=[]
@@ -1098,7 +1145,358 @@ def test_tight_confirmation_requires_two_equal_frames_and_exact_balance_before_c
     ui.finish_draw_result=lambda *args:None
     ui.draw_once(10)
     assert clicks == [(1025,618),(770,525)]
-    reader,image,_=confirmation_reader("9923",original_after="9923")
+    wrong="10023" if balance_field=="confirm_before" else "9923"
+    reader,image,_=confirmation_reader(wrong,original_after=wrong,field=balance_field)
     ui.reader=reader
     with pytest.raises(RuntimeError,match="余额冲突"):ui.draw_once(10)
     assert clicks == [(1025,618),(770,525),(1025,618)]
+
+
+@pytest.mark.parametrize("field", BALANCE_ROIS)
+def test_confirmation_changed_balance_between_frames_never_authorizes_click(field):
+    first,image,_=confirmation_reader()
+    wrong="10023" if field=="confirm_before" else "9923"
+    second,_,_=confirmation_reader(wrong,original_after=wrong,field=field)
+    readers=iter([first,second]*5)
+    context=SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    ui=ExchangeUI(context,reader=first,capture=lambda context:image,sleep=lambda seconds:None)
+    with pytest.raises(RuntimeError,match="未稳定"):
+        ui.stable("draw_confirm",lambda frame:next(readers).draw_confirmation(frame))
+
+
+# 外部清单使用 {"cases":[{"image":"相对清单的图片路径","expected":[10,100,9922,9822]}]}。
+# 图片与环境清单均不入库，CI 未提供清单时明确跳过真实 OCR 回放。
+CONFIRMATION_REPLAY_MANIFEST=os.environ.get("MAABANGDREAM_EXCHANGE_CONFIRMATION_REPLAY_MANIFEST")
+
+
+@pytest.mark.skipif(not CONFIRMATION_REPLAY_MANIFEST,reason="未提供可移植真实确认图回放清单")
+def test_real_confirmation_balances_from_portable_manifest():
+    from agent.realtime.vision_io import imread_unicode
+    manifest=Path(CONFIRMATION_REPLAY_MANIFEST)
+    cases=json.loads(manifest.read_text(encoding="utf-8"))["cases"]
+    assert cases
+    for case in cases:
+        kind=case.get("kind","draw_confirm")
+        reader=ExchangeReader()
+        reader.read_currency=case.get("read_currency",True)
+        if kind=="new_box":
+            images=[imread_unicode(manifest.parent/name) for name in case["images"]]
+            assert len(images)>=2 and len(set(case["images"]))==len(images)
+            frames=iter(images)
+            ui=ExchangeUI(SimpleNamespace(tasker=SimpleNamespace(stopping=False)),reader=reader,
+                          capture=lambda context:next(frames),sleep=lambda seconds:None)
+            assert ui.wait_new_box(tuple(case["before"]),None)==tuple(case["expected"])
+        else:
+            image=imread_unicode(manifest.parent/case["image"])
+            actual=getattr(reader,{"main":"main","contents":"contents","draw_confirm":"draw_confirmation",
+                                   "draw_result":"draw_result"}[kind])(image)
+            expected=tuple(case["expected"]) if isinstance(case["expected"],list) else case["expected"]
+            assert actual==expected
+        if kind=="draw_confirm" and reader.read_currency:
+            for key in BALANCE_ROIS:
+                assert reader.readings[key]["confidence"]>=.90
+                assert reader.readings[key]["method"]=="complete_ink_crop"
+        if not reader.read_currency:
+            assert not any(key.startswith(("currency","confirm_before","confirm_after","result_currency"))
+                           for key in reader.readings)
+
+
+@pytest.mark.parametrize("options", ({"max_draws":10},{"currency_budget":100}))
+def test_user_budget_needs_no_actual_currency(tmp_path,options):
+    ui=UI([state(currency=None),state(remaining=170,cans=9,currency=None)])
+    f=flow(ui,tmp_path,**options)
+    assert f.run()
+    assert f.draws==10
+    data=json.loads((tmp_path/"ledger.json").read_text(encoding="utf-8"))
+    assert data["budget"]["source"]=="user_budget"
+    assert data["budget"]["estimated_spent_currency"]==100
+    assert data["after"]["currency"] is None
+
+
+def test_production_budget_mode_skips_all_balance_ocr():
+    reader,image,_=confirmation_reader()
+    reader.read_currency=False
+    original=reader.ocr
+    def ocr(image,*,roi):
+        if roi[1]==425 or roi==(1017,539,111,31):pytest.fail("预算模式不得读取余额")
+        return original(image,roi=roi)
+    reader.ocr=ocr
+    assert reader.draw_confirmation(image)==(10,100,None,None)
+    assert reader.draw_result(image) is True
+
+
+def test_auto_budget_reads_initial_balance_on_exactly_two_new_frames():
+    reader=SimpleNamespace(read_currency=True,readings={},page=lambda image,page:True,
+                           main=lambda image:(19,180,180,1,30822))
+    captures=[]
+    ui=ExchangeUI(SimpleNamespace(tasker=SimpleNamespace(stopping=False)),reader=reader,
+                  capture=lambda context:captures.append(True),sleep=lambda seconds:None)
+    assert ui.initialize_budget(True)==30822
+    assert len(captures)==2 and reader.read_currency is False
+
+
+@pytest.mark.parametrize("maximum,currency,expected", ((0,99,9),(20,105,10),(5,100,5),(0,9,0),(10,0,10)))
+def test_explicit_budget_uses_tighter_limit_and_whole_ten_coin_units(maximum,currency,expected):
+    budget=ExchangeBudget.from_options(validate_options({"max_draws":maximum,"currency_budget":currency}),None)
+    assert budget.source=="user_budget" and budget.remaining==expected
+
+
+@pytest.mark.parametrize("value", (True,-1,1.5,"100",1000000000))
+def test_currency_budget_strict_type_and_bounds(value):
+    with pytest.raises(ValueError):validate_options({"currency_budget":value})
+
+
+def production_budget_ui(*, initial_currency=200, failure=None):
+    reader=ExchangeReader()
+    current={"page":"main","remaining":180,"cans":10,"special":1,"balance_reads":0}
+    clicks=[]
+    image=np.full((720,1280,3),255,np.uint8)
+    reader.page=lambda image,page:current["page"]==page
+    reader.settings=lambda image:(True,True)
+    reader.contents=lambda image:(current["remaining"],180,current["cans"],current["special"])
+    def ocr(image,*,roi):
+        if roi==(1017,539,111,31):
+            current["balance_reads"]+=1
+            if not current.get("allow_initial"):pytest.fail("用户预算或初始化后不得OCR余额")
+            return SimpleNamespace(text=str(initial_currency)+"枚",confidence=.999)
+        if roi[1]==425:pytest.fail("不得OCR确认前后余额")
+        values={(666,184,103,39):"第19箱",(853,184,100,38):f'{current["remaining"]}/180',
+                (875,377,49,29):f'{current["special"]}/1',
+                (989,599,128,31):"10个交换",(1030,635,94,31):"100枚",
+                (460,251,360,31):"消费礼物币100枚",(528,281,221,31):"领取礼物10个奖品。",
+                (586,311,115,30):"确认吗？"}
+        return SimpleNamespace(text=values[roi],confidence=.999)
+    reader.ocr=ocr
+    context=SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    ui=ExchangeUI(context,reader=reader,capture=lambda context:image,sleep=lambda seconds:None)
+    original_initialize=ui.initialize_budget
+    def initialize(automatic):
+        current["allow_initial"]=automatic
+        result=original_initialize(automatic)
+        current["allow_initial"]=False
+        return result
+    ui.initialize_budget=initialize
+    def click(x,y):
+        clicks.append((x,y))
+        if (x,y)==(1068,127):current["page"]="settings"
+        elif (x,y)==(640,603):current["page"]="main"
+        elif (x,y)==(1029,465):current["page"]="contents"
+        elif (x,y)==(640,642):current["page"]="main"
+        elif (x,y)==(1025,618):current["page"]="unknown" if failure=="insufficient" else "draw_confirm"
+        elif (x,y)==(770,525):
+            current["remaining"]-=11 if failure=="delta" else 10
+            current["cans"]-=1
+            current["page"]="unknown" if failure=="result" else "draw_result"
+            if failure=="stop":
+                context.tasker.stopping=True
+                ui.stopped()
+        elif (x,y)==(1068,648):current["page"]="main"
+        else:pytest.fail(f"意外输入{(x,y)}")
+    ui.click=click
+    return ui,current,clicks
+
+
+@pytest.mark.parametrize("options,reads", (({"max_draws":20},0),({"currency_budget":200},0),({},2)))
+def test_production_flow_reads_actual_currency_only_for_auto_initialization(tmp_path,options,reads):
+    ui,current,clicks=production_budget_ui()
+    f=flow(ui,tmp_path,**options)
+    assert f.run() and f.draws==20
+    assert current["balance_reads"]==reads
+    assert clicks.count((770,525))==2
+    assert ui.current_state.currency is None
+    data=json.loads((tmp_path/"ledger.json").read_text(encoding="utf-8"))
+    assert data["budget"]["source"]==("initial_balance_ocr" if reads else "user_budget")
+    assert data["budget"]["estimated_spent_currency"]==200
+    assert data["after"]["currency"] is None
+    assert not any(key.startswith("confirm_before") or key.startswith("confirm_after") or key=="result_currency"
+                   for key in ui.reader.readings)
+
+
+@pytest.mark.parametrize("failure", ("result","delta","stop","insufficient"))
+def test_budget_is_not_deducted_when_real_transaction_evidence_is_missing(tmp_path,failure):
+    ui,current,clicks=production_budget_ui(failure=failure)
+    f=flow(ui,tmp_path,max_draws=20)
+    with pytest.raises((RuntimeError,ExchangeStopped)):f.run()
+    assert f.draws==0 and f.budget.spent_draws==0
+    assert clicks.count((770,525))==(0 if failure=="insufficient" else 1)
+    data=json.loads((tmp_path/"ledger.json").read_text(encoding="utf-8"))
+    assert data["status"]=="pending" and data["budget"]["estimated_spent_currency"]==0
+    with pytest.raises(RuntimeError,match="上次"):ExchangeJournal(tmp_path/"ledger.json").check_unresolved()
+
+
+@pytest.mark.parametrize("options", ({"currency_budget":9},{"max_draws":9},{"max_draws":10001},{"currency_budget":100010}))
+def test_unusable_or_oversized_user_budget_never_confirms(tmp_path,options):
+    ui,current,clicks=production_budget_ui()
+    f=flow(ui,tmp_path,**options)
+    if max(options.values())>10000:
+        with pytest.raises(ValueError,match="预算过大"):f.run()
+    else:assert f.run()
+    assert (770,525) not in clicks and current["balance_reads"]==0
+
+
+@pytest.mark.parametrize("changes", ({"box":20},{"remaining":169},{"cans":11},{"special":1},{"total":230,"remaining":170}))
+def test_unobserved_currency_still_requires_exact_random_pool_transition(changes):
+    before=state(currency=None,cans=9,special=0)
+    after=state(currency=None,remaining=170,cans=8,special=0)
+    with pytest.raises((ValueError,RuntimeError)):validate_draw(before,replace(after,**changes),10)
+
+
+@pytest.mark.parametrize("save_failure", ("before_write","after_write"))
+def test_budget_confirm_and_receipt_are_one_atomic_record_before_memory_update(tmp_path,save_failure):
+    ui,_,_=production_budget_ui()
+    f=flow(ui,tmp_path,max_draws=10)
+    original=f.journal._save
+    observed=[]
+    def save(data):
+        if data["status"]=="confirmed":
+            observed.append(data)
+            assert f.budget.spent_draws==0 and f.draws==0
+            assert data["budget"]["spent_draws"]==10
+            assert data["receipt"]["operation_id"]==data["operation_id"]
+            assert data["receipt"]["run_id"]==data["run_id"]
+            assert data["receipt"]["before"]==data["before"]
+            assert data["receipt"]["after"]==data["after"]
+            assert data["receipt"]["cost"]==100
+            if save_failure=="after_write":original(data)
+            raise OSError("模拟写盘或返回前进程终止")
+        original(data)
+    f.journal._save=save
+    with pytest.raises(OSError):f.run()
+    assert len(observed)==1 and f.draws==0 and f.budget.spent_draws==0
+    data=json.loads((tmp_path/"ledger.json").read_text(encoding="utf-8"))
+    assert data["status"]==("pending" if save_failure=="before_write" else "confirmed")
+    assert data["budget"]["spent_draws"]==(0 if save_failure=="before_write" else 10)
+
+
+def test_completed_receipt_contains_ordered_local_observations(tmp_path):
+    ui,_,_=production_budget_ui()
+    assert flow(ui,tmp_path,max_draws=10).run()
+    data=json.loads((tmp_path/"ledger.json").read_text(encoding="utf-8"))
+    receipt=data["receipt"]
+    observations=receipt["observations"]
+    assert observations["prepared"]<observations["confirmation_verified"]
+    assert observations["submitted"]<observations["result_verified"]<observations["result_closed"]<observations["pool_verified"]
+    assert receipt["phase"]=="confirmed" and receipt["budget"]["source"]=="user_budget"
+    assert "device_timestamp" not in receipt
+
+
+def test_old_receipt_or_wrong_stage_cannot_confirm_new_pending(tmp_path):
+    from agent.realtime.exchange_shop_policy import Decision
+    journal=ExchangeJournal(tmp_path/"ledger.json")
+    before=state(currency=None);after=state(currency=None,remaining=170,cans=9)
+    operation_id=journal.reserve(before,Decision("draw",10),run_id="current-run")
+    valid={"operation_id":operation_id,"phase":"pool_verified","before":before.__dict__,"after":after.__dict__}
+    for wrong in (valid|{"operation_id":"old-operation"},valid|{"phase":"submitted"},valid|{"before":after.__dict__}):
+        with pytest.raises(RuntimeError,match="回执"):journal.confirm(after,receipt=wrong)
+    assert json.loads(journal.path.read_text(encoding="utf-8"))["status"]=="pending"
+
+
+def test_result_before_submission_and_duplicate_submit_are_rejected():
+    from agent.realtime.exchange_shop_policy import Decision
+    ui,current,clicks=production_budget_ui()
+    ui.initialize_budget(False)
+    ui.current_state=state(currency=None)
+    ui.begin_operation("operation",ui.current_state,Decision("draw",10),{"source":"user_budget"})
+    current["page"]="draw_result"
+    with pytest.raises(RuntimeError,match="唯一提交"):ui.finish_draw_result(None)
+    assert clicks==[]
+    current["page"]="main"
+    ui.draw_once(10)
+    assert clicks.count((770,525))==1
+    with pytest.raises(RuntimeError,match="禁止重复确认"):ui.draw_once(10)
+    assert clicks.count((770,525))==1
+    with pytest.raises(RuntimeError,match="上一笔"):ui.begin_operation("next",ui.current_state,Decision("draw",10),{})
+
+
+def test_result_page_instead_of_new_confirmation_never_submits(tmp_path):
+    ui,current,clicks=production_budget_ui()
+    original=ui.click
+    def click(x,y):
+        original(x,y)
+        if (x,y)==(1025,618):current["page"]="draw_result"
+    ui.click=click
+    f=flow(ui,tmp_path,max_draws=10)
+    with pytest.raises(RuntimeError,match="未稳定"):f.run()
+    assert (770,525) not in clicks and f.budget.spent_draws==0
+
+
+@pytest.mark.parametrize("metadata", ({"reused":True,"sequence":2},{"sequence":1},{"sequence":0}))
+def test_native_capture_metadata_cannot_reuse_or_reverse_frame_sequence(metadata):
+    context=SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    captures=iter([{"image":"fresh","sequence":1},metadata|{"image":"stale"}])
+    reader=SimpleNamespace(page=lambda *args:True,readings={})
+    ui=ExchangeUI(context,reader=reader,capture=lambda context:next(captures),sleep=lambda seconds:None)
+    with pytest.raises(RuntimeError,match="截图复用或序号未前进"):ui.stable("main")
+    assert ui.observation==1 and ui.last_frame=="fresh"
+
+
+def test_previous_task_pending_with_budget_stays_pending_and_never_submits(tmp_path):
+    ui,current,clicks=production_budget_ui()
+    f=flow(ui,tmp_path,max_draws=10)
+    f.journal._save({"status":"pending","before":state(currency=None).__dict__,
+                     "operation_id":"old","budget":{"source":"user_budget","spent_draws":0}})
+    original=f.journal.path.read_bytes()
+    with pytest.raises(RuntimeError,match="上次"):f.run()
+    assert (770,525) not in clicks and f.journal.path.read_bytes()==original
+
+
+def test_user_budget_tail_and_exact_next_box_without_observed_currency(tmp_path):
+    ui=UI([state(currency=None,remaining=5,cans=1),state(box=20,currency=None)])
+    f=flow(ui,tmp_path,currency_budget=59)
+    assert f.run() and f.draws==5
+    assert ui.actions.count(("draw",5))==1
+    assert f.budget.remaining==0
+
+
+@pytest.mark.parametrize("success_at", (0,1,2,3))
+def test_initial_dark_balance_uses_bounded_complete_field_paths_and_stops_at_first_valid(success_at):
+    calls=[]
+    def ocr(image,*,roi):
+        calls.append(roi)
+        return SimpleNamespace(text="9922枚",confidence=.999 if len(calls)>success_at else .84)
+    reader=ExchangeReader(ocr=ocr)
+    assert reader.initial_balance(np.zeros((720,1280,3),np.uint8))==9922
+    assert len(calls)==success_at+1
+    x,y,w,h=calls[0]
+    for left,top,width,height in calls:
+        assert left<=x and top<=y and left+width>=x+w and top+height>=y+h
+
+
+@pytest.mark.parametrize("invalid", ("9O22枚","-9922枚","99.22枚","9922星石","1000000000枚"))
+def test_initial_balance_invalid_text_and_low_confidence_cannot_initialize(invalid):
+    reader=ExchangeReader(ocr=lambda *a,**k:SimpleNamespace(text=invalid,confidence=.999))
+    with pytest.raises(ValueError,match="请填写"):reader.initial_balance(None)
+
+
+@pytest.mark.parametrize("exception", (ValueError,RuntimeError))
+def test_initial_balance_recognizer_exception_is_not_hidden(exception):
+    calls=[]
+    def ocr(*a,**k):
+        calls.append(True)
+        raise exception("识别器异常")
+    reader=ExchangeReader(ocr=ocr)
+    with pytest.raises(exception,match="识别器异常"):reader.initial_balance(None)
+    assert len(calls)==1
+
+
+@pytest.mark.parametrize("stopped", (False,True))
+def test_real_input_failed_receipt_keeps_budget_pending_and_sends_no_result_work(tmp_path,monkeypatch,stopped):
+    ui,current,clicks=production_budget_ui()
+    original=ui.click
+    context=ui.context
+    def post(x,y):
+        clicks.append((x,y))
+        def wait():
+            if stopped:context.tasker.stopping=True
+        return SimpleNamespace(wait=wait,succeeded=False)
+    context.tasker.controller=SimpleNamespace(post_click=post)
+    monkeypatch.setattr("agent.realtime.exchange_shop.require_game_foreground",lambda controller:None)
+    def click(x,y):
+        if (x,y)==(770,525):ExchangeUI.click(ui,x,y)
+        else:original(x,y)
+    ui.click=click
+    f=flow(ui,tmp_path,max_draws=10)
+    with pytest.raises(ExchangeStopped if stopped else RuntimeError):f.run()
+    assert clicks.count((770,525))==1 and (1068,648) not in clicks
+    assert f.budget.spent_draws==0 and ui.operation["phase"]=="submitted"
+    assert json.loads((tmp_path/"ledger.json").read_text(encoding="utf-8"))["status"]=="pending"

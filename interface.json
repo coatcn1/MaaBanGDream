@@ -126,7 +126,7 @@
     {
       "name": "ExchangeShop",
       "label": "🎁 交换所抽箱",
-      "description": "从当前交换所主页面启动，以可用礼物币和最大抽数为预算，最大化火罐期望数量；特别奖励仅用于解锁换箱。空箱等待游戏自动换新箱。精确计算预算最多10000抽，默认仅预览；请先手动关闭游戏礼物箱设置的两项自动交换选项。",
+      "description": "从当前交换所主页面启动，可填写最大抽数或活动币预算，两项同时填写取更紧者；两项均0时，开始只读取一次可信余额，随后仅在抽取确认完成后扣减预算。以火罐期望数量为目标，特别奖励仅解锁换箱，空箱等待游戏自动换新箱。精确预算最多10000抽，默认仅预览；请先手动关闭游戏礼物箱设置的两项自动交换选项。",
       "entry": "ExchangeShop",
       "option": [
         "ExchangeShopMode",
@@ -245,21 +245,30 @@
     },
     "ExchangeShopBudget": {
       "type": "input",
-      "label": "最大抽数",
+      "label": "抽取预算",
       "inputs": [
         {
           "name": "Count",
-          "label": "抽数（0为用尽礼物币）",
+          "label": "最大抽数（0为不单独限制）",
           "default": "0",
           "pipeline_type": "int",
           "verify": "^(?:0|[1-9][0-9]{0,5})$",
-          "pattern_msg": "请输入0到999999；每次最多十抽，不足一次十抽的预算保留。"
+          "pattern_msg": "请输入0到999999；两项均0时只读取一次初始余额，精确预算最多10000抽。"
+        },
+        {
+          "name": "Currency",
+          "label": "活动币预算（0为不单独限制）",
+          "default": "0",
+          "pipeline_type": "int",
+          "verify": "^(?:0|[1-9][0-9]{0,8})$",
+          "pattern_msg": "请输入0到999999999；每抽10币，两项同时填写时取更紧预算。"
         }
       ],
       "pipeline_override": {
         "ExchangeShopBudgetConfigure": {
           "custom_action_param": {
-            "max_draws": "{Count}"
+            "max_draws": "{Count}",
+            "currency_budget": "{Currency}"
           }
         }
       }
