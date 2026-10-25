@@ -966,9 +966,11 @@ class CooperativeLiveFlow:
             raise RoomPreparationTimeout("等待玩家手动选歌并确认180秒后仍未到达准备页")
         raise RoomPreparationTimeout("进入协力房间后180秒内未出现不指定歌曲或准备页")
 
-    @staticmethod
-    def action_argv(params: dict[str, object]):
-        return SimpleNamespace(custom_action_param=json.dumps(params, ensure_ascii=False))
+    def action_argv(self, params: dict[str, object]):
+        return SimpleNamespace(
+            custom_action_param=json.dumps(params, ensure_ascii=False),
+            task_detail=getattr(getattr(self, "stamina_argv", None), "task_detail", None),
+        )
 
     def prepare(self) -> None:
         difficulty = str(self.settings["difficulty"])

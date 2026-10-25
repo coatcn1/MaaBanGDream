@@ -583,6 +583,7 @@ def test_action_hands_opening_identity_to_profile_play(
     recovered = []
 
     def fake_profile_play(_self, _context, argv):
+        assert argv.task_detail is task_detail
         run = current_live_run()
         params = json.loads(argv.custom_action_param)
         played.append((run, params))
@@ -611,7 +612,8 @@ def test_action_hands_opening_identity_to_profile_play(
     context = SimpleNamespace(
         tasker=SimpleNamespace(stopping=False, controller=object())
     )
-    argv = SimpleNamespace(custom_action_param=json.dumps({
+    task_detail = SimpleNamespace(task_id=61)
+    argv = SimpleNamespace(task_detail=task_detail, custom_action_param=json.dumps({
         "difficulty": "Expert",
         "dpi": 240,
         "game_fps": 60,
