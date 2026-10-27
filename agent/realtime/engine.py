@@ -228,6 +228,24 @@ class RealtimeEngine:
             )
         )
 
+    def _handoff_native_feedback_rois(self,native_feedback):
+        """只确认诊断FIFO接收；单项失败不关闭控制观察或阻塞输入。"""
+        record_roi=getattr(self.debug_recorder,'record_native_feedback_roi',None)
+        for evidence in native_feedback.take_roi_evidence():
+            accepted=False
+            try:
+                if callable(record_roi):
+                    accepted=record_roi(evidence['image'],evidence['timestamp'],
+                        evidence['metadata'],evidence['window_start_s'])
+            except Exception:
+                accepted=False
+            acknowledge=getattr(native_feedback,'acknowledge_roi_evidence',None)
+            if callable(acknowledge):
+                try:
+                    acknowledge(evidence['metadata']['sequence'],accepted)
+                except Exception:
+                    pass
+
     def run(
         self,
         capture: Callable[[], np.ndarray],
@@ -338,6 +356,22 @@ class RealtimeEngine:
                 if not stopping():
                     warning(f"NativeLifeFeedback disabled=true error={type(exc).__name__}: {exc}")
                 return default
+
+        capture_peek_failed = False
+
+        def peek_capture_ready():
+            nonlocal capture_peek_failed
+            if capture_peek_failed or stopping():
+                return False
+            try:
+                peek = getattr(capture, "has_ready_frame", None)
+                return bool(peek()) if callable(peek) else None
+            except Exception as exc:
+                # 辅助就绪查询失败仅退回基础节拍，不关闭输入或判定反馈。
+                capture_peek_failed = True
+                if not stopping():
+                    warning(f"NativeCaptureReady fallback=base error={type(exc).__name__}")
+                return False
 
         native_monitor_due = started_at
         native_feedback_scene_valid = False
@@ -635,17 +669,37 @@ class RealtimeEngine:
                 capture_deadline = next_frame
                 ticket_due = None
                 if native_feedback is not None and native_started:
-                    ticket_due = feedback_call(lambda: native_feedback.capture_due(now))
-                    if ticket_due is not None:
-                        prefetch = getattr(capture, "prefetch_fresh", None)
-                        if callable(prefetch) and feedback_call(lambda: native_feedback.capture_request_due(now), False):
-                            feedback_call(lambda: prefetch(now))
-                            feedback_call(lambda: native_feedback.capture_requested(now))
-                            ticket_due = feedback_call(lambda: native_feedback.capture_due(now))
+                    ready = peek_capture_ready()
+                    if stopping():
+                        was_stopped = True
+                        break
+                    if ready:
+                        # 请求额度只管post；已完成图优先消费，本轮不能再预取覆盖它。
+                        capture_deadline = now
+                    elif not capture_peek_failed:
+                        ticket_due = feedback_call(lambda: native_feedback.capture_due(now))
                         if ticket_due is not None:
-                            capture_deadline = min(next_frame, ticket_due)
+                            prefetch = getattr(capture, "prefetch_fresh", None)
+                            if callable(prefetch) and feedback_call(lambda: native_feedback.capture_request_due(now), False):
+                                # False表示未发新请求，不能消费目标的两次post额度。
+                                if feedback_call(lambda: prefetch(now), False) is True:
+                                    feedback_call(lambda: native_feedback.capture_requested(now))
+                                ticket_due = feedback_call(lambda: native_feedback.capture_due(now))
+                            if stopping():
+                                was_stopped = True
+                                break
+                            if ready is None:
+                                # 不支持peek的旧capture保留原deadline兼容路径。
+                                if ticket_due is not None:
+                                    capture_deadline = min(next_frame, ticket_due)
+                            elif peek_capture_ready():
+                                capture_deadline = now
+                            if stopping():
+                                was_stopped = True
+                                break
                 if now < capture_deadline:
-                    if native_feedback is not None and native_started and ticket_due is None and next_frame - now <= .060:
+                    if (native_feedback is not None and native_started and not capture_peek_failed
+                            and ticket_due is None and next_frame - now <= .060):
                         prefetch = getattr(capture, "prefetch_fresh", None)
                         if callable(prefetch):
                             feedback_call(lambda: prefetch(next_frame))
@@ -663,6 +717,14 @@ class RealtimeEngine:
                         )
                     time.sleep(min(0.002, wait_target - now))
                     continue
+                if capture_peek_failed and native_feedback is not None and native_started:
+                    # 未知done只能在基础周期走旧取图/异常策略，不再提前get或消耗目标额度。
+                    prefetch = getattr(capture, "prefetch_fresh", None)
+                    if callable(prefetch):
+                        feedback_call(lambda: prefetch(next_frame))
+                    if stopping():
+                        was_stopped = True
+                        break
                 capture_interval = (
                     .2
                     if native_exclusive and native_started else interval
@@ -671,7 +733,6 @@ class RealtimeEngine:
                     next_frame += capture_interval
                     if now - next_frame > capture_interval:
                         next_frame = now + capture_interval
-                feedback_capture_ready = ticket_due is None or now >= ticket_due
                 stage_started = self.clock()
                 image = capture()
                 now = self.clock()
@@ -930,10 +991,11 @@ class RealtimeEngine:
                             # 观察器清理自身异常也不能让视觉租约继续压制旧反馈。
                             optional_diagnostics.call("native-game-clock-release", lambda: self.native_backend.set_visual_phase_guard(False), during_cleanup=True)
                             game_clock = None
-                    if native_feedback is not None and feedback_capture_ready:
+                    # 到期点只调度取图；现成图须交给既有图龄、渲染和归属门禁，避免提前消费后丢失新图。
+                    if native_feedback is not None:
                         feedback_call(lambda: native_feedback.refresh_phase_status(now))
                         fresh_feedback_frame = feedback_call(lambda: native_feedback.fresh(frame_metadata, now), False)
-                        # 目标已在截图前绑定；基础图仅建立空白基准，不产生方向票。
+                        # 目标已在截图前绑定；无目标的基础图仅建立空白基准，不产生方向票。
                         if native_feedback is not None and (fresh_feedback_frame or not native_feedback_scene_valid):
                             feedback_call(lambda: native_feedback.observe_scene(now, visible=native_feedback_scene_valid))
                         if native_feedback is not None and fresh_feedback_frame and native_feedback.scene_valid:
@@ -941,7 +1003,9 @@ class RealtimeEngine:
                             with optional_diagnostics.guard("native-feedback-frame") as diagnostic_enabled:
                                 if diagnostic_enabled:
                                     record_feedback = getattr(self.debug_recorder, "record_native_feedback", None)
-                                    if native_feedback is not None and native_feedback.roi_worthy and callable(record_feedback):
+                                    if native_feedback is not None and getattr(native_feedback,'direction_window_mode',False):
+                                        self._handoff_native_feedback_rois(native_feedback)
+                                    elif native_feedback is not None and native_feedback.roi_worthy and callable(record_feedback):
                                         record_feedback(image, now,
                                             dict(frame_metadata, feedback_sniff=native_feedback.last_sniff),
                                             native_feedback.burst_started_at if native_feedback.burst_started_at is not None else now)

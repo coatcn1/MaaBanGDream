@@ -64,6 +64,12 @@ foreach ($required in ($mfaExe, $sourceInterface, $sourceResource, $python, $age
     }
 }
 
+# 开发 Agent 从源码树加载；缺失资产仅用本机固定 NDK 构建，完整资产无需编译。
+& $python (Join-Path $PSScriptRoot 'build_android_clock.py') --ensure
+if ($LASTEXITCODE -ne 0) {
+    throw 'Android observation clock assets are missing, stale, or failed to build locally.'
+}
+
 # 运行目录外的 MFA 可能是用户的正式版。先完整枚举，再只停止本次部署目标，
 # 发现其它路径的实例时在写入前失败，避免按进程名误伤正式安装目录。
 

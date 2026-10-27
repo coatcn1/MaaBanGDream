@@ -82,7 +82,7 @@ def test_one_sustained_glyph_with_new_down_tokens_never_requests():
     assert sampler.summary["distinct_events"] == 0
 
 
-@pytest.mark.parametrize("reason", ["reverse", "mixed", "scene", "reused", "terminal", "stop"])
+@pytest.mark.parametrize("reason", ["reverse", "mixed", "scene", "reused-gap", "terminal", "stop"])
 def test_invalid_visual_evidence_revokes_pending_even_without_input_eligibility(reason):
     sampler, backend, applied = sampler_fixture()
     two_events(sampler)
@@ -93,8 +93,8 @@ def test_invalid_visual_evidence_revokes_pending_even_without_input_eligibility(
         frame(sampler, TimingFeedback.SLOW if reason == "reverse" else "mixed", .3, eligible=False)
     elif reason == "scene":
         sampler.observe_scene(.3, visible=False)
-    elif reason == "reused":
-        assert not sampler.fresh({"sequence": 100, "request_s": .29, "reused": True}, .3)
+    elif reason == "reused-gap":
+        assert not sampler.fresh({"sequence": 100, "request_s": .99, "reused": True}, 1.)
     else:
         sampler.close(.3, reason)
     backend._compiler.phase_boundary_safe = lambda: True

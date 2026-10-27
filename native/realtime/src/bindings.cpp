@@ -3,6 +3,7 @@
 #include <pybind11/stl.h>
 
 #include <limits>
+#include <cmath>
 #include <sstream>
 #include <string>
 
@@ -557,6 +558,10 @@ PYBIND11_MODULE(maabangdream_realtime, module) {
         .def("reset_contacts", &TouchScriptCompiler::reset_contacts)
         .def("phase_boundary_safe", &TouchScriptCompiler::phase_boundary_safe)
         .def("contact_available_s", &TouchScriptCompiler::contact_available_s)
+        .def("pending_up_boundary_s", [](const TouchScriptCompiler& self) -> py::object {
+            const double value = self.pending_up_boundary_s();
+            return std::isfinite(value) ? py::cast(value) : py::none();
+        })
         .def("execution_receipts", &execution_receipts_to_list)
         .def("last_execution_receipts", &execution_receipts_to_list)
         .def("compile",
@@ -661,7 +666,9 @@ PYBIND11_MODULE(maabangdream_realtime, module) {
             py::arg("engine_config") = py::dict())
         .def("start", &PlaybackSession::start,
             py::arg("first_action_engine_s"))
-        .def("publish", &PlaybackSession::publish)
+        .def("publish", &PlaybackSession::publish,
+            py::arg("window_end_cap_s") = std::numeric_limits<double>::quiet_NaN())
+        .def("supports_window_end_cap", &PlaybackSession::supports_window_end_cap)
         .def("apply_future_phase", &PlaybackSession::apply_future_phase,
             py::arg("delta_ms"), py::arg("contact_available_s"))
         .def_property_readonly("future_phase_offset_ms",
@@ -725,6 +732,17 @@ PYBIND11_MODULE(maabangdream_realtime, module) {
             },
             py::arg("max_bytes"), py::arg("timeout_ms") = 500)
         .def("close", &MinitouchClient::close)
+        .def("receive_with_timestamp",
+            [](MinitouchClient& self, std::size_t max_bytes, int timeout_ms) {
+                MinitouchReceiveResult result;
+                {
+                    py::gil_scoped_release release;
+                    result = self.receive_with_timestamp(max_bytes, timeout_ms);
+                }
+                py::object returned = result.returned_host_s
+                    ? py::cast(*result.returned_host_s) : py::none();
+                return py::make_tuple(result.text, returned);
+            }, py::arg("max_bytes"), py::arg("timeout_ms") = 500)
         .def_property_readonly("last_publish_diagnostics",
             [](const MinitouchClient& self) {
                 const MinitouchPublishDiagnostics diagnostics =

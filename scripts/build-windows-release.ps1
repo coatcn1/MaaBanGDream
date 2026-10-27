@@ -197,6 +197,15 @@ foreach ($relativePath in $trackedRuntimeFiles) {
 }
 Copy-ProjectFile -RelativePath 'agent\realtime\native\maabangdream_realtime.pyd'
 
+# 四 ABI 与 manifest 均为忽略的构建产物，不能依赖 git ls-files 携带。
+& $BuildPython (Join-Path $PSScriptRoot 'build_android_clock.py')
+if ($LASTEXITCODE -ne 0) {
+    throw 'Android observation clock asset build failed.'
+}
+foreach ($clockAsset in @('manifest.json', 'x86/mbd-clock', 'x86_64/mbd-clock', 'armeabi-v7a/mbd-clock', 'arm64-v8a/mbd-clock')) {
+    Copy-ProjectFile -RelativePath "agent/runtime/android_clock/$clockAsset"
+}
+
 foreach ($relativePath in @(
     'docs\about.md',
     'docs\contact.md',

@@ -7,6 +7,7 @@ import threading
 import uuid
 import queue
 import math
+import os
 from collections import deque
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -22,6 +23,14 @@ from .playfield_monitor import LANE_CENTERS, PlayfieldDetector
 from .prepare_popup import CooperativePreparePopupDetector
 from .native_start_evidence import shared_start_evidence_writer
 from .native_feedback_ticket import FeedbackTicketStream, SingleTapEligibility
+from .native_observation_clock import (
+    ClockIdentity, JLOG_DEVICE_UNCERTAINTY_S, ObservationClockSnapshot, device_time_enclosure,
+)
+from .native_clock_observer import NativeClockObserver
+try:
+    from ..device_runtime_guard import NativeRunDeviceClaim, native_clock_trial_enabled, probe_native_boot_identity
+except ImportError:
+    from device_runtime_guard import NativeRunDeviceClaim, native_clock_trial_enabled, probe_native_boot_identity
 from .runtime_flags import (
     native_timing_compensation_enabled,
     native_wait_jitter_trial_enabled,
@@ -56,11 +65,18 @@ class NativePhaseStatus:
     transient_chunk_sequence: int | None = None
     owner: str = "feedback"
     owner_cumulative_phase_ms: float = 0.0
+    transient_host_lower_s: float | None = None
+    transient_host_upper_s: float | None = None
+    transient_clock_epoch: int | None = None
+    transient_clock_generation: int | None = None
+    transient_clock_identity: ClockIdentity | None = None
+    transient_trust_revision: int | None = None
+    applied_host_s: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class NativeFeedbackInput:
-    """已执行瞬态 DOWN 的不可变证据，时刻均处于本局 monotonic 域。"""
+    """已执行瞬态 DOWN；planned/actual 保留冻结执行域，另存设备原始时刻。"""
 
     run_id: str
     planned_s: float
@@ -68,6 +84,67 @@ class NativeFeedbackInput:
     action_token: int
     chunk_sequence: int
     clock_uncertainty_ms: float | None
+    device_actual_s: float | None = None
+    device_uncertainty_s: float = JLOG_DEVICE_UNCERTAINTY_S
+    host_lower_s: float | None = None
+    host_upper_s: float | None = None
+    observation_epoch: int | None = None
+    observation_generation: int | None = None
+    observation_identity: ClockIdentity | None = None
+    observation_trust_revision: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class NativeExecutedAction:
+    action_token: int
+    planned_s: float
+    kind: str
+    command: str
+    single_tap: bool
+
+
+@dataclass(frozen=True, slots=True)
+class NativeExecutionCommit:
+    """仅接受完整会话回执后发布；不把宿主接收时刻冒充设备执行时刻。"""
+
+    run_id: str
+    command_cursor: int
+    device_actual_s: float
+    actual_execution_s: float
+    received_host_s: float
+    chunk_sequence: int
+    action_tokens: tuple[int, ...]
+    device_uncertainty_s: float = JLOG_DEVICE_UNCERTAINTY_S
+    actions: tuple[NativeExecutedAction, ...] = ()
+    last_release_host_upper_s: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class NativeMappedCommit:
+    """覆盖时冻结的观察区间；过后不能用新 offset 追溯改写历史输入。"""
+
+    execution: NativeExecutionCommit
+    host_lower_s: float
+    host_upper_s: float
+    observation_epoch: int
+    observation_generation: int
+    clock_identity: ClockIdentity
+    trust_revision: int
+
+    @property
+    def uncertainty_ms(self):
+        return (self.host_upper_s - self.host_lower_s) * 500
+
+
+@dataclass(frozen=True, slots=True)
+class NativeClockRelationSample:
+    """已接受 commit 的宿主接收与原映射关系，仅用于否定失信的视觉前提。"""
+
+    run_id: str
+    command_cursor: int
+    actual_mapped_s: float
+    received_host_s: float
+    probe_uncertainty_ms: float | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -893,6 +970,8 @@ class NativeMinitouchBackend:
 
     exclusive = True
 
+    _clock_relation_required = True
+
     def __init__(
         self,
         chart_path: str | Path,
@@ -918,6 +997,10 @@ class NativeMinitouchBackend:
         wait_jitter_trial_enabled: bool | None = None,
         life_feedback_enabled: bool = False,
         early_start_enabled: bool = False,
+        observation_clock: Any | None = None,
+        observation_clock_trial_enabled: bool | None = None,
+        visual_refresh_enabled: bool | None = None,
+        borrowed_device_lease: dict | None = None,
     ) -> None:
         if not native_engine.available():
             raise RuntimeError(
@@ -985,6 +1068,53 @@ class NativeMinitouchBackend:
         if native_wait_jitter_trial_enabled():
             print("NativeMinitouch MAABANGDREAM_NATIVE_WAIT_JITTER_TRIAL 已弃用；以演出设置为准", flush=True)
         self._run_id = run_id or str(uuid.uuid4())
+        # 旁路观察源是内部注入 seam；尚未接入消费者时不改变 C5 生产门禁。
+        self._observation_clock = observation_clock
+        self._native_clock_trial = (native_clock_trial_enabled() if observation_clock_trial_enabled is None
+                                    else bool(observation_clock_trial_enabled))
+        # 预武装与正式消费共享一次选择；保留显式 False 和旧环境试验兼容，
+        # 后续采样器不得因进程环境变化切换当前局的反馈模型。
+        self._native_visual_refresh_enabled = (
+            os.environ.get("MAABANGDREAM_NATIVE_VISUAL_REFRESH_TRIAL") == "1"
+            if visual_refresh_enabled is None else bool(visual_refresh_enabled)
+        )
+        self._native_observer_cleanup_allowed = threading.Event() if self._native_clock_trial else None
+        self._native_input_stop_requested = threading.Event()
+        self._native_stop_lifecycle_lock = threading.Lock()
+        self._native_stop_started = False
+        self._native_adb_path, self._native_serial = adb_path, serial
+        self._borrowed_device_lease = borrowed_device_lease
+        self._native_device_claim = None
+        self._native_ownership_setup_done = threading.Event()
+        self._native_ownership_setup_done.set()
+        self._native_ownership_cleanup_done = threading.Event()
+        self._native_ownership_finisher = None
+        self._native_ownership_warning = None
+        if not self._native_clock_trial:
+            self._native_ownership_setup_done.set()
+            self._native_ownership_cleanup_done.set()
+        self._observation_clock_reader_failed = False
+        self._execution_commits: tuple[NativeExecutionCommit, ...] = ()
+        self._mapped_execution_commits: tuple[NativeMappedCommit, ...] = ()
+        self._observation_mapping_disabled_reason = None
+        self._observation_refresh_key = None
+        self._observation_refresh_epoch = None
+        self._observation_pending_attempts = {}
+        self._observation_rejected_cursors = set()
+        self._feedback_release_host_upper_s = None
+        self._observation_last_snapshot = None
+        self._observation_reader_lost = False
+        self._observation_reader_fence = None
+        self._observation_trust_revision = 0
+        self._observation_hard_revision = 0
+        self._observation_hard_lost = False
+        self._observation_local_recovery = None
+        self._observation_pinned_identity = None
+        self._observation_effective_key = None
+        self._observation_effective_snapshot = None
+        self._observation_validated_snapshot = None
+        self._observation_ever_ready = False
+        self._execution_commit_disabled_reason = None
         self._jlog_path = Path(jlog_path) if jlog_path is not None else None
         # 速率估计按 chunk 聚合：设备回执成簇到达（同一 commit 的动作共享
         # 实际时刻），逐条回执喂回归会在窗口内得到大幅摆动的斜率甚至符号
@@ -1035,7 +1165,7 @@ class NativeMinitouchBackend:
         if self.life_feedback_enabled:
             try:
                 self._feedback_tickets = FeedbackTicketStream(self._run_id)
-                self._feedback_single_taps = SingleTapEligibility(self._actions)
+                self._feedback_single_taps = SingleTapEligibility(self._actions, allow_groups=True)
             except Exception as exc:
                 self._feedback_ticket_disabled_reason = f"init:{type(exc).__name__}: {exc}"
         if self.life_feedback_enabled and not all(callable(method) for method in (
@@ -1044,6 +1174,12 @@ class NativeMinitouchBackend:
             getattr(self._compiler, "contact_available_s", None),
         )):
             raise RuntimeError("Native 模块缺少掉血反馈安全相位接口，请重新构建 Native")
+        if self._native_clock_trial and not (
+            callable(getattr(self._compiler, 'pending_up_boundary_s', None))
+            and callable(getattr(self._session, 'supports_window_end_cap', None))
+            and self._session.supports_window_end_cap()
+        ):
+            raise RuntimeError("Native 模块缺少试验相位窗口裁限接口，请重新构建 Native")
         # 主截图消费者只提交空闲单槽；唯一 owner 才能验证并移动未来切片。
         self._phase_lock = threading.Lock()
         self._phase_closed = False
@@ -1060,6 +1196,8 @@ class NativeMinitouchBackend:
         # 每项是一份 commit，不能用截图频率或分块数推断回执数量。
         self._phase_receipt_diagnostics = deque(maxlen=128)
         self._phase_receipts_dropped = 0
+        self._clock_relation_samples: tuple[NativeClockRelationSample, ...] = ()
+        self._clock_relation_disabled_reason = None
         self._phase_receipt_diagnostics_dropped = 0
         self._feedback_input_history_dropped = 0
         self._feedback_input_history: tuple[NativeFeedbackInput, ...] = ()
@@ -1067,6 +1205,8 @@ class NativeMinitouchBackend:
         self._feedback_transient_snapshot = (None, None, None, None)
         self._phase_status = NativePhaseStatus(self._run_id)
         self._phase_last_applied_status = None
+        self._phase_applied_history = ()
+        self._phase_applied_history_disabled_reason = None
         self._state = "idle"
         self._early_start_trial_requested = (
             str(start_gate_mode).strip().lower() in ("cooperative", "versus")
@@ -1199,8 +1339,8 @@ class NativeMinitouchBackend:
         return {
             "schema_version": 1,
             "scope": "first-playback-chunk-only",
-            "host_clock_domain": "backend-monotonic-seconds",
-            "device_clock_domain": "minitouch-monotonic-milliseconds",
+            "host_clock_domain": "host-perf-counter-seconds",
+            "device_clock_domain": "minitouch-CLOCK_REALTIME-milliseconds",
             "duration_sign_convention": (
                 "positive=later-boundary-minus-earlier-boundary"
             ),
@@ -1550,7 +1690,7 @@ class NativeMinitouchBackend:
             self._observation_error = f"读取 jlog 失败：{type(exc).__name__}: {exc}"
             raise
         self._log_cursor = cursor
-        for line, received_s in records:
+        for raw_cursor, (line, received_s) in enumerate(records, cursor - len(records) + 1):
             if not line.startswith("jlog "):
                 continue
             event = native_engine.parse_minitouch_log(line)
@@ -1603,8 +1743,8 @@ class NativeMinitouchBackend:
                 if command.startswith("w "):
                     nominal = float(command.split()[1])
                     if nominal <= 1 and self._probe_published_at is not None:
-                        # 以日志接收线程的时间戳截断 owner 轮询抖动；两端
-                        # 单调时钟差按 NTP midpoint 近似，并记录误差上界。
+                        # 以日志接收线程的宿主 perf_counter 截断 owner 轮询抖动；
+                        # 用 NTP midpoint 近似映射设备 CLOCK_REALTIME，并记录探测误差上界。
                         round_trip = max(
                             0.0,
                             float(received_s) - self._probe_published_at,
@@ -1707,6 +1847,7 @@ class NativeMinitouchBackend:
             observe = getattr(self._session, "observe_minitouch_log", None)
             if observe is not None:
                 observe(event)
+            owner_observe_s = None
             if expected.receipts:
                 # d/m/u 只是排入当前事务；其后的 c 完成 input_sync 后触控
                 # 才对系统可见，因此用 commit 的 end 作为保守执行时刻。
@@ -1751,6 +1892,11 @@ class NativeMinitouchBackend:
                     if token in self._observed_action_tokens:
                         self._fail_observation(f"重复动作回执 token={token}")
                     planned_s = float(receipt["planned_engine_s"])
+                    if owner_observe_s is None:
+                        try:
+                            owner_observe_s = self._clock()
+                        except Exception:
+                            pass
                     observed = self._session.observe_execution(
                         planned_s, actual_s, 1
                     )
@@ -1769,7 +1915,7 @@ class NativeMinitouchBackend:
                             and receipt.get("command") == "d"):
                         # 只发布已被会话接受的执行回执，消费者不遍历 owner 的可变 deque。
                         source = NativeFeedbackInput(self._run_id, planned_s, actual_s,
-                            token, expected.chunk_sequence, self._clock_uncertainty_ms)
+                            token, expected.chunk_sequence, self._clock_uncertainty_ms, device_commit_s)
                         if len(self._feedback_input_history) == 64:
                             self._feedback_input_history_dropped += 1
                         self._feedback_input_history = (*self._feedback_input_history, source)[-64:]
@@ -1780,13 +1926,46 @@ class NativeMinitouchBackend:
                             planned_s - self._first_action_anchor_s,
                             (actual_s - planned_s) * 1000.0,
                         ))
+                if self.life_feedback_enabled and not getattr(self, "_execution_commit_disabled_reason", None):
+                    try:
+                        self._publish_execution_commit(device_commit_s, actual_s, float(received_s), expected)
+                    except Exception as exc:
+                        # 原会话已接受输入；附加证据失败只关闭此观察源，不倒改执行账本。
+                        self._execution_commit_disabled_reason = type(exc).__name__
+                        self._execution_commits = ()
+                        try:
+                            safe_print("NativeObservationClock commit_warning=" + type(exc).__name__, flush=True)
+                        except Exception:
+                            pass
+                if (self.life_feedback_enabled and self._clock_basis == "probe-midpoint"
+                        and not getattr(self, "_clock_relation_disabled_reason", None)):
+                    try:
+                        # 必须等整个 commit 的动作均被会话接受；双押仍只发布一笔关系证据。
+                        self._publish_clock_relation(actual_s, float(received_s))
+                    except Exception as exc:
+                        self._clock_relation_disabled_reason = type(exc).__name__
+                        self._clock_relation_samples = ()
+                        try:
+                            safe_print("NativeClockRelation disabled=" + type(exc).__name__, flush=True)
+                        except Exception:
+                            pass
                 tickets = getattr(self, "_feedback_tickets", None)
                 if tickets is not None and not getattr(self, "_feedback_ticket_disabled_reason", None):
                     try:
                         tickets.observe_commit(expected.receipts, actual_s, expected.chunk_sequence,
-                            self._clock_uncertainty_ms if self._clock_basis == "probe-midpoint" else None)
+                            self._clock_uncertainty_ms if self._clock_basis == "probe-midpoint" else None,
+                            device_actual_s=device_commit_s)
                     except Exception as exc:
                         self._disable_feedback_tickets("observe-commit", exc)
+            try:
+                # 仅归属已经按连续命令序列接受的日志；不成为设备执行或释放证明。
+                note_accept = getattr(self._device, 'note_log_owner_accept', None)
+                if callable(note_accept):
+                    note_accept(raw_cursor, self._clock(),
+                        action_token=token if expected.receipts else None,
+                        owner_observe_s=owner_observe_s, formal_cursor=self._observed_commands)
+            except Exception:
+                pass
             if expected.last_in_chunk:
                 self._complete_observed_chunk(expected)
         if self._playback_observation_started:
@@ -1854,6 +2033,18 @@ class NativeMinitouchBackend:
 
     def _start_device(self) -> None:
         try:
+            if getattr(self, '_native_clock_trial', False):
+                identity = probe_native_boot_identity(self._native_adb_path, self._native_serial,
+                    cancelled=self._device_start_cancel.is_set)
+                if self._device_start_cancel.is_set():
+                    raise RuntimeError("Native 设备 claim 准备已取消")
+                claim = NativeRunDeviceClaim(Path(__file__).resolve().parents[2], identity['boot_id'], self._run_id,
+                                             borrow=self._borrowed_device_lease)
+                claim.acquire()
+                self._native_device_claim = claim
+                if self._device_start_cancel.is_set():
+                    claim.stopping()
+                    raise RuntimeError("Native 设备 claim 已取消")
             self._device.start(cancel_event=self._device_start_cancel)
             # 与 stop 的取消提交共用一把锁：锁内检查通过后可能先完成一次
             # probe，但 stop 必须随后取得锁并清理；反过来则绝不允许迟到发布。
@@ -1868,6 +2059,8 @@ class NativeMinitouchBackend:
                 self._device.publish("c\nw 0\nc\n")
             if self._device_start_cancel.is_set():
                 raise RuntimeError("minitouch probe 完成时准备已取消")
+            if getattr(self, '_native_clock_trial', False) and self.life_feedback_enabled:
+                self._start_native_clock_observer()
             print(
                 "NativeMinitouch device_ready "
                 f"max={self._device.max_x}x{self._device.max_y} "
@@ -1887,7 +2080,91 @@ class NativeMinitouchBackend:
                 f"cleanup_confirmed={str(cleanup_ok).lower()}",
                 flush=True,
             )
+            if getattr(self, '_native_clock_trial', False):
+                # 准备失败未进入演奏时，先封闭迟到probe/observer，再允许附加清理。
+                with self._device_start_commit_lock:
+                    self._device_start_cancel.set()
+                    no_input = not self._playback_observation_started
+                # 无输入终态与stop接管必须原子决定，不能在检查后被stop抢先进入释放。
+                with self._native_stop_lifecycle_lock:
+                    if no_input and not self._native_input_stop_requested.is_set():
+                        try:
+                            self._stop_native_clock_observer()
+                        finally:
+                            self._native_observer_cleanup_allowed.set()
+        finally:
+            prepared = getattr(self, '_native_ownership_setup_done', None)
+            if prepared is not None:
+                prepared.set()
 
+    def _start_native_clock_observer(self):
+        try:
+            # 只在线程创建的本地提交窗口内互斥；后台 helper 自己处理 ADB，不阻输入。
+            with self._device_start_commit_lock:
+                if self._device_start_cancel.is_set():
+                    return
+                if self._observation_clock is None:
+                    self._observation_clock = NativeClockObserver(self._run_id,
+                        lease_current=self._native_device_claim.current,
+                        adb_path=self._native_adb_path, serial=self._native_serial,
+                        cleanup_allowed=self._native_observer_cleanup_allowed)
+                self._observation_clock.start()
+        except Exception as exc:
+            self._native_ownership_warning = "observer-start:" + type(exc).__name__
+
+    def _stop_native_clock_observer(self):
+        claim = getattr(self, '_native_device_claim', None)
+        if claim is not None:
+            try:
+                claim.stopping()
+            except Exception as exc:
+                self._native_ownership_warning = "claim-stop:" + type(exc).__name__
+        source = getattr(self, '_observation_clock', None)
+        if getattr(self, '_native_clock_trial', False) and source is not None:
+            try:
+                source.request_stop()
+            except Exception as exc:
+                self._native_ownership_warning = "observer-stop:" + type(exc).__name__
+
+    def _finish_native_ownership(self):
+        try:
+            if not self._native_ownership_setup_done.wait(1.0):
+                self._native_ownership_warning = 'claim-setup-not-terminal'
+                return
+            source = self._observation_clock
+            terminal = source is None or source.wait_closed(3.1)
+            claim = self._native_device_claim
+            if claim is not None:
+                claim.stopping()
+                claim.finish(input_released=self._release_confirmed is True, observer_terminal=terminal)
+            if not terminal:
+                self._native_ownership_warning = 'observer-worker-not-terminal'
+        except Exception as exc:
+            self._native_ownership_warning = 'claim-finish:' + type(exc).__name__
+        finally:
+            self._native_ownership_cleanup_done.set()
+
+    def wait_native_cleanup(self, timeout_s=0):
+        """仅供运行器/非热路径收束；必要输入释放凭据仍由原 stop 单独决定。"""
+        if not getattr(self, '_native_clock_trial', False):
+            return True
+        if not self._native_ownership_cleanup_done.wait(max(0, min(float(timeout_s), 5))):
+            return False
+        claim = self._native_device_claim
+        return (self._native_ownership_setup_done.is_set()
+                and (claim is None or claim.report()['settled']))
+
+    def _native_clock_observer_report(self):
+        source = getattr(self, '_observation_clock', None)
+        if source is None:
+            return {'enabled': getattr(self, '_native_clock_trial', False), 'configured': False}
+        reader = getattr(source, 'report', None)
+        if not callable(reader):
+            return {'enabled': getattr(self, '_native_clock_trial', False), 'configured': True}
+        try:
+            return {'enabled': getattr(self, '_native_clock_trial', False), 'configured': True, **reader()}
+        except Exception as exc:
+            return {'enabled': getattr(self, '_native_clock_trial', False), 'report_warning': type(exc).__name__}
     def arm(self) -> None:
         """在 photogate 前异步准备设备和 C++ 会话。"""
         if self._state in {"arming", "armed", "ready"}:
@@ -1913,7 +2190,13 @@ class NativeMinitouchBackend:
             name="native-minitouch-start",
             daemon=True,
         )
-        self._device_thread.start()
+        if self._native_clock_trial:
+            self._native_ownership_setup_done.clear()
+        try:
+            self._device_thread.start()
+        except Exception:
+            self._native_ownership_setup_done.set()
+            raise
 
     def wait_until_ready(self, timeout_s: float, *, wait_observer=None, should_stop=None) -> bool:
         """等待设备握手完成，但不观察 photogate，也不启动演奏。"""
@@ -2522,6 +2805,8 @@ class NativeMinitouchBackend:
     def _drive_session(self) -> None:
         """由 owner 线程高频补充切片并推进取消超时。"""
         self._observe_new_logs()
+        if getattr(self, '_native_clock_trial', False):
+            self._refresh_observation_views()
         if (
             self._session_state == "cancelling"
             and bool(getattr(self._device, "reset_executed", False))
@@ -2542,7 +2827,14 @@ class NativeMinitouchBackend:
             )
         if self._session_state == "running":
             self._consume_phase_candidate()
-            self._session.publish()
+            cap = self._pending_phase_publish_cap()
+            if cap is None:
+                self._session.publish()
+            else:
+                self._session.publish(cap)
+            if getattr(self, '_native_clock_trial', False):
+                # 本块编译可能刚释放HOLD边界；在原TTL内复用全部门禁，不等下一轮错过窗口。
+                self._consume_phase_candidate()
             if self._finish_when_fully_published():
                 return
         state = self._refresh_session_snapshot()
@@ -2636,12 +2928,248 @@ class NativeMinitouchBackend:
         self._game_terminal_reason = str(reason) if reason else None
 
     def feedback_input_eligible(self, now: float) -> bool:
+        if getattr(self, '_native_clock_trial', False):
+            inputs = self._mapped_feedback_inputs(now)
+            if not any(source.host_upper_s <= now and 0 <= now - source.host_lower_s <= .6 for source in inputs):
+                return False
+            release_upper = self._feedback_release_host_upper_s
+            # jlog 收到必晚于对应执行；仅用 RX 作为释放上界，绝不拿它估 offset。
+            # 该上界跨 clock epoch 保留，避免旧 UP 不再可映射后永久等待释放窗口。
+            if release_upper is not None and (not math.isfinite(release_upper) or now - release_upper < .15):
+                return False
+            return True
         transient_at, release_at = self._feedback_input_snapshot
         return 0 <= now - transient_at <= .6 and now - release_at >= .15
 
     def feedback_observation_snapshot(self):
         tickets = getattr(self, "_feedback_tickets", None)
         return tickets.snapshot() if tickets is not None and not getattr(self, "_feedback_ticket_disabled_reason", None) else None
+
+    def _publish_clock_relation(self, actual_s, received_s):
+        sample = NativeClockRelationSample(self._run_id, self._observed_commands,
+            actual_s, received_s, self._clock_uncertainty_ms)
+        history = getattr(self, "_clock_relation_samples", ())
+        self._clock_relation_samples = (*history, sample)[-64:]
+
+    def clock_relation_snapshot(self):
+        """纯缓存读取，不等待 owner 锁，也不遍历可变回执容器。"""
+        return (None if getattr(self, "_clock_relation_disabled_reason", None)
+                else getattr(self, "_clock_relation_samples", ()))
+
+    def observation_clock_snapshot(self):
+        """只读独立观察源；缺失、外来 run 或异常都不借用旧 jlog 关系兜底。"""
+        if (getattr(self, "_execution_commit_disabled_reason", None)
+                or getattr(self, '_observation_mapping_disabled_reason', None)):
+            self._lose_observation_reader()
+            return None
+        source = getattr(self, "_observation_clock", None)
+        reader = getattr(source, "snapshot", None)
+        if not callable(reader):
+            self._lose_observation_reader()
+            return None
+        try:
+            snapshot = reader()
+            if not isinstance(snapshot, ObservationClockSnapshot) or snapshot.identity.run_id != self._run_id:
+                self._lose_observation_reader()
+                return None
+            pinned = self._observation_pinned_identity
+            if pinned is not None and pinned != snapshot.identity:
+                self._lose_observation_reader()
+                return None
+            if snapshot is not self._observation_validated_snapshot:
+                if any(row.identity != snapshot.identity for row in snapshot.probes):
+                    self._lose_observation_reader()
+                    return None
+                self._observation_validated_snapshot = snapshot
+            self._observation_pinned_identity = snapshot.identity
+            self._observation_last_snapshot = snapshot
+            identity_epoch = (snapshot.identity, snapshot.epoch)
+            if self._observation_reader_lost:
+                fence = self._observation_reader_fence
+                recovery = snapshot.recovery_sequence
+                if snapshot.reason is not None or recovery is None:
+                    return replace(snapshot, trust_revision=self._observation_trust_revision)
+                if fence is not None and fence[:2] == identity_epoch:
+                    new = [row for row in snapshot.probes if row.sequence > fence[2]]
+                    if snapshot.reason is not None or len(new) < 3:
+                        return None
+                    recovery = max(recovery or 0, new[2].sequence)
+                self._observation_local_recovery = (identity_epoch, recovery)
+                self._observation_reader_lost = False
+                self._observation_reader_fence = None
+                self._observation_hard_lost = False
+            local = self._observation_local_recovery
+            recovery = snapshot.recovery_sequence
+            if local is not None and local[0] == identity_epoch and local[1] is not None:
+                recovery = max(recovery or 0, local[1])
+            if snapshot.trust_revision == self._observation_trust_revision and snapshot.recovery_sequence == recovery:
+                return snapshot
+            effective_key = (id(snapshot), self._observation_trust_revision, recovery)
+            if effective_key != self._observation_effective_key:
+                self._observation_effective_snapshot = replace(snapshot,
+                    trust_revision=self._observation_trust_revision, recovery_sequence=recovery)
+                self._observation_effective_key = effective_key
+            return self._observation_effective_snapshot
+        except Exception as exc:
+            self._lose_observation_reader()
+            if not getattr(self, "_observation_clock_reader_failed", False):
+                self._observation_clock_reader_failed = True
+                try:
+                    safe_print("NativeObservationClock reader_warning=" + type(exc).__name__, flush=True)
+                except Exception:
+                    pass
+            return None
+
+    def observation_provenance(self):
+        """历史 E 事实的硬身份；采样质量只影响新覆盖，不能改写已封闭的事实。"""
+        identity = self._observation_pinned_identity
+        return ((self._run_id, identity, self._observation_hard_revision,
+                 self._device_clock_offset_s, self._first_action_anchor_s) if identity is not None else None)
+
+    def _lose_observation_reader(self, *, hard=True):
+        if hard and not self._observation_hard_lost:
+            self._observation_hard_revision += 1
+            self._observation_hard_lost = True
+        if not getattr(self, '_observation_reader_lost', False):
+            previous = getattr(self, '_observation_last_snapshot', None)
+            self._observation_reader_fence = ((previous.identity, previous.epoch,
+                previous.probes[-1].sequence if previous.probes else 0) if previous is not None else None)
+            self._observation_trust_revision = getattr(self, '_observation_trust_revision', 0) + 1
+            self._observation_reader_lost = True
+
+    def execution_commit_snapshot(self):
+        """保留 D/E/H 三种原始来源；消费者自行获取同 epoch 的双侧映射。"""
+        return (() if getattr(self, "_execution_commit_disabled_reason", None)
+            else getattr(self, "_execution_commits", ()))
+
+    def _publish_execution_commit(self, device_s, actual_s, received_s, expected):
+        commit = NativeExecutionCommit(self._run_id, self._observed_commands,
+            device_s, actual_s, received_s, expected.chunk_sequence,
+            tuple(int(row["action_token"]) for row in expected.receipts),
+            actions=tuple(NativeExecutedAction(int(row['action_token']), float(row['planned_engine_s']),
+                str(row.get('action_kind', '')), str(row.get('command', '')), bool(row.get('feedback_single_tap')))
+                for row in expected.receipts))
+        if any(action.kind == 'up' or action.kind == 'flick' and action.command == 'm' for action in commit.actions):
+            self._feedback_release_host_upper_s = received_s
+        commit = replace(commit, last_release_host_upper_s=self._feedback_release_host_upper_s)
+        self._execution_commits = (*getattr(self, "_execution_commits", ()), commit)[-64:]
+
+    def _observation_clock_ready(self, snapshot, now):
+        # now可能是原图首次观察时刻；采样线程可在其后发布新probe，健康检查另取当前H。
+        # 这不改图龄、receipt年龄或请求TTL，避免把合法新probe误判为未来时钟并抬fence。
+        current_host = max(now, self._clock())
+        ready = (snapshot is not None and snapshot.reason is None and snapshot.probes
+                and 0 <= current_host - snapshot.probes[-1].host_receive_s <= snapshot.maximum_age_s
+                and snapshot.trust_revision == self._observation_trust_revision
+                and self._device_clock_offset_s is not None and math.isfinite(self._device_clock_offset_s))
+        if ready:
+            self._observation_ever_ready = True
+        elif self._observation_ever_ready:
+            # reader 的 None/异常已在读取入口提升硬 fence；本地三新样本等待也会返回 None。
+            hard = snapshot is not None and snapshot.reason not in {
+                None, 'warming', 'unqualified-probe', 'clock-discontinuity', 'high-rtt'}
+            self._lose_observation_reader(hard=hard)
+        return ready
+
+    def _refresh_observation_views(self):
+        """唯一 owner 发布冻结 view；只做有界缓存算术，不发 RPC、不读设备、不等待。"""
+        if getattr(self, '_observation_mapping_disabled_reason', None):
+            return
+        try:
+            now = self._clock()
+            snapshot = self.observation_clock_snapshot()
+            if not self._observation_clock_ready(snapshot, now):
+                self._mapped_execution_commits = ()
+                self._observation_refresh_key = None
+                return
+            raw_snapshot = self.execution_commit_snapshot()
+            epoch = (snapshot.identity, snapshot.epoch, snapshot.trust_revision)
+            probe_sequence = snapshot.probes[-1].sequence
+            key = (snapshot.identity, snapshot.epoch, snapshot.trust_revision, probe_sequence,
+                   raw_snapshot[-1].command_cursor if raw_snapshot else None)
+            if self._observation_refresh_key == key:
+                return
+            if self._observation_refresh_epoch != epoch:
+                self._observation_pending_attempts = {}
+                self._observation_rejected_cursors = set()
+                self._observation_refresh_epoch = epoch
+            existing = {row.execution.command_cursor: row for row in self._mapped_execution_commits
+                if row.observation_epoch == snapshot.epoch and row.clock_identity == snapshot.identity
+                and row.trust_revision == snapshot.trust_revision}
+            result = []
+            attempts, rejected = {}, set()
+            first_covered = next(row for row in snapshot.probes if row.sequence >= snapshot.recovery_sequence)
+            for raw in raw_snapshot:
+                if raw.run_id != self._run_id:
+                    continue
+                previous = existing.get(raw.command_cursor)
+                if previous is not None:
+                    if previous.execution != raw:
+                        raise RuntimeError('conflicting Native observation commit cursor')
+                    result.append(previous)
+                    continue
+                cursor = raw.command_cursor
+                if cursor in self._observation_rejected_cursors:
+                    rejected.add(cursor)
+                    continue
+                if self._observation_pending_attempts.get(cursor) == probe_sequence:
+                    attempts[cursor] = probe_sequence
+                    continue
+                device_lower, device_upper = device_time_enclosure(raw.device_actual_s, raw.device_uncertainty_s)
+                if device_lower < first_covered.device_send_s:
+                    rejected.add(cursor)
+                    continue
+                if device_upper > snapshot.probes[-1].device_receive_s:
+                    attempts[cursor] = probe_sequence
+                    continue
+                view = snapshot.commit_view(raw.device_actual_s, now_s=now,
+                    execution_offset_s=self._device_clock_offset_s, device_uncertainty_s=raw.device_uncertainty_s)
+                if view is not None:
+                    lower, upper = view.device_to_host(raw.device_actual_s)
+                    mapped = NativeMappedCommit(raw, lower, upper, view.epoch, view.identity.generation,
+                                               view.identity, view.trust_revision)
+                    if mapped.uncertainty_ms <= 1 and lower <= raw.received_host_s:
+                        result.append(mapped)
+                    else:
+                        rejected.add(cursor)
+                elif device_upper <= snapshot.probes[-1].device_receive_s:
+                    # 右端已越过事件且本 epoch 无合法 bracket，未来点不能回填这个历史缺口。
+                    rejected.add(cursor)
+                else:
+                    attempts[cursor] = probe_sequence
+            self._mapped_execution_commits = tuple(result)
+            self._observation_pending_attempts, self._observation_rejected_cursors = attempts, rejected
+            self._observation_refresh_key = key
+        except Exception as exc:
+            self._observation_mapping_disabled_reason = type(exc).__name__
+            self._mapped_execution_commits = ()
+            try:
+                safe_print('NativeObservationClock mapping_warning=' + type(exc).__name__, flush=True)
+            except Exception:
+                pass
+
+    def mapped_execution_commit_snapshot(self, now=None):
+        """纯只读缓存；当前时钟失信立即撤资格，但不将旧缓存改成新 epoch。"""
+        now = self._clock() if now is None else now
+        snapshot = self.observation_clock_snapshot()
+        if not self._observation_clock_ready(snapshot, now):
+            return ()
+        result = tuple(row for row in self._mapped_execution_commits
+            if row.observation_epoch == snapshot.epoch and row.clock_identity == snapshot.identity
+            and row.trust_revision == snapshot.trust_revision)
+        return result if snapshot.trust_revision == self._observation_trust_revision else ()
+
+    def _mapped_feedback_inputs(self, now):
+        mapped = {token: row for row in self.mapped_execution_commit_snapshot(now)
+                  for token in row.execution.action_tokens}
+        result = []
+        for source in getattr(self, '_feedback_input_history', ()):
+            row = mapped.get(source.action_token)
+            if row is not None and row.execution.actual_execution_s == source.actual_s:
+                result.append(replace(source, host_lower_s=row.host_lower_s, host_upper_s=row.host_upper_s,
+                    observation_epoch=row.observation_epoch, observation_generation=row.observation_generation,
+                    observation_identity=row.clock_identity, observation_trust_revision=row.trust_revision))
+        return tuple(result)
 
     def _disable_feedback_tickets(self, stage, exc):
         if getattr(self, "_feedback_ticket_disabled_reason", None):
@@ -2670,6 +3198,11 @@ class NativeMinitouchBackend:
 
     def feedback_input_snapshot(self, request_s: float, now: float) -> NativeFeedbackInput | None:
         """仅取截图开始前已执行的最近 DOWN；缺证据时不借用 latest 状态兜底。"""
+        if getattr(self, '_native_clock_trial', False):
+            if not math.isfinite(request_s) or not math.isfinite(now) or not self.feedback_input_eligible(now):
+                return None
+            return next((source for source in reversed(self._mapped_feedback_inputs(now))
+                if source.host_upper_s <= request_s and 0 <= now - source.host_lower_s <= .6), None)
         uncertainty = self._clock_uncertainty_ms
         if (self._clock_basis != "probe-midpoint" or uncertainty is None
                 or not math.isfinite(uncertainty) or not 0 <= uncertainty <= 1.0
@@ -2692,6 +3225,20 @@ class NativeMinitouchBackend:
     def phase_status_snapshot(self) -> NativePhaseStatus:
         """纯缓存读取；没有锁等待、设备调用或并发 deque 遍历。"""
         status = getattr(self, "_phase_status", NativePhaseStatus(str(getattr(self, "_run_id", "unknown"))))
+        if getattr(self, '_native_clock_trial', False):
+            now = self._clock()
+            source = next((item for item in reversed(self._mapped_feedback_inputs(now))
+                if item.host_upper_s <= now and 0 <= now - item.host_lower_s <= .6), None)
+            return replace(status, transient_planned_s=source.planned_s if source else None,
+                transient_actual_s=source.actual_s if source else None,
+                transient_action_token=source.action_token if source else None,
+                transient_chunk_sequence=source.chunk_sequence if source else None,
+                transient_host_lower_s=source.host_lower_s if source else None,
+                transient_host_upper_s=source.host_upper_s if source else None,
+                transient_clock_epoch=source.observation_epoch if source else None,
+                transient_clock_generation=source.observation_generation if source else None,
+                transient_clock_identity=source.observation_identity if source else None,
+                transient_trust_revision=source.observation_trust_revision if source else None)
         planned, actual, token, chunk = getattr(self, "_feedback_transient_snapshot", (None, None, None, None))
         return replace(status, transient_planned_s=planned, transient_actual_s=actual,
                        transient_action_token=token, transient_chunk_sequence=chunk)
@@ -2703,7 +3250,10 @@ class NativeMinitouchBackend:
     def _publish_phase_status(self, status: NativePhaseStatus, event: str, **details) -> None:
         # 方向回执的 revision 不因独立到达的输入回执变化，避免 waiting 状态刷屏。
         status = replace(status, transient_planned_s=None, transient_actual_s=None,
-                         transient_action_token=None, transient_chunk_sequence=None)
+                         transient_action_token=None, transient_chunk_sequence=None,
+                         transient_host_lower_s=None, transient_host_upper_s=None,
+                         transient_clock_epoch=None, transient_clock_generation=None, transient_clock_identity=None,
+                         transient_trust_revision=None)
         current = getattr(self, "_phase_status", None)
         if current is not None and replace(status, event_cursor=current.event_cursor) == current:
             return
@@ -2711,6 +3261,16 @@ class NativeMinitouchBackend:
         self._phase_status = replace(status, event_cursor=cursor)
         if status.state == "applied":
             self._phase_last_applied_status = self._phase_status
+            if getattr(self, '_native_clock_trial', False) and not getattr(self, '_phase_applied_history_disabled_reason', None):
+                try:
+                    self._publish_phase_effect_history(self._phase_status)
+                except Exception as exc:
+                    self._phase_applied_history_disabled_reason = type(exc).__name__
+                    self._phase_applied_history = ()
+                    try:
+                        safe_print('NativePhaseBudget history_warning=' + type(exc).__name__, flush=True)
+                    except Exception:
+                        pass
         if not hasattr(self, "_phase_events"):
             self._phase_events = deque(maxlen=128)
         self._phase_events.append({"event": event, "sequence": status.request_sequence,
@@ -2739,6 +3299,57 @@ class NativeMinitouchBackend:
         finally:
             self._phase_lock.release()
 
+    def _publish_phase_effect_history(self, status):
+        key = status.run_id, status.owner, status.request_sequence
+        history = getattr(self, '_phase_applied_history', ())
+        if any((row.run_id, row.owner, row.request_sequence) == key for row in history):
+            self._phase_applied_history = tuple(status if (row.run_id, row.owner, row.request_sequence) == key
+                                               else row for row in history)
+        else:
+            self._phase_applied_history = (*history, status)[-64:]
+
+    def phase_effect_history_snapshot(self):
+        """只读真实应用及边界补齐回执；缺历史时不能猜测共享预算。"""
+        return None if getattr(self, '_phase_applied_history_disabled_reason', None) else getattr(
+            self, '_phase_applied_history', ())
+
+    def phase_effect_watermark(self):
+        effect = self.phase_effect_snapshot()
+        return (self.phase_owner_cumulative('feedback'), self.phase_owner_cumulative('game-clock'),
+                (effect.run_id, effect.owner, effect.request_sequence) if effect is not None else None)
+
+    def _visual_qualification_ready(self, qualification, snapshot, now):
+        return (isinstance(qualification, tuple) and len(qualification) == 4
+            and type(qualification[0]) in {int, float} and math.isfinite(qualification[0])
+            and now <= qualification[0] <= now + .5
+            and snapshot is not None and qualification[1] == (snapshot.identity, snapshot.epoch, snapshot.trust_revision)
+            and qualification[2] == self.observation_provenance()
+            and qualification[3] == self.phase_effect_watermark())
+
+    def refresh_visual_phase_qualification(self, sequence, qualification):
+        """同一意图只更新新三帧执行资格；序号、原始 H 和两秒终点不可续租。"""
+        if not self._phase_lock.acquire(False):
+            return False
+        try:
+            status = self.phase_status_snapshot()
+            now = self._clock()
+            if (self._phase_closed or self._phase_slot is None or self._phase_slot[1] != sequence
+                    or status.owner != 'game-clock' or status.request_sequence != sequence
+                    or now > self._phase_slot[4]):
+                return False
+            if qualification is None:
+                self._phase_slot_visual_qualification = None
+                return True
+            snapshot = self.observation_clock_snapshot()
+            if (not self._observation_clock_ready(snapshot, now)
+                    or self._phase_observation_qualification(now) != 'ready'
+                    or not self._visual_qualification_ready(qualification, snapshot, now)):
+                return False
+            self._phase_slot_visual_qualification = qualification
+            return True
+        finally:
+            self._phase_lock.release()
+
     def _sync_visual_phase_guard_locked(self):
         self._visual_phase_guard = bool(getattr(self, "_visual_phase_guard_requested",
                                               getattr(self, "_visual_phase_guard", False)))
@@ -2747,7 +3358,25 @@ class NativeMinitouchBackend:
         """读取 owner 已应用增量；未知窗口内其他来源的修正不会被视觉归还。"""
         return float(getattr(self, "_phase_owner_totals", {}).get(owner, 0.0))
 
-    def request_future_phase(self, delta_ms: float, observed_s: float, *, owner: str = "feedback") -> bool:
+    def visual_refresh_observation_context(self, clock_snapshot=None):
+        """刷新原图封存的硬时钟/相位上下文；请求方必须原样携回，不能换成当前值。"""
+        snapshot = self.observation_clock_snapshot() if clock_snapshot is None else clock_snapshot
+        if snapshot is None:
+            return None
+        status, effect = self.phase_status_snapshot(), self.phase_effect_snapshot()
+        return self._visual_refresh_context_from(snapshot, status, effect, self.observation_provenance(),
+            getattr(self, '_visual_phase_guard_epoch', 0))
+
+    @staticmethod
+    def _visual_refresh_context_from(snapshot, status, effect, provenance, guard_epoch):
+        effect_key = None if effect is None else (effect.request_sequence, effect.event_cursor,
+            effect.first_adjusted_due_s, effect.first_affected_chunk_sequence, effect.first_affected_action_token)
+        return (snapshot.identity, snapshot.epoch, snapshot.trust_revision,
+            provenance, status.event_cursor, status.cumulative_phase_ms, effect_key, guard_epoch)
+
+    def request_future_phase(self, delta_ms: float, observed_s: float, *, owner: str = "feedback",
+                             expected_owner_totals=None, visual_qualification=None,
+                             expected_observation_context=None) -> bool:
         """非阻塞单槽请求，不等待 owner，也不触碰 C++ 会话。"""
         self._phase_request_rejection_reason = None
         if not self.life_feedback_enabled:
@@ -2757,6 +3386,9 @@ class NativeMinitouchBackend:
             self._phase_request_rejection_reason = "owner-lock-busy"
             return False
         try:
+            if expected_observation_context is not None and not getattr(self, '_native_clock_trial', False):
+                self._phase_request_rejection_reason = 'observation-context-unavailable'
+                return False
             if owner not in {"feedback", "game-clock"}:
                 self._phase_request_rejection_reason = "invalid-owner"
                 return False
@@ -2767,12 +3399,37 @@ class NativeMinitouchBackend:
             if owner == "game-clock" and not requested_guard:
                 self._phase_request_rejection_reason = "visual-owner-inactive"
                 return False
+            if owner == 'game-clock' and getattr(self, '_native_clock_trial', False):
+                actual_totals = (self.phase_owner_cumulative('feedback'), self.phase_owner_cumulative('game-clock'))
+                if expected_owner_totals != actual_totals:
+                    self._phase_request_rejection_reason = 'shared-budget-changed-or-unavailable'
+                    return False
             if self._phase_closed or self._state != "running" or self._phase_slot is not None:
                 self._phase_request_rejection_reason = "closed-not-running-or-slot-busy"
                 return False
             if delta_ms not in {-15.0, 15.0} or not math.isfinite(observed_s):
                 self._phase_request_rejection_reason = "invalid-request"
                 return False
+            if getattr(self, '_native_clock_trial', False):
+                clock_snapshot = self.observation_clock_snapshot()
+                if not self._observation_clock_ready(clock_snapshot, self._clock()):
+                    self._phase_request_rejection_reason = 'observation-clock-unavailable'
+                    return False
+                # 与占槽在同一phase锁内比较；旧pulse不能在外来apply/换epoch后被重新贴新凭据。
+                if (expected_observation_context is not None
+                        and expected_observation_context != self.visual_refresh_observation_context(clock_snapshot)):
+                    self._phase_request_rejection_reason = 'observation-context-changed'
+                    return False
+                self._phase_slot_observation_epoch = (clock_snapshot.identity, clock_snapshot.epoch, clock_snapshot.trust_revision)
+                self._phase_slot_provenance = self.observation_provenance()
+                self._phase_slot_owner_totals = (self.phase_owner_cumulative('feedback'),
+                                                 self.phase_owner_cumulative('game-clock'))
+                self._phase_slot_effect_watermark = self.phase_effect_watermark()
+                if owner == 'game-clock' and not self._visual_qualification_ready(
+                        visual_qualification, clock_snapshot, self._clock()):
+                    self._phase_request_rejection_reason = 'visual-execution-evidence-unavailable'
+                    return False
+                self._phase_slot_visual_qualification = visual_qualification
             self._phase_sequence += 1
             self._phase_slot = (self._run_id, self._phase_sequence, observed_s,
                                 delta_ms, observed_s + 2.0)
@@ -2787,6 +3444,21 @@ class NativeMinitouchBackend:
         finally:
             self._phase_lock.release()
 
+    def _pending_phase_publish_cap(self) -> float | None:
+        if not getattr(self, '_native_clock_trial', False):
+            return None
+        with self._phase_lock:
+            candidate = self._phase_slot
+            now = self._clock()
+            if (candidate is None or self._phase_closed or self._session_state != 'running'
+                    or candidate[0] != self._run_id or not candidate[2] <= now <= candidate[4]
+                    or self.phase_status_snapshot().state != 'waiting-touch-boundary'
+                    or self._phase_observation_qualification(now) != 'ready'):
+                return None
+            # 提示只缩短当前未发布窗口；应用仍在publish返回后走原完整门禁。
+            hint = self._compiler.pending_up_boundary_s()
+            return hint if hint is not None and math.isfinite(hint) else None
+
     def _consume_phase_candidate(self) -> None:
         if not getattr(self, "life_feedback_enabled", False):
             return
@@ -2797,15 +3469,35 @@ class NativeMinitouchBackend:
                 return
             run_id, sequence, observed_s, delta_ms, expiry_s = candidate
             now = self._clock()
+            observation_state = self._phase_observation_qualification(now) if getattr(
+                self, '_native_clock_trial', False) else 'ready'
             reason = None
             if self._phase_closed or self._session_state != "running":
                 reason = "stopped"
             elif sequence <= getattr(self, "_phase_invalidated_sequence", 0):
                 reason = "invalidated-window"
+            elif (run_id, self.phase_status_snapshot().owner, sequence) in getattr(
+                    self, '_phase_invalidated_requests', ()):
+                reason = 'invalidated-window'
             elif run_id != self._run_id:
                 reason = "stale-run"
+            elif observation_state == 'hard-invalid':
+                reason = 'observation-hard-fence-changed'
+            elif observation_state == 'effect-changed':
+                reason = 'phase-effect-changed'
             elif now > expiry_s or now < observed_s:
                 reason = "expired"
+            elif observation_state == 'quality-pending':
+                self._publish_phase_status(replace(self.phase_status_snapshot(), state='waiting-execution-receipts'),
+                                           'waiting-observation-clock', applied_s=now)
+                return
+            elif (getattr(self, '_native_clock_trial', False)
+                    and self.phase_status_snapshot().owner == 'game-clock'
+                    and not self._visual_qualification_ready(getattr(self, '_phase_slot_visual_qualification', None),
+                        self.observation_clock_snapshot(), now)):
+                self._publish_phase_status(replace(self.phase_status_snapshot(), state='waiting-execution-receipts'),
+                                           'waiting-visual-evidence', applied_s=now)
+                return
             elif not self._compiler.phase_boundary_safe():
                 # HOLD 或隐式 FLICK 尚未完成时保留候选，正常补粮不能被阻断。
                 self._publish_phase_status(replace(self.phase_status_snapshot(), state="waiting-touch-boundary"),
@@ -2813,12 +3505,7 @@ class NativeMinitouchBackend:
                 return
             else:
                 # 稀疏谱面允许跨 1.5 秒收集，但整个时钟误差区间须落在窗口内。
-                recent = {row[0]: row for row in self._phase_receipts
-                          if len(row) == 6 and row[5] is not None
-                          and math.isfinite(row[5]) and 0 <= row[5] <= 1.0
-                          and now - 1.5 <= row[1] - row[5] / 1000.0
-                          and row[1] + row[5] / 1000.0 <= now}
-                tail_age = min((now - (row[1] - row[5] / 1000.0) for row in recent.values()), default=None)
+                recent, tail_age = self._phase_receipt_window(now)
                 absolute_median = median([row[2] for row in recent.values()]) if recent else None
                 uncertainty = self._clock_uncertainty_ms
                 failed_checks = []
@@ -2844,6 +3531,8 @@ class NativeMinitouchBackend:
                     "abs_execution_residual_median_ms": absolute_median,
                     "signed_execution_residual_median_ms": median([row[3] for row in recent.values()]) if recent else None,
                     "clock_uncertainty_ms": self._clock_uncertainty_ms}
+                diagnostic['freshness_clock_domain'] = 'host-perf-counter-interval' if getattr(
+                    self, '_native_clock_trial', False) else 'frozen-execution-legacy'
                 if not hasattr(self, "_phase_receipt_diagnostics"):
                     self._phase_receipt_diagnostics = deque(maxlen=128)
                 previous = self._phase_receipt_diagnostics[-1] if self._phase_receipt_diagnostics else None
@@ -2864,6 +3553,7 @@ class NativeMinitouchBackend:
                 else:
                     contact_available_s = self._compiler.contact_available_s()
                     self._sync_visual_phase_guard_locked()
+
                     if self._phase_slot is None:
                         return
                     reason = str(self._session.apply_future_phase(
@@ -2888,6 +3578,7 @@ class NativeMinitouchBackend:
                 self._phase_owner_totals[owner] = self.phase_owner_cumulative(owner) + delta_ms
             self._publish_phase_status(replace(self.phase_status_snapshot(), state=state,
                                        terminal_reason=None if reason == "applied" else reason,
+                                       applied_host_s=now if reason == 'applied' else None,
                                        owner_cumulative_phase_ms=self.phase_owner_cumulative(owner),
                                        cumulative_phase_ms=event["cumulative_phase_ms"]), reason, applied_s=now)
             # 原报告继续持有同一事件，由首个受影响切片补齐效果边界。
@@ -2895,16 +3586,52 @@ class NativeMinitouchBackend:
                 self._phase_applied_pending = self._phase_events[-1]
             self._sync_visual_phase_guard_locked()
 
-    def revoke_future_phase(self, reason: str, *, owner: str = "feedback") -> None:
+    def _phase_observation_epoch_matches(self, now):
+        return self._phase_observation_qualification(now) == 'ready'
+
+    def _phase_observation_qualification(self, now):
+        snapshot = self.observation_clock_snapshot()
+        ready = self._observation_clock_ready(snapshot, now)
+        if getattr(self, '_phase_slot_provenance', None) != self.observation_provenance():
+            return 'hard-invalid'
+        if getattr(self, '_phase_slot_owner_totals', None) != (
+                self.phase_owner_cumulative('feedback'), self.phase_owner_cumulative('game-clock')):
+            return 'effect-changed'
+        if getattr(self, '_phase_slot_effect_watermark', None) != self.phase_effect_watermark():
+            return 'effect-changed'
+        return 'ready' if ready else 'quality-pending'
+
+    def _phase_receipt_window(self, now):
+        valid = [row for row in self._phase_receipts if len(row) == 6 and row[5] is not None
+                 and math.isfinite(row[5]) and 0 <= row[5] <= 1.0]
+        if getattr(self, '_native_clock_trial', False):
+            mapped = {row.execution.command_cursor: row for row in self.mapped_execution_commit_snapshot(now)}
+            recent = {row[0]: row for row in valid if row[0] in mapped
+                and now - 1.5 <= mapped[row[0]].host_lower_s and mapped[row[0]].host_upper_s <= now}
+            age = min((now - mapped[cursor].host_lower_s for cursor in recent), default=None)
+        else:
+            recent = {row[0]: row for row in valid if now - 1.5 <= row[1] - row[5] / 1000
+                      and row[1] + row[5] / 1000 <= now}
+            age = min((now - (row[1] - row[5] / 1000) for row in recent.values()), default=None)
+        return recent, age
+
+    def revoke_future_phase(self, reason: str, *, owner: str = "feedback", expected_sequence=None) -> None:
         status = self.phase_status_snapshot()
-        if status.owner != owner:
+        if status.owner != owner or expected_sequence is not None and status.request_sequence != expected_sequence:
             return
         # 标量失效标记不等待 owner；即使锁正在使用，下一次消费也会拒绝旧候选。
-        self._phase_invalidated_sequence = self._phase_sequence
+        if getattr(self, '_native_clock_trial', False):
+            request = status.run_id, owner, status.request_sequence
+            self._phase_invalidated_requests = (*getattr(self, '_phase_invalidated_requests', ()), request)[-64:]
+        else:
+            self._phase_invalidated_sequence = self._phase_sequence
         if not self._phase_lock.acquire(False):
             return
         try:
-            if self._phase_slot is not None:
+            latest = self.phase_status_snapshot()
+            if (self._phase_slot is not None and (not getattr(self, '_native_clock_trial', False)
+                    or (latest.run_id, latest.owner, latest.request_sequence) ==
+                       (status.run_id, owner, status.request_sequence))):
                 self._phase_slot = None
                 self._publish_phase_status(replace(self.phase_status_snapshot(), state="revoked", terminal_reason=reason),
                                            "revoked", reason=reason)
@@ -2912,6 +3639,35 @@ class NativeMinitouchBackend:
             self._phase_lock.release()
 
     def stop(self) -> None:
+        if getattr(self, '_native_clock_trial', False):
+            with self._native_stop_lifecycle_lock:
+                if self._native_stop_started:
+                    return
+                self._native_stop_started = True
+                self._native_input_stop_requested.set()
+        try:
+            self._stop_input()
+        finally:
+            if getattr(self, '_native_clock_trial', False):
+                # gate只表示输入stop尝试终态，绝不表示UP/reset或claim已确认成功。
+                try:
+                    self._stop_native_clock_observer()
+                except Exception as exc:
+                    # 附加观察器故障不能覆盖输入首因，也不能跳过所有权收束。
+                    self._native_ownership_warning = 'observer-stop:' + type(exc).__name__
+                finally:
+                    self._native_observer_cleanup_allowed.set()
+                if self._native_ownership_finisher is None:
+                    try:
+                        self._native_ownership_finisher = threading.Thread(target=self._finish_native_ownership,
+                            name='native-claim-finish', daemon=True)
+                        self._native_ownership_finisher.start()
+                    except Exception as exc:
+                        self._native_ownership_warning = 'claim-finisher-start:' + type(exc).__name__
+                    if self._borrowed_device_lease is None and self._release_confirmed is True:
+                        self.wait_native_cleanup(3.2)
+
+    def _stop_input(self) -> None:
         """在 1s 硬预算内取消生产并取得完整 UP/commit/reset 协议证据。"""
         # 停止先封闭请求与应用入口；之后任何在途采样都只能被拒绝。
         if hasattr(self, "_phase_lock"):
@@ -2932,6 +3688,7 @@ class NativeMinitouchBackend:
         start_cancel_synchronized = self._cancel_device_start(
             min(0.02, remaining())
         )
+        self._stop_native_clock_observer()
         if not start_cancel_synchronized:
             release_errors.append("minitouch 启动提交未在释放预算内同步")
         owner = self._publisher_thread
@@ -3069,7 +3826,6 @@ class NativeMinitouchBackend:
             and self._release_latency_ms <= 1000.0
         )
         self._release_error = "; ".join(release_errors) or None
-
         fatal_error = bool(
             self._publisher_error
             or self._publish_error
@@ -3114,6 +3870,8 @@ class NativeMinitouchBackend:
         }.items():
             if target not in report and source in report:
                 report[target] = report[source]
+        direction_window_mode = (getattr(self, '_life_feedback_sniff', {}).get('visual_refresh', {}).get('mode')
+                                 == 'direction-window-observation')
         defaults: dict[str, object] = {
             "planned": len(self._actions),
             "sent": 0,
@@ -3213,8 +3971,17 @@ class NativeMinitouchBackend:
         defaults.update({
             "run_id": self._run_id,
             "life_feedback": {"enabled": getattr(self, "life_feedback_enabled", False),
+                              "configuration": {
+                                  "observation_clock_enabled": getattr(self, "_native_clock_trial", False),
+                                  "visual_refresh_requested": getattr(self, "_native_visual_refresh_enabled", False),
+                                  "visual_refresh_selected": bool(getattr(self, "life_feedback_enabled", False)
+                                      and getattr(self, "_native_clock_trial", False)
+                                      and getattr(self, "_native_visual_refresh_enabled", False)),
+                              },
                               "summary": getattr(self, "_life_feedback_summary", {}),
-                              "model": "continuous-single-tap-observations-v5",
+                              "model": ("visual-direction-windows-v2" if direction_window_mode else "visual-refresh-observations-v1" if getattr(self,
+                                  "_life_feedback_sniff", {}).get("visual_refresh", {}).get("mode")
+                                  == "visual-refresh-observation" else "continuous-single-tap-observations-v5"),
                               "distinct_visual_events_measured": False,
                               "continuation": getattr(self, "_life_feedback_sniff", {}).get("continuation", {}),
                               "tickets": self._feedback_ticket_report(),
@@ -3224,14 +3991,32 @@ class NativeMinitouchBackend:
                               "ignored_reasons": getattr(self, "_life_feedback_sniff", {}).get("ignored_reasons", {}),
                               "disabled_reason": (getattr(self, "_life_feedback_disabled_reason", None)
                                   or getattr(self, "_feedback_ticket_disabled_reason", None)),
-                              "stat_units": {"sightings": "fresh-frames-with-colour",
+                              "stat_units": ({"sightings":"fresh-frames-with-colour",
+                                  "neutral_baseline_frames":"qualified-fresh-frames-without-strong-direction",
+                                  "fresh_direction_frames":"fresh-direction-frames",
+                                  "qualified_direction_windows":"qualified-direction-windows",
+                                  "debounced_reports":"qualified-direction-windows",
+                                  "single_tap_observations":"disabled-in-direction-window-mode",
+                                  "fast_observations":"fast-direction-frames","slow_observations":"slow-direction-frames",
+                                  "fast_votes":"fast-direction-frames","slow_votes":"slow-direction-frames",
+                                  "direction_votes":"fresh-direction-frames"} if direction_window_mode else {"sightings": "fresh-frames-with-colour",
+                                  "debounced_reports": "visual-refresh-observations",
+                                  "single_tap_observations": "disabled-in-visual-refresh-mode",
+                                  "visual_refresh_observations": "visual-refresh-observations",
+                                  "fast_observations": "fast-visual-refresh-observations",
+                                  "slow_observations": "slow-visual-refresh-observations",
+                                  "fast_votes": "eligible-fast-visual-refresh-observations",
+                                  "slow_votes": "eligible-slow-visual-refresh-observations",
+                                  "direction_votes": "eligible-visual-refresh-observations"}
+                                  if getattr(self, "_life_feedback_sniff", {}).get("visual_refresh", {}).get("mode")
+                                  == "visual-refresh-observation" else {"sightings": "fresh-frames-with-colour",
                                   "debounced_reports": "post-single-tap-direction-observations",
                                   "single_tap_observations": "post-independent-executed-single-taps",
                                   "fast_observations": "post-single-tap-fast-observations",
                                   "slow_observations": "post-single-tap-slow-observations",
                                   "fast_votes": "eligible-fast-single-tap-observations",
                                   "slow_votes": "eligible-slow-single-tap-observations",
-                                  "direction_votes": "eligible-single-tap-observations"},
+                                  "direction_votes": "eligible-single-tap-observations"}),
                               "sampling_events_capacity": 128,
                               "sampling_events_dropped": getattr(self, "_life_feedback_summary", {}).get("events_dropped", 0),
                               "sniff": getattr(self, "_life_feedback_sniff", {}),
@@ -3254,6 +4039,12 @@ class NativeMinitouchBackend:
                                   if self.phase_effect_snapshot() is not None else None),
                               "phase_status": asdict(self.phase_status_snapshot())},
             "state": self._state,
+            "native_device_claim": (dict(required=True, ownership_warning=self._native_ownership_warning,
+                cleanup_done=self._native_ownership_cleanup_done.is_set(),
+                **(self._native_device_claim.report() if self._native_device_claim is not None
+                   else {'state': 'not-acquired', 'settled': self._native_ownership_setup_done.is_set()}))
+                if getattr(self, '_native_clock_trial', False) else {'required': False}),
+            "native_clock_observer": self._native_clock_observer_report(),
             "session_state": self._session_state,
             "first_action_anchor_s": self._first_action_anchor_s,
             "start_decision": getattr(self, "_start_decision", None),

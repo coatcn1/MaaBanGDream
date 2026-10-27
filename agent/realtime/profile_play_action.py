@@ -774,11 +774,12 @@ class StallSafeCapture:
 
     def prefetch_fresh(self, target_s):
         """同一消费者提前请求，不等待截图完成；每个目标节拍最多发一次。"""
-        if not self._lazy_prefetch or self._prefetch_target_s == target_s:
-            return
+        if (not self._lazy_prefetch or self._prefetch_target_s == target_s
+                or self._sequence > self._last_consumed_sequence):
+            return False
         if self._pending is not None:
             if not self._job_done(self._pending):
-                return
+                return False
             try:
                 self._accept(self._get(self._pending))
             except Exception:
@@ -786,16 +787,25 @@ class StallSafeCapture:
             self._pending = None
         self._pending = self._post()
         self._prefetch_target_s = target_s
+        return True
+
+    def has_ready_frame(self):
+        """只查未读缓存或作业状态；不取图、不发请求、不等待。"""
+        return (self._sequence > self._last_consumed_sequence
+                or self._pending is not None and self._job_done(self._pending, strict=True))
 
     @property
     def frame_metadata(self):
         return {**self._image_metadata, "sequence": self._sequence,
                 "request_s": self._image_request_s, "reused": self._reused}
 
-    def _job_done(self, job) -> bool:
+    def _job_done(self, job, *, strict=False) -> bool:
         try:
             done = bool(job.done)
         except Exception:
+            if strict:
+                # 加速peek不能把未知状态当就绪；交引擎退回基础节拍。
+                raise
             return True
         if done and self._pending_metadata.get("first_done_observed_s") is None:
             self._pending_metadata["first_done_observed_s"] = time.perf_counter()
@@ -811,6 +821,9 @@ class StallSafeCapture:
         return image
 
     def _capture(self):
+        if self._sequence > self._last_consumed_sequence:
+            # 已接收的第一张图先交消费者；不能让第二张完成图覆盖未读缓存。
+            return self._last_image
         if self._pending is not None and self._job_done(self._pending):
             try:
                 image = self._get(self._pending)
@@ -3131,7 +3144,7 @@ class RealtimeProfilePlay(CustomAction):
                     f"{type(artifact_error).__name__}: {artifact_error}"
                 )
             raise
-        save_screenshot = debug_recording
+        save_screenshot = debug_recording or (diagnostic_trace and params.get('save_result_frame') is True)
         print(
             "RealtimeProfilePlay life_policy "
             f"rehearsal={is_rehearsal} "

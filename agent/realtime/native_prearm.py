@@ -82,6 +82,9 @@ class NativePrearmManager:
     def _stop_backend(backend: Any, reason: str) -> None:
         try:
             backend.stop()
+            settle = getattr(backend, 'wait_native_cleanup', None)
+            if callable(settle) and not settle(4.2):
+                print('NativePrearm cleanup_warning=claim-or-helper-not-terminal reason=' + reason, flush=True)
         except Exception as exc:  # noqa: BLE001 - watchdog 不能抛出到线程边界
             print(
                 "NativePrearm cleanup_failed "
@@ -383,6 +386,15 @@ def prepare_native_for_settings_gate(
         from .native_play import NativeMinitouchBackend
 
         backend_factory = NativeMinitouchBackend
+    # 单人正式局复用已冻结的反馈选项；两条依赖同时交给同一预武装后端，
+    # 避免正式启动时再读环境而切换模型。其他模式保留原显式试验入口。
+    solo_feedback_options = {}
+    if (str(getattr(live_run, "mode", "")) == "formal"
+            and bool(runtime_options.get("native_life_feedback_enabled", False))):
+        solo_feedback_options = {
+            "observation_clock_trial_enabled": True,
+            "visual_refresh_enabled": True,
+        }
     backend = backend_factory(
         selection.path,
         adb_path=adb_path,
@@ -405,6 +417,7 @@ def prepare_native_for_settings_gate(
         life_feedback_enabled=(bool(runtime_options.get("native_life_feedback_enabled", False))
                                and str(getattr(live_run, "mode", "")) in {
                                    "formal", "challenge", "cooperative", "versus", "continuous", "medley"}),
+        **solo_feedback_options,
     )
     try:
         backend.arm()

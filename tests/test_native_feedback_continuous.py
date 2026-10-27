@@ -191,7 +191,7 @@ def test_phase_limit_uses_request_delta_after_local_drop_and_reverse_restores_he
     assert sampler.summary["requests"] == 3
 
 
-def test_neutral_target_clears_two_votes_and_reverse_needs_three_new_observations():
+def test_directionless_target_keeps_votes_but_reverse_needs_three_new_observations():
     sampler, backend, _ = sampler_fixture()
     tap(sampler, .1)
     tap(sampler, .2)
@@ -200,14 +200,12 @@ def test_neutral_target_clears_two_votes_and_reverse_needs_three_new_observation
                      actual_s=.26, planned_s=.26)
     backend._test_ticket_state = FeedbackObservationState(target, target.judgement_sequence, .26, .5)
     frame(sampler, None, .3)
-    assert not sampler.votes and sampler.summary["requests"] == 0
-    tap(sampler, .4)
-    tap(sampler, .5)
-    tap(sampler, .6, TimingFeedback.SLOW)
+    assert len(sampler.votes) == 2 and sampler.summary["requests"] == 0
+    tap(sampler, .4, TimingFeedback.SLOW)
     assert len(sampler.votes) == 1 and sampler.summary["requests"] == 0
-    tap(sampler, .7, TimingFeedback.SLOW)
-    assert sampler.summary["requests"] == 0
-    tap(sampler, .8, TimingFeedback.SLOW)
+    tap(sampler, .5, TimingFeedback.SLOW)
+    tap(sampler, .6, TimingFeedback.SLOW)
+    assert sampler.summary["requests"] == 1
     assert backend._phase_slot[3] == -15
 
 

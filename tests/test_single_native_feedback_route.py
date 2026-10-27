@@ -179,6 +179,8 @@ def test_formal_selection_prearm_play_uses_frozen_options(monkeypatch, tmp_path,
     backend = env.backends[0]
     assert backend.options["life_feedback_enabled"] is life
     assert backend.options["wait_jitter_trial_enabled"] is wait
+    assert backend.options.get("observation_clock_trial_enabled", False) is life
+    assert backend.options.get("visual_refresh_enabled", False) is life
     env.options.update(native_realtime_enabled=False, native_life_feedback_enabled=not life,
                        native_wait_jitter_filter_enabled=not wait)
     engine_backends = []
@@ -193,6 +195,7 @@ def test_formal_selection_prearm_play_uses_frozen_options(monkeypatch, tmp_path,
         profile_play_action.RealtimeProfilePlay()._run(env.context, SimpleNamespace(
             custom_action_param=json.dumps(pipeline[play_node]["custom_action_param"])))
     assert engine_backends == [backend]
+    assert backend.options.get("visual_refresh_enabled", False) is life
     assert backend.offsets == [17]
     assert env.controller.clicks == [difficulty_action.DIFFICULTY_TARGETS[difficulty]]
 
@@ -228,6 +231,8 @@ def test_nonformal_mode_is_not_upgraded_by_formal_gate(monkeypatch, tmp_path, ro
     assert performance_settings_action.RealtimePerformanceSettingsGate()._run(env.context, gate)
     assert current_live_run().mode == mode
     assert env.backends[0].options["life_feedback_enabled"] is False
+    assert "observation_clock_trial_enabled" not in env.backends[0].options
+    assert "visual_refresh_enabled" not in env.backends[0].options
 
 
 @pytest.mark.parametrize("mode", ["calibration-rehearsal", "calibration-formal"])

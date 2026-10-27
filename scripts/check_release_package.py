@@ -5,8 +5,49 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tempfile
 import zipfile
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from agent.realtime.native_clock_assets import ABIS, ClockAssetError, validate_assets
+
+CLOCK_ASSET_PREFIX = "agent/runtime/android_clock/"
+CLOCK_ASSET_FILES = ("manifest.json", *(f"{abi}/mbd-clock" for abi in ABIS))
+
+
+def validate_clock_directory(package_root):
+    try:
+        validate_assets(package_root / CLOCK_ASSET_PREFIX)
+        return []
+    except ClockAssetError:
+        return ["Android observation clock assets missing, stale, or invalid"]
+
+
+def validate_clock_archive(archive, prefix):
+    # 只读固定五个成员，禁止任意解压路径；大小上限同时约束损坏归档的解压开销。
+    names = archive.namelist()
+    members = [(relative, prefix + CLOCK_ASSET_PREFIX + relative) for relative in CLOCK_ASSET_FILES]
+    if any(names.count(name) != 1 for _, name in members):
+        return ["Android observation clock archive assets missing or duplicated"]
+    if any(archive.getinfo(name).file_size > (16384 if relative == 'manifest.json' else 4 * 1024 * 1024)
+           for relative, name in members):
+        return ["Android observation clock archive assets oversized"]
+    scratch = ROOT / '.local'
+    scratch.mkdir(exist_ok=True)
+    try:
+        with tempfile.TemporaryDirectory(prefix='clock-package-', dir=scratch) as temporary:
+            asset_root = Path(temporary)
+            for relative, name in members:
+                destination = asset_root / relative
+                destination.parent.mkdir(exist_ok=True)
+                destination.write_bytes(archive.read(name))
+            validate_assets(asset_root)
+        return []
+    except (ClockAssetError, OSError, RuntimeError):
+        return ["Android observation clock archive assets stale or invalid"]
 
 
 REQUIRED_PATHS = (
@@ -77,6 +118,8 @@ def validate_release_archives(package_root: Path) -> list[str]:
                 names = set(archive.namelist())
                 is_update = archive_path.name.endswith("-update.zip")
                 archive_root = "" if is_update else f"{package_root.name}/"
+                errors.extend(f"{archive_path.name}: {error}"
+                              for error in validate_clock_archive(archive, archive_root))
                 launcher = f"{archive_root}启动 MaaBanGDream.cmd"
                 if launcher not in names:
                     errors.append(
@@ -110,6 +153,7 @@ def validate_release_archives(package_root: Path) -> list[str]:
 
 def validate(package_root: Path) -> list[str]:
     errors: list[str] = []
+    errors.extend(validate_clock_directory(package_root))
     for relative in REQUIRED_PATHS:
         if not (package_root / relative).is_file():
             errors.append(f"missing required file: {relative}")

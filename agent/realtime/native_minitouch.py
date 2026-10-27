@@ -206,6 +206,12 @@ class NativeMinitouchDevice:
         self._log_lines: deque[str] = deque(maxlen=4096)
         self._log_records: deque[tuple[int, str, float]] = deque(maxlen=4096)
         self._log_sequence = 0
+        self._receipt_timing_prefix_limit = 4096
+        self._receipt_timing_prefix = []
+        self._receipt_timing = deque(maxlen=512)
+        self._receipt_timing_by_cursor = {}
+        self._receipt_timing_dropped = 0
+        self._receipt_owner_missing = 0
         self._jlog_path = Path(jlog_path) if jlog_path is not None else None
         self._jlog_writer: _JlogWriter | None = None
         self._jlog_blocking_writer: _JlogWriter | None = None
@@ -319,13 +325,41 @@ class NativeMinitouchDevice:
     def jlog_io_diagnostics(self) -> dict[str, object]:
         writer = self._jlog_writer
         if self._jlog_disabled_reason is not None:
-            return {"enabled": False, "complete": False,
+            return {"enabled": False, "complete": False, "receipt_timing": self.receipt_timing_diagnostics,
                     "generation": self._reset_generation,
                     "missing_lines": self._jlog_disabled_lines,
                     "warnings": [self._jlog_disabled_reason],
                     "previous_writer": self._jlog_blocking_writer.snapshot()
                                        if self._jlog_blocking_writer else None}
-        return writer.snapshot() if writer else {"enabled": False, "complete": True, "warnings": []}
+        result = writer.snapshot() if writer else {"enabled": False, "complete": True, "warnings": []}
+        return dict(result, receipt_timing=self.receipt_timing_diagnostics)
+
+    @property
+    def receipt_timing_diagnostics(self):
+        with self._log_lock:
+            return dict(capacity=self._receipt_timing_prefix_limit + self._receipt_timing.maxlen,
+                prefix_capacity=self._receipt_timing_prefix_limit, tail_capacity=self._receipt_timing.maxlen,
+                dropped=self._receipt_timing_dropped,
+                owner_missing=self._receipt_owner_missing, clock_domain='host-perf-counter-seconds',
+                transport_semantics='completed-line-final-recv-return-before-gil',
+                rows=[dict(row) for row in (*self._receipt_timing_prefix, *self._receipt_timing)])
+
+    def note_log_owner_accept(self, cursor, accepted_s, *, action_token=None, owner_observe_s=None, formal_cursor=None):
+        # 附加归属不能等待reader锁，也绝不参与释放、完整性或输入资格判定。
+        if not self._log_lock.acquire(False):
+            self._receipt_owner_missing += 1
+            return
+        try:
+            row = self._receipt_timing_by_cursor.get(cursor)
+            if row is None:
+                self._receipt_owner_missing += 1
+            else:
+                row['owner_accept_s'] = accepted_s
+                row['action_token'] = action_token
+                row['owner_observe_s'] = owner_observe_s
+                row['formal_command_cursor'] = formal_cursor
+        finally:
+            self._log_lock.release()
 
     def _start_jlog_writer(self, *, stream=None, capacity=4096):
         previous = self._jlog_writer
@@ -498,7 +532,12 @@ class NativeMinitouchDevice:
             generation = self._reset_generation
         while not self._closed and client.connected:
             try:
-                chunk = client.receive(65536, 500)
+                timed_receive = getattr(client, 'receive_with_timestamp', None)
+                if callable(timed_receive):
+                    chunk, transport_return_s = timed_receive(65536, 500)
+                else:
+                    chunk = client.receive(65536, 500)
+                    transport_return_s = None
             except Exception:  # noqa: BLE001 - 停止阶段套接字可能已关闭
                 break
             with self._reset_lock:
@@ -519,7 +558,8 @@ class NativeMinitouchDevice:
                 for line in parts:
                     line = line.strip()
                     if line:
-                        self._record_log_line(line, source_generation=generation, source_client=client)
+                        self._record_log_line(line, source_generation=generation, source_client=client,
+                                              transport_return_s=transport_return_s)
             finally:
                 with self._reset_lock:
                     if generation == self._reset_generation:
@@ -530,6 +570,7 @@ class NativeMinitouchDevice:
     def _record_log_line(
         self, line: str, received_s: float | None = None,
         *, source_generation: int | None = None, source_client: Any | None = None,
+        transport_return_s: float | None = None,
     ) -> None:
         """先处理内存回执，再非阻塞入队诊断；磁盘不能拖慢 reader。"""
         if received_s is None:
@@ -545,6 +586,24 @@ class NativeMinitouchDevice:
                 sequence = self._log_sequence
                 self._log_lines.append(line)
                 self._log_records.append((sequence, line, float(received_s)))
+                try:
+                    if (len(self._receipt_timing_prefix) >= self._receipt_timing_prefix_limit
+                            and len(self._receipt_timing) == self._receipt_timing.maxlen):
+                        old = self._receipt_timing.popleft()
+                        self._receipt_timing_by_cursor.pop(old['log_cursor'], None)
+                        self._receipt_timing_dropped += 1
+                    row = dict(log_cursor=sequence, generation=generation,
+                        transport_return_s=transport_return_s, line_record_s=float(received_s),
+                        owner_accept_s=None, action_token=None, owner_observe_s=None, formal_command_cursor=None)
+                    # 固定保留开局命令窗口；长局结束时仍可核H30附近，超额仅保尾段。
+                    if len(self._receipt_timing_prefix) < self._receipt_timing_prefix_limit:
+                        self._receipt_timing_prefix.append(row)
+                    else:
+                        self._receipt_timing.append(row)
+                    self._receipt_timing_by_cursor[sequence] = row
+                except Exception:
+                    # 诊断分配失败不改变已经接收的连续日志或释放证据。
+                    self._receipt_timing_dropped += 1
                 writer = self._jlog_writer
                 if self._jlog_disabled_reason is not None:
                     self._jlog_disabled_lines += 1

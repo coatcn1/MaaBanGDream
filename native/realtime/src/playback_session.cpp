@@ -256,7 +256,7 @@ bool PlaybackSession::start(double first_action_engine_s) {
     return true;
 }
 
-bool PlaybackSession::publish() {
+bool PlaybackSession::publish(double window_end_cap_s) {
     if (state_ != PlaybackState::Running) {
         return false;
     }
@@ -270,8 +270,9 @@ bool PlaybackSession::publish() {
     }
 
     const double queue_depth_s = std::max(0.0, queue_tail_s_ - current_s);
-    if (published_once_
-        && queue_depth_s > config_.low_water_s + kTimeEpsilon) {
+    const bool above_low_water = published_once_
+        && queue_depth_s > config_.low_water_s + kTimeEpsilon;
+    if (above_low_water && !std::isfinite(window_end_cap_s)) {
         return false;
     }
 
@@ -279,11 +280,16 @@ bool PlaybackSession::publish() {
     const double queue_cap_s = current_s + config_.max_queue_s;
     const double desired_end_s = std::min(
         current_s + config_.lookahead_s, queue_cap_s);
-    playback_end_engine_s_ = std::max(published_completion_s_,
+    const double candidate_playback_end_s = std::max(published_completion_s_,
         completion_suffix_max_[cursor_] + future_phase_offset_s_);
-    const double base_window_end_s = std::max(
+    double base_window_end_s = std::max(
         window_start_s,
-        std::min(desired_end_s, playback_end_engine_s_));
+        std::min(desired_end_s, candidate_playback_end_s));
+    // 无效/已过窗口的提示不阻断正常补粮；有效cap必须在选择整组动作之前裁限。
+    const bool capped = std::isfinite(window_end_cap_s)
+        && window_end_cap_s > window_start_s + kTimeEpsilon
+        && window_end_cap_s < base_window_end_s;
+    if (capped) base_window_end_s = window_end_cap_s;
 
     std::size_t next_cursor = cursor_;
     while (next_cursor < entries_.size()) {
@@ -301,13 +307,21 @@ bool PlaybackSession::publish() {
         next_cursor = group_end;
     }
 
+    // cap由上层真实compiler的pending-UP提示提供；Session本身不判定事件种类。
+    // 仅原视野内、不消费新高层整组的短块可提前编译；无效cap仍保持低水位门禁。
+    if (above_low_water && !(capped && next_cursor == cursor_)) {
+        return false;
+    }
+    playback_end_engine_s_ = candidate_playback_end_s;
+
     // 中间块必须停在名义窗口边界：TouchScriptCompiler 会把越界的隐式
     // MOVE/UP 留在 pending_events，下一块仍从相同绝对时间轴继续。若把
     // queue_tail 延到 TAP/FLICK 的 completion，边界后的音符会整体变晚。
     const bool all_actions_selected = next_cursor == entries_.size();
     const bool final_tail_fits =
         playback_end_engine_s_ <= queue_cap_s + kTimeEpsilon;
-    const bool final_chunk = all_actions_selected && final_tail_fits;
+    const bool final_chunk = all_actions_selected && final_tail_fits
+        && (!capped || playback_end_engine_s_ <= base_window_end_s + kTimeEpsilon);
     const double window_end_s = final_chunk
         ? std::max(base_window_end_s, playback_end_engine_s_)
         : base_window_end_s;

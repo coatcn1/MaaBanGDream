@@ -412,6 +412,34 @@ class RealtimeDebugRecorder:
         except queue.Full:
             self._dropped_native_feedback_frames += 1
 
+    def record_native_feedback_roi(self,roi,timestamp,frame_metadata,window_start_s):
+        """只确认FIFO接收，不把接收等同图片已经落盘；任何失败均不影响输入。"""
+        try:
+            if (self._closed or self._error is not None or not isinstance(roi,np.ndarray)
+                    or roi.shape!=(42,140,3)):
+                self._dropped_native_feedback_frames+=1
+                return False
+            if roi.flags.writeable:
+                roi=roi.copy()
+                roi.setflags(write=False)
+            if self._native_feedback_window!=window_start_s:
+                self._native_feedback_window=window_start_s
+                self._native_feedback_window_index+=1
+                self._native_feedback_count=0
+            if self._native_feedback_count>=20 or self._native_feedback_total>=256:
+                self._dropped_native_feedback_frames+=1
+                return False
+            index=self._native_feedback_count
+            self._native_feedback_count+=1
+            self._native_feedback_total+=1
+            self._record_queue.put_nowait(_NativeFeedbackFrame(roi,timestamp,
+                dict(frame_metadata,window_start_s=window_start_s,roi=[570,514,710,556]),
+                self._native_feedback_window_index,index))
+            return True
+        except Exception:
+            self._dropped_native_feedback_frames+=1
+            return False
+
     def _process_native_life(self, frame: _NativeLifeFrame) -> None:
         history = self._native_life_history
         triggered = self._native_life_triggered_at

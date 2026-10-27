@@ -133,6 +133,8 @@ public:
         return static_cast<double>(*std::max_element(
             contact_available_after_.begin(), contact_available_after_.end())) / 1e9;
     }
+    // 只提示已有隐式UP能完全收束的边界；真实HOLD不推测未来释放。
+    double pending_up_boundary_s() const noexcept;
 
     // 仅返回最近一次成功 compile() 中到达判定关键命令的高层动作；
     // TAP/普通 FLICK 记在 DOWN，尾部 FLICK 记在首个 MOVE，HOLD 生命周期

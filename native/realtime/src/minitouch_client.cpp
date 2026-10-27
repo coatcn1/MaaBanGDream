@@ -149,6 +149,10 @@ MinitouchClient::last_publish_diagnostics() const noexcept {
 }
 
 std::string MinitouchClient::receive(std::size_t max_bytes, int timeout_ms) {
+    return receive_with_timestamp(max_bytes, timeout_ms).text;
+}
+
+MinitouchReceiveResult MinitouchClient::receive_with_timestamp(std::size_t max_bytes, int timeout_ms) {
     if (!connected()) {
         return {};
     }
@@ -161,11 +165,18 @@ std::string MinitouchClient::receive(std::size_t max_bytes, int timeout_ms) {
     buffer.resize(max_bytes);
     const int count = recv(handle, buffer.data(),
                            static_cast<int>(max_bytes), 0);
+    // 不调用Python时钟回调，避免把重获GIL的延迟算进传输返回时刻。
+    LARGE_INTEGER counter{}, frequency{};
+    std::optional<double> returned;
+    if (QueryPerformanceCounter(&counter) && QueryPerformanceFrequency(&frequency)
+            && frequency.QuadPart > 0) {
+        returned = static_cast<double>(counter.QuadPart) / static_cast<double>(frequency.QuadPart);
+    }
     if (count <= 0) {
-        return {};
+        return {std::string{}, returned};
     }
     buffer.resize(static_cast<std::size_t>(count));
-    return buffer;
+    return {std::move(buffer), returned};
 }
 
 void MinitouchClient::close() noexcept {

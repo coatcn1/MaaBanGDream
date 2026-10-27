@@ -112,7 +112,8 @@ public:
     // 最小 due_s 映射到该锚点，并保持后续动作的谱面相对间隔。
     bool start(double first_action_engine_s);
     // 低于 low_water 时至多发布一个窗口；队列充足时返回 false 但不失败。
-    bool publish();
+    bool publish(double window_end_cap_s = std::numeric_limits<double>::quiet_NaN());
+    bool supports_window_end_cap() const noexcept { return true; }
 
     // 单 owner 在下一次发布前调用；只移动未发布动作，不改锚点或已发布回执。
     std::string apply_future_phase(double delta_ms, double contact_available_s);
