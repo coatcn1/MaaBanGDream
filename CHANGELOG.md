@@ -5,7 +5,7 @@
 ## v1.4.13（2026-10-28）
 
 - Native 反馈选项默认关闭；启用后单人正式局选择方向纠偏路径，截图过慢或时钟证据失信时降级。隔离运行以持久化反馈选项开启完成《ROZEN HORIZON》Expert 28，1074 PERFECT，记录到 v2 模型及采样并完整释放；启动命令已移除两项内部试验环境变量，未保存子进程环境快照。未操作 MFA 界面或注入人工偏移，不能作为界面端到端或实时偏移恢复验收。《恋は渾沌の隷也》815 PERFECT 与该局的含粉键同时按键首拍均命中，原问题未复现、根因未定位，不能保证修复。D20 受控单局达到目标，D21 未能注入故障，证据范围保持。
-- 提交 3d3f5da 的干净检出完整验证为 3516 passed、24 skipped，Native 1932 项检查通过；完整包静态检查及两包哈希通过。构包报告高危依赖通告：System.Security.Cryptography.Pkcs 8.0.1（GHSA-846f-f764-76mx）和 Tmds.DBus.Protocol 0.21.2（GHSA-xrw6-gwf8-vvr9）；程序集均在包内，实际利用路径未证实。详见[发行说明](docs/release-notes-v1.4.13.md)。
+- 提交 3d3f5da 的干净检出完整验证为 3516 passed、24 skipped，Native 1932 项检查通过；完整包静态检查及两包哈希通过。定制 MFA #20 已 squash 合并至 3e03f9e，System.Security.Cryptography.Pkcs 8.0.2 与 Tmds.DBus.Protocol 0.21.3 单独构建验证通过，NU1903 高危警告消失，其他 NU1902 中危警告仍在。已有 8e10cdf 构包使用旧 MFA 9de751c，仍含旧 DLL；最终包须用更新后的两仓源码重新构建验证，不能据此称最终包已修补。详见[发行说明](docs/release-notes-v1.4.13.md)。
 
 ## 2026-10-27（Native raw方向首图诊断候选）
 

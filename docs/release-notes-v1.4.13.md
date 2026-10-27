@@ -24,5 +24,5 @@
 ## 🔒 已知限制
 
 - ⚠️ 自动纠偏仍为默认关闭的测试候选，尚未完成稳定性验收；不同设备、歌曲和演出模式的表现不能由单局结果外推。
-- ⚠️ 构包报告 System.Security.Cryptography.Pkcs 8.0.1（GHSA-846f-f764-76mx）和 Tmds.DBus.Protocol 0.21.2（GHSA-xrw6-gwf8-vvr9）两项高危依赖安全通告；对应程序集在包内，实际利用路径尚未证实。
+- ⚠️ 定制 MFA #20 已 squash 合并至 3e03f9e；System.Security.Cryptography.Pkcs 8.0.2 与 Tmds.DBus.Protocol 0.21.3 单独构建验证通过，NU1903 高危警告消失，其他 NU1902 中危警告仍在。已有 8e10cdf 构包使用旧 MFA 9de751c，仍含旧 DLL：Pkcs 8.0.1（GHSA-846f-f764-76mx）及 Tmds 0.21.2（GHSA-xrw6-gwf8-vvr9），实际利用路径未证实。最终包须用更新后的两仓源码重新构建验证，当前不能认定最终包已修补。
 - ⚠️ 如遇异常，请停止测试并保留现场；不要与其他自动化程序同时控制同一设备。
