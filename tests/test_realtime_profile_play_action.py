@@ -1726,6 +1726,7 @@ def _completed_play_harness(
     prepared_for_play=True,
     collection_exception=None,
     screenshot_success=True,
+    save_result_frame=True,
     expected_success=True,
     startup_timed_out=False,
     run_mode="formal",
@@ -1909,6 +1910,8 @@ def _completed_play_harness(
     writes = []
 
     def fake_imwrite(path, _image):
+        if Path(path).name.startswith('realtime-result-'):
+            assert _image is image
         writes.append(str(path))
         if not screenshot_success:
             return False
@@ -1928,7 +1931,7 @@ def _completed_play_harness(
         "duration_seconds": 600,
         "wait_for_completion": True,
         "require_completion": True,
-        "save_result_frame": True,
+        "save_result_frame": save_result_frame,
         "debug_recording": debug_recording,
         "diagnostic_trace": diagnostic_trace,
         "run_mode": run_mode,
@@ -2178,7 +2181,7 @@ def test_finalize_deferred_result_rejects_wrong_state_and_external_path(
         )
 
 
-def test_completed_without_video_writes_json_and_trace_only(tmp_path, monkeypatch):
+def test_completed_trace_only_explicit_save_keeps_existing_stable_result_image(tmp_path, monkeypatch):
     root, writes, recorder = _completed_play_harness(
         monkeypatch, tmp_path, debug_recording=False,
     )
@@ -2186,8 +2189,8 @@ def test_completed_without_video_writes_json_and_trace_only(tmp_path, monkeypatc
     reports = list((root / "screencap").glob("realtime-result-*.json"))
     screenshots = list((root / "screencap").glob("realtime-result-*.png"))
     assert len(reports) == 1
-    assert screenshots == []
-    assert writes == []
+    assert len(screenshots) == 1
+    assert writes == [str(screenshots[0])]
     payload = json.loads(reports[0].read_text(encoding="utf-8"))
     assert payload["perfect"] == 100
     assert payload["processed_frames"] == 120
@@ -2199,6 +2202,22 @@ def test_completed_without_video_writes_json_and_trace_only(tmp_path, monkeypatc
         (recorder.output_dir / "summary.json").read_text(encoding="utf-8")
     )
     assert summary["recording_mode"] == "trace-only"
+
+
+def test_trace_only_explicit_result_save_off_does_not_write_image(tmp_path,monkeypatch):
+    root,writes,recorder=_completed_play_harness(monkeypatch,tmp_path,debug_recording=False,
+        save_result_frame=False)
+    assert writes==[] and not list((root/'screencap').glob('realtime-result-*.png'))
+    assert recorder.video_enabled is False
+
+
+def test_trace_only_result_image_write_failure_warns_without_losing_completion(tmp_path,monkeypatch):
+    root,writes,recorder=_completed_play_harness(monkeypatch,tmp_path,debug_recording=False,
+        screenshot_success=False)
+    payload=json.loads(next((root/'screencap').glob('realtime-result-*.json')).read_text(encoding='utf8'))
+    assert writes and recorder.video_enabled is False
+    assert payload['completed'] and payload['valid'] and payload['result_status']=='stable'
+    assert '无法保存结算截图' in payload['result_screenshot_error']
 
 
 @pytest.mark.parametrize("run_mode", ["cooperative", "versus"])

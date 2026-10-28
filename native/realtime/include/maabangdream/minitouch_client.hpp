@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <optional>
 
 namespace mbdr {
 
@@ -13,6 +14,11 @@ struct MinitouchPublishDiagnostics {
     uint64_t send_calls = 0;
     uint64_t sent_bytes = 0;
     bool success = false;
+};
+
+struct MinitouchReceiveResult {
+    std::string text;
+    std::optional<double> returned_host_s;
 };
 
 // minitouch 脚本发布端：支持把 TouchScriptCompiler 产出的滚动脚本块依次
@@ -34,6 +40,8 @@ public:
     // 读取最多 max_bytes；timeout_ms 内无数据返回空串。用于读取 minitouch
     // 连接后的握手头（v/^/$ 行）。
     std::string receive(std::size_t max_bytes, int timeout_ms);
+    // Windows QPC秒，与固定CPython perf_counter同域；在recv后、重获GIL前采集。
+    MinitouchReceiveResult receive_with_timestamp(std::size_t max_bytes, int timeout_ms);
     void close() noexcept;
     bool connected() const noexcept {
         return socket_.load(std::memory_order_acquire) != kInvalidSocket;

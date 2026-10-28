@@ -39,12 +39,13 @@ MFA不读源码目录；改`agent/`、`resource/`或`interface.json`后须经`sc
 
 ## Subagent路由
 
-边界清楚才委派；主Agent负责需求/证据链/范围/结论；同批文件仅一人写入。
-只允许`gpt-6-luna`、`gpt-6.1-sol`，禁GPT-5.6系列。通用角色显式选允许模型，自定义角色核对实际绑定；旧型号改用允许模型的通用角色并传递同等职责/约束，不调用旧角色或回退5.6。
-- `gpt-6-luna`仅只读：`mbd_log_scanner`读MFA日志/`summary.json`/结果JSON；`mbd_trace_scanner`读checkpoints/events/lifecycle/trace有限窗口。
-- `gpt-6.1-sol`：`mbd_replay_runner`离线replay/基线比较，仅在`.local/`生成临时产物；`mbd_implementer`在已有有界证据/最小假设/验收标准后实施代码/测试。
+职责清楚再委派；同批文件仅一人写入。
+仅用`gpt-6.1-terra`、`gpt-6.1-sol`，禁GPT-5.6。通用角色显式选模型；自定义角色核对绑定，旧型号改用通用角色，职责/约束不变。
+- `gpt-6.1-terra`：日志/结果只读扫描交`mbd_log_scanner`，trace/checkpoints/events/lifecycle有限窗口交`mbd_trace_scanner`。
+- `gpt-6.1-sol`：`mbd_replay_runner`离线replay/基线比较，只写`.local/`；`mbd_implementer`依有界证据、最小假设及验收标准实现/测试。
+- 电脑/浏览器/模拟器/真机操作（含CUA、ADB、MaaFramework、模拟器API及脚本截图/输入/导航/验收）仅委派显式`gpt-6.1-terra`的Subagent。主Agent负责目标、拆分与证据复核；同设备唯一操作Agent，保留身份、租约及触点释放门禁。
 
-Realtime顺序：证据提取 → 必要独立审查 → 最小实现 → 定向测试 → 离线replay → 修改后复核 → 用户真机验收；离线不能替代真机。
+Realtime：取证→必要独立审查→最小实现→定向测试→离线replay→修改后复核→用户真机验收；离线不代替真机。
 
 ## 任务架构
 

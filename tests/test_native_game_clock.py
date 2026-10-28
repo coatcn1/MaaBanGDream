@@ -197,13 +197,13 @@ def test_capture_uncertainty_covering_zero_does_not_move_phase():
     assert calls == []
 
 
-def test_reused_or_scene_invalid_frame_revokes_pending_and_needs_three_new_frames():
+def test_scene_invalid_frame_revokes_pending_and_needs_three_new_frames():
     backend, calls = _phase_backend()
     backend._first_action_anchor_s = 0
     controller = NativeGameClockController(backend, matcher=Matcher())
     for sequence, now in enumerate((.8, .85, .9)):
         emit(controller, now, sequence)
-    emit(controller, .95, 2, reused=True)
+    controller.observe(None, {"request_s": .94, "sequence": 3, "reused": False}, .95, visible=False)
     backend._consume_phase_candidate()
     assert calls == []
     assert backend._phase_slot is None

@@ -20,9 +20,32 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from agent.device_runtime_guard import (DeviceSafetyError, RuntimeLease,
     reject_mfa_gui, validate_device, verify_endpoint_owner, tcp_listeners, write_json,
-    process_identity)
+    process_identity, native_clock_trial_enabled, require_canonical_registry, NATIVE_BORROW_RECEIPT_ENV,
+    NATIVE_CLOCK_TRIAL_ENV)
 
 MANIFEST = 'runner-manifest.json'
+
+
+def native_borrow_child_environment(runtime: Path, nonce: str, environment: dict) -> dict:
+    child = dict(environment)
+    if child.get(NATIVE_CLOCK_TRIAL_ENV) == '1':
+        child[NATIVE_BORROW_RECEIPT_ENV] = str(runtime / 'control' / ('native-borrow-' + nonce + '.json'))
+    return child
+
+
+def load_native_borrow_receipt(runtime: Path, nonce: str) -> dict:
+    expected = (runtime / 'control' / ('native-borrow-' + nonce + '.json')).resolve()
+    configured = os.environ.get(NATIVE_BORROW_RECEIPT_ENV)
+    if not configured or Path(configured).resolve() != expected or expected.stat().st_size > 16384:
+        raise DeviceSafetyError('Native child requires its explicit parent borrow receipt')
+    value = json.loads(expected.read_text(encoding='utf-8'))
+    if value.get('nonce') != nonce or value.get('runtime_root') != str(runtime.resolve()):
+        raise DeviceSafetyError('Native parent borrow receipt belongs to another runtime/session')
+    descriptor = value.get('descriptor')
+    if not isinstance(descriptor, dict):
+        raise DeviceSafetyError('Native parent borrow descriptor unavailable')
+    require_canonical_registry(Path(descriptor['registry_root']))
+    return descriptor
 
 
 def configure_shell_api(framework=None) -> None:
@@ -268,8 +291,11 @@ def agent_main(runtime: Path, nonce: str, identifier: str, flags: list[str]) -> 
     from realtime.native_prearm import discard_prearmed_backend
     backends = []
     original_init = NativeMinitouchBackend.__init__
+    borrowed_lease = load_native_borrow_receipt(runtime, nonce) if native_clock_trial_enabled() else None
 
     def tracked_init(self, *args, **kwargs):
+        if borrowed_lease is not None:
+            kwargs['borrowed_device_lease'] = borrowed_lease
         original_init(self, *args, **kwargs)
         backends.append(self)
     NativeMinitouchBackend.__init__ = tracked_init
@@ -292,8 +318,14 @@ def agent_main(runtime: Path, nonce: str, identifier: str, flags: list[str]) -> 
                     if report.get('release_confirmed') is not True:
                         backend.stop()
                         report = backend.report()
+                    settled = backend.wait_native_cleanup(4.2)
+                    report = backend.report()
+                    if not settled:
+                        errors.append('Native run claim/helper worker did not settle; parent lease retained')
                     reports.append({'release_confirmed': report.get('release_confirmed') is True,
-                                    'release_proof': report.get('release_proof')})
+                                    'release_proof': report.get('release_proof'), 'native_cleanup_settled': settled,
+                                    'native_device_claim': report.get('native_device_claim'),
+                                    'native_clock_observer': report.get('native_clock_observer')})
                 for contact in range(10):
                     if not context.tasker.controller.post_touch_up(contact).wait().succeeded:
                         errors.append('controller touch-up failed for contact ' + str(contact))
@@ -395,6 +427,7 @@ def execute(args, nonce: str, identity: dict) -> tuple[dict, bool]:
     flags = ['--native-timing-trial', '--regional-level-drift-trial', *args.agent_flag]
     environment = dict(os.environ, MAABANGDREAM_MFA_SESSION_ID=nonce,
                        MAABANGDREAM_MFA_ROOT=str(runtime), PYTHONUNBUFFERED='1', PYTHONIOENCODING='utf-8')
+    environment = native_borrow_child_environment(runtime, nonce, environment)
     # Maa 默认加载已安装的固定版本二进制；显式指定目录时，客户端与服务必须共用，
     # 不能混入其他 MaaFW 版本。
     if args.maafw_binary_root:
@@ -573,6 +606,8 @@ def main(argv=None) -> int:
         write_json(args.runtime_root / 'control/cancel.json', {'nonce': active['nonce']})
         print(json.dumps({'status': 'cancel_requested', 'nonce': active['nonce']}))
         return 0
+    if native_clock_trial_enabled() and not (args.prepare_only or args.smoke_only):
+        require_canonical_registry(args.registry_root)
     nonce = uuid4().hex
     lease = RuntimeLease(args.registry_root, args.runtime_root, args.expected_boot_id, nonce)
     lease.acquire()
@@ -596,6 +631,9 @@ def main(argv=None) -> int:
         if args.validate_only:
             print(json.dumps({'status': 'validated', 'identity': identity}))
             return 0
+        if native_clock_trial_enabled():
+            write_json(args.runtime_root / 'control' / ('native-borrow-' + nonce + '.json'),
+                {'nonce': nonce, 'runtime_root': str(args.runtime_root), 'descriptor': lease.descriptor()})
         # 确定性的预检失败尚未创建控制器，可以释放本次占用。
         reject_mfa_gui()
         safe_override(args.runtime_root,

@@ -186,21 +186,21 @@
   "RealtimeLiveFailedContinue": {
     "recognition": "TemplateMatch",
     "template": "live_failed_continue.png",
-    "roi": [630, 390, 300, 130],
+    "roi": [740, 390, 340, 130],
     "threshold": 0.9,
     "action": "DoNothing"
   },
   "RealtimeLiveFailedExit": {
     "recognition": "TemplateMatch",
     "template": "live_failed_exit.png",
-    "roi": [360, 390, 300, 130],
+    "roi": [240, 390, 280, 130],
     "threshold": 0.9,
     "action": "DoNothing"
   },
   "RealtimeQuitConfirmExit": {
     "recognition": "TemplateMatch",
     "template": "quit_confirm_exit.png",
-    "roi": [630, 470, 300, 120],
+    "roi": [600, 390, 320, 130],
     "threshold": 0.9,
     "action": "DoNothing"
   },

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from types import SimpleNamespace
 
 import cv2
@@ -13,7 +11,6 @@ from agent.realtime.live_failed_detector import (
     exit_failed_live,
 )
 from agent.realtime import live_failed_detector
-from agent.realtime.vision_io import imread_unicode
 
 
 TEMPLATE_PATH = PROJECT_ROOT / "resource" / "image" / "live_failed_continue.png"
@@ -110,31 +107,35 @@ def test_failed_exit_requires_first_stage_before_second_confirmation(monkeypatch
     assert clicks == []
 
 
-def test_realtime_exit_rois_cover_complete_buttons_and_separate_dialog_stages():
-    nodes = json.loads((PROJECT_ROOT / "resource/pipeline/common.json").read_text(encoding="utf-8"))
-    first = np.zeros((720, 1280, 3), dtype=np.uint8)
-    second = first.copy()
-    for image, name, (x, y) in (
-        (first, "RealtimeLiveFailedContinue", (653, 414)),
-        (first, "RealtimeLiveFailedExit", (386, 408)),
-        (second, "RealtimeQuitConfirmExit", (653, 491)),
-    ):
-        template = imread_unicode(PROJECT_ROOT / "resource/image" / nodes[name]["template"])
-        h, w = template.shape[:2]
-        image[y:y + h, x:x + w] = template
+def test_failed_exit_stopped_before_capture_sends_no_input(monkeypatch):
+    context, clicks, calls = _exit_context(monkeypatch, ["first"])
+    context.tasker.stopping = True
 
-    def matches(name, image):
-        node = nodes[name]
-        x, y, w, h = node["roi"]
-        template = imread_unicode(PROJECT_ROOT / "resource/image" / node["template"])
-        score = cv2.matchTemplate(image[y:y + h, x:x + w], template, cv2.TM_CCOEFF_NORMED).max()
-        return score >= node["threshold"]
+    def unexpected_capture():
+        raise AssertionError("人工停止后不得追加截图")
 
-    assert matches("RealtimeLiveFailedContinue", first)
-    assert matches("RealtimeLiveFailedExit", first)
-    assert not matches("RealtimeQuitConfirmExit", first)
-    assert matches("RealtimeQuitConfirmExit", second)
-    assert not matches("RealtimeLiveFailedContinue", second)
+    context.tasker.controller.post_screencap = unexpected_capture
+    assert exit_failed_live(context, timeout_seconds=2.0) is True
+    assert clicks == []
+    assert calls == []
+
+
+def test_failed_exit_stopped_after_exit_recognition_sends_no_input(monkeypatch):
+    context, clicks, calls = _exit_context(monkeypatch, ["first"])
+    original_recognize = context.run_recognition
+
+    def recognize_then_stop(name, stage):
+        result = original_recognize(name, stage)
+        if name == "RealtimeLiveFailedExit":
+            context.tasker.stopping = True
+        return result
+
+    context.run_recognition = recognize_then_stop
+    assert exit_failed_live(context, timeout_seconds=2.0) is True
+    assert clicks == []
+    assert [name for name, _stage in calls] == [
+        "RealtimeLiveHomeMarker", "RealtimeLiveFailedContinue", "RealtimeLiveFailedExit",
+    ]
 
 
 def test_detector_ignores_plain_playfield():

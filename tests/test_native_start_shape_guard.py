@@ -7,10 +7,11 @@ from agent.realtime.prepare_popup import CooperativePreparePopupDetector
 from agent.realtime import runtime_flags
 
 
-def gate(enabled=False):
+def gate(enabled=False, *, broad=None):
     return NativeStartPhotogate(stable_duration_ms=0, grace_ms=0,
         mode="cooperative-playfield-confirmed", playfield_detector=lambda _: True,
-        popup_detector=lambda _: False, spatial_transition_guard=enabled)
+        popup_detector=lambda _: False, spatial_transition_guard=enabled,
+        broad_shape_guard=broad)
 
 
 def freeze(result, image):
@@ -19,11 +20,33 @@ def freeze(result, image):
     assert result.frozen
 
 
+@pytest.mark.parametrize("mode", ["cooperative-playfield-confirmed", "versus-playfield-confirmed"])
+def test_default_multiplayer_gate_keeps_partial_height_first_chord(mode):
+    image = np.zeros((720, 1280, 3), np.uint8)
+    chord = image.copy()
+    chord[520:526, 170:1110] = 255
+    result = NativeStartPhotogate(
+        stable_duration_ms=0, grace_ms=0, mode=mode,
+        playfield_detector=lambda _: True,
+    )
+    freeze(result, image)
+    assert result.observe(chord, 1.02) is not None
+    assert result.triggered
+
+
+@pytest.mark.parametrize("mode", ["cooperative-playfield-confirmed", "versus-playfield-confirmed"])
+def test_default_multiplayer_broad_fix_keeps_original_popup_detector(mode):
+    result = NativeStartPhotogate(mode=mode)
+    assert not result._spatial_transition_guard
+    assert not result._popup_detector._require_solid_panel
+    assert result._popup_detector(popup_image(False))
+
+
 def test_partial_height_connected_first_notes_are_not_a_broad_transition():
     image = np.zeros((720, 1280, 3), np.uint8)
     note = image.copy()
     note[520:526, 170:1110] = 255
-    old, candidate = gate(), gate(True)
+    old, candidate = gate(broad=False), gate(True)
     freeze(old, image)
     freeze(candidate, image)
     assert old.observe(note, 1.02) is None
@@ -33,11 +56,12 @@ def test_partial_height_connected_first_notes_are_not_a_broad_transition():
 
 
 @pytest.mark.parametrize("channels", [3, 4])
-def test_full_height_change_still_blocks_and_clears_reference(channels):
+@pytest.mark.parametrize("trial", [False, True])
+def test_full_height_change_still_blocks_and_clears_reference(channels, trial):
     image = np.full((720, 1280, channels), 255, np.uint8)
     changed = image.copy()
     changed[510:536, :700, :3] = 0
-    result = gate(True)
+    result = gate(trial)
     freeze(result, image)
     assert result.observe(changed, 1.02) is None
     assert not result.frozen and result._frozen_band is None
@@ -74,7 +98,11 @@ def test_trial_report_defines_actual_guard():
     assert report["photogate_broad_change_policy"] == "column-mean-then-all-band-rows"
     assert report["photogate_broad_pixel_change_min"] == 45
     assert report["photogate_broad_column_fraction"] == .35
-    assert report["photogate_popup_min_panel_fill"] == .75
+    assert report["photogate_popup_min_panel_fill"] is None
+    built_in = NativeStartPhotogate(
+        mode="cooperative-playfield-confirmed", spatial_transition_guard=True,
+    )
+    assert built_in.report()["photogate_popup_min_panel_fill"] == .75
 
 
 def test_backend_wires_trial_only_for_native_cooperative_or_versus(monkeypatch):
@@ -104,6 +132,25 @@ def test_backend_wires_trial_only_for_native_cooperative_or_versus(monkeypatch):
         backend.__init__("unused", adb_path="unused", serial="unused", start_gate_mode="cooperative",
             device=SimpleNamespace(request_reset=lambda: None), session_factory=stop, timing_trial_enabled=False)
     assert not backend._photogate.report()["photogate_spatial_transition_guard"]
+    assert backend._photogate.report()["photogate_broad_shape_guard"]
+    assert not backend._photogate._popup_detector._require_solid_panel
+
+
+@pytest.mark.parametrize("mode", ["single-playfield-first-note", "calibration-playfield-first-note"])
+def test_single_and_calibration_keep_original_broad_policy(mode):
+    result = NativeStartPhotogate(mode=mode)
+    report = result.report()
+    assert not report["photogate_broad_shape_guard"]
+    assert report["photogate_broad_change_policy"] == "column-mean"
+    assert result._popup_detector is None
+
+
+def test_default_broad_report_does_not_claim_solid_popup_trial():
+    report = NativeStartPhotogate(mode="cooperative-playfield-confirmed").report()
+    assert report["photogate_broad_shape_guard"]
+    assert report["photogate_broad_change_policy"] == "column-mean-then-all-band-rows"
+    assert not report["photogate_spatial_transition_guard"]
+    assert report["photogate_popup_min_panel_fill"] is None
 
 
 def test_shape_mismatch_fails_closed_without_array_broadcasting():
@@ -140,11 +187,12 @@ def test_extra_alpha_channel_does_not_change_frozen_resolution():
 
 
 @pytest.mark.parametrize("columns,level,blocked", [(448,15,True),(447,15,False),(448,14,False)])
-def test_broad_thresholds_keep_exact_inclusive_boundaries(columns,level,blocked):
+@pytest.mark.parametrize("trial", [False, True])
+def test_broad_thresholds_keep_exact_inclusive_boundaries(columns,level,blocked,trial):
     image = np.zeros((720,1280,3),np.uint8)
     changed = image.copy()
     changed[510:536,:columns] = level
-    result = gate(True)
+    result = gate(trial)
     freeze(result,image)
     anchor = result.observe(changed,1.02)
     assert (anchor is None) is blocked
@@ -178,3 +226,25 @@ def test_playfield_loss_clears_spatial_reference():
     result._playfield_detector = lambda _: False
     result.observe(image,1.02)
     assert result._frozen_band is None and not result.frozen
+
+
+def test_default_broad_guard_keeps_custom_popup_and_clears_on_popup():
+    visible = False
+
+    def popup(_):
+        return visible
+
+    result = NativeStartPhotogate(
+        stable_duration_ms=0, grace_ms=0,
+        mode="cooperative-playfield-confirmed", playfield_detector=lambda _: True,
+        popup_detector=popup,
+    )
+    image = np.zeros((720, 1280, 3), np.uint8)
+    freeze(result, image)
+    visible = True
+    assert result.observe(image, 1.02) is None
+    assert result._popup_detector is popup
+    assert not result.frozen and result._frozen_band is None
+    visible = False
+    assert result.observe(image, 1.03) is None
+    assert not result.frozen

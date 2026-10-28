@@ -16,6 +16,24 @@ from agent.realtime.note_detector import NoteKind, ObservedNote
 from agent.realtime.touch_planner import ActionKind, TouchAction
 
 
+def test_control_window_small_roi_keeps_original_mapping_without_full_frame(tmp_path):
+    recorder=RealtimeDebugRecorder(tmp_path,video_enabled=False)
+    roi=np.full((42,140,3),80,np.uint8)
+    metadata=dict(sequence=17,request_s=1.,capture_upper_s=1.01,observed_s=1.02,
+        control_window_id=3,evidence_roles=['peak'])
+    recorder.record_native_feedback_roi(roi,1.02,metadata,1.1)
+    roi[:]=0
+    recorder.close()
+    events=[json.loads(s) for s in (recorder.output_dir/'events.jsonl').read_text().splitlines()]
+    assert len(events)==1
+    assert events[0]['timestamp']==1.02 and events[0]['frame_metadata']['sequence']==17
+    assert events[0]['frame_metadata']['request_s']==1.
+    assert events[0]['frame_metadata']['capture_upper_s']==1.01
+    from agent.realtime.vision_io import imread_unicode
+    image=imread_unicode(recorder.output_dir/events[0]['screenshot'])
+    assert image.shape==(42,140,3) and np.all(image==80)
+
+
 def test_native_life_drop_keeps_bounded_before_and_after_evidence(tmp_path):
     recorder = RealtimeDebugRecorder(tmp_path, video_enabled=False)
     frame = np.zeros((72, 128, 3), dtype=np.uint8)

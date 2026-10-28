@@ -16,3 +16,5 @@ __pycache__/
 /agent/realtime/native/*.lib
 /agent/realtime/native/*.pdb
 /native/realtime/build/
+/native/android_clock/build/
+/agent/runtime/android_clock/

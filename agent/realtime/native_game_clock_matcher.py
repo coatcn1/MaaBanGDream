@@ -5,6 +5,7 @@ import math
 import numpy as np
 import cv2
 TOL = 0.018
+_BOOTSTRAP_BATCH_SIZE = 2048
 
 
 def _depth_supported(values):
@@ -71,15 +72,65 @@ def evaluate(ranked):
     return dict(status='matched' if ok else 'unknown', best=best, competition=ranked[1:4], margin_pass=margin)
 
 
+def _batch_assign(hs, ns, aa, h, cc, host):
+    """仅并行独立候选，逐头贪心、同分首选及全局 note_index 排除保持不变。"""
+    size = len(aa)
+    times = np.asarray([n.time_s for n in ns], dtype=np.float64)
+    lanes = np.asarray([n.lane for n in ns])
+    indices = np.asarray([n.note_index for n in ns])
+    used = np.zeros((size, len(ns)), dtype=bool)
+    chosen = np.full((size, len(hs)), -1, dtype=np.int64)
+    active = np.abs(cc + aa / (590 - h) - host) <= .3
+    rows = np.arange(size)
+    for i, head in enumerate(hs):
+        predicted = cc + aa / (head['y'] - h)
+        error = np.abs(times[None, :] - predicted[:, None])
+        error[:, lanes != head['lane']] = np.inf
+        error[used] = np.inf
+        pick = error.argmin(axis=1)
+        valid = active & (error[rows, pick] <= TOL)
+        chosen[valid, i] = pick[valid]
+        used |= valid[:, None] & (indices[None, :] == indices[pick, None])
+    counts = (chosen >= 0).sum(axis=1)
+    lane_count = np.zeros(size, dtype=np.int64)
+    for lane in {head['lane'] for head in hs}:
+        positions = [i for i, head in enumerate(hs) if head['lane'] == lane]
+        lane_count += (chosen[:, positions] >= 0).any(axis=1)
+    return chosen, (counts >= 4) & (lane_count >= 3)
+
+
 def bootstrap(heads, judgements, expected_time_s):
     hs, ns = prepare(heads, judgements, expected_time_s)
-    host = expected_time_s
-    cs = []
-    if len(hs) < 4 or len(hs) > 16:
+    if not 4 <= len(hs) <= 16 or not ns or not _depth_supported(x['y'] for x in hs):
         return evaluate([])
-    if not _depth_supported(x['y'] for x in hs):
-        return evaluate([])
+    unique = {}
     for h in np.arange(-300, 50.01, 2.0):
+        pending = []
+        refined_seen = set()
+
+        def consume():
+            if not pending:
+                return
+            # 单批最多 2048 个候选，不广播全部候选与所有音符头的笛卡尔积。
+            values = np.asarray(pending, dtype=np.float64)
+            chosen, keep = _batch_assign(hs, ns, values[:, 0], h, values[:, 1], expected_time_s)
+            for row in np.flatnonzero(keep):
+                assignment = tuple((i, int(n)) for i, n in enumerate(chosen[row]) if n >= 0)
+                if assignment in refined_seen:
+                    continue
+                refined_seen.add(assignment)
+                # 同 h 和初始指派的拟合输入完全相同，只保留首次出现的计算及同分次序。
+                design = np.array([[1 / (hs[i]['y'] - h), 1] for i, n in assignment])
+                target = np.array([ns[n].time_s for i, n in assignment])
+                a, c = np.linalg.lstsq(design, target, rcond=None)[0]
+                refined = score(hs, ns, float(a), float(h), float(c), expected_time_s)
+                if (refined and refined['count'] >= 4 and refined['lanes'] >= 3
+                        and _depth_supported(pair['head_y'] for pair in refined['pairs'])):
+                    key = tuple((p['head_index'], p['note_index']) for p in refined['pairs'])
+                    if key not in unique or rank(refined) < rank(unique[key]):
+                        unique[key] = refined
+            pending.clear()
+
         for i, j in itertools.combinations(range(len(hs)), 2):
             den = 1 / (hs[i]['y'] - h) - 1 / (hs[j]['y'] - h)
             if abs(den) < 1e-08:
@@ -90,21 +141,10 @@ def bootstrap(heads, judgements, expected_time_s):
                     if not 150 < a < 1500:
                         continue
                     c = ni.time_s - a / (hs[i]['y'] - h)
-                    z = score(hs, ns, float(a), float(h), float(c), host)
-                    if z and z['count'] >= 4 and (z['lanes'] >= 3):
-                        ps = z['pairs']
-                        design = np.array([[1 / (hs[p['head_index']]['y'] - h), 1] for p in ps])
-                        target = np.array([p['due_s'] for p in ps])
-                        aa, cc = np.linalg.lstsq(design, target, rcond=None)[0]
-                        refined = score(hs, ns, float(aa), float(h), float(cc), host)
-                        if (refined and refined['count'] >= 4 and refined['lanes'] >= 3
-                            and _depth_supported(pair['head_y'] for pair in refined['pairs'])):
-                            cs.append(refined)
-    unique = {}
-    for z in cs:
-        key = tuple(((p['head_index'], p['note_index']) for p in z['pairs']))
-        if key not in unique or rank(z) < rank(unique[key]):
-            unique[key] = z
+                    pending.append((float(a), float(c)))
+                    if len(pending) == _BOOTSTRAP_BATCH_SIZE:
+                        consume()
+        consume()
     ranked = clusters(list(unique.values()))
     return evaluate(ranked)
 
@@ -174,10 +214,11 @@ def extract_heads(im):
     return heads
 
 
-def aggregate_bootstrap(frame_inputs, judgements):
+def aggregate_bootstrap(frame_inputs, judgements, *, seed_results=None):
     seeds = []
-    for frame in frame_inputs:
-        result = bootstrap(frame['heads'], judgements, frame['host_estimate_s'])
+    for index, frame in enumerate(frame_inputs):
+        result = (bootstrap(frame['heads'], judgements, frame['host_estimate_s'])
+                  if seed_results is None else seed_results[index])
         if result['status'] == 'matched':
             seeds.append((frame, result['best']))
     if len(seeds) < 3:
@@ -237,7 +278,7 @@ class NativeGameClockMatcher:
         intercept = float(np.median([pair['due_s'] - a / (pair['head_y'] - h) for pair in pairs]))
         return intercept + a / (590 - h)
 
-    def observe(self, image, request_s, observed_s, anchor_s):
+    def observe(self, image, request_s, observed_s, anchor_s, clock_view=None):
         if self.chart is None:
             env = self.environment
             if (env is None or tuple(getattr(env, 'resolution', ())) != (1280, 720)
@@ -252,7 +293,14 @@ class NativeGameClockMatcher:
             self.chart = ChartTimeline.from_json(self.chart_path)
         if not isinstance(image, np.ndarray) or image.shape != (720, 1280, 3) or anchor_s is None or (not 0 <= observed_s - request_s <= 0.08):
             return {'status': 'unknown', 'reason': 'unsupported-frame'}
-        host = (request_s + observed_s) / 2 - anchor_s + self.chart.start_time_s
+        capture_lower_s, capture_upper_s = request_s, observed_s
+        if clock_view is not None:
+            bounds = clock_view.host_to_execution(request_s, observed_s)
+            if bounds is None:
+                return {'status': 'unknown', 'reason': 'clock-frame-uncovered'}
+            capture_lower_s, capture_upper_s = bounds
+        # 候选搜索先验和最终 lag/bounds 共用冻结 E 域，不能只在输出扣一个 scalar。
+        host = (capture_lower_s + capture_upper_s) / 2 - anchor_s + self.chart.start_time_s
         heads = extract_heads(image)
         if self.projection is None:
             if observed_s - anchor_s > 8:
@@ -260,18 +308,22 @@ class NativeGameClockMatcher:
             result = bootstrap(heads, self.chart.judgements, host)
             if result['status'] != 'matched':
                 return {'status': 'unknown', 'reason': 'opening-ambiguous-or-insufficient'}
-            self.opening.append({'heads': heads, 'host_estimate_s': host, 'request_s': request_s, 'observed_s': observed_s})
+            # 种子与自产帧一起受六帧上限和 reset 管理，不另建全谱面内容缓存。
+            self.opening.append({'heads': heads, 'host_estimate_s': host, 'request_s': request_s,
+                                 'observed_s': observed_s, 'bootstrap_seed': result,
+                                 'capture_lower_s': capture_lower_s, 'capture_upper_s': capture_upper_s})
             if len(self.opening) < 3:
                 return {'status': 'unknown', 'reason': 'opening-needs-multiple-frames'}
-            joint = aggregate_bootstrap(list(self.opening), self.chart.judgements)
+            joint = aggregate_bootstrap(list(self.opening), self.chart.judgements,
+                                        seed_results=[frame['bootstrap_seed'] for frame in self.opening])
             if joint['status'] != 'matched':
                 return {'status': 'unknown', 'reason': 'opening-inconsistent'}
             bounds, lags = ([], [])
             for frame, check in zip(self.opening, joint['checks']):
                 game = check['best']['game_time_s']
                 game_lo, game_hi = check['best']['game_time_bounds_s']
-                bounds.append((frame['request_s'] - anchor_s + self.chart.start_time_s - game_hi,
-                               frame['observed_s'] - anchor_s + self.chart.start_time_s - game_lo))
+                bounds.append((frame['capture_lower_s'] - anchor_s + self.chart.start_time_s - game_hi,
+                               frame['capture_upper_s'] - anchor_s + self.chart.start_time_s - game_lo))
                 lags.append(frame['host_estimate_s'] - game)
             if max(lags) - min(lags) > 0.02:
                 return {'status': 'unknown', 'reason': 'opening-capture-inconsistent'}
@@ -285,8 +337,8 @@ class NativeGameClockMatcher:
             return {'status': 'unknown', 'reason': 'ambiguous-or-insufficient-heads'}
         game = result['best']['game_time_s']
         game_lo, game_hi = result['best']['game_time_bounds_s']
-        lo = request_s - anchor_s + self.chart.start_time_s - game_hi - self.baseline_interval[1]
-        hi = observed_s - anchor_s + self.chart.start_time_s - game_lo - self.baseline_interval[0]
+        lo = capture_lower_s - anchor_s + self.chart.start_time_s - game_hi - self.baseline_interval[1]
+        hi = capture_upper_s - anchor_s + self.chart.start_time_s - game_lo - self.baseline_interval[0]
         relative = host - game - self.baseline_lag
         alternatives = [host - self._game_for_pairs(result['best']['pairs'], projection) - baseline for projection, baseline in self.baseline_models]
         if alternatives:
@@ -295,8 +347,31 @@ class NativeGameClockMatcher:
         return {'status': 'matched', 'relative_lag_ms': (host - game - self.baseline_lag) * 1000, 'capture_bounds_ms': (lo * 1000, hi * 1000), 'match': result['best']}
 
     def report(self):
+        # 开场搜索最多351个h候选；仅复制已冻结结果，不重算几何或参与纠偏。
+        capacity, models, count, warning = 351, [], 0, None
+        try:
+            count = len(self.baseline_models)
+            for projection, baseline in itertools.islice(self.baseline_models, capacity):
+                a, h, lag = float(projection['a']), float(projection['h']), float(baseline)
+                if not all(math.isfinite(value) for value in (a, h, lag)):
+                    raise ValueError('non-finite baseline model')
+                models.append(dict(projection=dict(a=a, h=h), baseline_lag_s=lag))
+            family_count = len(self.projection.get('family', ())) if self.projection is not None else 0
+            complete = count == len(models) == family_count
+            if not complete:
+                warning = 'incomplete-family-baselines'
+        except Exception as exc:
+            # 附加报告损坏只撤销该诊断的完整性，不改变matcher或演奏状态。
+            models, complete, warning = [], False, type(exc).__name__
         return {'calibrated': self.projection is not None,
                 'bounds_sources': ['capture-window', 'accepted-projection-family'],
+                'baseline_models_schema_version': 1,
+                'baseline_models': models,
+                'baseline_models_capacity': capacity,
+                'baseline_models_dropped': max(0, count - len(models)),
+                'baseline_models_complete': complete,
+                'baseline_models_warning': warning,
+                'baseline_interval_scope': 'nominal-projection-opening-capture-envelope',
                 'experimental_thresholds': {'rms_ms': 12, 'inlier_ms': 18,
                                             'minimum_depth_groups': 3, 'minimum_y_span_px': 100},
                 **self.calibration_report}

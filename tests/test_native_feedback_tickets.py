@@ -33,7 +33,7 @@ def test_single_tap_prefilter_rejects_interference(interference):
     assert not SingleTapEligibility([target, *extra]).eligible(target)
 
 
-def test_executed_tickets_are_sparse_immutable_and_overwritten_by_any_judgement():
+def test_executed_tickets_cover_each_eligible_commit_and_are_immutable():
     stream = FeedbackTicketStream("run")
     for index in range(9):
         receipt = dict(action_token=100 + index, planned_engine_s=1 + index,
@@ -41,7 +41,7 @@ def test_executed_tickets_are_sparse_immutable_and_overwritten_by_any_judgement(
         stream.publish_receipts([receipt])
         stream.observe_commit([receipt], 1 + index, index, .5)
         state = stream.snapshot()
-        assert (state.ticket is not None) is (index in {0, 8})
+        assert state.ticket is not None
     with pytest.raises(FrozenInstanceError):
         state.ticket.action_token = 3
     other = dict(action_token=999, planned_engine_s=10.1, action_kind="down", command="d")
@@ -383,5 +383,5 @@ def test_real_compiler_receipt_binds_ticket_and_observer_faults_preserve_input(t
         assert fault.replace("_", "-") in backend._feedback_ticket_disabled_reason
         assert backend.feedback_observation_snapshot() is None
     else:
-        assert backend._feedback_tickets.summary["ticket-created"] == 1
-        assert backend._feedback_tickets.summary["stride-skipped"] == 1
+        assert backend._feedback_tickets.summary["ticket-created"] == 2
+        assert backend._feedback_tickets.summary["stride-skipped"] == 0

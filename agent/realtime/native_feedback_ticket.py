@@ -1,9 +1,11 @@
-"""实际执行单键的只读观测票据；owner 不进行截图或等待。"""
+"""实际执行普通 TAP 组的只读观测票据；owner 不进行截图或等待。"""
 
 from bisect import bisect_left, bisect_right
 from collections import Counter, deque
 from dataclasses import asdict, dataclass
 import math
+
+from .native_observation_clock import JLOG_DEVICE_UNCERTAINTY_S
 
 
 JUDGEMENT_KINDS = frozenset({"tap", "flick", "down", "up"})
@@ -14,15 +16,17 @@ def action_key(action):
 
 
 class SingleTapEligibility:
-    def __init__(self, actions):
+    def __init__(self, actions, *, allow_groups=False):
         ordered = sorted(actions, key=lambda row: float(row["due_s"]))
         counts = Counter(float(row["due_s"]) for row in ordered if row["kind"] in JUDGEMENT_KINDS)
+        tap_counts = Counter(float(row["due_s"]) for row in ordered if row["kind"] == "tap")
         interference = sorted(float(row["due_s"]) for row in ordered if row["kind"] in {"flick", "up"})
         active = set()
         self._eligible = set()
         for row in ordered:
             due, kind = float(row["due_s"]), row["kind"]
-            if kind == "tap" and not active and counts[due] == 1:
+            homogeneous = counts[due] == tap_counts[due] if allow_groups else counts[due] == 1
+            if kind == "tap" and not active and homogeneous:
                 lo, hi = bisect_left(interference, due - .2), bisect_right(interference, due + .2)
                 if lo == hi:
                     self._eligible.add(action_key(row))
@@ -47,6 +51,9 @@ class FeedbackObservationTicket:
     actual_s: float
     clock_uncertainty_ms: float
     judgement_sequence: int
+    action_tokens: tuple[int, ...] = ()
+    device_actual_s: float | None = None
+    device_uncertainty_s: float = JLOG_DEVICE_UNCERTAINTY_S
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,10 +63,11 @@ class FeedbackObservationState:
     last_actual_s: float | None = None
     last_uncertainty_ms: float | None = None
     next_judgement_lower_s: float | None = None
+    judgement_history: tuple = ()
 
 
 class FeedbackTicketStream:
-    STRIDE = 8
+    STRIDE = 1
     CAPACITY = 256
 
     def __init__(self, run_id):
@@ -67,6 +75,7 @@ class FeedbackTicketStream:
         self._snapshot = FeedbackObservationState()
         self._scheduled = {}
         self._residuals = deque(maxlen=64)
+        self._judgement_history = deque(maxlen=64)
         self._eligible_count = 0
         self._published_until_s = None
         self._final_published = False
@@ -92,7 +101,7 @@ class FeedbackTicketStream:
         next_lower = min(min(self._scheduled.values(), default=float("inf")),
                          horizon if horizon is not None else float("inf")) - margin
         self._snapshot = FeedbackObservationState(ticket, sequence, actual, uncertainty,
-                                                  next_lower if math.isfinite(next_lower) else None)
+            next_lower if math.isfinite(next_lower) else None, tuple(self._judgement_history))
 
     def publish_receipts(self, receipts, *, published_until_s=None, final_chunk=False):
         if published_until_s is not None:
@@ -104,7 +113,7 @@ class FeedbackTicketStream:
         state = self._snapshot
         self._publish(state.ticket, state.judgement_sequence, state.last_actual_s, state.last_uncertainty_ms)
 
-    def observe_commit(self, receipts, actual_s, chunk_sequence, uncertainty):
+    def observe_commit(self, receipts, actual_s, chunk_sequence, uncertainty, *, device_actual_s=None):
         judgements = [row for row in receipts if row.get("action_kind") in JUDGEMENT_KINDS]
         if not judgements:
             return
@@ -113,9 +122,12 @@ class FeedbackTicketStream:
             self._residuals.append(abs(actual_s - float(row["planned_engine_s"])))
         state = self._snapshot
         sequence = state.judgement_sequence + len(judgements)
+        self._judgement_history.append((state.judgement_sequence + 1, sequence, actual_s, uncertainty))
         ticket = None
         reason = "non-single-tap"
-        if len(judgements) == len(receipts) == 1 and judgements[0].get("feedback_single_tap"):
+        if (len(judgements) == len(receipts) and all(row.get("feedback_single_tap")
+                and row.get("action_kind") == "tap" and row.get("command") == "d" for row in judgements)
+                and len({float(row["planned_engine_s"]) for row in judgements}) == 1):
             row = judgements[0]
             if uncertainty is None or not math.isfinite(uncertainty) or not 0 <= uncertainty <= 1:
                 reason = "untrusted-clock"
@@ -123,7 +135,8 @@ class FeedbackTicketStream:
                 self._eligible_count += 1
                 if (self._eligible_count - 1) % self.STRIDE == 0:
                     ticket = FeedbackObservationTicket(self.run_id, int(row["action_token"]), chunk_sequence,
-                        float(row["planned_engine_s"]), actual_s, uncertainty, sequence)
+                        float(row["planned_engine_s"]), actual_s, uncertainty, sequence,
+                        tuple(int(item["action_token"]) for item in judgements), device_actual_s)
                     reason = "ticket-created"
                 else:
                     reason = "stride-skipped"

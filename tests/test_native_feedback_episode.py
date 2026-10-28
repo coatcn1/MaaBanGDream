@@ -88,12 +88,12 @@ def test_request_exception_consumes_votes_before_call(monkeypatch):
     assert len(calls) == 1
 
 
-def test_first_unsubmitted_episode_can_restart_three_votes_after_reused_frame():
+def test_first_unsubmitted_episode_keeps_valid_vote_through_short_reused_frame():
     sampler, backend, _ = sampler_fixture()
     tap(sampler, 0)
     assert not sampler.fresh(dict(sequence=100, request_s=.04, reused=True), .05)
-    assert not sampler.votes
-    for now in (.1, .2, .3):
+    assert len(sampler.votes) == 1
+    for now in (.1, .2):
         tap(sampler, now)
     assert sampler.summary["requests"] == 1
 
@@ -166,7 +166,7 @@ def test_target_local_drop_keeps_waiting_slow_request_and_native_applies_once(re
     assert session.future_phase_offset_ms == -15
 
 
-@pytest.mark.parametrize("invalid", ["reverse", "mixed", "scene", "reused", "gap", "stop"])
+@pytest.mark.parametrize("invalid", ["reverse", "mixed", "scene", "reused-gap", "gap", "stop"])
 def test_global_evidence_can_still_revoke_waiting_request_after_local_drop(invalid):
     sampler, backend, calls = sampler_fixture()
     for now in (0, .1, .2):
@@ -186,8 +186,8 @@ def test_global_evidence_can_still_revoke_waiting_request_after_local_drop(inval
         frame(sampler, TimingFeedback.FAST if invalid == "reverse" else "mixed", .5, eligible=False)
     elif invalid == "scene":
         sampler.observe_scene(.5, visible=False)
-    elif invalid == "reused":
-        assert not sampler.fresh(dict(sequence=101, request_s=.49, reused=True), .5)
+    elif invalid == "reused-gap":
+        assert not sampler.fresh(dict(sequence=101, request_s=.99, reused=True), 1.)
     elif invalid == "gap":
         frame(sampler, TimingFeedback.SLOW, 1., eligible=False)
     else:

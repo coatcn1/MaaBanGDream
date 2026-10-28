@@ -23,6 +23,30 @@ def source_tree(tmp_path):
     return source
 
 
+def test_native_borrow_receipt_is_explicit_canonical_and_only_added_to_child_env(tmp_path, monkeypatch):
+    from agent.device_runtime_guard import (RuntimeLease, shared_device_registry_root,
+        NATIVE_BORROW_RECEIPT_ENV, NATIVE_CLOCK_TRIAL_ENV)
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path / 'appdata'))
+    runtime = tmp_path / 'native.mbdruntime'
+    parent = RuntimeLease(shared_device_registry_root(), runtime,
+        '00000000-0000-4000-8000-000000000001', 'parent-nonce')
+    parent.acquire()
+    path = runtime / 'control/native-borrow-parent-nonce.json'
+    write_json(path, {'nonce': 'parent-nonce', 'runtime_root': str(runtime.resolve()), 'descriptor': parent.descriptor()})
+    original = {NATIVE_CLOCK_TRIAL_ENV: '1'}
+    child = runner.native_borrow_child_environment(runtime, 'parent-nonce', original)
+    assert NATIVE_BORROW_RECEIPT_ENV not in original
+    assert child[NATIVE_BORROW_RECEIPT_ENV] == str(path)
+    monkeypatch.setenv(NATIVE_BORROW_RECEIPT_ENV, child[NATIVE_BORROW_RECEIPT_ENV])
+    assert runner.load_native_borrow_receipt(runtime, 'parent-nonce') == parent.descriptor()
+    with pytest.raises(DeviceSafetyError):
+        runner.load_native_borrow_receipt(runtime, 'foreign-session')
+    monkeypatch.delenv(NATIVE_BORROW_RECEIPT_ENV)
+    with pytest.raises(DeviceSafetyError, match='explicit parent'):
+        runner.load_native_borrow_receipt(runtime, 'parent-nonce')
+    parent.release()
+
+
 def test_snapshot_is_independent_and_reprepare_preserves_profile_data(tmp_path):
     source = source_tree(tmp_path)
     runtime = tmp_path / 'guest.mbdruntime'

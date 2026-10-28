@@ -57,6 +57,8 @@ def _feedback_image(direction):
 
 def _phase_backend():
     backend = object.__new__(NativeMinitouchBackend)
+    # 此旧孤立相位 seam 没有真实 jlog，不能作为宿主与 Native 时钟关系的验收证据。
+    backend._clock_relation_required = False
     backend.life_feedback_enabled = True
     backend._phase_lock = threading.Lock()
     backend._phase_closed = False
@@ -269,6 +271,7 @@ def _virtual_feedback_engine(monkeypatch, *, terminal=None, enabled=True, early_
         def prefetch_fresh(self, target):
             if capture_fault == "prefetch":
                 raise RuntimeError("prefetch unavailable")
+            return capture_fault != "declined"
     class Life:
         def detect(self, _image):
             data["life"].append(clock[0])

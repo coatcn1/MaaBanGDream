@@ -339,6 +339,25 @@ TouchTimingTrialReport TouchScriptCompiler::timing_trial_report() const noexcept
     return report;
 }
 
+double TouchScriptCompiler::pending_up_boundary_s() const noexcept {
+    if (pending_events_.empty()) return std::numeric_limits<double>::quiet_NaN();
+    auto active = active_contacts_;
+    double boundary = 0.0;
+    for (const auto& event : pending_events_) {
+        if (event.kind != LowKind::Up || event.contact < 0
+            || static_cast<std::size_t>(event.contact) >= active.size()) {
+            return std::numeric_limits<double>::quiet_NaN();
+        }
+        active[static_cast<std::size_t>(event.contact)] = false;
+        boundary = std::max(boundary, event.due);
+    }
+    if (std::any_of(active.begin(), active.end(), [](bool value) { return value; })) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    // double往返不得把边界舍入到原UP的整数纳秒之前；只上移一个浮点间隔。
+    return std::nextafter(boundary, std::numeric_limits<double>::infinity());
+}
+
 std::vector<std::string> TouchScriptCompiler::compile(
     std::vector<ScheduledAction> actions,
     const EngineConfig& config,
