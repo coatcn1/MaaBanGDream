@@ -1,4 +1,4 @@
-# MaaBanGDream v1.4.13
+# MaaBanGDream v1.5.0
 
 发布日期：2026-10-28
 
