@@ -326,16 +326,19 @@ def test_wrong_signature_components_are_all_rejected():
 
 
 @pytest.mark.parametrize("original_guard", [False, True])
+@pytest.mark.parametrize("original_broad_guard", [None, False, True])
 def test_real_frame_resolution_disables_life_and_restores_original_shape_policy(
-    original_guard,
+    original_guard, original_broad_guard,
 ):
     gate = NativeStartPhotogate(
         mode="cooperative-playfield-confirmed",
         spatial_transition_guard=original_guard,
+        broad_shape_guard=original_broad_guard,
         playfield_detector=lambda _: True,
         popup_detector=lambda _: False,
     )
     original_popup = gate._popup_detector
+    expected_broad_guard = gate._broad_shape_guard
     gate.configure_early_start(CALIBRATED_ENVIRONMENT, actions())
     gate._early_gate.detect = lambda _: None
     reading = SimpleNamespace(visible=True, value=1000)
@@ -345,6 +348,7 @@ def test_real_frame_resolution_disables_life_and_restores_original_shape_policy(
     assert gate.observe(np.zeros((1080, 1280, 3), np.uint8), 10.02) is None
     assert not gate._life_fallback_enabled and not gate.triggered
     assert gate._spatial_transition_guard is original_guard
+    assert gate._broad_shape_guard is expected_broad_guard
     assert gate._popup_detector is original_popup
     assert gate._early_gate.rejected_reason == "frame-resolution-mismatch"
 

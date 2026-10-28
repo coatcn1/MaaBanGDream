@@ -366,8 +366,8 @@ class _DriftRateEstimator:
 class NativeStartPhotogate:
     """用判定线附近的整行颜色变化定位第一颗音符。"""
 
-    # 协力弹窗及其背景变暗会让判定带大面积同向变化；首颗音符只影响少数
-    # 相邻轨道列。逐列变化超过该分量的列数占比过大时视为弹窗转场。
+    # 弹窗转场可改变整个判定带；同步双键的连接线也可能跨越多数列，
+    # 因此协力/竞演须再核每列全部行，不能只凭横向宽度清除首音基线。
     _BROAD_COLUMN_MIN = 45.0
     _BROAD_COLUMN_FRACTION = 0.35
 
@@ -386,6 +386,7 @@ class NativeStartPhotogate:
         popup_detector: Callable[[Any], bool] | None = None,
         suppress_prepare_popup: bool | None = None,
         spatial_transition_guard: bool = False,
+        broad_shape_guard: bool | None = None,
     ) -> None:
         if not 0 <= from_row <= to_row < reference_height:
             raise ValueError("photogate 行范围无效")
@@ -410,6 +411,14 @@ class NativeStartPhotogate:
             self._playfield_detector = playfield_detector
         self.mode = str(mode)
         self._spatial_transition_guard = bool(spatial_transition_guard)
+        # 广域形状保护独立于旧试验的弹窗实心要求；只修默认协力连线误拦，
+        # 不改变既有弹窗检测、单人策略或显式旧试验的组合行为。
+        self._broad_shape_guard = (
+            self._spatial_transition_guard
+            or self.mode.startswith(("cooperative", "versus"))
+            if broad_shape_guard is None
+            else bool(broad_shape_guard)
+        )
         # 协力/竞演进入演奏场后可能出现“其他成员正在准备中”弹窗；其出现/消失
         # 会让整行颜色发生大变化，被首拍门控误判成第一颗音符。默认仅对
         # 协力/竞演策略启用弹窗门控，单人/校准/挑战保持原有行为。
@@ -476,11 +485,13 @@ class NativeStartPhotogate:
         if not self._early_gate.eligible:
             return
         self._early_original_guard = self._spatial_transition_guard
+        self._early_original_broad_guard = self._broad_shape_guard
         self._early_original_popup_detector = self._popup_detector
         self._life_fallback_enabled = True
         self._life_detector = LifeDetector()
         # 独立新候选复用形状保护，不改变旧环境开关的含义。
         self._spatial_transition_guard = True
+        self._broad_shape_guard = True
         if isinstance(self._popup_detector, CooperativePreparePopupDetector):
             self._popup_detector = CooperativePreparePopupDetector(
                 require_solid_panel=True
@@ -646,13 +657,16 @@ class NativeStartPhotogate:
             "photogate_last_change_score": self.last_change_score,
             "photogate_prepare_popup_enabled": self._popup_gate_enabled,
             "photogate_spatial_transition_guard": self._spatial_transition_guard,
+            "photogate_broad_shape_guard": self._broad_shape_guard,
             "photogate_broad_change_policy": (
-                "column-mean-then-all-band-rows" if self._spatial_transition_guard else "column-mean"
+                "column-mean-then-all-band-rows" if self._broad_shape_guard else "column-mean"
             ),
             "photogate_broad_pixel_change_min": self._BROAD_COLUMN_MIN,
             "photogate_broad_column_fraction": self._BROAD_COLUMN_FRACTION,
             "photogate_popup_min_panel_fill": (
-                CooperativePreparePopupDetector.MIN_PANEL_FILL if self._spatial_transition_guard else None
+                CooperativePreparePopupDetector.MIN_PANEL_FILL
+                if isinstance(self._popup_detector, CooperativePreparePopupDetector)
+                and self._popup_detector._require_solid_panel else None
             ),
             "photogate_early_start": self._early_gate.report() if self._early_gate is not None else None,
             "photogate_life_fallback_enabled": self._life_fallback_enabled,
@@ -743,6 +757,7 @@ class NativeStartPhotogate:
             self._life_detector = None
             self._life_peak = None
             self._spatial_transition_guard = self._early_original_guard
+            self._broad_shape_guard = self._early_original_broad_guard
             self._popup_detector = self._early_original_popup_detector
             self._reset_band_state()
             return None
@@ -772,7 +787,7 @@ class NativeStartPhotogate:
             self._last_color = current
             self._previous_frame_s = frame_s
             return None
-        if self._spatial_transition_guard and self.frozen:
+        if self._broad_shape_guard and self.frozen:
             band = image[from_row : to_row + 1, :, :3]
             if (
                 self._frozen_frame_shape != image.shape[:2]
@@ -816,7 +831,7 @@ class NativeStartPhotogate:
                     self._frozen_columns = image[
                         from_row : to_row + 1, :, :3
                     ].astype("float64").mean(axis=0)
-                    if self._spatial_transition_guard:
+                    if self._broad_shape_guard:
                         self._frozen_band = image[from_row : to_row + 1, :, :3].astype("uint8", copy=True)
                         self._frozen_frame_shape = image.shape[:2]
                     self._record_event("stable", frame_s, change_score)
@@ -888,13 +903,12 @@ class NativeStartPhotogate:
             and self._popup_gate_enabled
             and self._frozen_columns is not None
         ):
-            # 弹窗缩放出现/消失或背景变暗时，判定带会发生大面积变化；首颗
-            # 音符只改变少数相邻轨道列。逐列比较冻结基线，变化列占比过高
-            # 就判定为弹窗转场，重置基线后继续等待真正的首音。
+            # 先按原列均值筛出广域变化，再区分全高度转场和局部高度连接线。
+            # 弹窗本身仍由前面的原检测器处理，不与广域形状策略耦合。
             current_columns = image[
                 from_row : to_row + 1, :, :3
             ].astype("float64").mean(axis=0)
-            if self._spatial_transition_guard and current_columns.shape != self._frozen_columns.shape:
+            if self._broad_shape_guard and current_columns.shape != self._frozen_columns.shape:
                 # 冻结参考不能跨分辨率复用；尺寸不一致时保守重新建立基线。
                 self._record_event("broad-shape-mismatch", frame_s, change_score)
                 self._reset_band_state()
@@ -906,7 +920,7 @@ class NativeStartPhotogate:
                 (column_change >= self._BROAD_COLUMN_MIN).sum()
             )
             broad = broad_columns >= self._BROAD_COLUMN_FRACTION * image.shape[1]
-            if broad and self._spatial_transition_guard:
+            if broad and self._broad_shape_guard:
                 band = image[from_row : to_row + 1, :, :3]
                 if self._frozen_band is None or band.shape != self._frozen_band.shape:
                     self._record_event("broad-shape-mismatch", frame_s, change_score)
