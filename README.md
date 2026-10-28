@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.4.13-ff6f9f" alt="Version"></a>
+  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.5.0-ff6f9f" alt="Version"></a>
   <img src="https://img.shields.io/badge/MaaFramework-5.10.2-4c8bf5" alt="MaaFramework">
   <img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?logo=windows11&logoColor=white" alt="Windows">
@@ -22,7 +22,7 @@
 
 ---
 
-v1.4.13 的 Native 反馈选项默认关闭；启用后，单人正式局选择方向纠偏路径，截图过慢或时钟证据失信时降级。修复反馈异常停用后画面可能不再刷新、生命与演出结束检测持续读取旧画面的问题；故障注入离线回归通过，尚未在设备上注入该故障。隔离单人受控偏移与反转测试已确认连续多步微调实际执行，GREAT 为 9.9628%，末段采样未见持续偏向；该局仍有 1 MISS，执行时序指标未达门槛，不能称为稳定验收。隔离 MFA 界面的开关保存及重启读回、配置到实际纠偏后端的离线对接均已验证，尚未从 MFA 界面实际开演。两首含粉键的同时按键首拍在单人测试中均命中；本版另修正协力/竞演首拍被广域转场保护误挡的问题，保留等待弹窗识别。真实 A to Z 视频的多组采样对照未再出现该误挡，也未提前于谱面首组触发，但稀疏采样仍可能错过首拍；用户随后完成这两首 Native 协力实测，首组均命中；曲尾 2 MISS / 1 MISS 与已开启的漏键抖动主动删键对应。该结果仅覆盖这两局，不代表普遍稳定。当前代码完整自动化验证为 3579 passed、31 skipped；Native 1932 项检查此前已在干净工作树通过。两项高危依赖已更新，构建无 NU1903 高危警告，仍有 NU1902 中危警告。验证范围和风险详见[发行说明](docs/release-notes-v1.4.13.md)。
+v1.5.0 的 Native 反馈选项默认关闭；启用后，单人正式局选择方向纠偏路径，截图过慢或时钟证据失信时降级。修复反馈异常停用后画面可能不再刷新、生命与演出结束检测持续读取旧画面的问题；故障注入离线回归通过，尚未在设备上注入该故障。隔离单人受控偏移与反转测试已确认连续多步微调实际执行，GREAT 为 9.9628%，末段采样未见持续偏向；该局仍有 1 MISS，执行时序指标未达门槛，不能称为稳定验收。隔离 MFA 界面的开关保存及重启读回、配置到实际纠偏后端的离线对接均已验证，尚未从 MFA 界面实际开演。两首含粉键的同时按键首拍在单人测试中均命中；本版另修正协力/竞演首拍被广域转场保护误挡的问题，保留等待弹窗识别。真实 A to Z 视频的多组采样对照未再出现该误挡，也未提前于谱面首组触发，但稀疏采样仍可能错过首拍；用户随后完成这两首 Native 协力实测，首组均命中；曲尾 2 MISS / 1 MISS 与已开启的漏键抖动主动删键对应。该结果仅覆盖这两局，不代表普遍稳定。当前代码完整自动化验证为 3579 passed、31 skipped；Native 1932 项检查此前已在干净工作树通过。两项高危依赖已更新，构建无 NU1903 高危警告，仍有 NU1902 中危警告。验证范围和风险详见[发行说明](docs/release-notes-v1.5.0.md)。
 
 体力补充修复候选（2026-10-24）：定制 MFA 自行为每次客户端进程生成独立会话身份，并在启动 Agent 时显式传递；直接运行 EXE 也能提供体力账本所需的可信身份。同一客户端的多实例、Agent 和重连共享本进程身份，新客户端不复用历史环境值。消费未决保护、补充计划及库存判断保持，尚待真实环境验收。
 
@@ -256,7 +256,7 @@ Special 只有确认不可选时才允许显式回退 Expert；实时校准要�
 .\scripts\setup.ps1
 & '..\.tools\Miniconda3\envs\maabangdream\python.exe' `
   -m pip install -r .\requirements-release.txt
-.\scripts\build-windows-release.ps1 -Version 1.4.13
+.\scripts\build-windows-release.ps1 -Version 1.5.0
 ```
 
 发布包须保持定制 MFA 与 Core 一致、依赖完整、路径可迁移，并排除本机用户配置。
