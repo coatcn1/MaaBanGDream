@@ -373,6 +373,35 @@ class RealtimeEngine:
                     warning(f"NativeCaptureReady fallback=base error={type(exc).__name__}")
                 return False
 
+        capture_prefetch_failed_target = None
+        capture_prefetch_warned = False
+
+        def prefetch_base_capture(target_s):
+            nonlocal capture_prefetch_failed_target, capture_prefetch_warned
+            if stopping() or capture_prefetch_failed_target == target_s:
+                return False
+            prefetch = getattr(capture, "prefetch_fresh", None)
+            if not callable(prefetch):
+                return False
+            if native_feedback is not None and not native_feedback.disabled_reason:
+                result = feedback_call(lambda: prefetch(target_s), False)
+                if native_feedback.disabled_reason:
+                    capture_prefetch_failed_target = target_s
+                return result
+            # 反馈降级后，基础生命/终点监控仍使用同一非阻塞截图流；不能让
+            # 已禁用的反馈回调跳过预取，导致lazy缓存永远重复最后一张图。
+            try:
+                return prefetch(target_s)
+            except Exception as exc:
+                if isinstance(exc, InterruptedError) and stopping():
+                    raise
+                # 同一基础节拍至多失败一次，下个节拍才重试，避免热循环刷屏。
+                capture_prefetch_failed_target = target_s
+                if not capture_prefetch_warned and not stopping():
+                    capture_prefetch_warned = True
+                    warning(f"NativeCapturePrefetch fallback=base error={type(exc).__name__}")
+                return False
+
         native_monitor_due = started_at
         native_feedback_scene_valid = False
         frame_metadata: dict[str, object] = {}
@@ -700,9 +729,10 @@ class RealtimeEngine:
                 if now < capture_deadline:
                     if (native_feedback is not None and native_started and not capture_peek_failed
                             and ticket_due is None and next_frame - now <= .060):
-                        prefetch = getattr(capture, "prefetch_fresh", None)
-                        if callable(prefetch):
-                            feedback_call(lambda: prefetch(next_frame))
+                        prefetch_base_capture(next_frame)
+                        if stopping():
+                            was_stopped = True
+                            break
                     # Pace BEFORE capturing. Capturing first and then
                     # discarding the frame whenever the loop is early wastes
                     # a full screenshot; once per-frame work crosses the
@@ -719,9 +749,7 @@ class RealtimeEngine:
                     continue
                 if capture_peek_failed and native_feedback is not None and native_started:
                     # 未知done只能在基础周期走旧取图/异常策略，不再提前get或消耗目标额度。
-                    prefetch = getattr(capture, "prefetch_fresh", None)
-                    if callable(prefetch):
-                        feedback_call(lambda: prefetch(next_frame))
+                    prefetch_base_capture(next_frame)
                     if stopping():
                         was_stopped = True
                         break
