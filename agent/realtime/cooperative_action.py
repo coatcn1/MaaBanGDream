@@ -63,7 +63,7 @@ from .profile_store import (
 from .rehearsal_action import frame_resolution
 from .native_prearm import discard_prearmed_backend
 from .stamina_task import (prepare_stamina_round, allocate_flow_home, mark_uncertain, mark_stamina_settled, StaminaTaskError)
-from .cooperative_network import GameNetworkGate
+from .cooperative_network import GameNetworkGate, UidBlackholeGate
 from .result_navigation import (
     RESULT_ANIMATION_SKIP_POINT,
     accelerated_back,
@@ -631,7 +631,7 @@ class CooperativeLiveFlow:
         “连接失败。”弹窗有界点“重试”直到回主页。任何一步失败都在 finally
         恢复网络（fail-closed），绝不把模拟器留在网络隔离状态。
         """
-        gate = GameNetworkGate(self._adb_shell)
+        gate = UidBlackholeGate(self._adb_shell)
         try:
             required = {
                 "disconnect_continue_body",
@@ -644,13 +644,28 @@ class CooperativeLiveFlow:
                     flush=True,
                 )
                 return False
-            if not gate.block():
+            # MuMu 12 的内核没有 iptables owner 模块，uidrange 是唯一可用
+            # 的后端；老环境写入失败时回退到 iptables owner。
+            gate.cleanup_stale()
+            if gate.block():
                 print(
-                    "CooperativeDisconnectJump gate_block_failed=true "
-                    f"reason={gate.last_error or 'unknown'}",
+                    "CooperativeDisconnectJump gate_backend=uidrange",
                     flush=True,
                 )
-                return False
+            else:
+                gate.restore()
+                gate = GameNetworkGate(self._adb_shell)
+                if not gate.block():
+                    print(
+                        "CooperativeDisconnectJump gate_block_failed=true "
+                        f"reason={gate.last_error or 'unknown'}",
+                        flush=True,
+                    )
+                    return False
+                print(
+                    "CooperativeDisconnectJump gate_backend=iptables-owner",
+                    flush=True,
+                )
             # 退后台再切回；网络隔离状态下切回会触发“是否切换到单人演奏”弹窗。
             self.controller.post_click_key(3).wait()
             time.sleep(0.6)
