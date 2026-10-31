@@ -6,6 +6,37 @@ All source changes are tracked with Git. Use `feature/<name>` for features and
 Merge pull requests into `main` using squash to comply with the repository's
 linear-history rules. Do not create merge commits or rewrite shared history.
 
+## 本地开发
+
+将 MaaBanGDream 和定制 MFAAvalonia 放在同一父目录；界面源码使用 [fix/speed-only-settings](https://github.com/coatcn1/MFAAvalonia/tree/fix/speed-only-settings) 分支。
+
+```text
+workplace/
+├─ MaaBanGDream/
+└─ MFAAvalonia/
+```
+
+Python、MaaFramework、MFA 和 .NET 的版本以 [runtime-compatibility.json](runtime-compatibility.json) 为准。从 MaaBanGDream 源码目录运行：
+
+```powershell
+.\scripts\setup.ps1
+.\scripts\launch-mfa.ps1
+```
+
+Agent 和资源改动通过启动脚本同步到开发 MFA；不要用官方 Core DLL 覆盖定制版本，也不要删除配置或 Profile 来修复界面。
+
+维护者构建 Windows 完整包：
+
+```powershell
+& '..\.tools\Miniconda3\envs\maabangdream\python.exe' `
+  -m pip install -r .\requirements-release.txt
+.\scripts\build-windows-release.ps1 -Version 1.5.0
+```
+
+发布门禁见 [AGENTS.md](AGENTS.md)，运行包约定见 [Windows 运行包](docs/release-package.md)。
+
+## 提交检查
+
 Before committing, run:
 
 ```powershell

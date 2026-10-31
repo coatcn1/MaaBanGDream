@@ -1,10 +1,14 @@
 # MaaBanGDream规范
 
-全文保持在一万字符以内（含空白换行）；仅长期规范，新增先去重。历史故障/完成修改/一次性测试数字/提交号/发布结果写`CHANGELOG.md`、交接文档或调试证据。实现依源码/测试，说明见`README.md`、`docs/`。
+全文≤10000字符（含空白换行），仅长期规范，新增先去重。
+
+## 文档边界
+
+- README仅放简洁功能概览与使用入口；禁止开发/调查过程、候选迭代、测试/验收记录及数字。
+- 详细说明写`docs/`，开发命令写`CONTRIBUTING.md`，变更写`CHANGELOG.md`，证据写交接/调试记录。
+- 保留Logo/徽章/emoji；正文统一Markdown标题、短列表和编号步骤，表格/提示块按需，HTML限页首/页尾。
 
 ## 项目与目录边界
-
-MaaBanGDream基于MaaFramework，由定制MFAAvalonia加载Python Agent，控制Android自动演出/实时触控/校准/协力/挑战/组曲。
 
 |路径|用途与写入边界|
 |---|---|
@@ -23,12 +27,12 @@ MFA不读源码目录；改`agent/`、`resource/`或`interface.json`后须经`sc
 
 ## Git/修改
 
-1. 改前检查`git status --short --branch`、分支、远端及差异；不得覆盖、回退用户改动或混入无关重构。
+1. 改前核对`git status --short --branch`、远端及差异；保留用户改动，不混无关重构。
 2. 从`main`建`feature/*`或`fix/*`，不直接在`main`开发；提交单目的，沿用格式。
 3. PR以squash合入`main`，保留线性历史；不建merge commit，不强推或改写共享历史。
 4. 人工注释用简体中文，解释原因/边界/失败策略，不逐行翻译。
 5. 禁止提交日志、截图、Profile、设备序列号、凭据、本机绝对路径、缓存、运行目录及构建产物。
-6. 行为或用户可见修改同步`CHANGELOG.md`；本文件仅改长期规则，不堆调查或验收记录。
+6. 行为或用户可见修改同步`CHANGELOG.md`。
 7. 提交/推送/PR/合并/Release独立；无用户明确要求，不推送、合并或发布。
 
 ## 图像与证据工具
@@ -39,8 +43,7 @@ MFA不读源码目录；改`agent/`、`resource/`或`interface.json`后须经`sc
 
 ## Subagent路由
 
-职责清楚再委派；同批文件仅一人写入。
-仅用`gpt-6.1-terra`、`gpt-6.1-sol`，禁GPT-5.6。通用角色显式选模型；自定义角色核对绑定，旧型号改用通用角色，职责/约束不变。
+明确职责，同批文件仅一人写。仅用`gpt-6.1-terra`/`gpt-6.1-sol`，禁GPT-5.6；通用角色显式指定模型，自定义角色核绑定，不符则换合规通用角色，职责/约束保持。
 - `gpt-6.1-terra`：日志/结果只读扫描交`mbd_log_scanner`，trace/checkpoints/events/lifecycle有限窗口交`mbd_trace_scanner`。
 - `gpt-6.1-sol`：`mbd_replay_runner`离线replay/基线比较，只写`.local/`；`mbd_implementer`依有界证据、最小假设及验收标准实现/测试。
 - 电脑/浏览器/模拟器/真机操作（含CUA、ADB、MaaFramework、模拟器API及脚本截图/输入/导航/验收）仅委派显式`gpt-6.1-terra`的Subagent。主Agent负责目标、拆分与证据复核；同设备唯一操作Agent，保留身份、租约及触点释放门禁。
