@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .native_random_great import RANDOM_GREAT_DEFAULTS, validate_random_great_options
+
 
 # 这些字段只为兼容既有 Profile/校准 JSON 的版本 1 结构保留；运行时不再
 # 自动检查或据此拒绝旧文件。数值沿用当前已验证环境，供新文件稳定序列化。
@@ -134,6 +136,7 @@ class RealtimeProfileStore:
         "native_life_feedback_enabled": False,
         "native_early_start_enabled": False,
         "native_wait_jitter_filter_enabled": False,
+        **RANDOM_GREAT_DEFAULTS,
         "cooperative_jitter_enabled": True,
         "cooperative_member_loading_guard_enabled": True,
         "bestdori_auto_update_enabled": True,
@@ -265,6 +268,7 @@ class RealtimeProfileStore:
         if not isinstance(native_realtime_enabled, bool):
             raise ValueError("native_realtime_enabled 必须是布尔值")
         native_options = {}
+        native_options.update(validate_random_great_options(options))
         for key in ("native_life_feedback_enabled", "native_wait_jitter_filter_enabled", "native_early_start_enabled"):
             value = options.get(key, False)
             if not isinstance(value, bool):
