@@ -16,6 +16,7 @@ from .chart_repository import (
     ChartResolution,
     LocalChartRepository,
 )
+from .optional_diagnostics import safe_print
 
 
 DEFAULT_TTL_SECONDS = 30.0
@@ -290,7 +291,11 @@ def resolve_confirmed_chart(
         runtime_options = RealtimeProfileStore(
             root / "profiles"
         ).runtime_options()
-        if bool(runtime_options.get("cooperative_jitter_enabled", True)):
+        from .native_random_great import random_great_enabled
+        runtime_options = frozen_native_runtime_options(live_run, runtime_options)
+        random_great = (bool(runtime_options.get("native_realtime_enabled", False))
+                        and random_great_enabled(runtime_options, mode))
+        if bool(runtime_options.get("cooperative_jitter_enabled", True)) and not random_great:
             jittered_path = _cooperative_jittered_chart(
                 selection.path,
                 str(getattr(live_run, "run_id", "")),
@@ -332,6 +337,8 @@ def frozen_native_runtime_options(live_run, runtime_options):
     snapshot = {key: bool(runtime_options.get(key, False)) for key in (
         "native_realtime_enabled", "native_life_feedback_enabled", "native_wait_jitter_filter_enabled",
         "native_early_start_enabled")}
+    from .native_random_great import validate_random_great_options
+    snapshot.update(validate_random_great_options(runtime_options))
     if current is not None and current.run_id == live_run.run_id:
         update_live_run(native_runtime_options=dict(snapshot))
     return dict(runtime_options) | snapshot
@@ -395,8 +402,7 @@ def prepare_native_for_settings_gate(
             "observation_clock_trial_enabled": True,
             "visual_refresh_enabled": True,
         }
-    backend = backend_factory(
-        selection.path,
+    backend_options = dict(
         adb_path=adb_path,
         serial=adb_serial,
         # y=565 是视觉预判线；Native 直触必须与 Legacy/上游一致落在 y=590。
@@ -414,11 +420,17 @@ def prepare_native_for_settings_gate(
         ),
         wait_jitter_trial_enabled=bool(runtime_options.get("native_wait_jitter_filter_enabled", False)),
         early_start_enabled=bool(runtime_options.get("native_early_start_enabled", False)),
+        random_great_options=runtime_options,
+        chart_level=getattr(selection, "level", None),
+        expected_notes=getattr(selection, "expected_notes", None),
         life_feedback_enabled=(bool(runtime_options.get("native_life_feedback_enabled", False))
                                and str(getattr(live_run, "mode", "")) in {
                                    "formal", "challenge", "cooperative", "versus", "continuous", "medley"}),
         **solo_feedback_options,
     )
+    backend = backend_factory(selection.path, **backend_options)
+    ready_deadline = time.monotonic() + float(ready_timeout_s)
+    backend_stopped = False
     try:
         backend.arm()
         ready_kwargs = {} if wait_observer is None and should_stop is None else {
@@ -427,8 +439,40 @@ def prepare_native_for_settings_gate(
             raise RuntimeError("Native 预武装等待 minitouch ready 失败")
         if should_stop is not None and should_stop():
             raise InterruptedError("用户已停止任务")
+        capacity_required = getattr(backend, "random_great_requires_contact_capacity", lambda: False)()
+        capacity = getattr(backend, "random_great_contact_capacity", lambda: None)() if capacity_required else 10
+        if capacity_required and capacity != 10:
+            safe_print(f"NativeRandomGreat fallback=device-contact-capacity-unverified capacity={capacity}", flush=True)
+            # 构造时尚无握手容量；原对象完整清理后才可创建一次独立回退对象。
+            backend_stopped = True
+            backend.stop()
+            settle = getattr(backend, "wait_native_cleanup", None)
+            settled = callable(settle) and settle(4.2)
+            release = backend.report()
+            if (not settled or release.get("release_confirmed") is not True
+                    or release.get("release_sequence_confirmed") is not True or release.get("release_error")):
+                raise RuntimeError("随机 GREAT 容量回退前无法确认本轮触点完整释放")
+            if should_stop is not None and should_stop():
+                raise InterruptedError("用户已停止任务")
+            remaining = ready_deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError("随机 GREAT 容量回退已耗尽预武装总等待预算")
+            fallback_options = dict(backend_options)
+            fallback_options["random_great_options"] = dict(runtime_options, native_random_great_enabled=False)
+            fallback_options["random_great_fallback_reason"] = "device-contact-capacity-unverified"
+            backend = backend_factory(selection.path, **fallback_options)
+            backend_stopped = False
+            backend.arm()
+            remaining = ready_deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError("随机 GREAT 容量回退已耗尽预武装总等待预算")
+            if not bool(backend.wait_until_ready(remaining, **ready_kwargs)):
+                raise RuntimeError("随机 GREAT 容量回退后 Native 等待 ready 失败")
+            if should_stop is not None and should_stop():
+                raise InterruptedError("用户已停止任务")
     except Exception as exc:
-        NativePrearmManager._stop_backend(backend, "prepare-failed")
+        if not backend_stopped:
+            NativePrearmManager._stop_backend(backend, "prepare-failed")
         if isinstance(exc, InterruptedError):
             raise
         raise RuntimeError(

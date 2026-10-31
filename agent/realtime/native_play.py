@@ -8,6 +8,7 @@ import uuid
 import queue
 import math
 import os
+import json
 from collections import deque
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -1015,6 +1016,10 @@ class NativeMinitouchBackend:
         observation_clock_trial_enabled: bool | None = None,
         visual_refresh_enabled: bool | None = None,
         borrowed_device_lease: dict | None = None,
+        random_great_options: dict | None = None,
+        chart_level: int | None = None,
+        expected_notes: int | None = None,
+        random_great_fallback_reason: str | None = None,
     ) -> None:
         if not native_engine.available():
             raise RuntimeError(
@@ -1029,6 +1034,40 @@ class NativeMinitouchBackend:
         )
         if not self._actions:
             raise RuntimeError("谱面没有可编译的动作")
+        self._run_id = run_id or str(uuid.uuid4())
+        self._random_great_report = {"enabled": False, "status": "disabled", "actual_great_measured": False}
+        if random_great_fallback_reason:
+            self._random_great_report.update(status="fallback", reason=random_great_fallback_reason,
+                                            requested_enabled=True)
+        from .native_random_great import (
+            build_random_great_safety_context, chart_random_great_inputs, plan_random_great, random_great_enabled,
+        )
+        if random_great_enabled(random_great_options or {}, start_gate_mode):
+            try:
+                ordinary, total = chart_random_great_inputs(chart_path)
+                if expected_notes is not None and (type(expected_notes) is not int or expected_notes <= 0 or expected_notes != total):
+                    raise ValueError("整曲可见判定数与曲库 expected_notes 不一致或无效")
+                planned, report = plan_random_great(self._actions, options=random_great_options,
+                    mode=start_gate_mode, run_id=self._run_id, level=chart_level,
+                    total_judgements=total, ordinary_single_note_indices=ordinary,
+                    safety_context=build_random_great_safety_context(chart_path, self._actions,
+                        lane_centers=lane_centers, judgement_y=judgement_y))
+                report["denominator_source"] = "verified-chart-visible+catalog" if expected_notes is not None else "chart-visible"
+                report["phase_feedback_requested"] = bool(life_feedback_enabled)
+                report["phase_feedback_suppressed"] = True
+                report["phase_feedback_suppressed_reason"] = "intentional-random-great"
+                self._actions, self._random_great_report = planned, report
+                # 有意的 FAST/SLOW 不进入游戏相位仲裁，避免反馈抵消计划。
+                life_feedback_enabled = False
+                observation_clock_trial_enabled = False
+                visual_refresh_enabled = False
+            except Exception as exc:
+                self._random_great_report = {"enabled": False, "status": "fallback", "actual_great_measured": False,
+                                             "reason": f"{type(exc).__name__}: {exc}"}
+                safe_print(f"NativeRandomGreat warning={type(exc).__name__}: {exc}; 保留原始输入", flush=True)
+            else:
+                safe_print("NativeRandomGreat " + json.dumps({key: value for key, value in report.items()
+                    if key != "selected_notes"}, ensure_ascii=False), flush=True)
         self._clock = clock
         self._start_evidence_ticket = None
         self._start_evidence_warning = None
@@ -1081,7 +1120,6 @@ class NativeMinitouchBackend:
         )
         if native_wait_jitter_trial_enabled():
             print("NativeMinitouch MAABANGDREAM_NATIVE_WAIT_JITTER_TRIAL 已弃用；以演出设置为准", flush=True)
-        self._run_id = run_id or str(uuid.uuid4())
         # 旁路观察源是内部注入 seam；尚未接入消费者时不改变 C5 生产门禁。
         self._observation_clock = observation_clock
         self._native_clock_trial = (native_clock_trial_enabled() if observation_clock_trial_enabled is None
@@ -2301,6 +2339,14 @@ class NativeMinitouchBackend:
         value = int(offset_ms)
         self._frozen_timing_offset_ms = value
         self._config["press_bias_ms"] = value
+
+    def random_great_requires_contact_capacity(self) -> bool:
+        return bool(self._random_great_report.get("selected_with_active_hold", 0))
+
+    def random_great_contact_capacity(self) -> int | None:
+        """只读已完成的握手值，不进行设备查询。"""
+        value = getattr(self._device, "max_contacts", None)
+        return value if type(value) is int else None
 
     def configure_early_start(self, environment) -> None:
         config = getattr(self, "_config", {})
@@ -3984,6 +4030,7 @@ class NativeMinitouchBackend:
         )
         defaults.update({
             "run_id": self._run_id,
+            "native_random_great": getattr(self, "_random_great_report", {"enabled": False, "status": "disabled"}),
             "life_feedback": {"enabled": getattr(self, "life_feedback_enabled", False),
                               "configuration": {
                                   "observation_clock_enabled": getattr(self, "_native_clock_trial", False),
