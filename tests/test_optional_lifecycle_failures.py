@@ -54,21 +54,29 @@ def test_member_recovery_preserves_stop_exception(module):
 def test_preplay_recovery_requires_a_new_safe_page(monkeypatch, scene):
     from agent.realtime import room_song_entry
     clock = [0.0]
-    observations = []
+    observations, dismissals = [], []
     flow = SimpleNamespace(stopped=lambda: False,
         capture=lambda: observations.append(clock[0]) or scene,
         visible=lambda image, name, threshold=0.90: (image == "ready" and name == "ready_button") or
             (image == "generic-error-title" and name == "member_exit_title"),
+        dismiss_member_exit=lambda: dismissals.append(clock[0]),
         pipeline_box=lambda image, name: object() if image == "home" else None)
     monkeypatch.setattr(room_song_entry.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(room_song_entry.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
     if scene in {"ready", "home"}:
         room_song_entry.wait_for_preplay_recovery_page(flow, "room_wait", "HomeMarker")
         assert len(observations) == 1
+        assert dismissals == []
+    elif scene == "generic-error-title":
+        with pytest.raises(RuntimeError, match="反复出现"):
+            room_song_entry.wait_for_preplay_recovery_page(flow, "room_wait", "HomeMarker")
+        assert len(dismissals) == 3
+        assert 0.0 < clock[0] < 60.0
     else:
         with pytest.raises(RuntimeError, match="安全页面"):
             room_song_entry.wait_for_preplay_recovery_page(flow, "room_wait", "HomeMarker")
         assert clock[0] >= 60.0
+        assert dismissals == []
 
 
 def test_preplay_recovery_stop_after_capture_does_no_recognition():
