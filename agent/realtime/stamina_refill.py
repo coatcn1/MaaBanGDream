@@ -46,8 +46,8 @@ TEMPLATE_REGIONS = {
 }
 NUMBER_REGIONS = {
     "top": (979, 23, 32, 33),
-    "small_stock": (444, 245, 44, 24),
-    "large_stock": (444, 393, 44, 24),
+    "small_stock": (390, 245, 98, 24),
+    "large_stock": (390, 393, 98, 24),
     "small_count": (647, 209, 34, 41),
     "large_count": (647, 357, 34, 41),
     "current": (716, 473, 48, 37),
@@ -315,7 +315,12 @@ class StaminaRefill:
         if key in {"top", "current", "success_points"}:
             reading = recognize_song_title(image, roi=NUMBER_REGIONS[key])
         else:
-            if key == "preview":
+            if key in {"small_stock", "large_stock"}:
+                # 完整保留乘号和最多四位库存；窄框会漏千位，残留乘号还可能被读成数字。
+                # 只提取白字，避免绿色道具底图降低置信度，不放宽消费所需的读数门槛。
+                ink = (crop.min(axis=2) >= 180) & (crop.max(axis=2) - crop.min(axis=2) < 60)
+                crop = cv2.cvtColor(np.where(ink, 0, 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
+            elif key == "preview":
                 hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
                 ink = (hsv[:, :, 1] > 60) & (hsv[:, :, 2] > 120)
                 crop = cv2.cvtColor(np.where(ink, 0, 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
@@ -324,6 +329,8 @@ class StaminaRefill:
         detail = {"roi": list(NUMBER_REGIONS[key]), "text": reading.text if reading else None,
                   "confidence": float(reading.confidence) if reading else None}
         self.readings[key] = detail
+        if key in {"small_stock", "large_stock"}:
+            detail["variant"] = "stock-white-mask"
         if reading is None or reading.confidence < .90:
             raise ValueError(f"体力读数置信度不足：{key}")
         text = reading.text.strip()
@@ -331,6 +338,11 @@ class StaminaRefill:
             match = re.fullmatch(r"LIVE\s*BOOST已回复((?:[0-9]|'[0-9]'|\"[0-9]\")+)[!！]", text)
             if match is None:
                 raise ValueError("体力回复成功正文不符合预期")
+            text = match.group(1)
+        elif key in {"small_stock", "large_stock"}:
+            match = re.fullmatch(r"[x×]((?:[0-9]|'[0-9]'|\"[0-9]\"){1,4})", text)
+            if match is None:
+                raise ValueError(f"体力库存必须包含完整乘号与数字：{key}")
             text = match.group(1)
         # 本地字典的数字字符保留 YAML 引号；只接受逐个数字的字典包装，不纠正字母。
         if re.fullmatch(r"(?:[0-9]|'[0-9]'|\"[0-9]\")+", text):

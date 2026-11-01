@@ -127,7 +127,8 @@ def prepare_runtime(source: Path, runtime: Path, requested_binding: dict) -> dic
     selection_path = runtime / 'profiles/selection.json'
     selection = (json.loads(selection_path.read_text(encoding='utf-8-sig')) if selection_path.exists()
                  else {'version': 1, 'pinned': {}, 'runtime_options': {}})
-    selection.setdefault('runtime_options', {})['live_boost_target'] = 0
+    selection.setdefault('runtime_options', {}).update(
+        live_boost_settings_enabled=True, live_boost_target=0)
     write_json(selection_path, selection)
     manifest = {'version': 1, 'source_root': str(source), 'runtime_root': str(runtime),
                 'binding': requested_binding}
@@ -144,6 +145,8 @@ def load_manifest(args) -> dict:
     if not (args.runtime_root / 'agent/server.py').is_file():
         raise DeviceSafetyError('Prepared Agent is missing')
     selection = json.loads((args.runtime_root / 'profiles/selection.json').read_text(encoding='utf-8-sig'))
+    if selection.get('runtime_options', {}).get('live_boost_settings_enabled') is not True:
+        raise DeviceSafetyError('Isolated cooperative tests require enabled live boost checks; prepare again')
     boost = selection.get('runtime_options', {}).get('live_boost_target')
     if type(boost) is not int or boost != 0:
         raise DeviceSafetyError('Isolated cooperative tests require explicit zero live boost consumption; prepare again')

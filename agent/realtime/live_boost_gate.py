@@ -60,8 +60,11 @@ class BoostDetector:
         )
 
     def page(self, image):
-        return self.matches(image, "page_title") and self.matches(
-            image, "page_settings"
+        # 面板压暗后的背景仍可能命中模板，标题仍可见时不能当作已经关闭。
+        return (
+            not self.matches(image, "panel_title")
+            and self.matches(image, "page_title")
+            and self.matches(image, "page_settings")
         )
 
     def panel_selection(self, image):
@@ -182,7 +185,9 @@ class LiveBoostGate:
 
 
 def ensure_live_boost(context):
-    target = RealtimeProfileStore(
+    options = RealtimeProfileStore(
         Path(__file__).resolve().parents[2] / "profiles"
-    ).runtime_options()["live_boost_target"]
-    return LiveBoostGate(context).ensure(target)
+    ).runtime_options()
+    if not options["live_boost_settings_enabled"]:
+        return False
+    return LiveBoostGate(context).ensure(options["live_boost_target"])

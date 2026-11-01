@@ -19,6 +19,29 @@ def test_runtime_options_does_not_enumerate_profile_files(tmp_path, monkeypatch)
     assert not (tmp_path / "selection.json").exists()
 
 
+def test_live_boost_switch_roundtrip_preserves_false_and_target_when_other_setting_changes(tmp_path):
+    initial = handle_request({"operation": "runtime-options"}, root=tmp_path)["runtime_options"]
+    assert initial["live_boost_settings_enabled"] is True
+    initial.update(live_boost_settings_enabled=False, live_boost_target=2)
+    handle_request({"operation": "update-runtime-options", "runtime_options": initial}, root=tmp_path)
+    restored = handle_request({"operation": "runtime-options"}, root=tmp_path)["runtime_options"]
+    assert restored["live_boost_settings_enabled"] is False
+    assert restored["live_boost_target"] == 2
+    restored["skip_result_check"] = True
+    handle_request({"operation": "update-runtime-options", "runtime_options": restored}, root=tmp_path)
+    options = RealtimeProfileStore(tmp_path).runtime_options()
+    assert options["live_boost_settings_enabled"] is False and options["live_boost_target"] == 2
+
+
+@pytest.mark.parametrize("bad", [0, 1, "false", None])
+def test_live_boost_switch_rejects_non_boolean_values_without_saving(tmp_path, bad):
+    with pytest.raises(ValueError, match="live_boost_settings_enabled"):
+        handle_request({"operation": "update-runtime-options", "runtime_options": {
+            "live_boost_settings_enabled": bad,
+        }}, root=tmp_path)
+    assert not (tmp_path / "selection.json").exists()
+
+
 def test_list_reports_automatic_selection_and_full_records(tmp_path):
     store = RealtimeProfileStore(tmp_path)
     profile = payload(difficulty="Expert", accepted=True)
@@ -144,6 +167,7 @@ def test_selection_state_is_written_atomically(tmp_path):
         "runtime_options": {
             "skip_process_conflict_cleanup": False,
             "skip_result_check": False,
+            "live_boost_settings_enabled": True,
             "live_boost_target": 3,
             "note_speed_settings_enabled": True,
             "chart_prediction_enabled": True,
@@ -186,6 +210,7 @@ def test_runtime_options_default_and_atomic_update_do_not_invalidate_profile(tmp
     assert listed["runtime_options"] == {
         "skip_process_conflict_cleanup": False,
         "skip_result_check": False,
+        "live_boost_settings_enabled": True,
         "live_boost_target": 3,
         "note_speed_settings_enabled": True,
         "chart_prediction_enabled": True,

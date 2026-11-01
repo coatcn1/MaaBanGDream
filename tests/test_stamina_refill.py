@@ -274,7 +274,7 @@ def test_dimmed_menu_background_is_not_a_supported_menu():
     assert not detector.page((image*.6).astype(np.uint8),"menu")
 
 
-@pytest.mark.parametrize("text,confidence,expected", [("'6''0''4'",.999,604), ('"1"',.99,1),
+@pytest.mark.parametrize("text,confidence,expected", [("'6''0'",.999,60), ('"1"',.99,1),
     ("O",.999,None), ("'12'",.999,None), ("1/25",.999,None), ("1",.89,None)])
 def test_local_ocr_rejects_letters_low_confidence_and_non_dictionary_quotes(monkeypatch,text,confidence,expected):
     import agent.realtime.stamina_refill as module
@@ -282,9 +282,83 @@ def test_local_ocr_rejects_letters_low_confidence_and_non_dictionary_quotes(monk
     refill=StaminaRefill(SimpleNamespace(),detector=SimpleNamespace())
     image=np.zeros((720,1280,3),np.uint8)
     if expected is None:
-        with pytest.raises(ValueError): refill.read_number(image,"small_stock")
+        with pytest.raises(ValueError): refill.read_number(image,"small_count")
     else:
-        assert refill.read_number(image,"small_stock")==expected
+        assert refill.read_number(image,"small_count")==expected
+
+
+@pytest.mark.parametrize("key,y,text,expected", [
+    ("small_stock",245,"x'1''0''1''8'",1018),
+    ("large_stock",393,"×'1''7''7'",177),
+])
+def test_stock_reader_keeps_prefix_and_leading_digits_and_removes_green_background(monkeypatch,key,y,text,expected):
+    import agent.realtime.stamina_refill as module
+    image=np.zeros((720,1280,3),np.uint8)
+    image[y:y+24,390:488]=(60,140,80)
+    # 左侧标记模拟乘号和原窄框外的千位，右侧标记模拟末位。
+    for x in (425,439,481):
+        image[y+8:y+17,x:x+2]=(230,230,230)
+    def recognize(candidate,*,roi):
+        assert candidate.shape==(34,108,3)
+        assert roi==(0,0,108,34)
+        assert np.all(candidate[:5]==255) and np.all(candidate[5:29,5:103][0]==255)
+        for x in (425,439,481):
+            assert np.all(candidate[13:22,x-390+5:x-390+7]==0)
+        return SimpleNamespace(text=text,confidence=.96)
+    monkeypatch.setattr(module,"recognize_song_title",recognize)
+    refill=StaminaRefill(SimpleNamespace(),detector=SimpleNamespace())
+    assert refill.read_number(image,key)==expected
+    assert refill.readings[key]["roi"]==[390,y,98,24]
+    assert refill.readings[key]["text"]==text
+    assert refill.readings[key]["confidence"]==.96
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("x0",0),('×"1"',1),("x177",177),("×'9''9''9''9'",9999),
+])
+def test_stock_reader_accepts_only_complete_prefixed_counts(monkeypatch,text,expected):
+    import agent.realtime.stamina_refill as module
+    monkeypatch.setattr(module,"recognize_song_title",lambda *a,**kw:SimpleNamespace(text=text,confidence=.96))
+    refill=StaminaRefill(SimpleNamespace(),detector=SimpleNamespace())
+    assert refill.read_number(np.zeros((720,1280,3),np.uint8),"small_stock")==expected
+
+
+@pytest.mark.parametrize("answer", [
+    None,("x177",.899),("3177",.99),("'1''7''7'",.99),
+    ("xO",.99),("x'12'",.99),("x10000",.99),("x1/25",.99),
+    ("xx177",.99),("x1 x2",.99),
+])
+def test_invalid_stock_ocr_never_confirms_or_reserves_refill(monkeypatch,tmp_path,answer):
+    import agent.realtime.stamina_refill as module
+    reading=None if answer is None else SimpleNamespace(text=answer[0],confidence=answer[1])
+    monkeypatch.setattr(module,"recognize_song_title",lambda *a,**kw:reading)
+    context=FakeContext(current=0,stock=(1018,177))
+    image=np.zeros((720,1280,3),np.uint8)
+    refill=StaminaRefill(context,detector=SimpleNamespace(page=lambda _im,page:context.state==page),
+        capture=lambda _:image,foreground=lambda _:None,sleep=lambda _:None)
+    refill.ocr=lambda frame,key:refill.read_number(frame,key) if key=="large_stock" else context.ocr(frame,key)
+    journal=RefillJournal(tmp_path,914)
+    with pytest.raises(RuntimeError,match="数字未稳定") as error:
+        refill.ensure(3,options(),journal)
+    assert "large_stock" in str(error.value)
+    assert (770,603) not in context.clicks and (770,449) not in context.clicks
+    assert journal.load()["reserved_points"]==0 and not journal.pending_path.exists()
+
+
+def test_changing_prefixed_stock_never_becomes_a_refill_reservation(monkeypatch,tmp_path):
+    import agent.realtime.stamina_refill as module
+    answers=iter((177,178)*5)
+    monkeypatch.setattr(module,"recognize_song_title",lambda *a,**kw:SimpleNamespace(text=f"x{next(answers)}",confidence=.96))
+    context=FakeContext(current=0,stock=(1018,177))
+    image=np.zeros((720,1280,3),np.uint8)
+    refill=StaminaRefill(context,detector=SimpleNamespace(page=lambda _im,page:context.state==page),
+        capture=lambda _:image,foreground=lambda _:None,sleep=lambda _:None)
+    refill.ocr=lambda frame,key:refill.read_number(frame,key) if key=="large_stock" else context.ocr(frame,key)
+    journal=RefillJournal(tmp_path,915)
+    with pytest.raises(RuntimeError,match="数字未稳定"):
+        refill.ensure(3,options(),journal)
+    assert (770,603) not in context.clicks and (770,449) not in context.clicks
+    assert journal.load()["reserved_points"]==0 and not journal.pending_path.exists()
 
 
 def test_success_amount_mismatch_retains_reservation_and_does_not_close(tmp_path):

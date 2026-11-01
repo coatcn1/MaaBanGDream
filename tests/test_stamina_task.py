@@ -33,11 +33,73 @@ def test_each_play_task_has_own_complete_refill_option_cases():
 
 
 @pytest.fixture(autouse=True)
-def isolated_task_stamina():
+def isolated_task_stamina(monkeypatch):
     from agent.realtime import stamina_task
+    monkeypatch.setattr(stamina_task, 'RealtimeProfileStore', lambda _: SimpleNamespace(
+        runtime_options=lambda: {'live_boost_target': 3}))
     stamina_task._TASKS.clear()
     yield
     stamina_task._TASKS.clear()
+
+
+def test_disabled_boost_check_isolates_requested_refill_without_changing_saved_task_options(monkeypatch):
+    from agent.realtime import stamina_task
+    monkeypatch.setattr(stamina_task, 'RealtimeProfileStore', lambda _: SimpleNamespace(
+        runtime_options=lambda: {'live_boost_target': 3, 'live_boost_settings_enabled': False}))
+    monkeypatch.setattr(stamina_task, 'StaminaRefill', lambda _: pytest.fail('关闭检查时不能构造补充器'))
+    monkeypatch.setattr(stamina_task, 'record_failure_reason', lambda _: pytest.fail('可选补充不能记任务失败'))
+    warnings = []
+    monkeypatch.setattr(stamina_task, 'report_task_warning', lambda *args: warnings.append(args[-1]))
+    saved = json.dumps({'task_mode': 'VersusLive', 'stamina_refill_enabled': True})
+    argv = SimpleNamespace(task_detail=SimpleNamespace(task_id=9901), custom_action_param=saved)
+    context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    assert stamina_task.StaminaRefillConfigure().run(context, argv)
+    assert stamina_task.enabled_state(argv) is None
+    assert stamina_task.task_state(argv).degraded
+    assert argv.custom_action_param == saved
+    assert warnings and 'LIVE BOOST' in warnings[-1]
+
+
+@pytest.mark.parametrize('stage', ['allocate', 'prepare'])
+def test_closing_boost_check_after_configuration_never_refills_or_returns_home(monkeypatch, stage):
+    from agent.realtime import stamina_task
+    monkeypatch.setattr(stamina_task, 'RealtimeProfileStore', lambda _: SimpleNamespace(
+        runtime_options=lambda: {'live_boost_target': 3, 'live_boost_settings_enabled': False}))
+    monkeypatch.setattr(stamina_task, 'StaminaRefill', lambda _: pytest.fail('旧目标不能驱动消费'))
+    monkeypatch.setattr(stamina_task, 'RefillJournal', lambda *args: pytest.fail('不能进入补充事务'))
+    monkeypatch.setattr(stamina_task, 'recover_stamina_home', lambda *args: pytest.fail('跳过补充不能触发主页恢复'))
+    saved_options = {'stamina_refill_enabled': True}
+    state = stamina_task.TaskStamina(saved_options, 'VersusLive', 3, available=0, completed_epoch=1)
+    stamina_task._TASKS[9902] = state
+    argv = SimpleNamespace(task_detail=SimpleNamespace(task_id=9902))
+    context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
+    if stage == 'allocate':
+        stamina_task.allocate_home(context, argv, 2)
+    else:
+        flow = SimpleNamespace(context=context, stamina_argv=argv, stopped=lambda: False,
+            wait_for=lambda *args, **kwargs: pytest.fail('关闭后不再确认回主页边界'),
+            recover_after_play_failure=lambda _: pytest.fail('关闭后不为补充回主页'))
+        assert stamina_task.prepare_stamina_round(flow, 2) is False
+    assert stamina_task.enabled_state(argv) is None
+    assert saved_options['stamina_refill_enabled'] is True
+
+
+@pytest.mark.parametrize('enabled', [None, True])
+def test_enabled_or_legacy_boost_settings_keep_allocated_refill_cost(monkeypatch, enabled):
+    from agent.realtime import stamina_task
+    runtime = {'live_boost_target': 3}
+    if enabled is not None:
+        runtime['live_boost_settings_enabled'] = enabled
+    monkeypatch.setattr(stamina_task, 'RealtimeProfileStore', lambda _: SimpleNamespace(runtime_options=lambda: runtime))
+    monkeypatch.setattr(stamina_task, 'RefillJournal', lambda *args: SimpleNamespace(load=lambda: {'available_points': 6}))
+    costs = []
+    monkeypatch.setattr(stamina_task, 'StaminaRefill', lambda _: SimpleNamespace(
+        ensure=lambda cost, *args, **kwargs: costs.append(cost)))
+    stamina_task._TASKS[9903] = stamina_task.TaskStamina({'stamina_refill_enabled': True}, 'VersusLive', 3)
+    argv = SimpleNamespace(task_detail=SimpleNamespace(task_id=9903))
+    stamina_task.allocate_home(SimpleNamespace(tasker=SimpleNamespace(stopping=False)), argv, 2)
+    assert costs == [3]
+    assert stamina_task.task_state(argv).available == 6
 
 
 @pytest.mark.parametrize('module,klass',[(cooperative_action,cooperative_action.CooperativeLiveFlow),(versus_action,versus_action.VersusLiveFlow)])
@@ -157,7 +219,8 @@ def test_versus_safe_boundary_only_uses_owned_templates():
         assert set(names)<=set(templates)
         seen.extend(names)
         return 'room_together',None
-    flow=SimpleNamespace(stamina_argv=argv,stopped=lambda:False,templates=templates,wait_for=wait,
+    flow=SimpleNamespace(context=SimpleNamespace(tasker=SimpleNamespace(stopping=False)),
+        stamina_argv=argv,stopped=lambda:False,templates=templates,wait_for=wait,
         recover_after_play_failure=lambda _:setattr(state,'available',12))
     assert stamina_task.prepare_stamina_round(flow,4)
     assert 'room_together' in seen
@@ -364,7 +427,8 @@ def test_known_low_degraded_retries_only_once_after_a_completed_settlement(remai
         available=1,degraded=True,home_attempt_epoch=0)
     stamina_task._TASKS[992]=state
     homes=[]
-    flow=SimpleNamespace(stamina_argv=argv,stopped=lambda:False,wait_for=lambda *a,**kw:('room_search',None),
+    flow=SimpleNamespace(context=SimpleNamespace(tasker=SimpleNamespace(stopping=False)),
+        stamina_argv=argv,stopped=lambda:False,wait_for=lambda *a,**kw:('room_search',None),
         recover_after_play_failure=lambda _:homes.append(True))
     assert not stamina_task.prepare_stamina_round(flow,remaining)
     assert not homes

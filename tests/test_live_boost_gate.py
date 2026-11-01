@@ -18,6 +18,37 @@ def test_runtime_default_and_explicit_zero_are_preserved(tmp_path):
     assert RealtimeProfileStore(tmp_path).runtime_options()["live_boost_target"] == 0
 
 
+@pytest.mark.parametrize("enabled", [None, False, True])
+def test_ensure_boost_disabled_skips_all_device_work_and_preserves_old_default(tmp_path, monkeypatch, enabled):
+    import json
+    from agent.realtime import live_boost_gate as module
+
+    options = {"live_boost_target": 2}
+    if enabled is not None:
+        options["live_boost_settings_enabled"] = enabled
+    (tmp_path / "selection.json").write_text(
+        json.dumps({"version": 1, "pinned": {}, "runtime_options": options}), encoding="utf-8",
+    )
+    monkeypatch.setattr(module, "RealtimeProfileStore", lambda _: RealtimeProfileStore(tmp_path))
+    calls = []
+
+    class Gate:
+        def __init__(self, context):
+            assert enabled is not False, "关闭时不得构造设备门禁"
+            calls.append(context)
+
+        def ensure(self, target):
+            assert target == 2
+            return True
+
+    monkeypatch.setattr(module, "LiveBoostGate", Gate)
+    monkeypatch.setattr(module, "detector", lambda: pytest.fail("此边界不能构造 detector"))
+    context = object()
+    assert module.ensure_live_boost(context) is (enabled is not False)
+    assert calls == ([] if enabled is False else [context])
+    assert RealtimeProfileStore(tmp_path).runtime_options()["live_boost_target"] == 2
+
+
 @pytest.mark.parametrize("bad", [True, False, 1.0, "3", -1, 4, None])
 def test_runtime_boost_rejects_non_integer_or_out_of_range(bad):
     with pytest.raises(ValueError, match="live_boost_target"):
@@ -53,6 +84,19 @@ def test_all_consumption_dynamic_number_is_not_a_layout_dependency():
     image = fixture_frame(detector, True, 10)
     cv2.putText(image, "4", (305, 532), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
     assert detector.panel_selection(image) == 10
+
+
+@pytest.mark.parametrize("selected", [3, None])
+def test_visible_boost_panel_excludes_dimmed_background_page(selected):
+    detector = BoostDetector()
+    image = fixture_frame(detector, True, selected)
+    for name in ("page_title", "page_settings"):
+        x, y, w, h = TEMPLATE_REGIONS[name]
+        image[y:y + h, x:x + w] = (detector.templates[name] * 0.5).astype(np.uint8)
+        assert detector.matches(image, name)
+    assert detector.matches(image, "panel_title")
+    assert detector.panel_selection(image) == selected
+    assert not detector.page(image)
 
 
 class Context:
