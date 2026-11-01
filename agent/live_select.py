@@ -26,6 +26,8 @@ except ImportError:  # AgentServer loads modules from the agent directory.
 
 
 DEFAULT_ROI = (0, 100, 1280, 620)
+_BOOST_ENTRY_TIMEOUT_S = 3.0
+_BOOST_ENTRY_POLL_INTERVAL_S = 0.1
 
 
 @dataclass(frozen=True)
@@ -227,6 +229,31 @@ def _same_source_box(context, image, params, expected, template_node, source):
     return finder(image) if finder else None
 
 
+def _wait_for_post_boost_entry(context, params, expected, template_node, source, deadline):
+    # 关闭设置后可能还有短暂过渡；只用同源新帧重定位，不复用旧坐标或切换来源。
+    waiting_logged = False
+    while True:
+        if context.tasker.stopping:
+            raise ScreenRefreshCancelled("用户已停止演出入口确认")
+        if time.monotonic() >= deadline:
+            raise RuntimeError("体力设置完成后未能重新确认演出入口（等待 3 秒）")
+        image = capture_image(context)
+        if context.tasker.stopping:
+            raise ScreenRefreshCancelled("用户已停止演出入口确认")
+        box = _same_source_box(context, image, params, expected, template_node, source)
+        if context.tasker.stopping:
+            raise ScreenRefreshCancelled("用户已停止演出入口确认")
+        now = time.monotonic()
+        if now >= deadline:
+            raise RuntimeError("体力设置完成后未能重新确认演出入口（等待 3 秒）")
+        if box is not None:
+            return box
+        if not waiting_logged:
+            log_task("界面导航", "选择演出", "INFO", f"体力设置后等待“{expected}”入口重新可见（{source}）")
+            waiting_logged = True
+        time.sleep(min(_BOOST_ENTRY_POLL_INTERVAL_S, deadline - now))
+
+
 def _confirm_delivery(context, params, expected, template_node, source, delivery_node):
     timeout = max(0, int(params.get("delivery_timeout_ms", 12000))) / 1000
     retry_interval = max(1000, int(params.get("delivery_retry_interval_ms", 1500))) / 1000
@@ -347,16 +374,17 @@ class LiveSelectFind(CustomAction):
             if not should_click:
                 return True
 
+            entry_deadline = None
             if expected in {"自由演出", "协力演出", "竞演演出", "巡回演出"}:
                 ensure_live_boost(context)
                 if context.tasker.stopping:
                     return True
                 # 设置弹窗会改变页面及代理；禁止复用门禁前的入口坐标。
-                image = capture_image(context)
-                box = _same_source_box(context, image, params, expected, template_node, source)
-                if box is None:
-                    raise RuntimeError("体力设置完成后未能重新确认演出入口")
-            if not _click_entry(context, box):
+                entry_deadline = time.monotonic() + _BOOST_ENTRY_TIMEOUT_S
+                box = _wait_for_post_boost_entry(
+                    context, params, expected, template_node, source, entry_deadline,
+                )
+            if not _click_entry(context, box, deadline=entry_deadline):
                 return True
             delivery_node = str(params.get("delivery_node", "")).strip()
             if delivery_node:

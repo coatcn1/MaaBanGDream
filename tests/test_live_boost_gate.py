@@ -55,6 +55,19 @@ def test_all_consumption_dynamic_number_is_not_a_layout_dependency():
     assert detector.panel_selection(image) == 10
 
 
+@pytest.mark.parametrize("selected", [3, None])
+def test_visible_boost_panel_excludes_dimmed_background_page(selected):
+    detector = BoostDetector()
+    image = fixture_frame(detector, True, selected)
+    for name in ("page_title", "page_settings"):
+        x, y, w, h = TEMPLATE_REGIONS[name]
+        image[y:y + h, x:x + w] = (detector.templates[name] * 0.5).astype(np.uint8)
+        assert detector.matches(image, name)
+    assert detector.matches(image, "panel_title")
+    assert detector.panel_selection(image) == selected
+    assert not detector.page(image)
+
+
 class Context:
     def __init__(self, detector, *, saved=0):
         self.detector = detector

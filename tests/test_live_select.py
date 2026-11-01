@@ -240,6 +240,12 @@ class DeliveryContext(Context):
         return SimpleNamespace(hit=box is not None, box=box)
 
 
+class BoostEntryContext(DeliveryContext):
+    def __init__(self, frames):
+        super().__init__(frames)
+        self.frames = list(frames)
+
+
 def delivery_argv(**overrides):
     params = dict(
         expected="协力演出", template_node="EntryTemplate", click=True,
@@ -352,3 +358,91 @@ def test_live_boost_failure_prevents_entry_click(monkeypatch):
     monkeypatch.setattr(live_select,"ensure_live_boost",fail)
     assert not live_select.LiveSelectFind().run(context,argv(expected="自由演出",template_node="EntryTemplate"))
     assert not context.tasker.controller.clicks
+
+
+def test_boost_entry_waits_for_same_source_after_transient_miss(monkeypatch, delivery_clock):
+    context = BoostEntryContext([(100, 200), "transition", (400, 300)])
+    checked = []
+    monkeypatch.setattr(live_select, "ensure_live_boost", checked.append)
+
+    assert live_select.LiveSelectFind().run(
+        context, argv(expected="自由演出", template_node="EntryTemplate"),
+    )
+    assert checked == [context]
+    assert context.tasker.controller.clicks == [(440, 320)]
+    assert context.requests == [(0, "EntryTemplate"), (1, "EntryTemplate"), (2, "EntryTemplate")]
+    assert context.ocr_requests == []
+    assert 0.0 < delivery_clock.now < 3.0
+
+
+def test_boost_entry_permanent_miss_is_bounded_without_old_click(monkeypatch, delivery_clock, capsys):
+    context = BoostEntryContext([(100, 200), "transition"])
+    checked = []
+    monkeypatch.setattr(live_select, "ensure_live_boost", checked.append)
+    context.ocr_hits = {"自由演出": True}
+
+    assert not live_select.LiveSelectFind().run(
+        context, argv(expected="自由演出", template_node="EntryTemplate"),
+    )
+    assert checked == [context]
+    assert context.tasker.controller.clicks == []
+    assert context.ocr_requests == []
+    assert delivery_clock.now == pytest.approx(3.0)
+    assert "体力设置完成后未能重新确认演出入口" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("stage", ["capture", "recognition", "waiting"])
+def test_boost_entry_stop_prevents_further_input(monkeypatch, delivery_clock, stage):
+    context = BoostEntryContext([(100, 200), "transition", (400, 300)])
+    checked = []
+    monkeypatch.setattr(live_select, "ensure_live_boost", checked.append)
+    if stage == "capture":
+        refresh = context.run_task
+
+        def stop_after_refresh(node):
+            result = refresh(node)
+            context.tasker.stopping = context.frame == 1
+            return result
+
+        context.run_task = stop_after_refresh
+    elif stage == "recognition":
+        recognize = context.run_recognition
+
+        def stop_after_recognition(node, image):
+            result = recognize(node, image)
+            context.tasker.stopping = context.frame == 1
+            return result
+
+        context.run_recognition = stop_after_recognition
+    else:
+        def stop_after_wait(seconds):
+            delivery_clock.now += seconds
+            context.tasker.stopping = True
+
+        monkeypatch.setattr(live_select.time, "sleep", stop_after_wait)
+
+    assert live_select.LiveSelectFind().run(
+        context, argv(expected="自由演出", template_node="EntryTemplate"),
+    )
+    assert checked == [context]
+    assert context.tasker.controller.clicks == []
+    assert context.frame == 1
+    assert context.requests == ([(0, "EntryTemplate")] if stage == "capture" else
+                                [(0, "EntryTemplate"), (1, "EntryTemplate")])
+
+
+def test_boost_entry_recognition_after_deadline_never_clicks(monkeypatch, delivery_clock):
+    context = BoostEntryContext([(100, 200), (400, 300)])
+    recognize = context.run_recognition
+
+    def slow_recognition(node, image):
+        result = recognize(node, image)
+        if context.frame == 1:
+            delivery_clock.now = 3.1
+        return result
+
+    context.run_recognition = slow_recognition
+    assert not live_select.LiveSelectFind().run(
+        context, argv(expected="自由演出", template_node="EntryTemplate"),
+    )
+    assert context.tasker.controller.clicks == []

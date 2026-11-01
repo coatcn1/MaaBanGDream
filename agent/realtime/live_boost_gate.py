@@ -60,8 +60,11 @@ class BoostDetector:
         )
 
     def page(self, image):
-        return self.matches(image, "page_title") and self.matches(
-            image, "page_settings"
+        # 面板压暗后的背景仍可能命中模板，标题仍可见时不能当作已经关闭。
+        return (
+            not self.matches(image, "panel_title")
+            and self.matches(image, "page_title")
+            and self.matches(image, "page_settings")
         )
 
     def panel_selection(self, image):
