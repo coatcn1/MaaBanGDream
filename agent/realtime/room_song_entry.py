@@ -61,6 +61,7 @@ def wait_for_preplay_recovery_page(flow, room_marker, home_node):
     deadline = time.monotonic() + 60.0
     connection_retried = False
     connection_cancels = 0
+    member_exit_dismissals = 0
     while time.monotonic() < deadline:
         check_stopping(flow)
         image = flow.capture()
@@ -80,6 +81,21 @@ def wait_for_preplay_recovery_page(flow, room_marker, home_node):
                 time.sleep(0.8)
             else:
                 time.sleep(0.1)
+            continue
+        # 成员退出弹窗会盖住房间页；只轮询房间模板会空等到 60 秒。
+        # 先按现有标题模板关闭弹窗，再继续确认安全页；次数有界，
+        # 反复退出仍交给外层成员退出策略处理。
+        if flow.visible(image, "member_exit_title", 0.93):
+            if member_exit_dismissals >= 3:
+                raise RuntimeError("开演前恢复成员退出弹窗反复出现")
+            safe_print(
+                f"RoomEntry member_exit=dismiss attempt={member_exit_dismissals + 1}",
+                flush=True,
+            )
+            check_stopping(flow)
+            flow.dismiss_member_exit()
+            member_exit_dismissals += 1
+            time.sleep(0.3)
             continue
         if any(flow.visible(image, name)
                for name in ("room_search", room_marker,

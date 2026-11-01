@@ -84,6 +84,43 @@ def test_guarded_click_checks_stop_and_fresh_framework_page(monkeypatch, module,
                      "task": ["foreground", "task"], None: ["foreground", "task"]}[stop_at]
 
 
+def test_preplay_recovery_dismisses_member_exit_popup_before_safe_page(monkeypatch):
+    clock, state = [0.0], ["member_exit"]
+    flow = SimpleNamespace(
+        stopped=lambda: False,
+        capture=lambda: state[0],
+        visible=lambda image, name, *args: (
+            (image == "member_exit" and name == "member_exit_title")
+            or (image == "room" and name == "room_search")
+        ),
+        dismiss_member_exit=lambda: state.__setitem__(0, "room"),
+        pipeline_box=lambda image, node: None,
+    )
+    monkeypatch.setattr(entry.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(entry.time, "sleep", lambda value: clock.__setitem__(0, clock[0] + value))
+    entry.wait_for_preplay_recovery_page(flow, "room_wait", "CooperativeHomeMarker")
+    assert state == ["room"]
+    assert clock[0] == 0.3
+
+
+def test_preplay_recovery_member_exit_dismiss_is_bounded(monkeypatch):
+    clock = [0.0]
+    flow = SimpleNamespace(
+        stopped=lambda: False,
+        capture=lambda: "member_exit",
+        visible=lambda image, name, *args: (
+            image == "member_exit" and name == "member_exit_title"
+        ),
+        dismiss_member_exit=lambda: None,
+        pipeline_box=lambda image, node: None,
+    )
+    monkeypatch.setattr(entry.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(entry.time, "sleep", lambda value: clock.__setitem__(0, clock[0] + value))
+    with pytest.raises(RuntimeError, match="反复出现"):
+        entry.wait_for_preplay_recovery_page(flow, "room_wait", "CooperativeHomeMarker")
+    assert clock[0] < 60.0
+
+
 @pytest.mark.parametrize("module,cls,prefix", MODES)
 @pytest.mark.parametrize("scenario", ["retry", "unknown", "gate-miss", "stop-after-option", "stop-after-confirm"])
 def test_selection_confirmation_is_bounded_and_requires_selection(monkeypatch, module, cls, prefix, scenario):
