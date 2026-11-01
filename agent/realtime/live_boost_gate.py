@@ -185,7 +185,9 @@ class LiveBoostGate:
 
 
 def ensure_live_boost(context):
-    target = RealtimeProfileStore(
+    options = RealtimeProfileStore(
         Path(__file__).resolve().parents[2] / "profiles"
-    ).runtime_options()["live_boost_target"]
-    return LiveBoostGate(context).ensure(target)
+    ).runtime_options()
+    if not options["live_boost_settings_enabled"]:
+        return False
+    return LiveBoostGate(context).ensure(options["live_boost_target"])

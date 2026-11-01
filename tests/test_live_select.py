@@ -341,7 +341,9 @@ def test_failed_initial_click_fails_before_delivery(monkeypatch, delivery_clock,
 def test_live_boost_hook_scope_and_fresh_entry_box(monkeypatch,expected,click,should_check):
     context=Context(template_hit=True)
     checked=[]
-    def boost(_):checked.append(True)
+    def boost(_):
+        checked.append(True)
+        return True
     monkeypatch.setattr(live_select,"ensure_live_boost",boost)
     def recognize(node,image):
         x=400 if checked else 100
@@ -363,7 +365,7 @@ def test_live_boost_failure_prevents_entry_click(monkeypatch):
 def test_boost_entry_waits_for_same_source_after_transient_miss(monkeypatch, delivery_clock):
     context = BoostEntryContext([(100, 200), "transition", (400, 300)])
     checked = []
-    monkeypatch.setattr(live_select, "ensure_live_boost", checked.append)
+    monkeypatch.setattr(live_select, "ensure_live_boost", lambda value: checked.append(value) or True)
 
     assert live_select.LiveSelectFind().run(
         context, argv(expected="自由演出", template_node="EntryTemplate"),
@@ -378,7 +380,7 @@ def test_boost_entry_waits_for_same_source_after_transient_miss(monkeypatch, del
 def test_boost_entry_permanent_miss_is_bounded_without_old_click(monkeypatch, delivery_clock, capsys):
     context = BoostEntryContext([(100, 200), "transition"])
     checked = []
-    monkeypatch.setattr(live_select, "ensure_live_boost", checked.append)
+    monkeypatch.setattr(live_select, "ensure_live_boost", lambda value: checked.append(value) or True)
     context.ocr_hits = {"自由演出": True}
 
     assert not live_select.LiveSelectFind().run(
@@ -395,7 +397,7 @@ def test_boost_entry_permanent_miss_is_bounded_without_old_click(monkeypatch, de
 def test_boost_entry_stop_prevents_further_input(monkeypatch, delivery_clock, stage):
     context = BoostEntryContext([(100, 200), "transition", (400, 300)])
     checked = []
-    monkeypatch.setattr(live_select, "ensure_live_boost", checked.append)
+    monkeypatch.setattr(live_select, "ensure_live_boost", lambda value: checked.append(value) or True)
     if stage == "capture":
         refresh = context.run_task
 
@@ -442,6 +444,29 @@ def test_boost_entry_recognition_after_deadline_never_clicks(monkeypatch, delive
         return result
 
     context.run_recognition = slow_recognition
+    assert not live_select.LiveSelectFind().run(
+        context, argv(expected="自由演出", template_node="EntryTemplate"),
+    )
+    assert context.tasker.controller.clicks == []
+
+
+def test_disabled_boost_does_not_refresh_or_wait_after_initial_entry(monkeypatch, delivery_clock):
+    context = BoostEntryContext([(100, 200), "transition", (400, 300)])
+    checked = []
+    monkeypatch.setattr(live_select, "ensure_live_boost", lambda value: checked.append(value) or False)
+    assert live_select.LiveSelectFind().run(
+        context, argv(expected="自由演出", template_node="EntryTemplate"),
+    )
+    assert checked == [context]
+    assert context.requests == [(0, "EntryTemplate")]
+    assert context.frame == 0 and delivery_clock.now == 0.0
+    assert context.tasker.controller.clicks == [(140, 220)]
+
+
+@pytest.mark.parametrize("result", [None, 0, "false"])
+def test_boost_must_return_a_boolean_before_entry_input(monkeypatch, result):
+    context = Context(template_hit=True)
+    monkeypatch.setattr(live_select, "ensure_live_boost", lambda _: result)
     assert not live_select.LiveSelectFind().run(
         context, argv(expected="自由演出", template_node="EntryTemplate"),
     )

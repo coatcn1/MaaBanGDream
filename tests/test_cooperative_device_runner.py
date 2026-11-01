@@ -77,12 +77,14 @@ def test_isolated_runner_uses_zero_boost_without_modifying_source(tmp_path):
     selection_path = source / 'profiles/selection.json'
     original = json.loads(selection_path.read_text(encoding='utf-8'))
     original['runtime_options']['live_boost_target'] = 3
+    original['runtime_options']['live_boost_settings_enabled'] = False
     write_json(selection_path, original)
     before = selection_path.read_bytes()
     runtime = tmp_path / 'guest.mbdruntime'
     runner.prepare_runtime(source, runtime, {'device': 'one'})
     copied = json.loads((runtime / 'profiles/selection.json').read_text(encoding='utf-8'))
     assert copied['runtime_options']['live_boost_target'] == 0
+    assert copied['runtime_options']['live_boost_settings_enabled'] is True
     assert selection_path.read_bytes() == before
 
 
@@ -94,7 +96,28 @@ def test_isolated_runner_supports_empty_source_profile_selection(tmp_path):
     runner.prepare_runtime(source, runtime, {'device': 'one'})
     copied = json.loads((runtime / 'profiles/selection.json').read_text(encoding='utf-8'))
     assert copied['runtime_options']['live_boost_target'] == 0
+    assert copied['runtime_options']['live_boost_settings_enabled'] is True
     assert not selection.exists()
+
+
+@pytest.mark.parametrize("enabled", [False, None, "missing"])
+def test_prepared_runner_rejects_disabled_or_missing_boost_check(tmp_path, monkeypatch, enabled):
+    source = source_tree(tmp_path)
+    runtime = tmp_path / 'guest.mbdruntime'
+    requested = {'device': 'one'}
+    runner.prepare_runtime(source, runtime, requested)
+    args = SimpleNamespace(source_root=source, runtime_root=runtime)
+    monkeypatch.setattr(runner, 'binding', lambda _: requested)
+    assert runner.load_manifest(args)
+    selection = runtime / 'profiles/selection.json'
+    state = json.loads(selection.read_text(encoding='utf-8'))
+    if enabled == 'missing':
+        del state['runtime_options']['live_boost_settings_enabled']
+    else:
+        state['runtime_options']['live_boost_settings_enabled'] = enabled
+    write_json(selection, state)
+    with pytest.raises(DeviceSafetyError, match='enabled live boost checks'):
+        runner.load_manifest(args)
 
 
 def test_source_nested_or_unowned_destination_is_rejected(tmp_path):

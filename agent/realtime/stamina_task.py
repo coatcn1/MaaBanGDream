@@ -87,6 +87,26 @@ def enabled_state(argv):
     return state if state and state.options["stamina_refill_enabled"] else None
 
 
+def _boost_allows_refill(context, argv, runtime_options=None):
+    if context.tasker.stopping:
+        raise ScreenRefreshCancelled("用户已停止体力配置检查")
+    try:
+        if runtime_options is None:
+            runtime_options = RealtimeProfileStore(ROOT / "profiles").runtime_options()
+    except Exception as exc:
+        if context.tasker.stopping:
+            raise ScreenRefreshCancelled("用户已停止体力配置检查") from exc
+        _disable_optional_refill(context, argv, exc)
+        return False
+    if context.tasker.stopping:
+        raise ScreenRefreshCancelled("用户已停止体力配置检查")
+    if runtime_options.get("live_boost_settings_enabled", True) is False:
+        # 未检查游戏实际耗火时，保存的目标不能作为消费火罐的依据。
+        _disable_optional_refill(context, argv, "LIVE BOOST 检查已关闭，实际耗火未知，跳过自动补体力")
+        return False
+    return True
+
+
 def formal_single(context):
     node = context.get_node_data("RealtimeLiveFormalModeGate")
     if not isinstance(node, dict):
@@ -102,6 +122,8 @@ def allocate_home(context, argv, remaining=None, *, minimum_rounds=1):
         return
     if context.tasker.stopping:
         raise ScreenRefreshCancelled("用户已停止主页体力检查")
+    if not _boost_allows_refill(context, argv):
+        return
     state.remaining = remaining
     state.home_attempt_epoch = state.completed_epoch
     if remaining == 0:
@@ -236,6 +258,11 @@ def prepare_stamina_round(flow, remaining):
     if state.available is None or state.available < state.cost:
         if flow.stopped():
             raise InterruptedError("用户已停止任务")
+        try:
+            if not _boost_allows_refill(flow.context, argv):
+                return False
+        except ScreenRefreshCancelled as exc:
+            raise InterruptedError("用户已停止任务") from exc
         # 只在已结算返回的房间/选择/准备页恢复，开场或曲中绝不主动退出。
         templates = getattr(flow, "templates", None)
         names = ("room_search", "room_wait", "room_together", "ready_button", "song_unspecified")
@@ -277,7 +304,8 @@ class StaminaRefillConfigure(CustomAction):
             mode = str(params["task_mode"])
             if mode not in {"AutoLive", "RealtimeLive", "CooperativeLive", "VersusLive", "MedleyLive", "RealtimeCalibration", "ContinuousRealtimeLive"}:
                 raise StaminaTaskError("不支持的体力任务模式")
-            cost = RealtimeProfileStore(ROOT / "profiles").runtime_options()["live_boost_target"]
+            runtime_options = RealtimeProfileStore(ROOT / "profiles").runtime_options()
+            cost = runtime_options["live_boost_target"]
             identity = task_identity(argv)
             previous = _TASKS.get(identity)
             if previous is not None:
@@ -285,6 +313,8 @@ class StaminaRefillConfigure(CustomAction):
                     raise StaminaTaskError("同任务体力配置发生冲突，拒绝覆盖已有凭据")
             else:
                 _TASKS[identity] = TaskStamina(options, mode, cost)
+            if options["stamina_refill_enabled"] and not _boost_allows_refill(context, argv, runtime_options):
+                return True
             if not options["stamina_refill_enabled"]:
                 description = "已关闭"
             elif options["stamina_refill_small_enabled"] and options["stamina_refill_large_enabled"]:
@@ -329,6 +359,8 @@ class StaminaHomeEntry(CustomAction):
                 allocate_home(context, argv, home_remaining(context, argv, state))
                 if context.tasker.stopping:
                     return True
+                if enabled_state(argv) is None:
+                    return ForegroundClick().run(context, argv)
                 # 补充弹窗可能改变代理和页面，只在最新完整主页再次确认后沿原入口点击。
                 if not detector().page(capture_image(context), "menu"):
                     raise StaminaTaskError("体力处理后无法重新确认主页演出入口")

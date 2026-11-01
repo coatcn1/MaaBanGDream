@@ -376,14 +376,17 @@ class LiveSelectFind(CustomAction):
 
             entry_deadline = None
             if expected in {"自由演出", "协力演出", "竞演演出", "巡回演出"}:
-                ensure_live_boost(context)
+                boost_checked = ensure_live_boost(context)
                 if context.tasker.stopping:
                     return True
-                # 设置弹窗会改变页面及代理；禁止复用门禁前的入口坐标。
-                entry_deadline = time.monotonic() + _BOOST_ENTRY_TIMEOUT_S
-                box = _wait_for_post_boost_entry(
-                    context, params, expected, template_node, source, entry_deadline,
-                )
+                if type(boost_checked) is not bool:
+                    raise RuntimeError("体力消耗检查未返回明确的启用状态")
+                if boost_checked:
+                    # 开过设置弹窗才需等待同源新帧；关闭检查时不额外取图或改目标值。
+                    entry_deadline = time.monotonic() + _BOOST_ENTRY_TIMEOUT_S
+                    box = _wait_for_post_boost_entry(
+                        context, params, expected, template_node, source, entry_deadline,
+                    )
             if not _click_entry(context, box, deadline=entry_deadline):
                 return True
             delivery_node = str(params.get("delivery_node", "")).strip()
