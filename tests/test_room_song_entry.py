@@ -104,20 +104,21 @@ def test_preplay_recovery_dismisses_member_exit_popup_before_safe_page(monkeypat
 
 
 def test_preplay_recovery_member_exit_dismiss_is_bounded(monkeypatch):
-    clock = [0.0]
+    clock, dismissals = [0.0], []
     flow = SimpleNamespace(
         stopped=lambda: False,
         capture=lambda: "member_exit",
         visible=lambda image, name, *args: (
             image == "member_exit" and name == "member_exit_title"
         ),
-        dismiss_member_exit=lambda: None,
+        dismiss_member_exit=lambda: dismissals.append(True),
         pipeline_box=lambda image, node: None,
     )
     monkeypatch.setattr(entry.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(entry.time, "sleep", lambda value: clock.__setitem__(0, clock[0] + value))
     with pytest.raises(RuntimeError, match="反复出现"):
         entry.wait_for_preplay_recovery_page(flow, "room_wait", "CooperativeHomeMarker")
+    assert len(dismissals) == 3
     assert clock[0] < 60.0
 
 
@@ -401,6 +402,30 @@ def _connection_flow(cls, monkeypatch, page="connection"):
     monkeypatch.setattr(entry.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(entry.time, "sleep", lambda delay: clock.__setitem__(0, clock[0] + delay))
     return flow, state, clicks, clock
+
+
+@pytest.mark.parametrize("module,cls,prefix", MODES)
+def test_preplay_recovery_member_exit_reclassified_as_connection_failure(monkeypatch, module, cls, prefix):
+    flow, state, clicks, clock = _connection_flow(cls, monkeypatch, page="member_exit_title")
+    captures = []
+
+    def capture():
+        image = state[0]
+        captures.append(image)
+        if image == "member_exit_title":
+            state[0] = "connection"
+        return image
+
+    def click(point):
+        clicks.append(point)
+        state[0] = "room_search"
+
+    flow.capture, flow.click = capture, click
+    flow.verify_preplay_recovery()
+    assert captures[:2] == ["member_exit_title", "connection"]
+    assert clicks == [(748, 527)]
+    assert state == ["room_search"]
+    assert clock[0] < 60.0
 
 
 @pytest.mark.parametrize("module,cls,prefix", MODES)
