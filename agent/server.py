@@ -5,6 +5,8 @@ import sys
 from maa.agent.agent_server import AgentServer
 from maa.tasker import Tasker
 
+from framework_logging import configure_framework_logging
+
 from realtime.runtime_flags import (
     configure_agent_runtime_flags,
     native_wait_jitter_trial_enabled,
@@ -41,6 +43,7 @@ def main() -> None:
     if len(sys.argv) < 2:
         raise SystemExit("Maa Agent socket id is required")
     runtime_flags = configure_agent_runtime_flags(sys.argv[1:-1])
+    framework_logging_enabled = configure_framework_logging(Tasker)
     print(
         "Agent runtime flags: "
         "native_timing_compensation="
@@ -51,10 +54,10 @@ def main() -> None:
         "cooperative_member_loading_guard_enabled="
         f"{runtime_flags['cooperative_member_loading_guard_enabled']} "
         "deprecated_cooperative_member_loading_guard_trial_ignored="
-        f"{runtime_flags['deprecated_cooperative_member_loading_guard_trial_requested']}",
+        f"{runtime_flags['deprecated_cooperative_member_loading_guard_trial_requested']} "
+        f"maafw_file_logging_enabled={framework_logging_enabled}",
         flush=True,
     )
-    Tasker.set_log_dir("./debug")
     AgentServer.start_up(sys.argv[-1])
     AgentServer.join()
     AgentServer.shut_down()
