@@ -295,6 +295,7 @@ def resolve_confirmed_chart(
         runtime_options = frozen_native_runtime_options(live_run, runtime_options)
         random_great = (bool(runtime_options.get("native_realtime_enabled", False))
                         and random_great_enabled(runtime_options, mode))
+        # 双开时保留 canonical，待 GREAT 按完整原谱校验后在后端内存中漏键。
         if bool(runtime_options.get("cooperative_jitter_enabled", True)) and not random_great:
             jittered_path = _cooperative_jittered_chart(
                 selection.path,
@@ -337,6 +338,7 @@ def frozen_native_runtime_options(live_run, runtime_options):
     snapshot = {key: bool(runtime_options.get(key, False)) for key in (
         "native_realtime_enabled", "native_life_feedback_enabled", "native_wait_jitter_filter_enabled",
         "native_early_start_enabled")}
+    snapshot["cooperative_jitter_enabled"] = bool(runtime_options.get("cooperative_jitter_enabled", True))
     from .native_random_great import validate_random_great_options
     snapshot.update(validate_random_great_options(runtime_options))
     if current is not None and current.run_id == live_run.run_id:
@@ -423,6 +425,10 @@ def prepare_native_for_settings_gate(
         random_great_options=runtime_options,
         chart_level=getattr(selection, "level", None),
         expected_notes=getattr(selection, "expected_notes", None),
+        # 仅双开路径使用内存漏键；只漏键时已选中旧谱面副本，不可重复删除。
+        cooperative_jitter_enabled=(bool(runtime_options.get("cooperative_jitter_enabled", True))
+                                    and bool(runtime_options.get("native_random_great_enabled", False))
+                                    and str(getattr(live_run, "mode", "")) in {"cooperative", "versus"}),
         life_feedback_enabled=(bool(runtime_options.get("native_life_feedback_enabled", False))
                                and str(getattr(live_run, "mode", "")) in {
                                    "formal", "challenge", "cooperative", "versus", "continuous", "medley"}),
