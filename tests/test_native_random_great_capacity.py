@@ -86,6 +86,8 @@ def test_unverified_capacity_releases_old_before_one_fresh_baseline_backend(tmp_
     assert calls[1][1]["random_great_options"]["native_random_great_enabled"] is False
     assert calls[1][1]["life_feedback_enabled"] is True
     assert calls[1][1]["random_great_fallback_reason"] == "device-contact-capacity-unverified"
+    assert calls[0][1]["cooperative_jitter_enabled"] is True
+    assert calls[1][1]["cooperative_jitter_enabled"] is True
     assert 0 < second.wait_calls[0] <= 10
 
 
@@ -143,7 +145,8 @@ def test_capacity_replacement_restores_both_formal_feedback_dependencies(tmp_pat
         assert options["observation_clock_trial_enabled"] and options["visual_refresh_enabled"]
 
 
-def test_real_constructed_fallback_retains_original_feedback_and_canonical_chart(tmp_path, monkeypatch):
+@pytest.mark.parametrize("mode", ["formal", "cooperative", "versus"])
+def test_real_constructed_fallback_retains_original_feedback_and_canonical_chart(tmp_path, monkeypatch, mode):
     from pathlib import Path
     from agent.realtime import native_engine
     from agent.realtime.native_play import NativeMinitouchBackend
@@ -152,7 +155,7 @@ def test_real_constructed_fallback_retains_original_feedback_and_canonical_chart
     path = Path(__file__).resolve().parents[1] / "resource/charts/bestdori/431/expert.json"
     if not path.exists():
         pytest.skip("本地谱面未同步")
-    run = reset_live_run(mode="formal", difficulty="Expert")
+    run = reset_live_run(mode=mode, difficulty="Expert")
     run = update_live_run(song_id="test", song_title="test", song_level=28, prepared_for_play=True)
     options = RealtimeProfileStore.DEFAULT_RUNTIME_OPTIONS | {"native_realtime_enabled": True,
         "native_random_great_enabled": True, "native_life_feedback_enabled": True}
@@ -176,7 +179,16 @@ def test_real_constructed_fallback_retains_original_feedback_and_canonical_chart
     assert len(instances) == 2 and stops == [instances[0]]
     old, fallback = instances
     assert old._random_great_report["selected_with_active_hold"] > 0 and not old.life_feedback_enabled
-    assert fallback.life_feedback_enabled and fallback._native_clock_trial and fallback._native_visual_refresh_enabled
-    assert fallback._actions == native_engine.compile_chart(path).compile_actions({})
+    assert fallback.life_feedback_enabled
+    if mode == "formal":
+        assert fallback._native_clock_trial and fallback._native_visual_refresh_enabled
+    baseline = native_engine.compile_chart(path).compile_actions({})
+    if mode == "formal":
+        assert fallback._actions == baseline
+    else:
+        jitter = fallback.report()["cooperative_jitter"]
+        assert old.report()["cooperative_jitter"]["selected"] in {1, 2}
+        assert jitter["selected"] in {1, 2}
+        assert fallback._actions == [row for row in baseline if row["note_index"] not in jitter["dropped_note_indices"]]
     assert fallback._random_great_report["reason"] == "device-contact-capacity-unverified"
     assert manager.consume(run.run_id, path) is fallback

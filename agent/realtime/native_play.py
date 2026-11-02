@@ -1020,6 +1020,7 @@ class NativeMinitouchBackend:
         chart_level: int | None = None,
         expected_notes: int | None = None,
         random_great_fallback_reason: str | None = None,
+        cooperative_jitter_enabled: bool = False,
     ) -> None:
         if not native_engine.available():
             raise RuntimeError(
@@ -1035,6 +1036,7 @@ class NativeMinitouchBackend:
         if not self._actions:
             raise RuntimeError("谱面没有可编译的动作")
         self._run_id = run_id or str(uuid.uuid4())
+        canonical_actions = self._actions
         self._random_great_report = {"enabled": False, "status": "disabled", "actual_great_measured": False}
         if random_great_fallback_reason:
             self._random_great_report.update(status="fallback", reason=random_great_fallback_reason,
@@ -1068,6 +1070,26 @@ class NativeMinitouchBackend:
             else:
                 safe_print("NativeRandomGreat " + json.dumps({key: value for key, value in report.items()
                     if key != "selected_notes"}, ensure_ascii=False), flush=True)
+        self._cooperative_jitter_report = None
+        if cooperative_jitter_enabled:
+            try:
+                from .native_cooperative_jitter import plan_cooperative_jitter
+
+                # GREAT 仍用完整原谱校验；漏键随后删除整组动作，避免改变判定分母。
+                # 从真实动作差异取保护集合，不依赖有长度上限的诊断 selected_notes。
+                protected = {before["note_index"] for before, after in zip(canonical_actions, self._actions)
+                             if before != after}
+                planned, jitter_report = plan_cooperative_jitter(
+                    self._actions, chart_path=chart_path, run_id=self._run_id,
+                    enabled=True, mode=start_gate_mode, protected_note_indices=protected)
+            except Exception as exc:
+                self._cooperative_jitter_report = {
+                    "enabled": False, "requested_enabled": True, "status": "fallback", "selected": 0,
+                    "reason": f"{type(exc).__name__}: {exc}"}
+                safe_print(f"NativeCooperativeJitter warning={type(exc).__name__}: {exc}; 保留现有输入", flush=True)
+            else:
+                self._actions, self._cooperative_jitter_report = planned, jitter_report
+                safe_print("NativeCooperativeJitter " + json.dumps(jitter_report, ensure_ascii=False), flush=True)
         self._clock = clock
         self._start_evidence_ticket = None
         self._start_evidence_warning = None
@@ -4189,4 +4211,8 @@ class NativeMinitouchBackend:
             "observation_error": self._observation_error,
             **photogate_report,
         })
+        # 旧谱面副本路径未在此统计漏键；缺省字段不能误报为已禁用。
+        jitter_report = getattr(self, "_cooperative_jitter_report", None)
+        if jitter_report is not None:
+            defaults["cooperative_jitter"] = jitter_report
         return defaults
