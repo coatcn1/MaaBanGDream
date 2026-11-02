@@ -30,7 +30,7 @@ Agent 和资源改动通过启动脚本同步到开发 MFA；不要用官方 Cor
 ```powershell
 & '..\.tools\Miniconda3\envs\maabangdream\python.exe' `
   -m pip install -r .\requirements-release.txt
-.\scripts\build-windows-release.ps1 -Version 1.5.0
+.\scripts\build-windows-release.ps1 -Version 1.5.1
 ```
 
 发布门禁见 [AGENTS.md](AGENTS.md)，运行包约定见 [Windows 运行包](docs/release-package.md)。

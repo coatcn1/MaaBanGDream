@@ -13,14 +13,14 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.5.0-ff6f9f" alt="Version"></a>
+  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.5.1-ff6f9f" alt="Version"></a>
   <img src="https://img.shields.io/badge/MaaFramework-5.10.2-4c8bf5" alt="MaaFramework">
   <img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?logo=windows11&logoColor=white" alt="Windows">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-6f42c1" alt="License"></a>
 </p>
 
-v1.5.0 新增交换所抽箱，并改进 Native 反馈与协力首拍识别。更新内容见[发行说明](docs/release-notes-v1.5.0.md)，开发变更见 [CHANGELOG](CHANGELOG.md)。
+v1.5.1 新增可配置随机 GREAT、LIVE BOOST 检查与框架日志开关，并修正协力漏键。更新内容见[发行说明](docs/release-notes-v1.5.1.md)，开发变更见 [CHANGELOG](CHANGELOG.md)。
 
 ## ✨ 功能
 
