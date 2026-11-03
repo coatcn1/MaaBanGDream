@@ -893,7 +893,7 @@ def test_realtime_multi_live_contract_and_options():
     ]
     assert nodes["RealtimeLiveRehearsalStart"]["template"] == "rehearsal_start.png"
     debug = interface["option"]["RealtimeLiveDebug"]
-    assert debug["default_case"] == "Light"
+    assert debug["default_case"] == "Opening"
     assert [case["name"] for case in debug["cases"]] == [
         "Light", "Off", "Full", "Opening",
     ]
@@ -977,7 +977,7 @@ def test_continuous_realtime_live_returns_home_after_internal_result_navigation(
         ]
         assert params == {"reset": True, "difficulty": case["name"]}
     debug = interface["option"]["ContinuousRealtimeDebug"]
-    assert debug["default_case"] == "Light"
+    assert debug["default_case"] == "Opening"
     assert [case["name"] for case in debug["cases"]] == [
         "Light", "Off", "Full", "Opening",
     ]
@@ -1061,7 +1061,7 @@ def test_calibration_and_challenge_offer_three_diagnostic_levels():
         ("ChallengeDebug", "ChallengeDebugGate"),
     ):
         option = interface["option"][option_name]
-        assert option["default_case"] == "Light"
+        assert option["default_case"] == "Opening"
         assert [case["name"] for case in option["cases"]] == [
             "Light", "Off", "Full", "Opening",
         ]
@@ -1227,7 +1227,12 @@ def test_seven_opening_debug_options_resolve_complete_params_in_real_maafw(tmp_p
     entries=[]
     for name in ['RealtimeLiveDebug','CooperativeDebug','VersusDebug','ContinuousRealtimeDebug','CalibrationDebug','ChallengeDebug','MedleyDebug']:
         option=interface['option'][name]
-        assert option['default_case']!='Opening'
+        assert option['default_case']=='Opening'
+        default_case = next(case for case in option['cases'] if case['name'] == option['default_case'])
+        for value in default_case['pipeline_override'].values():
+            assert value['custom_action_param'] == {
+                'debug_recording': False, 'diagnostic_trace': True, 'opening_recording': True,
+            }
         for case in option['cases']:
             override=case.get('pipeline_override',{})
             for node,value in override.items():

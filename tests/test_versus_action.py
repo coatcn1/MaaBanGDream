@@ -71,7 +71,7 @@ def test_versus_interface_exposes_room_types_difficulties_and_flow_options():
         "Unspecified", "Random", "Current",
     ]
     debug = options["VersusDebug"]
-    assert debug["default_case"] == "Light"
+    assert debug["default_case"] == "Opening"
     assert {
         c["name"]: c["pipeline_override"]["VersusDebugConfigure"]["custom_action_param"]
         for c in debug["cases"]
