@@ -47,6 +47,7 @@ class ChartSelection:
     shared_jacket_level_unique: bool = False
     # 等级容忍必须在最终封面重新取得实读标题，不能复用准备页候选直接开演。
     level_drift_tolerated: bool = False
+    chart_sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +95,19 @@ class LocalChartRepository:
             else regional_level_drift_enabled
         )
 
+    def cover_candidates(self, song_fingerprint: str) -> tuple[CatalogSongIdentity, ...]:
+        """全目录宽松近邻只标记身份歧义，不授予封面单独确认资格。"""
+        return tuple(
+            CatalogSongIdentity(
+                int(song["bestdori_song_id"]),
+                str(song.get("display_title") or song["titles"][0]),
+                tuple(song["titles"]), tuple(song["fingerprints"]),
+            )
+            for song in _coalesce_equivalent_songs(self._load_manifest()["songs"])
+            if any(same_song(song_fingerprint, item, max_distance=LOOSE_SAME_SONG_DISTANCE)
+                   for item in song["fingerprints"])
+        )
+
     def identify_by_cover_title(
         self,
         song_fingerprint: str,
@@ -115,7 +129,7 @@ class LocalChartRepository:
                 for confirmed in song["fingerprints"]
             )
         ]
-        if not cover_matches:
+        if not cover_matches or len(self.cover_candidates(song_fingerprint)) > 1:
             # 一键监听没有准备页等级可作第二重约束。只有标题先独立收窄出
             # 候选后，才允许用宽松封面阈值吸收开场页裁切和边框差异。
             title_scope = _unique_title_matches(songs, title)
@@ -222,6 +236,22 @@ class LocalChartRepository:
             )
         ]
         matched_exact_fingerprint = bool(fingerprint_matches)
+        matched_by_nearby_title = False
+        if (title and len(self.cover_candidates(song_fingerprint)) > 1
+            and not _unique_title_matches(fingerprint_matches, title)):
+            # 近似封面的严格 top1 不能遮住标题独立支持的宽松近邻。
+            nearby = [song for song in songs if any(
+                same_song(song_fingerprint, item, max_distance=LOOSE_SAME_SONG_DISTANCE)
+                for item in song["fingerprints"]
+            )]
+            supported = _unique_title_matches(nearby, title)
+            if len(supported) != 1:
+                return ChartResolution(None, "song title mapping is ambiguous or conflicts with similar cover")
+            fingerprint_matches = supported
+            matched_by_nearby_title = True
+            matched_exact_fingerprint = any(
+                same_song(song_fingerprint, item) for item in supported[0]["fingerprints"]
+            )
         if not fingerprint_matches and level is not None:
             # 选曲页封面裁切/边框会让个别谱面稳定多翻转几 bit；只有同时
             # 读到等级时才用更宽阈值重试，随后仍由等级硬约束唯一化。
@@ -291,7 +321,7 @@ class LocalChartRepository:
             # 恢复错误候选；只有封面与实读标题交叉一致时才保留等级容忍结果。
             if level_matches or not tolerated_level_drift:
                 matches = level_matches
-        matched_by_title = False
+        matched_by_title = matched_by_nearby_title
         if len(matches) != 1 and title:
             title_scope = matches or level_scope
             title_matches = _unique_title_matches(title_scope, title)
@@ -390,6 +420,7 @@ class LocalChartRepository:
                 shared_jacket=len(fingerprint_matches) > 1,
                 shared_jacket_level_unique=same_level_shared == 1,
                 level_drift_tolerated=tolerated_level_drift,
+                chart_sha256=digest,
             ),
             reason,
         )

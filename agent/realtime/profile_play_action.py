@@ -32,8 +32,8 @@ from .optional_diagnostics import OptionalDiagnostics
 from .debug_recorder import RealtimeDebugRecorder, append_lifecycle_event as _append_lifecycle_event
 from .engine import EngineStats, RealtimeEngine
 from .final_cover import (
-    FinalCoverResolution, FinalCoverResolver, FinalCoverStartupFailure,
-    is_member_loading_screen,
+    FinalCoverGate, FinalCoverResolution, FinalCoverResolver, FinalCoverStartupFailure, FinalCoverIdentityConflict,
+    is_member_loading_screen, preparation_identity_is_trusted, final_cover_frame_digest,
 )
 from .life_monitor import LifeDetector, LifeGuard, PlayfieldCompletionGuard
 from .live_failed_detector import (
@@ -337,6 +337,11 @@ def _final_cover_diagnostic(resolver) -> dict:
     detail["title_observation"] = {
         **resolver.last_title_reading_diagnostic, **resolver.last_title_diagnostic,
     }
+    detail["identity_guard"] = {
+        "requires_final_title": resolver.requires_final_title,
+        "trusted_preparation_song_id": resolver._prepared_song_id,
+        "cover_candidate_ids": resolver._cover_candidate_ids,
+    }
     return detail
 
 
@@ -458,16 +463,15 @@ def wait_for_final_cover(
             else 0.0
         ),
         selection=selection,
-        repository=(
-            repository
-            if selection is None else None
-        ),
+        repository=repository,
         require_observed_title=require_observed_title,
         allow_missing_level=ignore_preparation_level,
         reject_member_loading=(
             getattr(live_run, "mode", "") in ("cooperative", "versus")
             and cooperative_member_loading_guard_enabled
         ),
+        trust_preparation_identity=preparation_identity_is_trusted(live_run, difficulty),
+        preparation_song_fingerprint=getattr(live_run, "song_id", None),
     )
     def save_failure(error, image):
         try:
@@ -498,6 +502,54 @@ def wait_for_final_cover(
         if resolver.reject_member_loading and is_member_loading_screen(initial_image):
             # 交接必须对应真实封面帧；加载图标存在时废弃预确认，继续本局检测。
             initial_resolution = None
+        elif isinstance(getattr(resolver, "repository", None), LocalChartRepository):
+            # 交接布尔标志不能替代当前全库近邻及准备身份约束；重走本轮门禁。
+            from .song_identity import identify_final_song, same_song as final_cover_same_song
+            actual_fingerprint = identify_final_song(initial_image).song_id
+            candidates = resolver.repository.cover_candidates(actual_fingerprint)
+            prepared_id = resolver.trusted_preparation_song_id(actual_fingerprint)
+            selected_id = initial_resolution.selection.bestdori_song_id
+            title_identity = None
+            frame_bound = (
+                actual_fingerprint == initial_resolution.confirmation.song_id
+                and initial_resolution.frame_digest == final_cover_frame_digest(initial_image)
+            )
+            if (frame_bound and initial_resolution.final_title_confirmed
+                and initial_resolution.observed_title_confidence >= 0.7
+                and initial_resolution.observed_title):
+                title_identity = resolver.repository.identify_by_cover_title(
+                    actual_fingerprint, initial_resolution.observed_title,
+                ).identity
+            if (title_identity is not None and prepared_id is not None
+                and title_identity.bestdori_song_id != prepared_id):
+                fail(FinalCoverIdentityConflict("最终封面歌曲身份冲突：准备页歌曲与交接的最终实读标题不一致"), initial_image)
+            safe_unique = (len(candidates) == 1
+                           and candidates[0].bestdori_song_id == selected_id
+                           and any(final_cover_same_song(actual_fingerprint, item)
+                                   for item in candidates[0].fingerprints)
+                           and initial_resolution.unique_cover_confirmed)
+            safe_title = title_identity is not None and title_identity.bestdori_song_id == selected_id
+            current_selection = resolver.repository.resolve(
+                actual_fingerprint, difficulty, level=resolver.observed_level,
+                title=initial_resolution.observed_title if safe_title else None,
+            ).selection
+            cached_gate = FinalCoverGate(
+                initial_resolution.selection, difficulty=difficulty,
+                observed_level=resolver.observed_level,
+                observed_title=initial_resolution.observed_title,
+                allow_missing_level=ignore_preparation_level,
+                require_matching_title=safe_title,
+            )
+            if (not frame_bound
+                or current_selection is None
+                or current_selection.path != initial_resolution.selection.path
+                or current_selection.bestdori_song_id != selected_id
+                or current_selection.chart_sha256 != getattr(initial_resolution.selection, "chart_sha256", None)
+                or not (safe_unique or safe_title)
+                or cached_gate.observe(initial_image) is None
+                or (prepared_id is not None and selected_id != prepared_id)):
+                initial_resolution = None
+                resolver.requires_final_title = True
     if initial_resolution is not None:
         if observer is not None:
             observer(
@@ -645,7 +697,7 @@ def wait_for_final_cover(
                 image=image,
             )
         if not cooperative and playfield_streak >= 2 and now_mono >= black_burst_until:
-            if require_observed_title:
+            if require_observed_title or resolver.requires_final_title:
                 fail(FinalCoverStartupFailure(
                     "最终封面页标题未确认，已在发送演奏触控前停止："
                     f"{resolver.last_reason}"
@@ -677,7 +729,7 @@ def wait_for_final_cover(
             f"最终封面确认超时：{float(timeout_seconds):g} 秒内未确认本局歌曲封面与标题："
             f"{resolver.last_reason}；未启动演奏输入"
         ), last_image)
-    if require_observed_title:
+    if require_observed_title or resolver.requires_final_title:
         fail(FinalCoverStartupFailure(
             "最终封面页标题未确认，已在发送演奏触控前停止："
             f"{resolver.last_reason}"

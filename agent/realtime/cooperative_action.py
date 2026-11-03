@@ -49,6 +49,7 @@ from .playfield_monitor import PlayfieldDetector
 from .chart_repository import LocalChartRepository
 from .final_cover import (
     FinalCoverResolver, FinalCoverStartupFailure, FinalCoverIdentityConflict,
+    preparation_identity_is_trusted,
 )
 from .startup_diagnostics import CooperativeStartupRecorder, cover_diagnostic
 from .room_song_entry import (RoomEntryEvidence, RoomEntryTransient, guarded_song_choice_click,
@@ -1352,6 +1353,8 @@ class CooperativeLiveFlow:
             observed_level=run.song_level,
             observed_title=run.song_title,
             observed_title_confidence=float(run.song_title_confidence or 0.0),
+            trust_preparation_identity=preparation_identity_is_trusted(run, run.difficulty),
+            preparation_song_fingerprint=getattr(run, "song_id", None),
             repository=LocalChartRepository(
                 PROJECT_ROOT / "resource" / "charts"
             ),
