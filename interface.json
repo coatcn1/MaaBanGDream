@@ -441,11 +441,11 @@
     "MedleyDebug": {
       "type": "select",
       "label": "诊断记录",
-      "default_case": "Light",
+      "default_case": "Opening",
       "cases": [
         {
           "name": "Light",
-          "label": "轻量 Trace（推荐）",
+          "label": "轻量 Trace",
           "pipeline_override": {
             "MedleyDebugConfigure": {
               "custom_action_param": {
@@ -484,7 +484,7 @@
         },
         {
           "name": "Opening",
-          "label": "开场截图＋轻量 Trace（首音后20秒）",
+          "label": "开场截图＋轻量 Trace（推荐，首音后20秒）",
           "pipeline_override": {
             "MedleyDebugConfigure": {
               "custom_action_param": {
@@ -496,7 +496,7 @@
           }
         }
       ],
-      "description": "Trace只保留结构化帧和事件，不是连续画面；开场截图复用已有截图，有界保留首音前及首音后20秒的真实截图，可能丢帧或截断，不能用于证明绝对输入延迟。"
+      "description": "轻量Trace用于流程、输入、生命和校准排查；开场截图更便于核对页面、标题和首音，额外占用空间。Trace不是连续画面；开场截图复用已有截图，有界保留首音前及首音后20秒的真实截图，可能丢帧或截断，不能用于证明绝对输入延迟。"
     },
     "CooperativeEntryMethod": {
       "type": "select",
@@ -891,11 +891,11 @@
     "CooperativeDebug": {
       "type": "select",
       "label": "诊断记录",
-      "default_case": "Light",
+      "default_case": "Opening",
       "cases": [
         {
           "name": "Light",
-          "label": "轻量 Trace（推荐）",
+          "label": "轻量 Trace",
           "pipeline_override": {
             "CooperativeDebugConfigure": {
               "custom_action_param": {
@@ -934,7 +934,7 @@
         },
         {
           "name": "Opening",
-          "label": "开场截图＋轻量 Trace（首音后20秒）",
+          "label": "开场截图＋轻量 Trace（推荐，首音后20秒）",
           "pipeline_override": {
             "CooperativeDebugConfigure": {
               "custom_action_param": {
@@ -946,7 +946,7 @@
           }
         }
       ],
-      "description": "Trace只保留结构化帧和事件，不是连续画面；开场截图复用已有截图，有界保留首音前及首音后20秒的真实截图，可能丢帧或截断，不能用于证明绝对输入延迟。"
+      "description": "轻量Trace用于流程、输入、生命和校准排查；开场截图更便于核对页面、标题和首音，额外占用空间。Trace不是连续画面；开场截图复用已有截图，有界保留首音前及首音后20秒的真实截图，可能丢帧或截断，不能用于证明绝对输入延迟。"
     },
     "CooperativeDisconnectJump": {
       "type": "select",
@@ -1184,11 +1184,11 @@
     "VersusDebug": {
       "type": "select",
       "label": "诊断记录",
-      "default_case": "Light",
+      "default_case": "Opening",
       "cases": [
         {
           "name": "Light",
-          "label": "轻量 Trace（推荐）",
+          "label": "轻量 Trace",
           "pipeline_override": {
             "VersusDebugConfigure": {
               "custom_action_param": {
@@ -1227,7 +1227,7 @@
         },
         {
           "name": "Opening",
-          "label": "开场截图＋轻量 Trace（首音后20秒）",
+          "label": "开场截图＋轻量 Trace（推荐，首音后20秒）",
           "pipeline_override": {
             "VersusDebugConfigure": {
               "custom_action_param": {
@@ -1239,7 +1239,7 @@
           }
         }
       ],
-      "description": "Trace只保留结构化帧和事件，不是连续画面；开场截图复用已有截图，有界保留首音前及首音后20秒的真实截图，可能丢帧或截断，不能用于证明绝对输入延迟。"
+      "description": "轻量Trace用于流程、输入、生命和校准排查；开场截图更便于核对页面、标题和首音，额外占用空间。Trace不是连续画面；开场截图复用已有截图，有界保留首音前及首音后20秒的真实截图，可能丢帧或截断，不能用于证明绝对输入延迟。"
     },
     "VersusDisconnectJump": {
       "type": "select",
@@ -2045,11 +2045,11 @@
     "RealtimeLiveDebug": {
       "type": "select",
       "label": "诊断记录",
-      "default_case": "Light",
+      "default_case": "Opening",
       "cases": [
         {
           "name": "Light",
-          "label": "轻量 Trace（推荐）",
+          "label": "轻量 Trace",
           "pipeline_override": {
             "RealtimeLiveDebugGate": {
               "custom_action_param": {
@@ -2088,7 +2088,7 @@
         },
         {
           "name": "Opening",
-          "label": "开场截图＋轻量 Trace（首音后20秒）",
+          "label": "开场截图＋轻量 Trace（推荐，首音后20秒）",
           "pipeline_override": {
             "RealtimeLiveDebugGate": {
               "custom_action_param": {
@@ -2100,7 +2100,7 @@
           }
         }
       ],
-      "description": "Trace只保留结构化帧和事件，不是连续画面；开场截图复用已有截图，有界保留首音前及首音后20秒的真实截图，可能丢帧或截断，不能用于证明绝对输入延迟。"
+      "description": "轻量Trace用于流程、输入、生命和校准排查；开场截图更便于核对页面、标题和首音，额外占用空间。Trace不是连续画面；开场截图复用已有截图，有界保留首音前及首音后20秒的真实截图，可能丢帧或截断，不能用于证明绝对输入延迟。"
     },
     "ContinuousRealtimeDifficulty": {
       "type": "select",
@@ -2172,11 +2172,11 @@
     "ContinuousRealtimeDebug": {
       "type": "select",
       "label": "诊断记录",
-      "default_case": "Light",
+      "default_case": "Opening",
       "cases": [
         {
           "name": "Light",
-          "label": "轻量 Trace（推荐）",
+          "label": "轻量 Trace",
           "pipeline_override": {
             "ContinuousRealtimeDebugConfigure": {
               "custom_action_param": {
@@ -2215,7 +2215,7 @@
         },
         {
           "name": "Opening",
-          "label": "开场截图＋轻量 Trace（首音后20秒）",
+          "label": "开场截图＋轻量 Trace（推荐，首音后20秒）",
           "pipeline_override": {
             "ContinuousRealtimeDebugConfigure": {
               "custom_action_param": {
@@ -2227,7 +2227,7 @@
           }
         }
       ],
-      "description": "Trace只保留结构化帧和事件，不是连续画面；开场截图复用已有截图，有界保留首音前及首音后20秒的真实截图，可能丢帧或截断，不能用于证明绝对输入延迟。"
+      "description": "轻量Trace用于流程、输入、生命和校准排查；开场截图更便于核对页面、标题和首音，额外占用空间。Trace不是连续画面；开场截图复用已有截图，有界保留首音前及首音后20秒的真实截图，可能丢帧或截断，不能用于证明绝对输入延迟。"
     },
     "CalibrationSongMode": {
       "type": "select",
@@ -2388,11 +2388,11 @@
     "CalibrationDebug": {
       "type": "select",
       "label": "诊断记录",
-      "default_case": "Light",
+      "default_case": "Opening",
       "cases": [
         {
           "name": "Light",
-          "label": "轻量 Trace（推荐）",
+          "label": "轻量 Trace",
           "pipeline_override": {
             "CalibrationDebugSetting": {
               "custom_action_param": {
@@ -2431,7 +2431,7 @@
         },
         {
           "name": "Opening",
-          "label": "开场截图＋轻量 Trace（首音后20秒）",
+          "label": "开场截图＋轻量 Trace（推荐，首音后20秒）",
           "pipeline_override": {
             "CalibrationDebugSetting": {
               "custom_action_param": {
@@ -2443,7 +2443,7 @@
           }
         }
       ],
-      "description": "Trace只保留结构化帧和事件，不是连续画面；开场截图复用已有截图，有界保留首音前及首音后20秒的真实截图，可能丢帧或截断，不能用于证明绝对输入延迟。"
+      "description": "轻量Trace用于流程、输入、生命和校准排查；开场截图更便于核对页面、标题和首音，额外占用空间。Trace不是连续画面；开场截图复用已有截图，有界保留首音前及首音后20秒的真实截图，可能丢帧或截断，不能用于证明绝对输入延迟。"
     },
     "ChallengeDifficulty": {
       "type": "select",
@@ -2785,11 +2785,11 @@
     "ChallengeDebug": {
       "type": "select",
       "label": "诊断记录",
-      "default_case": "Light",
+      "default_case": "Opening",
       "cases": [
         {
           "name": "Light",
-          "label": "轻量 Trace（推荐）",
+          "label": "轻量 Trace",
           "pipeline_override": {
             "ChallengeDebugGate": {
               "custom_action_param": {
@@ -2828,7 +2828,7 @@
         },
         {
           "name": "Opening",
-          "label": "开场截图＋轻量 Trace（首音后20秒）",
+          "label": "开场截图＋轻量 Trace（推荐，首音后20秒）",
           "pipeline_override": {
             "ChallengeDebugGate": {
               "custom_action_param": {
@@ -2840,7 +2840,7 @@
           }
         }
       ],
-      "description": "Trace只保留结构化帧和事件，不是连续画面；开场截图复用已有截图，有界保留首音前及首音后20秒的真实截图，可能丢帧或截断，不能用于证明绝对输入延迟。"
+      "description": "轻量Trace用于流程、输入、生命和校准排查；开场截图更便于核对页面、标题和首音，额外占用空间。Trace不是连续画面；开场截图复用已有截图，有界保留首音前及首音后20秒的真实截图，可能丢帧或截断，不能用于证明绝对输入延迟。"
     },
     "AutoLiveStaminaRefill": {
       "type": "select",
