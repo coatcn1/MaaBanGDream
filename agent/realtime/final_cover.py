@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+import hashlib
 import unicodedata
 
 import cv2
@@ -92,6 +93,12 @@ class FinalCoverResolution:
     observed_title_confidence: float = 0.0
     final_title_confirmed: bool = False
     unique_cover_confirmed: bool = False
+    frame_digest: str | None = None
+
+
+def final_cover_frame_digest(image: Any) -> str:
+    """交接凭据绑定实际确认图，防止旧标题搭配同封面的另一张画面。"""
+    return hashlib.sha256(image.tobytes()).hexdigest()
 
 
 def _is_full_song(selection: Any) -> bool:
@@ -104,6 +111,16 @@ def _is_full_song(selection: Any) -> bool:
         if normalized.startswith("[full]"):
             return True
     return False
+
+
+def preparation_identity_is_trusted(run: Any, difficulty: str) -> bool:
+    """待最终封面兜底的准备候选不得升级为不可替换的身份。"""
+    return bool(
+        getattr(run, "prepared_for_play", False)
+        and str(getattr(run, "difficulty", "")).strip().lower() == str(difficulty).strip().lower()
+        and not getattr(run, "preparation_title_pending_final_cover", False)
+        and not getattr(run, "preparation_identity_pending_final_cover", False)
+    )
 
 
 class FinalCoverGate:
@@ -259,6 +276,8 @@ class FinalCoverResolver:
         require_observed_title: bool = False,
         allow_missing_level: bool = False,
         reject_member_loading: bool = False,
+        trust_preparation_identity: bool = True,
+        preparation_song_fingerprint: str | None = None,
     ) -> None:
         if selection is None and repository is None:
             raise ValueError("缺少最终封面谱面解析器")
@@ -292,7 +311,21 @@ class FinalCoverResolver:
                 Path(__file__).resolve().parents[2] / "resource" / "charts",
             )
             selection = None
-        self.repository = repository
+        # 已选谱面也须扫描完整目录，不能通过直接 gate 绕过相似封面保护。
+        self.repository = repository or LocalChartRepository(
+            Path(__file__).resolve().parents[2] / "resource" / "charts",
+        )
+        self.requires_final_title = False
+        self._cover_candidate_ids = None
+        self._prepared_song_id = None
+        self._preparation_title = observed_title
+        self._preparation_title_confidence = float(observed_title_confidence or 0.0)
+        self._preparation_selection = selection
+        self._trust_preparation_identity = bool(trust_preparation_identity)
+        self._preparation_song_fingerprint = preparation_song_fingerprint
+        self._preparation_identity_checked = False
+        self._title_cover_fingerprint = None
+        self._title_cover_pixels = None
         self._final_title_confirmed = False
         self.gate = (
             FinalCoverGate(
@@ -324,9 +357,36 @@ class FinalCoverResolver:
     def observed_title_confidence(self) -> float:
         return self._observed_title_confidence
 
+    def trusted_preparation_song_id(self, final_fingerprint: str | None = None) -> int | None:
+        """准备页仅由独立唯一标题及精确等级/难度冻结身份，不消费最终页读数。"""
+        if not self._preparation_identity_checked:
+            # 协力准备页只读标题时，须等本局最终封面独立支持该候选才冻结。
+            fingerprint = self._preparation_song_fingerprint
+            if fingerprint in (None, UNKNOWN_SONG_ID):
+                fingerprint = final_fingerprint
+            if fingerprint in (None, UNKNOWN_SONG_ID):
+                return None
+            if (self._trust_preparation_identity and isinstance(self.repository, LocalChartRepository)
+                and self._preparation_title and self._preparation_title_confidence >= 0.9
+                and self.observed_level is not None):
+                prepared = self.repository.resolve(
+                    UNKNOWN_SONG_ID, self.difficulty, level=None, title=self._preparation_title,
+                ).selection
+                if (prepared is not None and not prepared.level_drift_tolerated
+                    and prepared.level == self.observed_level
+                    and fingerprint is not None and any(
+                        same_song(fingerprint, item,
+                                  max_distance=LOOSE_SAME_SONG_DISTANCE)
+                        for item in prepared.fingerprints)
+                    and (self._preparation_selection is None or prepared.bestdori_song_id
+                         == self._preparation_selection.bestdori_song_id)):
+                    self._prepared_song_id = prepared.bestdori_song_id
+                    self._preparation_identity_checked = True
+        return self._prepared_song_id
+
     @property
     def independent_final_title_enabled(self) -> bool:
-        return bool(getattr(self.repository, "regional_level_drift_enabled", False))
+        return self.requires_final_title or bool(getattr(self.repository, "regional_level_drift_enabled", False))
 
     def refresh_observed_title(self, text: str, confidence: float, *, identity_confirmed: bool = False) -> bool:
         """用最终封面页自身的标题 OCR 刷新准备页标题。
@@ -455,11 +515,16 @@ class FinalCoverResolver:
         # 不传标题、等级或 ID：在完整曲库中按严格封面阈值解析唯一候选，
         # 不能把等级筛选后的唯一或宽松封面 top1 当作可信唯一封面。
         assert self.repository is not None
+        candidates = getattr(self.repository, "cover_candidates", lambda _song_id: ())(song_id)
+        if len(candidates) > 1:
+            return None
         selected = self.repository.resolve(
             song_id, self.difficulty, level=None, title=None,
         ).selection
         if (
             selected is None
+            or (self._prepared_song_id is not None
+                and selected.bestdori_song_id != self._prepared_song_id)
             or bool(getattr(selected, "shared_jacket", False))
             or bool(getattr(selected, "level_drift_tolerated", False))
             or not any(same_song(song_id, item)
@@ -501,6 +566,45 @@ class FinalCoverResolver:
             return None
         identity = None
         score_identity = None
+        if (isinstance(self.repository, LocalChartRepository)
+            and (not is_final_score_layout(image) or self._cover_candidate_ids is not None)):
+            identity = identify_final_song(image)
+            self.trusted_preparation_song_id(identity.song_id)
+            candidates = self.repository.cover_candidates(identity.song_id)
+            title_x, title_y, title_w, title_h = FINAL_COVER_TITLE_ROI
+            title_pixels = image[title_y:title_y + title_h, title_x:title_x + title_w]
+            if (self.requires_final_title and self._final_title_confirmed
+                and (identity.song_id != self._title_cover_fingerprint
+                     or (not is_final_score_layout(image) and self._title_cover_pixels is not None
+                         and not np.array_equal(title_pixels, self._title_cover_pixels)))):
+                # 同一近邻组也可能换歌；新封面或新标题不能继承上一身份的稳定计数。
+                self._final_title_confirmed = False
+                self._final_title_observed_frame = None
+                self._candidate_frames = 0
+                self.gate = None
+            candidate_ids = tuple(sorted(item.bestdori_song_id for item in candidates))
+            if self._cover_candidate_ids is not None and candidate_ids != self._cover_candidate_ids:
+                # 相邻哈希也可能越过候选边界；标题缓存只能属于同一全库候选组。
+                self._final_title_confirmed = False
+                self._final_title_observed_frame = None
+                self._candidate_frames = 0
+                if not is_final_score_layout(image):
+                    self._clear_unique_cover_candidate()
+                if self.requires_final_title:
+                    self.gate = None
+            self._cover_candidate_ids = candidate_ids
+            needs_title = len(candidates) > 1 or (
+                self._prepared_song_id is not None and bool(candidates)
+                and all(item.bestdori_song_id != self._prepared_song_id for item in candidates)
+            )
+            if needs_title:
+                self.requires_final_title = True
+                # 缓存与直接选谱面都只能提供候选；本页标题必须独立确认。
+                if self.gate is not None and not self._final_title_confirmed:
+                    self.gate = None
+                if not self._final_title_confirmed:
+                    self.observed_title = None
+                    self._observed_title_confidence = 0.0
         if is_final_score_layout(image):
             # 得分页仍展示相同封面，不能把得分标签提升为歌名或制造身份冲突。
             score_identity = identify_final_song(image)
@@ -543,6 +647,8 @@ class FinalCoverResolver:
                 "score-layout-cached-cover" if self._unique_cover_gate is not None
                 else "score-layout-cached-title"
             )
+        if self.requires_final_title and self.gate is not None:
+            self.gate = None
         if self.gate is None or self.gate is self._unique_cover_gate:
             identity = score_identity or identify_final_song(image)
             if score_identity is None and not self._observe_cover_candidate(identity.song_id):
@@ -571,6 +677,7 @@ class FinalCoverResolver:
                 self._final_title_confirmed = False
                 return FinalCoverResolution(
                     confirmation, self.gate.selection, unique_cover_confirmed=True,
+                    frame_digest=final_cover_frame_digest(image),
                 )
         if (
             score_identity is None and refresh_title and self.repository is not None
@@ -611,6 +718,7 @@ class FinalCoverResolver:
                 observed_title_confidence=self._observed_title_confidence,
                 final_title_confirmed=self._final_title_confirmed,
                 unique_cover_confirmed=self.gate is self._unique_cover_gate,
+                frame_digest=final_cover_frame_digest(image),
             )
 
         assert identity is not None
@@ -657,6 +765,9 @@ class FinalCoverResolver:
                 if self._final_title_confirmed:
                     self._final_title_observed_frame = self.frames
                     self.last_title_diagnostic["cached_title_frame"] = self.frames
+                    self._title_cover_fingerprint = identity.song_id
+                    x, y, width, height = FINAL_COVER_TITLE_ROI
+                    self._title_cover_pixels = image[y:y + height, x:x + width].copy()
         # 缓存标题不能降低连续两帧封面要求，加载和换封面会清空该缓存。
         if self._candidate_frames < 2:
             self.last_reason = "waiting for stable final cover jacket"
@@ -679,7 +790,9 @@ class FinalCoverResolver:
         if resolution.selection is None:
             if (
                 self._final_title_confirmed
-                and resolution.reason == "song title conflicts with regional level drift candidate"
+                and (resolution.reason == "song title conflicts with regional level drift candidate"
+                     or (self.requires_final_title and self.observed_title_confidence >= 0.9
+                         and resolution.reason == "song title mapping is ambiguous or conflicts with similar cover"))
             ):
                 # 本页封面与本页可信标题冲突属于身份失败，不能退回视觉演奏。
                 self.last_reason = resolution.reason
@@ -696,6 +809,10 @@ class FinalCoverResolver:
                 )
             self.last_reason = resolution.reason
             return None
+        if (self._final_title_confirmed and self._prepared_song_id is not None
+            and resolution.selection.bestdori_song_id != self._prepared_song_id):
+            self.last_reason = "final cover title conflicts with trusted preparation song"
+            raise FinalCoverIdentityConflict(f"最终封面歌曲身份冲突：准备页歌曲 {self._prepared_song_id} 与最终标题不一致")
         if (
             bool(getattr(resolution.selection, "level_drift_tolerated", False))
             and not self._final_title_confirmed
@@ -739,4 +856,5 @@ class FinalCoverResolver:
             observed_title=self.observed_title,
             observed_title_confidence=self._observed_title_confidence,
             final_title_confirmed=self._final_title_confirmed,
+            frame_digest=final_cover_frame_digest(image),
         )
