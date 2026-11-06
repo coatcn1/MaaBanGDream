@@ -733,6 +733,29 @@ class CommonRecover(CustomAction):
             if restart_round < restart_limit:
                 if context.tasker.stopping:
                     return True
+                # 调用方可在真正重启前复核当前页面是否已经恢复成可继续的状态
+                # （例如协力房间在恢复期间补满并出现准备按钮）。取消重启时
+                # 不写恢复截图，避免把已经开始的新局误记成失败现场。
+                veto = getattr(argv, "pre_restart_veto", None)
+                if callable(veto):
+                    try:
+                        if veto(image):
+                            setattr(argv, "recovery_cancelled", True)
+                            log_task(
+                                "游戏启动",
+                                "主页恢复",
+                                "INFO",
+                                "重启前复检命中可继续页面，取消本次游戏重启",
+                            )
+                            return False
+                    except Exception as exc:  # noqa: BLE001 - 复核失败继续原恢复
+                        log_task(
+                            "游戏启动",
+                            "主页恢复",
+                            "WARN",
+                            "重启前复检异常，继续原恢复："
+                            f"{type(exc).__name__}: {exc}",
+                        )
                 try:
                     evidence_dir = Path(__file__).resolve().parents[1] / "debug"
                     evidence_dir.mkdir(parents=True, exist_ok=True)

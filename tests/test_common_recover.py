@@ -357,6 +357,29 @@ def test_failure_path_restarts_only_up_to_limit(monkeypatch):
     assert context.tasker.controller.starts == ["test.package", "test.package"]
 
 
+def test_pre_restart_veto_cancels_restart(monkeypatch):
+    context = Context(foreground="test.package")
+    ticks = iter(range(1000))
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: next(ticks) / 1000)
+    monkeypatch.setattr(common_recover.time, "sleep", lambda _seconds: None)
+    args = argv(
+        escape_interval_ms=0,
+        escape_timeout_ms=2,
+        restart_wait_ms=0,
+        restart_limit=1,
+        package="test.package",
+    )
+    args.pre_restart_veto = lambda _image: True
+
+    result = common_recover.CommonRecover().run(context, args)
+
+    assert not result
+    assert getattr(args, "recovery_cancelled", False) is True
+    # 命中复核后不能停游戏，也不能再启动游戏。
+    assert context.tasker.controller.stops == []
+    assert context.tasker.controller.starts == []
+
+
 def test_startup_grace_waits_without_sending_back(monkeypatch):
     context = Context({"HomeMarker": [False, True]})
     ticks = iter([0, 0, .001, .002, .003, .004, .005])
