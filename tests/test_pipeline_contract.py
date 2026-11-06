@@ -54,6 +54,34 @@ print(json.dumps(effective))
     }
 
 
+def test_cooperative_bootstrap_config_nodes_drop_default_delays():
+    nodes = load(ROOT / "resource/pipeline/cooperative_live.json")
+    pure_config_nodes = (
+        "CooperativeLive",
+        "CooperativeProcessConflictGuard",
+        "CooperativeLiveStaminaRefillConfigure",
+        "CooperativeEntryConfigure",
+        "CooperativeTierConfigure",
+        "CooperativeCodeConfigure",
+        "CooperativeDifficultyConfigure",
+        "CooperativeCountConfigure",
+        "CooperativePostLiveConfigure",
+        "CooperativeMemberExitConfigure",
+        "CooperativeSongChoiceConfigure",
+        "CooperativeDebugConfigure",
+        "CooperativeDisconnectJumpConfigure",
+    )
+    for name in pure_config_nodes:
+        node = nodes[name]
+        assert node["recognition"] == "DirectHit"
+        assert node["pre_delay"] == 0
+        assert node["post_delay"] == 0
+
+    # 点击「演出」仍需保留点击后的 1 秒页面过渡等待。
+    assert nodes["CooperativeHomeLive"]["post_delay"] == 1000
+    assert "post_delay" not in nodes["CooperativeRecover"]
+
+
 def test_all_count_inputs_accept_zero_and_reject_out_of_range():
     import re
 
