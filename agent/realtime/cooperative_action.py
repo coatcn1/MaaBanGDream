@@ -2276,6 +2276,50 @@ class CooperativeLiveFlow:
         return True
 
 
+@AgentServer.custom_action("CooperativeHomeFastCheck")
+class CooperativeHomeFastCheck(CustomAction):
+    """主页快速启动：只有确认主页和游戏前台才跳过 CommonRecover。"""
+
+    def run(self, context: Context, argv: CustomAction.RunArg) -> bool:
+        del argv
+        if context.tasker.stopping:
+            return True
+        try:
+            image = capture_image(context)
+            result = context.run_recognition("CooperativeHomeMarker", image)
+            if not result or not result.hit:
+                print(
+                    "CooperativeHomeFastCheck home=false "
+                    "action=fallback-recover",
+                    flush=True,
+                )
+                return False
+            actual = foreground_package(context.tasker.controller) or ""
+            if actual != GAME_PACKAGE:
+                print(
+                    "CooperativeHomeFastCheck home=true "
+                    f"foreground={actual or 'unknown'} "
+                    "action=fallback-recover",
+                    flush=True,
+                )
+                return False
+            print(
+                "CooperativeHomeFastCheck home=true foreground=game "
+                "action=skip-recover",
+                flush=True,
+            )
+            return True
+        except ScreenRefreshCancelled:
+            return bool(context.tasker.stopping)
+        except Exception as exc:
+            print(
+                "CooperativeHomeFastCheck warning="
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            return False
+
+
 @AgentServer.custom_action("CooperativeLiveConfigure")
 class CooperativeLiveConfigure(CustomAction):
     def run(self, context: Context, argv: CustomAction.RunArg) -> bool:

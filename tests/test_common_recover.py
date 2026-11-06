@@ -370,6 +370,31 @@ def test_startup_grace_waits_without_sending_back(monkeypatch):
     assert context.tasker.controller.keys == []
 
 
+def test_foreground_start_uses_short_grace_before_escape(monkeypatch):
+    context = Context()
+    clock = [0.0]
+    monkeypatch.setattr(common_recover.time, "monotonic", lambda: clock[0])
+
+    def advance(_context, seconds):
+        clock[0] += max(seconds, 0.1)
+        return True
+
+    monkeypatch.setattr(common_recover, "_wait_unless_stopping", advance)
+    monkeypatch.setattr(common_recover, "_prepare_game", lambda *_args: (True, False))
+
+    common_recover.CommonRecover().run(
+        context,
+        argv(
+            escape_interval_ms=1000,
+            escape_timeout_ms=3000,
+            startup_grace_ms=12000,
+        ),
+    )
+
+    # 游戏已在前台时不能等满 12 秒 grace；3 秒预算内必须已经发出 ESC。
+    assert context.tasker.controller.keys
+
+
 def test_startup_grace_allows_launcher_until_game_reaches_foreground(monkeypatch):
     context = Context({"HomeMarker": [False, True]})
     context.tasker.controller.foreground = iter([

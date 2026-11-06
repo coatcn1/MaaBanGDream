@@ -54,6 +54,15 @@ print(json.dumps(effective))
     }
 
 
+def test_cooperative_fast_check_and_speed_gate_drop_default_delays():
+    nodes = load(ROOT / "resource/pipeline/cooperative_live.json")
+    # 快速主页检查本身不产生 UI；流速 Gate 关闭时直接返回，开启时由
+    # custom action 自己等待页面，因此节点默认延迟也压掉。
+    for name in ("CooperativeHomeFastCheck", "CooperativeSpeedSettingsGate"):
+        assert nodes[name]["pre_delay"] == 0
+        assert nodes[name]["post_delay"] == 0
+
+
 def test_all_count_inputs_accept_zero_and_reject_out_of_range():
     import re
 
@@ -1131,7 +1140,16 @@ def test_task_entries_bootstrap_before_round_execution():
             config = mode + "StaminaRefillConfigure"
             assert guard["next"] == [config]
             assert nodes[config]["custom_action"] == "StaminaRefillConfigure"
-            assert nodes[config]["next"] == [expected_next]
+            if entry_name == "CooperativeLive":
+                assert nodes[config]["next"] == ["CooperativeHomeFastCheck"]
+                fast = nodes["CooperativeHomeFastCheck"]
+                assert fast["custom_action"] == "CooperativeHomeFastCheck"
+                assert fast["pre_delay"] == 0
+                assert fast["post_delay"] == 0
+                assert fast["next"] == [gate_name]
+                assert fast["on_error"] == [recover_name]
+            else:
+                assert nodes[config]["next"] == [expected_next]
         assert guard["on_error"]
         if recover_name:
             recover = nodes[recover_name]
