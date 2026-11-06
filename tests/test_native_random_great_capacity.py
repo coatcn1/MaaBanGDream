@@ -178,7 +178,9 @@ def test_real_constructed_fallback_retains_original_feedback_and_canonical_chart
         backend_factory=factory, manager=manager) is selection
     assert len(instances) == 2 and stops == [instances[0]]
     old, fallback = instances
-    assert old._random_great_report["selected_with_active_hold"] > 0 and not old.life_feedback_enabled
+    assert old._random_great_report["selected_with_active_hold"] > 0 and old.life_feedback_enabled
+    assert old._random_great_report["phase_feedback_excluded_notes"] > 0
+    assert old._feedback_tickets is not None and old._feedback_single_taps is not None
     assert fallback.life_feedback_enabled
     if mode == "formal":
         assert fallback._native_clock_trial and fallback._native_visual_refresh_enabled

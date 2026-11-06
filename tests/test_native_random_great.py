@@ -45,6 +45,17 @@ def test_level_rule_uses_whole_chart_denominator(level, percent):
     assert shifted[0] == actions[0] and shifted[-1] == actions[-1]
 
 
+def test_selected_indices_are_complete_when_diagnostic_details_truncate():
+    actions = [action(i * .2, i) for i in range(2000)]
+    options = ENABLED | {"native_random_great_base_percent": 20, "native_random_great_max_percent": 20}
+    _, report = plan(actions, options=options, total_judgements=2000)
+    assert report["selected"] == 400
+    assert len(report["selected_notes"]) == 256 and report["selected_notes_truncated"]
+    assert len(report["selected_note_indices"]) == 400
+    assert len(set(report["selected_note_indices"])) == 400
+    assert {row["note_index"] for row in report["selected_notes"]} <= set(report["selected_note_indices"])
+
+
 def test_configurable_formula_and_missing_level_fallback():
     options = ENABLED | {"native_random_great_base_percent": 1.5, "native_random_great_level_start": 25,
                          "native_random_great_per_level_percent": .5, "native_random_great_max_percent": 5}
@@ -187,7 +198,7 @@ def write_chart(tmp_path):
 
 
 @requires_native
-def test_real_backend_disables_phase_feedback_but_default_and_modes_do_not(tmp_path):
+def test_real_backend_excludes_random_great_notes_but_keeps_phase_feedback(tmp_path):
     path = write_chart(tmp_path)
     baseline = native_engine.compile_chart(path).compile_actions({})
     for mode, options, expected in (("formal", {}, False), ("formal", ENABLED, True),
@@ -196,13 +207,23 @@ def test_real_backend_disables_phase_feedback_but_default_and_modes_do_not(tmp_p
             device=SimpleNamespace(request_reset=lambda: True), life_feedback_enabled=True,
             random_great_options=options, start_gate_mode=mode, chart_level=26, expected_notes=100,
             run_id="backend-plan")
-        assert backend.report()["native_random_great"]["enabled"] is expected
-        assert backend.life_feedback_enabled is (not expected)
+        report = backend.report()["native_random_great"]
+        assert report["enabled"] is expected
+        assert backend.life_feedback_enabled
+        assert backend._feedback_tickets is not None and backend._feedback_single_taps is not None
         assert (backend._actions != baseline) is expected
+        selected = set(report["selected_note_indices"])
         if expected:
-            assert backend.request_future_phase(15, 1) is False
-            assert backend._consume_phase_candidate() is None
-            assert backend._feedback_tickets is None
+            assert selected and len(selected) == report["selected"]
+            assert report["phase_feedback_suppressed"] is False
+            assert report["phase_feedback_excluded_notes"] == len(selected)
+            assert report["phase_feedback_exclusion_reason"] == "random-great-target"
+            assert all(not backend._feedback_single_taps.eligible(row) for row in backend._actions
+                       if row["note_index"] in selected)
+            assert all(backend._feedback_single_taps.eligible(row) for row in backend._actions
+                       if row["kind"] == "tap" and row["note_index"] not in selected)
+        else:
+            assert not selected
 
 
 @requires_native
@@ -233,8 +254,10 @@ def test_optional_plan_logging_failure_keeps_complete_valid_plan(tmp_path, monke
         observation_clock_trial_enabled=True, visual_refresh_enabled=True)
     report = backend.report()["native_random_great"]
     assert report["status"] == "planned" and report["selected"] == 2
-    assert report["phase_feedback_requested"] and report["phase_feedback_suppressed"]
-    assert not backend.life_feedback_enabled and not backend._native_clock_trial and not backend._native_visual_refresh_enabled
+    assert report["phase_feedback_requested"] and not report["phase_feedback_suppressed"]
+    assert report["phase_feedback_excluded_notes"] == report["selected"]
+    assert backend.life_feedback_enabled and backend._native_clock_trial
+    assert not backend._native_visual_refresh_enabled
 
 
 @pytest.mark.parametrize("terminal", ["completed", "life-failed", "stop"])

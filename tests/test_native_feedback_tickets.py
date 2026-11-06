@@ -56,6 +56,13 @@ def test_hold_flick_tail_closes_contact_for_later_single_taps():
         action("flick", 1, contact=0), target]).eligible(target)
 
 
+def test_excluded_note_indices_remove_only_matching_single_taps():
+    first, second, third = action(due=1, note=1), action(due=2, lane=3, note=2), action(due=3, lane=4, note=3)
+    eligibility = SingleTapEligibility([first, second, third], allow_groups=True,
+                                       excluded_note_indices={2})
+    assert eligibility.eligible(first) and not eligibility.eligible(second) and eligibility.eligible(third)
+
+
 @pytest.mark.parametrize("reason", ["foreign", "covered", "overwritten", "expired", "before-render"])
 def test_target_frame_attribution_rejects_unproven_samples(reason):
     sampler, backend, _ = sampler_fixture()

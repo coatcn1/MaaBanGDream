@@ -1037,7 +1037,9 @@ class NativeMinitouchBackend:
             raise RuntimeError("谱面没有可编译的动作")
         self._run_id = run_id or str(uuid.uuid4())
         canonical_actions = self._actions
-        self._random_great_report = {"enabled": False, "status": "disabled", "actual_great_measured": False}
+        random_great_excluded_note_indices = frozenset()
+        self._random_great_report = {"enabled": False, "status": "disabled", "actual_great_measured": False,
+                                     "selected_note_indices": []}
         if random_great_fallback_reason:
             self._random_great_report.update(status="fallback", reason=random_great_fallback_reason,
                                             requested_enabled=True)
@@ -1055,21 +1057,34 @@ class NativeMinitouchBackend:
                     safety_context=build_random_great_safety_context(chart_path, self._actions,
                         lane_centers=lane_centers, judgement_y=judgement_y))
                 report["denominator_source"] = "verified-chart-visible+catalog" if expected_notes is not None else "chart-visible"
+                # 随机 GREAT 的目标音符故意偏移 ±offset；反馈只使用未选中的
+                # 正常音符，避免把有意的 FAST/SLOW 当成全局相位漂移。
+                selected_note_indices = report.get("selected_note_indices")
+                if not isinstance(selected_note_indices, (list, tuple, set, frozenset)):
+                    selected_note_indices = [
+                        detail.get("note_index") for detail in report.get("selected_notes", ())
+                        if isinstance(detail, dict)
+                    ]
+                random_great_excluded_note_indices = frozenset(
+                    note for note in selected_note_indices if type(note) is int
+                )
                 report["phase_feedback_requested"] = bool(life_feedback_enabled)
-                report["phase_feedback_suppressed"] = True
-                report["phase_feedback_suppressed_reason"] = "intentional-random-great"
+                report["phase_feedback_suppressed"] = False
+                report["phase_feedback_suppressed_reason"] = None
+                report["phase_feedback_excluded_notes"] = len(random_great_excluded_note_indices)
+                report["phase_feedback_exclusion_reason"] = "random-great-target"
                 self._actions, self._random_great_report = planned, report
-                # 有意的 FAST/SLOW 不进入游戏相位仲裁，避免反馈抵消计划。
-                life_feedback_enabled = False
-                observation_clock_trial_enabled = False
+                # 视觉刷新试验没有逐音符票据，随机 GREAT 期间先保持关闭；
+                # 判定反馈和观察时钟可通过排除随机目标音符继续工作。
                 visual_refresh_enabled = False
             except Exception as exc:
                 self._random_great_report = {"enabled": False, "status": "fallback", "actual_great_measured": False,
+                                             "selected_note_indices": [],
                                              "reason": f"{type(exc).__name__}: {exc}"}
                 safe_print(f"NativeRandomGreat warning={type(exc).__name__}: {exc}; 保留原始输入", flush=True)
             else:
                 safe_print("NativeRandomGreat " + json.dumps({key: value for key, value in report.items()
-                    if key != "selected_notes"}, ensure_ascii=False), flush=True)
+                    if key not in ("selected_notes", "selected_note_indices")}, ensure_ascii=False), flush=True)
         self._cooperative_jitter_report = None
         if cooperative_jitter_enabled:
             try:
@@ -1239,7 +1254,10 @@ class NativeMinitouchBackend:
         if self.life_feedback_enabled:
             try:
                 self._feedback_tickets = FeedbackTicketStream(self._run_id)
-                self._feedback_single_taps = SingleTapEligibility(self._actions, allow_groups=True)
+                self._feedback_single_taps = SingleTapEligibility(
+                    self._actions, allow_groups=True,
+                    excluded_note_indices=random_great_excluded_note_indices,
+                )
             except Exception as exc:
                 self._feedback_ticket_disabled_reason = f"init:{type(exc).__name__}: {exc}"
         if self.life_feedback_enabled and not all(callable(method) for method in (

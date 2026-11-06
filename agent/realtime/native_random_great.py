@@ -276,6 +276,7 @@ def plan_random_great(actions, *, options, mode, run_id, level=None, total_judge
                   level_source="confirmed-chart" if trusted_level else "base-fallback",
                   target_percent=percent, desired=desired, eligible=0, selected=0,
                   planned_percent=0.0, fast=0, slow=0, shortfall=desired, selected_notes=[],
+                  selected_note_indices=[],
                   actual_great_measured=False, offset_ms=config["native_random_great_offset_ms"],
                   eligibility_policy="separated-hold-300px-v2" if safety_context is not None else "isolated-v1")
     if not active or not actions:
@@ -338,13 +339,18 @@ def plan_random_great(actions, *, options, mode, run_id, level=None, total_judge
                                 during_separated_hold=overlap))
     fast = sum(sign < 0 for _, sign in selected)
     _verify_selected_plan(actions, result, selected, visible)
+    selected_note_indices = [
+        note for note in (actions[index].get("note_index") for (index, _, _), _ in selected)
+        if type(note) is int
+    ]
     report.update(eligible=len(candidates), eligible_both=sum(row[1] == (-1, 1) for row in candidates),
                   eligible_fast_only=sum(row[1] == (-1,) for row in candidates),
                   eligible_slow_only=sum(row[1] == (1,) for row in candidates),
                   selected=len(selected), planned_percent=len(selected) * 100 / total_judgements,
                   fast=fast, slow=len(selected) - fast, shortfall=max(0, desired - len(selected)),
                   selected_with_active_hold=sum(row[2] for row, _ in selected),
-                  selected_notes=details, selected_notes_truncated=len(selected) > len(details))
+                  selected_notes=details, selected_notes_truncated=len(selected) > len(details),
+                  selected_note_indices=selected_note_indices)
     report.update(original_judgement_gap_ms=2 * config["native_random_great_offset_ms"] + 70,
                   shifted_non_tap_guard_ms=200, minimum_hold_distance_px=300,
                   contact_capacity_required=10 if report["selected_with_active_hold"] else None)
