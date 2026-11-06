@@ -2,6 +2,13 @@
 
 本页保留近期版本和开发记录。日期候选条目描述当时状态，发行说明以对应版本为准；更早记录见 [v1.4.3 及之前的历史档案](docs/history/changelog-through-v1.4.3.md)。
 
+## 2026-11-06（随机 GREAT 与判定反馈共存）
+
+- 随机 GREAT 生效时不再整体关闭判定反馈和观察时钟：计划报告改为 `phase_feedback_suppressed=false`，并通过 `phase_feedback_excluded_notes` 记录被排除的随机目标音符数；未选中音符继续提供 FAST/SLOW 与相位纠偏。
+- `plan_random_great` 新增完整的 `selected_note_indices`，不受诊断用 `selected_notes` 的 256 条截断影响；随机 GREAT 日志不打印这两个大列表。`SingleTapEligibility` 新增 `excluded_note_indices`，只排除随机选中的单点音符。
+- 视觉刷新试验没有逐音符票据，随机 GREAT 期间仍保持关闭。原有 `life_feedback_enabled`/观察时钟初始化不再被计划覆盖。
+- 新增随机目标排除、截断下完整索引和真实 backend 共存测试；定向测试通过。
+
 ## v1.5.1（2026-11-02）
 
 - 新增可配置随机 GREAT（实验）、LIVE BOOST 检查开关及 MaaFramework 日志与调试图开关，统一演出设置字号。

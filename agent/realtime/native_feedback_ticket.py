@@ -16,7 +16,7 @@ def action_key(action):
 
 
 class SingleTapEligibility:
-    def __init__(self, actions, *, allow_groups=False):
+    def __init__(self, actions, *, allow_groups=False, excluded_note_indices=frozenset()):
         ordered = sorted(actions, key=lambda row: float(row["due_s"]))
         counts = Counter(float(row["due_s"]) for row in ordered if row["kind"] in JUDGEMENT_KINDS)
         tap_counts = Counter(float(row["due_s"]) for row in ordered if row["kind"] == "tap")
@@ -26,7 +26,8 @@ class SingleTapEligibility:
         for row in ordered:
             due, kind = float(row["due_s"]), row["kind"]
             homogeneous = counts[due] == tap_counts[due] if allow_groups else counts[due] == 1
-            if kind == "tap" and not active and homogeneous:
+            if (kind == "tap" and not active and homogeneous
+                    and row.get("note_index") not in excluded_note_indices):
                 lo, hi = bisect_left(interference, due - .2), bisect_right(interference, due + .2)
                 if lo == hi:
                     self._eligible.add(action_key(row))
