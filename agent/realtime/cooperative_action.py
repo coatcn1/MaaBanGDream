@@ -1356,6 +1356,8 @@ class CooperativeLiveFlow:
                 PROJECT_ROOT / "resource" / "charts"
             ),
             reject_member_loading=self.settings["cooperative_member_loading_guard_enabled"],
+            # 协力不会出现 FULL 谱面；排除共享封面的 FULL 变体。
+            allow_full=False,
         )
 
     def watch_member_exit_before_black(

@@ -1277,7 +1277,7 @@ def test_final_cover_resolver_can_require_title_after_early_ocr_failed():
     )
 
     class Repository:
-        def resolve(self, _song_id, _difficulty, *, level, title):
+        def resolve(self, _song_id, _difficulty, *, level, title, **_kwargs):
             assert level == 28 or (level is None and title is None)
             return ChartResolution(
                 selection if title == "FIRE BIRD" else None,
@@ -1316,7 +1316,7 @@ def test_final_cover_resolver_can_reconfirm_pending_identity_without_old_level()
     )
 
     class Repository:
-        def resolve(self, _song_id, _difficulty, *, level, title):
+        def resolve(self, _song_id, _difficulty, *, level, title, **_kwargs):
             assert level is None
             return ChartResolution(
                 selected if title == "FIRE BIRD" else None,
@@ -1949,7 +1949,7 @@ def test_wait_for_final_cover_can_defer_chart_resolution_until_coop_cover():
     calls = []
 
     class Repository:
-        def resolve(self, fingerprint, difficulty, *, level, title):
+        def resolve(self, fingerprint, difficulty, *, level, title, **_kwargs):
             calls.append((fingerprint, difficulty, level, title))
             return ChartResolution(resolved, "confirmed local chart")
 
@@ -2114,7 +2114,7 @@ def test_deferred_resolution_rejects_title_fallback_for_wrong_jacket():
     resolved.shared_jacket = False
 
     class Repository:
-        def resolve(self, fingerprint, difficulty, *, level, title):
+        def resolve(self, fingerprint, difficulty, *, level, title, **_kwargs):
             assert fingerprint == wrong_song_id
             return ChartResolution(resolved, "confirmed by title fallback")
 
@@ -2283,9 +2283,9 @@ def test_goal_score_rechecks_unique_cover_identity(tmp_path, monkeypatch, second
                         lambda *_a, **_k: pytest.fail("唯一封面或得分页均不得OCR标题"))
     queries = []
     resolve = repository.resolve
-    def trace_resolve(fingerprint, difficulty, *, level, title):
+    def trace_resolve(fingerprint, difficulty, *, level, title, **kwargs):
         queries.append((fingerprint, level, title))
-        return resolve(fingerprint, difficulty, level=level, title=title)
+        return resolve(fingerprint, difficulty, level=level, title=title, **kwargs)
     monkeypatch.setattr(repository, "resolve", trace_resolve)
     resolver = FinalCoverResolver(
         difficulty="Expert", observed_level=26, observed_title=None,
