@@ -222,6 +222,25 @@ def test_repository_reports_level_mismatch_for_wrong_known_cover_level(
     assert resolution.reason == "selected song level does not match local chart metadata"
 
 
+def test_cooperative_allow_full_false_disambiguates_shared_normal_full_title():
+    repository = LocalChartRepository(PROJECT_CHART_ROOT)
+    title = "きゅ～まい flower"
+    # 普通版 186 与 FULL 229 共用封面；保留 FULL 时标题只能得到歧义。
+    assert repository.resolve(
+        UNKNOWN_SONG_ID, "Expert", level=None, title=title,
+    ).selection is None
+    resolution = repository.resolve(
+        UNKNOWN_SONG_ID, "Expert", level=None, title=title, allow_full=False,
+    )
+    assert resolution.selection is not None
+    assert resolution.selection.bestdori_song_id == 186
+    # 明确指向 FULL 的解析在协力模式同样应被排除。
+    assert repository.resolve(
+        UNKNOWN_SONG_ID, "Expert", title="[FULL]きゅ～まい flower",
+        allow_full=False,
+    ).selection is None
+
+
 def test_explicit_full_title_disambiguates_shared_fire_bird_jacket():
     repository = LocalChartRepository(Path(__file__).resolve().parents[1] / "resource/charts")
     fingerprint = "song-jacket-phash-v2-c52d4b1e6a1ab5e3"

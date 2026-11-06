@@ -2,6 +2,12 @@
 
 本页保留近期版本和开发记录。日期候选条目描述当时状态，发行说明以对应版本为准；更早记录见 [v1.4.3 及之前的历史档案](docs/history/changelog-through-v1.4.3.md)。
 
+## 2026-11-06（协力/竞演最终封面排除 FULL 变体）
+
+- 协力/竞演不会出现 FULL 谱面；最终封面解析新增 `allow_full=False`，在统计唯一封面和按标题消歧前先排除 FULL 条目。普通版与共享同一封面的 FULL 版不再互相制造 `song fingerprint mapping is ambiguous`。单人演出仍保留 FULL 解析和 FULL 徽标复核。
+- 真机复核：普通版《きゅ〜まい＊flower》（Bestdori 186）与 `[FULL]` 版（229）共用封面指纹时，原逻辑在最终封面等待 60 秒后失败；同一帧改用 `allow_full=False` 可确认 186 并继续完成该轮。
+- 新增 `test_cooperative_allow_full_false_disambiguates_shared_normal_full_title`；定向 `test_chart_repository.py`、`test_final_cover_gate.py` 通过。
+
 ## v1.5.1（2026-11-02）
 
 - 新增可配置随机 GREAT（实验）、LIVE BOOST 检查开关及 MaaFramework 日志与调试图开关，统一演出设置字号。

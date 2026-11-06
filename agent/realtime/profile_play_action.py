@@ -468,6 +468,9 @@ def wait_for_final_cover(
             getattr(live_run, "mode", "") in ("cooperative", "versus")
             and cooperative_member_loading_guard_enabled
         ),
+        # FULL 谱面只在单人演出出现；协力/竞演排除 FULL 变体，避免普通版
+        # 与共享封面的 FULL 版在最终封面身份解析时互相歧义。
+        allow_full=not cooperative,
     )
     def save_failure(error, image):
         try:

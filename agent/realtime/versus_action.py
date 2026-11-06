@@ -1271,6 +1271,8 @@ class VersusLiveFlow:
                 PROJECT_ROOT / "resource" / "charts"
             ),
             reject_member_loading=self.settings["versus_member_loading_guard_enabled"],
+            # 竞演不会出现 FULL 谱面；排除共享封面的 FULL 变体。
+            allow_full=False,
         )
 
     def watch_member_exit_before_black(
