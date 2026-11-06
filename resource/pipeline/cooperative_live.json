@@ -31,6 +31,19 @@
       "CooperativeFailure"
     ]
   },
+  "CooperativeHomeFastCheck": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "pre_delay": 0,
+    "post_delay": 0,
+    "custom_action": "CooperativeHomeFastCheck",
+    "next": [
+      "CooperativeEntryConfigure"
+    ],
+    "on_error": [
+      "CooperativeRecover"
+    ]
+  },
   "CooperativeRecover": {
     "recognition": "DirectHit",
     "action": "Custom",
@@ -221,6 +234,8 @@
   "CooperativeSpeedSettingsGate": {
     "recognition": "DirectHit",
     "action": "Custom",
+    "pre_delay": 0,
+    "post_delay": 0,
     "custom_action": "RealtimeGameSpeedSettingsGate",
     "custom_action_param": {
       "entry_mode": "home",
@@ -478,7 +493,7 @@
       "stamina_refill_large_enabled": true
     },
     "next": [
-      "CooperativeRecover"
+      "CooperativeHomeFastCheck"
     ],
     "on_error": [
       "CooperativeFailure"

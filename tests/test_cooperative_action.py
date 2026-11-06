@@ -2578,3 +2578,67 @@ def test_room_entry_match_stall_recovery_is_bounded(monkeypatch):
         if point == cooperative_action.ROOM_MATCH_CANCEL_POINT
     ]
     assert len(cancels) == cooperative_action.ROOM_MATCH_RECOVERY_LIMIT
+
+
+def _home_fast_context(*, hit: bool, stopping: bool = False):
+    return SimpleNamespace(
+        tasker=SimpleNamespace(stopping=stopping, controller=object()),
+        run_recognition=lambda node, image: SimpleNamespace(
+            hit=hit and node == "CooperativeHomeMarker",
+        ),
+    )
+
+
+def test_home_fast_check_skips_recovery_only_for_foreground_home(monkeypatch):
+    monkeypatch.setattr(
+        cooperative_action, "capture_image", lambda _context: "frame",
+    )
+    monkeypatch.setattr(
+        cooperative_action,
+        "foreground_package",
+        lambda _controller: cooperative_action.GAME_PACKAGE,
+    )
+
+    action = cooperative_action.CooperativeHomeFastCheck()
+    assert action.run(_home_fast_context(hit=True), SimpleNamespace()) is True
+
+
+def test_home_fast_check_falls_back_without_home_or_foreground(monkeypatch):
+    monkeypatch.setattr(
+        cooperative_action, "capture_image", lambda _context: "frame",
+    )
+    action = cooperative_action.CooperativeHomeFastCheck()
+    foreground_calls = []
+    monkeypatch.setattr(
+        cooperative_action,
+        "foreground_package",
+        lambda _controller: foreground_calls.append(True) or "com.example.other",
+    )
+
+    assert action.run(_home_fast_context(hit=False), SimpleNamespace()) is False
+    assert foreground_calls == []
+
+    assert action.run(_home_fast_context(hit=True), SimpleNamespace()) is False
+    assert foreground_calls == [True]
+
+
+def test_home_fast_check_failure_falls_back_to_common_recover(monkeypatch):
+    action = cooperative_action.CooperativeHomeFastCheck()
+
+    def fail_capture(_context):
+        raise RuntimeError("capture failed")
+
+    monkeypatch.setattr(cooperative_action, "capture_image", fail_capture)
+    assert action.run(_home_fast_context(hit=True), SimpleNamespace()) is False
+
+
+def test_home_fast_check_stopping_does_not_capture(monkeypatch):
+    monkeypatch.setattr(
+        cooperative_action,
+        "capture_image",
+        lambda _context: pytest.fail("已停止时不能再截图"),
+    )
+    action = cooperative_action.CooperativeHomeFastCheck()
+    assert action.run(
+        _home_fast_context(hit=True, stopping=True), SimpleNamespace(),
+    ) is True

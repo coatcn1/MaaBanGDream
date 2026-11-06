@@ -24,6 +24,11 @@ except ImportError:  # AgentServer loads this module from the agent directory.
     from realtime.vision_io import imwrite_unicode
 
 
+# 游戏本来就在前台时没有冷启动/登录动画可等；只留一个很短的画面 settle，
+# 避免从非主页开始任务时白等完整的 startup_grace（协力实测多等约 15 秒）。
+FOREGROUND_STARTUP_GRACE_SECONDS = 2.0
+
+
 def _params(raw: Any) -> dict[str, Any]:
     if isinstance(raw, dict):
         return raw
@@ -307,7 +312,14 @@ class CommonRecover(CustomAction):
             resource_download_visible = False
             resource_download_deadline: float | None = None
             exiting_failed_live = False
-            iteration_grace = max(startup_grace, 30.0) if app_started else startup_grace
+            if app_started:
+                # 游戏未运行或从后台切回：保留冷启动/登录/加载所需的完整宽限。
+                iteration_grace = max(startup_grace, 30.0)
+            else:
+                # 游戏本来就在前台：没有冷启动动画，短 settle 后即可 ESC 返回。
+                iteration_grace = min(
+                    startup_grace, FOREGROUND_STARTUP_GRACE_SECONDS,
+                )
             grace_deadline = time.monotonic() + iteration_grace
             deadline = time.monotonic() + timeout
             escape_count = 0

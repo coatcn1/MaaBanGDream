@@ -2,6 +2,13 @@
 
 本页保留近期版本和开发记录。日期候选条目描述当时状态，发行说明以对应版本为准；更早记录见 [v1.4.3 及之前的历史档案](docs/history/changelog-through-v1.4.3.md)。
 
+## 2026-11-06（协力主页快速启动与前台恢复宽限）
+
+- 新增 `CooperativeHomeFastCheck` 节点，位于体力配置之后、`CooperativeRecover` 之前：抓一帧匹配 `CooperativeHomeMarker`，命中后再确认游戏前台；主页且前台时直接进入配置，跳过 `CommonRecover`。未命中主页、前台不是游戏或检查异常时返回失败，由 `on_error` 回退原恢复流程，因此从非主页开始任务仍走原有恢复。
+- `CommonRecover` 在游戏本来就在前台（`app_started=False`）时改为 `min(startup_grace, 2.0)` 秒；游戏未运行或从后台切回（`app_started=True`）仍保持 `max(startup_grace, 30.0)`，冷启动/登录/加载宽限不变。
+- `CooperativeSpeedSettingsGate` 显式设置 `pre_delay: 0, post_delay: 0`：关闭流速设置时不再为空跳过等待约 1.2 秒；开启时由 gate 自己的页面等待负责。
+- 真机：主页启动 3.30–4.95 秒；非主页启动配置 2 为 14.41–19.37 秒、配置 1 为 18.70 秒（原 28.22 秒）。两批协力 5/5、4/4 均成功，18 次 Native 演奏 0 MISS。
+
 ## v1.5.1（2026-11-02）
 
 - 新增可配置随机 GREAT（实验）、LIVE BOOST 检查开关及 MaaFramework 日志与调试图开关，统一演出设置字号。
