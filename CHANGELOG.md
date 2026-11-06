@@ -2,6 +2,12 @@
 
 本页保留近期版本和开发记录。日期候选条目描述当时状态，发行说明以对应版本为准；更早记录见 [v1.4.3 及之前的历史档案](docs/history/changelog-through-v1.4.3.md)。
 
+## 2026-11-06（协力启动纯配置节点去延迟）
+
+- 协力启动流水线中的 13 个纯配置/守卫/入口节点只修改内存参数或做无 UI 检查，却继承 `resource/default_pipeline.json` 的 `post_delay: 1000` 和框架默认 `pre_delay: 200`，每节点约 1.23 秒。
+- 为 `CooperativeLive`、`CooperativeProcessConflictGuard`、`CooperativeLiveStaminaRefillConfigure` 及 10 个 `Cooperative*Configure` 节点显式设置 `pre_delay: 0, post_delay: 0`；`CommonRecover`、`CooperativeHomeLive` 等有 UI 行为的节点保持原等待。
+- 真机双开各 1 局：点开始任务到点击主页「演出」由 21.5–22.9 秒降至 7.44/7.50 秒，10 次配置日志由 11.05 秒降至 0.23–0.28 秒；两局均 SUCCESS 1/1。
+
 ## v1.5.1（2026-11-02）
 
 - 新增可配置随机 GREAT（实验）、LIVE BOOST 检查开关及 MaaFramework 日志与调试图开关，统一演出设置字号。

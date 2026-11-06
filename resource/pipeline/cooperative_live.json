@@ -2,6 +2,8 @@
   "CooperativeLive": {
     "recognition": "DirectHit",
     "action": "DoNothing",
+    "pre_delay": 0,
+    "post_delay": 0,
     "next": [
       "CooperativeProcessConflictGuard"
     ],
@@ -23,6 +25,8 @@
   "CooperativeProcessConflictGuard": {
     "recognition": "DirectHit",
     "action": "Custom",
+    "pre_delay": 0,
+    "post_delay": 0,
     "custom_action": "ProcessConflictGuard",
     "next": [
       "CooperativeLiveStaminaRefillConfigure"
@@ -77,6 +81,8 @@
   "CooperativeEntryConfigure": {
     "recognition": "DirectHit",
     "action": "Custom",
+    "pre_delay": 0,
+    "post_delay": 0,
     "custom_action": "CooperativeLiveConfigure",
     "custom_action_param": {
       "reset": true,
@@ -92,6 +98,8 @@
   "CooperativeTierConfigure": {
     "recognition": "DirectHit",
     "action": "Custom",
+    "pre_delay": 0,
+    "post_delay": 0,
     "custom_action": "CooperativeLiveConfigure",
     "custom_action_param": {
       "room_tier": "free"
@@ -106,6 +114,8 @@
   "CooperativeCodeConfigure": {
     "recognition": "DirectHit",
     "action": "Custom",
+    "pre_delay": 0,
+    "post_delay": 0,
     "custom_action": "CooperativeLiveConfigure",
     "custom_action_param": {
       "room_code": ""
@@ -120,6 +130,8 @@
   "CooperativeDifficultyConfigure": {
     "recognition": "DirectHit",
     "action": "Custom",
+    "pre_delay": 0,
+    "post_delay": 0,
     "custom_action": "CooperativeLiveConfigure",
     "custom_action_param": {
       "difficulty": "Expert"
@@ -134,6 +146,8 @@
   "CooperativeCountConfigure": {
     "recognition": "DirectHit",
     "action": "Custom",
+    "pre_delay": 0,
+    "post_delay": 0,
     "custom_action": "CooperativeLiveConfigure",
     "custom_action_param": {
       "count": 1
@@ -148,6 +162,8 @@
   "CooperativePostLiveConfigure": {
     "recognition": "DirectHit",
     "action": "Custom",
+    "pre_delay": 0,
+    "post_delay": 0,
     "custom_action": "CooperativeLiveConfigure",
     "custom_action_param": {
       "post_live_action": "exit"
@@ -162,6 +178,8 @@
   "CooperativeMemberExitConfigure": {
     "recognition": "DirectHit",
     "action": "Custom",
+    "pre_delay": 0,
+    "post_delay": 0,
     "custom_action": "CooperativeLiveConfigure",
     "custom_action_param": {
       "member_exit_policy": "reconnect",
@@ -177,6 +195,8 @@
   "CooperativeSongChoiceConfigure": {
     "recognition": "DirectHit",
     "action": "Custom",
+    "pre_delay": 0,
+    "post_delay": 0,
     "custom_action": "CooperativeLiveConfigure",
     "custom_action_param": {
       "song_choice": "unspecified"
@@ -191,6 +211,8 @@
   "CooperativeDebugConfigure": {
     "recognition": "DirectHit",
     "action": "Custom",
+    "pre_delay": 0,
+    "post_delay": 0,
     "custom_action": "CooperativeLiveConfigure",
     "custom_action_param": {
       "debug_recording": false,
@@ -207,6 +229,8 @@
   "CooperativeDisconnectJumpConfigure": {
     "recognition": "DirectHit",
     "action": "Custom",
+    "pre_delay": 0,
+    "post_delay": 0,
     "custom_action": "CooperativeLiveConfigure",
     "custom_action_param": {
       "disconnect_jump_enabled": false
@@ -470,6 +494,8 @@
   "CooperativeLiveStaminaRefillConfigure": {
     "recognition": "DirectHit",
     "action": "Custom",
+    "pre_delay": 0,
+    "post_delay": 0,
     "custom_action": "StaminaRefillConfigure",
     "custom_action_param": {
       "task_mode": "CooperativeLive",
