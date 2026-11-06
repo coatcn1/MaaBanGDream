@@ -182,6 +182,165 @@ def test_room_timeout_recovery_failure_does_not_start_new_attempt():
     assert attempts == [True]
 
 
+def test_cooperative_ready_page_requires_ready_button_and_room_marker():
+    flow = _bare_flow()
+    flow.templates = {
+        "ready_button": object(),
+        "room_member": object(),
+        "room_wait": object(),
+        "song_unspecified": object(),
+    }
+    flow.visible = lambda image, name, *args: (
+        (name == "ready_button" and image in {"ready", "button-only"})
+        or (image == "ready" and name in {"room_member", "room_wait"})
+    )
+
+    assert flow._cooperative_ready_page("ready") is True
+    # 只有准备按钮、没有房间成员/等候页标记时不能把它当成同一房间。
+    assert flow._cooperative_ready_page("button-only") is False
+    assert flow._cooperative_ready_page("waiting") is False
+
+
+def test_room_ready_now_uses_current_frame():
+    flow = _bare_flow()
+    flow.templates = {"ready_button": object(), "room_wait": object()}
+    flow.stopped = lambda: False
+    flow.capture = lambda: "ready"
+    flow.visible = lambda image, name, *args: (
+        image == "ready" and name in {"ready_button", "room_wait"}
+    )
+
+    assert flow._room_ready_now() is True
+
+
+def test_room_entry_timeout_ready_room_skips_recovery():
+    flow = _bare_flow()
+    flow._room_ready_now = lambda: True
+    recoveries = []
+    flow.recover_room_preparation_timeout = lambda reason: recoveries.append(reason)
+
+    assert flow.recover_room_entry_timeout("timeout") is True
+    assert recoveries == []
+
+
+def test_room_entry_timeout_recovery_enables_restart_guard():
+    flow = _bare_flow()
+    flow._room_ready_now = lambda: False
+    seen = []
+
+    def recover(reason):
+        seen.append(getattr(flow, "_allow_room_ready_recovery", None))
+
+    flow.recover_room_preparation_timeout = recover
+
+    assert flow.recover_room_entry_timeout("timeout") is False
+    assert seen == [True]
+    assert flow._allow_room_ready_recovery is False
+
+
+def test_ready_room_recovery_cancels_common_recover_restart(monkeypatch):
+    flow = _bare_flow()
+    flow.stopped = lambda: False
+    monkeypatch.setattr(
+        cooperative_action, "discard_prearmed_backend", lambda _reason: None,
+    )
+    navigations = []
+
+    def cancel_recovery(_self, _context, argv):
+        assert callable(argv.pre_restart_veto)
+        argv.recovery_cancelled = True
+        return False
+
+    monkeypatch.setattr(
+        cooperative_action.CommonRecover, "run", cancel_recovery,
+    )
+    flow._navigate_to_room_selection_after_recovery = (
+        lambda: navigations.append(True)
+    )
+
+    assert flow.recover_after_play_failure(
+        "timeout", restart_limit=1, allow_room_ready=True,
+    ) is True
+    assert navigations == []
+
+
+def test_recovery_room_selection_navigation_is_retried_once(monkeypatch):
+    flow = _bare_flow()
+    flow.stopped = lambda: False
+    calls = []
+
+    def navigate(origin, *, timeout=30.0):
+        calls.append((origin, timeout))
+        if len(calls) == 1:
+            raise RuntimeError("navigation timeout")
+
+    flow.navigate_to_cooperative_room_selection = navigate
+    monkeypatch.setattr(cooperative_action.time, "sleep", lambda _seconds: None)
+
+    flow._navigate_to_room_selection_after_recovery()
+
+    assert calls == [("home", 30.0), ("home", 45.0)]
+
+
+def test_recovery_room_selection_navigation_retry_is_bounded(monkeypatch):
+    flow = _bare_flow()
+    flow.stopped = lambda: False
+    calls = []
+
+    def navigate(_origin, *, timeout=30.0):
+        calls.append(timeout)
+        raise RuntimeError("navigation timeout")
+
+    flow.navigate_to_cooperative_room_selection = navigate
+    monkeypatch.setattr(cooperative_action.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(RuntimeError, match="navigation timeout"):
+        flow._navigate_to_room_selection_after_recovery()
+
+    assert len(calls) == 2
+
+
+def test_room_timeout_ready_room_resumes_same_round(monkeypatch):
+    flow = _bare_flow()
+    flow.settings.update(count=1)
+    attempts = []
+
+    def attempt(reuse_room=False, *, resume_ready_room=False):
+        attempts.append((reuse_room, resume_ready_room))
+        if len(attempts) == 1:
+            raise RoomPreparationTimeout("wait")
+        return True
+
+    flow.run_attempt = attempt
+    flow.recover_room_entry_timeout = lambda _reason: True
+    flow.progress_callback = None
+
+    assert flow.run() is True
+    assert attempts == [(False, False), (True, True)]
+
+
+def test_run_attempt_resume_ready_room_skips_entry_and_wait(monkeypatch):
+    flow = _bare_flow()
+    flow.settings = {"difficulty": "Expert"}
+    flow.stopped = lambda: False
+    calls = []
+    flow.enter_room = lambda: calls.append("enter")
+    flow.start_host_room = lambda: calls.append("start")
+    flow.wait_for_preparation = lambda: calls.append("wait")
+    flow.prepare = lambda: calls.append("prepare")
+    flow.play = lambda: calls.append("play") or True
+    monkeypatch.setattr(
+        cooperative_action,
+        "RoomEntryEvidence",
+        lambda *args, **kwargs: SimpleNamespace(
+            phase="", close=lambda *a, **k: None,
+        ),
+    )
+
+    assert flow.run_attempt(resume_ready_room=True) is True
+    assert calls == ["prepare", "play"]
+
+
 @pytest.mark.parametrize("count", [0, 1, 100, 999])
 def test_cooperative_accepts_infinite_and_new_count_limit(count):
     assert configure_cooperative_settings({"reset": True, "count": count})["count"] == count

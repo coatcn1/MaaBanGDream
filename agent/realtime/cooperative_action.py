@@ -135,6 +135,11 @@ MEMBER_DOWNLOAD_TIMEOUT_SECONDS = 60.0
 ROOM_SONG_CHOICE_TIMEOUT_SECONDS = 180.0
 SONG_CHOICE_TO_READY_TIMEOUT_SECONDS = 60.0
 POST_SCORE_NAVIGATION_TIMEOUT_SECONDS = 60.0
+# 进房超时恢复后从主页回房间选择页的有界重试。恢复期间游戏可能仍在冷启动，
+# 第一次 30 秒超时不直接结束任务，第二次给 45 秒；两次都失败才保留原异常。
+ROOM_SELECTION_NAVIGATION_ATTEMPTS = 2
+ROOM_SELECTION_NAVIGATION_TIMEOUT_SECONDS = 30.0
+ROOM_SELECTION_NAVIGATION_RETRY_TIMEOUT_SECONDS = 45.0
 HOME_LIVE_POINT = (1175, 645)
 # 跳车按钮点击点：弹窗1“通信已中断。是否继续演出？”点左侧“中断”；
 # 弹窗2“确认中断当前演出返回主页吗？”点右侧粉色“中断”。
@@ -1646,9 +1651,11 @@ class CooperativeLiveFlow:
             timeout=inspect_timeout,
         )
 
-    def navigate_to_cooperative_room_selection(self, origin: str) -> None:
+    def navigate_to_cooperative_room_selection(
+        self, origin: str, *, timeout: float = 30.0,
+    ) -> None:
         """Explicitly recover Home/live-select into cooperative room select."""
-        deadline = time.monotonic() + 30.0
+        deadline = time.monotonic() + float(timeout)
         next_home_click_at = 0.0
         stamina_home_allocated = False
         next_entry_click_at = 0.0
@@ -1833,7 +1840,9 @@ class CooperativeLiveFlow:
             raise RuntimeError("已选择留在房间，但未返回协力房间等候界面")
         print("CooperativeLive repeat_room=stay confirmed=true", flush=True)
 
-    def run_attempt(self, reuse_room: bool = False) -> bool:
+    def run_attempt(
+        self, reuse_room: bool = False, *, resume_ready_room: bool = False,
+    ) -> bool:
         if self.stopped():
             raise InterruptedError("用户已停止任务")
         # 入场可能在 prepare 之前失败，必须先隔离上局的身份、完成和录像凭据。
@@ -1854,13 +1863,18 @@ class CooperativeLiveFlow:
         self._room_entry_wait_pending = True
         outcome = "failed"
         try:
-            if not reuse_room:
-                self.enter_room()
-            elif str(self.settings.get("entry_method")) == "host_invite_all":
-                self.start_host_room()
-            if self._room_entry_evidence is not None:
-                self._room_entry_evidence.phase = "song-choice"
-            self.wait_for_preparation()
+            # 进房超时恢复前已确认房间补满且出现准备按钮时，直接在当前房间
+            # 继续 prepare/play；不能再 enter_room，也不能重新等选曲页。
+            if not resume_ready_room:
+                if not reuse_room:
+                    self.enter_room()
+                elif str(self.settings.get("entry_method")) == "host_invite_all":
+                    self.start_host_room()
+                if self._room_entry_evidence is not None:
+                    self._room_entry_evidence.phase = "song-choice"
+                self.wait_for_preparation()
+            elif self._room_entry_evidence is not None:
+                self._room_entry_evidence.phase = "prepare"
             if self.stopped():
                 raise InterruptedError("用户已停止任务")
             self._room_entry_wait_pending = False
@@ -1908,8 +1922,88 @@ class CooperativeLiveFlow:
             finally:
                 self._room_entry_evidence = None
 
-    def recover_after_play_failure(self, reason: str, *, restart_limit: int = 2) -> None:
-        """完整清理失败单局并从主页重新进入协力，禁止在旧会话中续跑。"""
+    def _cooperative_ready_page(self, image) -> bool:
+        """房间已补满且本机出现准备按钮时，可在原房间继续。"""
+        templates = getattr(self, "templates", None) or {}
+        if "ready_button" not in templates:
+            return False
+        try:
+            if not self.visible(image, "ready_button", 0.90):
+                return False
+            # 准备按钮必须与同一房间的等候页标记同时出现，避免把其他弹窗
+            # 或残留按钮当成“已可开演”。
+            return any(
+                name in templates and self.visible(image, name, 0.90)
+                for name in ("room_wait", "song_unspecified")
+            )
+        except Exception as exc:
+            print(
+                "CooperativeLive room_ready_check_warning="
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            return False
+
+    def _room_ready_now(self) -> bool:
+        """进房超时恢复前先看一帧，避免对已准备开演的房间执行主页恢复。"""
+        capture = getattr(self, "capture", None)
+        templates = getattr(self, "templates", None) or {}
+        if not callable(capture) or "ready_button" not in templates:
+            return False
+        try:
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
+            image = capture()
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
+            return self._cooperative_ready_page(image)
+        except InterruptedError:
+            raise
+        except Exception as exc:
+            print(
+                "CooperativeLive room_ready_recheck_warning="
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            return False
+
+    def _navigate_to_room_selection_after_recovery(self) -> None:
+        """主页恢复后的房间选择导航有界重试，避免冷启动超时直接终止任务。"""
+        for attempt in range(ROOM_SELECTION_NAVIGATION_ATTEMPTS):
+            try:
+                self.navigate_to_cooperative_room_selection(
+                    "home",
+                    timeout=(
+                        ROOM_SELECTION_NAVIGATION_TIMEOUT_SECONDS
+                        if attempt == 0
+                        else ROOM_SELECTION_NAVIGATION_RETRY_TIMEOUT_SECONDS
+                    ),
+                )
+                return
+            except (InterruptedError, JumpOutUnavailable, MemberExited):
+                raise
+            except Exception as exc:
+                if attempt + 1 >= ROOM_SELECTION_NAVIGATION_ATTEMPTS:
+                    raise
+                print(
+                    "CooperativeLive room_selection_retry "
+                    f"attempt={attempt + 1}/{ROOM_SELECTION_NAVIGATION_ATTEMPTS} "
+                    f"reason={type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+                if self.stopped():
+                    raise InterruptedError("用户已停止任务")
+                time.sleep(1.0)
+
+    def recover_after_play_failure(
+        self, reason: str, *, restart_limit: int = 2,
+        allow_room_ready: bool = False,
+    ) -> bool:
+        """完整清理失败单局并从主页重新进入协力，禁止在旧会话中续跑。
+
+        返回 True 表示恢复期间发现原房间已补满并已准备开演；调用方应留在
+        当前房间继续，而不是再执行主页/选房导航。
+        """
         if self.stopped():
             raise InterruptedError("用户已停止任务")
         discard_prearmed_backend("cooperative-play-retry")
@@ -1942,23 +2036,61 @@ class CooperativeLiveFlow:
                 ensure_ascii=False,
             )
         )
+        if allow_room_ready:
+            # 只在进房超时恢复路径启用：CommonRecover 在每次重启游戏前用
+            # 当前帧复核房间是否已补满/出现准备按钮。命中则取消重启，回到
+            # 原房间继续，而不是把已经可以开演的局丢掉。
+            argv.pre_restart_veto = self._cooperative_ready_page
         recovered = CommonRecover().run(self.context, argv)
         if self.stopped():
             raise InterruptedError("用户已停止任务")
+        if allow_room_ready and getattr(argv, "recovery_cancelled", False):
+            print(
+                "CooperativeLive room_recovery=cancelled "
+                "room_ready=true action=stay-in-room",
+                flush=True,
+            )
+            return True
         if not recovered:
             raise RuntimeError(
                 f"协力单局失败后无法恢复主页：{reason}"
             )
-        self.navigate_to_cooperative_room_selection("home")
+        self._navigate_to_room_selection_after_recovery()
+        return False
 
     def verify_preplay_recovery(self):
         wait_for_preplay_recovery_page(self, "room_wait", "CooperativeHomeMarker")
 
-    def recover_room_preparation_timeout(self, reason: str) -> None:
+    def recover_room_entry_timeout(self, reason: str) -> bool:
+        """进房超时恢复前复检房间；已准备开演则直接回房间循环。"""
+        if self._room_ready_now():
+            print(
+                "CooperativeLive room_timeout=recheck "
+                "ready=true action=stay-in-room",
+                flush=True,
+            )
+            return True
+        # 用实例标记传递“允许在重启前复核房间”，避免改变既有
+        # recover_room_preparation_timeout(reason) 的调用约定。
+        self._allow_room_ready_recovery = True
+        try:
+            return bool(self.recover_room_preparation_timeout(reason))
+        finally:
+            self._allow_room_ready_recovery = False
+
+    def recover_room_preparation_timeout(
+        self, reason: str, *, allow_room_ready: bool | None = None,
+    ) -> bool:
         """候选路径最多重启一次；必须确认主页及房间选择页后才能重入。"""
+        if allow_room_ready is None:
+            allow_room_ready = bool(
+                getattr(self, "_allow_room_ready_recovery", False)
+            )
         discard_prearmed_backend("preplay-room-recovery")
         self.verify_preplay_recovery()
-        self.recover_after_play_failure(reason, restart_limit=1)
+        return self.recover_after_play_failure(
+            reason, restart_limit=1, allow_room_ready=allow_room_ready,
+        )
 
     def handle_member_exit(self, reconnects: int) -> int:
         if self.stopped():
@@ -2012,6 +2144,7 @@ class CooperativeLiveFlow:
         completed = 0
         reconnects = 0
         reuse_room = False
+        resume_ready_room = False
         play_failures = 0
         room_timeouts = 0
         retry_count = max(
@@ -2029,16 +2162,25 @@ class CooperativeLiveFlow:
         while total == 0 or completed < total:
             if self.context.tasker.stopping:
                 return True
+            attempt_resume_ready = resume_ready_room
+            resume_ready_room = False
             print(
                 f"CooperativeLive round={completed + 1}/{total or '无限'} "
-                f"reuse_room={str(reuse_room).lower()}",
+                f"reuse_room={str(reuse_room).lower()} "
+                f"resume_ready={str(attempt_resume_ready).lower()}",
                 flush=True,
             )
             try:
                 mark_stamina_settled(getattr(self, "stamina_argv", None), completed)
                 if prepare_stamina_round(self, None if total == 0 else total-completed):
                     reuse_room = False
-                success = self.run_attempt(reuse_room=reuse_room)
+                    attempt_resume_ready = False
+                if attempt_resume_ready:
+                    success = self.run_attempt(
+                        reuse_room=True, resume_ready_room=True,
+                    )
+                else:
+                    success = self.run_attempt(reuse_room=reuse_room)
                 if not success:
                     mark_uncertain(getattr(self, "stamina_argv", None))
             except StaminaTaskError as exc:
@@ -2069,9 +2211,32 @@ class CooperativeLiveFlow:
             except RoomEntryTransient as exc:
                 if self.stopped():
                     return True
+                try:
+                    room_ready = self.recover_room_entry_timeout(str(exc))
+                except JumpOutUnavailable as jump_exc:
+                    record_failure_reason(str(jump_exc))
+                    print(
+                        f"[任务][协力演出][流程][ERROR] {jump_exc}",
+                        flush=True,
+                    )
+                    return False
+                if room_ready:
+                    # 恢复期间原房间已补满并出现准备按钮：不换房，也不把
+                    # 这次超时计入失败节奏，直接回到当前房间 prepare/play。
+                    print(
+                        "CooperativeLive room_timeout=resume-room "
+                        "reuse_room=true",
+                        flush=True,
+                    )
+                    reuse_room = True
+                    resume_ready_room = True
+                    continue
                 room_timeouts += 1
-                print(f"CooperativeLive room_retry=home-recovery attempt={room_timeouts} reason={exc}", flush=True)
-                self.recover_room_preparation_timeout(str(exc))
+                print(
+                    "CooperativeLive room_retry=home-recovery "
+                    f"attempt={room_timeouts} reason={exc}",
+                    flush=True,
+                )
                 rematch_backoff(self, room_timeouts)
                 reuse_room = False
                 continue
