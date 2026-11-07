@@ -252,6 +252,33 @@ def test_explicit_full_title_disambiguates_shared_fire_bird_jacket():
     assert confirmed_full.selection.bestdori_song_id == 243
 
 
+def test_cooperative_full_filter_disambiguates_title_without_changing_cover_catalog():
+    repository = LocalChartRepository(PROJECT_CHART_ROOT)
+    title = "きゅ～まい flower"
+    song = next(song for song in repository._load_manifest()["songs"] if song["bestdori_song_id"] == 186)
+    fingerprint = song["fingerprints"][0]
+    candidates = repository.cover_candidates(fingerprint)
+    assert {186, 229} <= {item.bestdori_song_id for item in candidates}
+    assert repository.resolve(UNKNOWN_SONG_ID, "Expert", title=title).selection is None
+    resolved = repository.resolve(UNKNOWN_SONG_ID, "Expert", title=title, allow_full=False)
+    assert resolved.selection.bestdori_song_id == 186
+    assert repository.cover_candidates(fingerprint) == candidates
+    assert repository.resolve(UNKNOWN_SONG_ID, "Expert", title="[FULL]きゅ～まい flower",
+                              allow_full=False).selection is None
+    assert repository.resolve(fingerprint, "Expert", bestdori_song_id=229,
+                              allow_full=False).selection is None
+
+
+def test_full_filter_cannot_create_regional_level_drift_eligibility():
+    repository = LocalChartRepository(PROJECT_CHART_ROOT)
+    song = next(song for song in repository._load_manifest()["songs"] if song["bestdori_song_id"] == 186)
+    level = song["difficulties"]["expert"]["level"]
+    resolved = repository.resolve(song["fingerprints"][0], "Expert", level=level + 1,
+                                  title="きゅ～まい flower", allow_full=False)
+    assert resolved.selection is None
+    assert resolved.reason == "selected song level does not match local chart metadata"
+
+
 @pytest.mark.parametrize("enabled", [None, True])
 def test_unique_cover_tolerates_single_level_regional_drift(tmp_path, enabled):
     """唯一封面与实读标题一致时，候选允许 1 级元数据差异。"""

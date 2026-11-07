@@ -1359,6 +1359,7 @@ class CooperativeLiveFlow:
                 PROJECT_ROOT / "resource" / "charts"
             ),
             reject_member_loading=self.settings["cooperative_member_loading_guard_enabled"],
+            allow_full=False,
         )
 
     def watch_member_exit_before_black(

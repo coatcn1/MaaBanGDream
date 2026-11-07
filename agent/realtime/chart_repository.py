@@ -193,7 +193,10 @@ class LocalChartRepository:
         level: int | None = None,
         title: str | None = None,
         bestdori_song_id: int | None = None,
+        allow_full: bool = True,
     ) -> ChartResolution:
+        if type(allow_full) is not bool:
+            raise ValueError("allow_full 必须是布尔值")
         manifest = self._load_manifest()
         # 唯一封面候选必须在完整目录里统计，再与实读标题交叉确认。
         # 不能先按标题或 ID 收窄，否则 FIRE BIRD 187/243 等共享封面会
@@ -211,6 +214,10 @@ class LocalChartRepository:
             == 1
         )
         songs = manifest["songs"]
+        # 联机模式只收窄可演奏版本；全库唯一封面计数和近邻歧义仍保留
+        # FULL 条目，不能因排除版本而免去最终封面的实读标题。
+        if not allow_full:
+            songs = [song for song in songs if not _catalog_song_is_full(song)]
         if bestdori_song_id is not None:
             songs = [
                 song for song in songs

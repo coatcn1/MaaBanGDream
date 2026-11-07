@@ -472,6 +472,7 @@ def wait_for_final_cover(
         ),
         trust_preparation_identity=preparation_identity_is_trusted(live_run, difficulty),
         preparation_song_fingerprint=getattr(live_run, "song_id", None),
+        allow_full=not cooperative,
     )
     def save_failure(error, image):
         try:
@@ -519,6 +520,7 @@ def wait_for_final_cover(
                 and initial_resolution.observed_title):
                 title_identity = resolver.repository.identify_by_cover_title(
                     actual_fingerprint, initial_resolution.observed_title,
+                    full_badge=(None if resolver.allow_full else False),
                 ).identity
             if (title_identity is not None and prepared_id is not None
                 and title_identity.bestdori_song_id != prepared_id):
@@ -532,6 +534,7 @@ def wait_for_final_cover(
             current_selection = resolver.repository.resolve(
                 actual_fingerprint, difficulty, level=resolver.observed_level,
                 title=initial_resolution.observed_title if safe_title else None,
+                allow_full=resolver.allow_full,
             ).selection
             cached_gate = FinalCoverGate(
                 initial_resolution.selection, difficulty=difficulty,
