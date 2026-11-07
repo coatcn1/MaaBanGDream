@@ -76,18 +76,27 @@ class FakeContext:
         self.clicks = []
         self.result_unknown = result_unknown
         self.bad_preview = False
+        self.dropped_clicks = {}
+        self.selection_history = []
         self.after_click = lambda: None
 
     def post_click(self, x, y):
         self.clicks.append((x, y))
+        if self.dropped_clicks.get((x, y), 0):
+            self.dropped_clicks[(x, y)] -= 1
+            return SimpleNamespace(wait=lambda: SimpleNamespace(succeeded=True))
         if (x, y) == (1149, 39):
             self.state = "choose"
         elif (x, y) == (497, 440):
             self.state = "items"
         elif (x, y) == (766, 228):
-            self.selected[0] += 1
+            self.selected[0] = min(self.selected[0]+1, self.stock[0])
         elif (x, y) == (766, 376):
-            self.selected[1] += 1
+            self.selected[1] = min(self.selected[1]+1, self.stock[1])
+        elif (x, y) == (532, 228):
+            self.selected[0] = max(0, self.selected[0]-1)
+        elif (x, y) == (532, 376):
+            self.selected[1] = max(0, self.selected[1]-1)
         elif (x, y) == (505, 603):
             self.state = "menu"
         elif (x, y) == (770, 603):
@@ -103,10 +112,13 @@ class FakeContext:
         else:
             raise AssertionError((x,y))
         self.after_click()
+        if self.state == "items":
+            self.selection_history.append((tuple(self.selected), self.current+sum(s*v for s,v in zip(self.selected,(1,10)))))
         return SimpleNamespace(wait=lambda: SimpleNamespace(succeeded=True))
 
     def ocr(self, image, key):
-        return {"success_points":getattr(self,"recovered",0), "top":self.current, "small_stock":self.stock[0], "large_stock":self.stock[1],
+        assert not key.endswith("stock"), "补充流程不得读取精确库存"
+        return {"success_points":getattr(self,"recovered",0), "top":self.current,
                 "small_count":self.selected[0], "large_count":self.selected[1], "current":self.current,
                 "preview":self.current+self.selected[0]+10*self.selected[1]+self.bad_preview}[key]
 
@@ -287,78 +299,156 @@ def test_local_ocr_rejects_letters_low_confidence_and_non_dictionary_quotes(monk
         assert refill.read_number(image,"small_count")==expected
 
 
-@pytest.mark.parametrize("key,y,text,expected", [
-    ("small_stock",245,"x'1''0''1''8'",1018),
-    ("large_stock",393,"×'1''7''7'",177),
-])
-def test_stock_reader_keeps_prefix_and_leading_digits_and_removes_green_background(monkeypatch,key,y,text,expected):
-    import agent.realtime.stamina_refill as module
-    image=np.zeros((720,1280,3),np.uint8)
-    image[y:y+24,390:488]=(60,140,80)
-    # 左侧标记模拟乘号和原窄框外的千位，右侧标记模拟末位。
-    for x in (425,439,481):
-        image[y+8:y+17,x:x+2]=(230,230,230)
-    def recognize(candidate,*,roi):
-        assert candidate.shape==(34,108,3)
-        assert roi==(0,0,108,34)
-        assert np.all(candidate[:5]==255) and np.all(candidate[5:29,5:103][0]==255)
-        for x in (425,439,481):
-            assert np.all(candidate[13:22,x-390+5:x-390+7]==0)
-        return SimpleNamespace(text=text,confidence=.96)
-    monkeypatch.setattr(module,"recognize_song_title",recognize)
-    refill=StaminaRefill(SimpleNamespace(),detector=SimpleNamespace())
-    assert refill.read_number(image,key)==expected
-    assert refill.readings[key]["roi"]==[390,y,98,24]
-    assert refill.readings[key]["text"]==text
-    assert refill.readings[key]["confidence"]==.96
-
-
-@pytest.mark.parametrize("text,expected", [
-    ("x0",0),('×"1"',1),("x177",177),("×'9''9''9''9'",9999),
-])
-def test_stock_reader_accepts_only_complete_prefixed_counts(monkeypatch,text,expected):
-    import agent.realtime.stamina_refill as module
-    monkeypatch.setattr(module,"recognize_song_title",lambda *a,**kw:SimpleNamespace(text=text,confidence=.96))
-    refill=StaminaRefill(SimpleNamespace(),detector=SimpleNamespace())
-    assert refill.read_number(np.zeros((720,1280,3),np.uint8),"small_stock")==expected
-
-
-@pytest.mark.parametrize("answer", [
-    None,("x177",.899),("3177",.99),("'1''7''7'",.99),
-    ("xO",.99),("x'12'",.99),("x10000",.99),("x1/25",.99),
-    ("xx177",.99),("x1 x2",.99),
-])
-def test_invalid_stock_ocr_never_confirms_or_reserves_refill(monkeypatch,tmp_path,answer):
-    import agent.realtime.stamina_refill as module
-    reading=None if answer is None else SimpleNamespace(text=answer[0],confidence=answer[1])
-    monkeypatch.setattr(module,"recognize_song_title",lambda *a,**kw:reading)
-    context=FakeContext(current=0,stock=(1018,177))
-    image=np.zeros((720,1280,3),np.uint8)
-    refill=StaminaRefill(context,detector=SimpleNamespace(page=lambda _im,page:context.state==page),
-        capture=lambda _:image,foreground=lambda _:None,sleep=lambda _:None)
-    refill.ocr=lambda frame,key:refill.read_number(frame,key) if key=="large_stock" else context.ocr(frame,key)
+@pytest.mark.parametrize("small_enabled,large_enabled", [(True,True),(True,False),(False,True)])
+def test_low_confidence_stock_is_never_read_by_actual_refill(tmp_path,small_enabled,large_enabled):
+    context=FakeContext(stock=(1014,173))
+    calls=[]
+    original=context.ocr
+    def read(image,key):
+        calls.append(key)
+        assert key not in {"small_stock","large_stock"}, "×173 置信度 .88123773 不再参与补充"
+        return original(image,key)
+    context.ocr=read
     journal=RefillJournal(tmp_path,914)
-    with pytest.raises(RuntimeError,match="数字未稳定") as error:
-        refill.ensure(3,options(),journal)
-    assert "large_stock" in str(error.value)
-    assert (770,603) not in context.clicks and (770,449) not in context.clicks
-    assert journal.load()["reserved_points"]==0 and not journal.pending_path.exists()
+    assert runner(context).ensure(3,options(stamina_refill_small_enabled=small_enabled,
+        stamina_refill_large_enabled=large_enabled),journal)
+    assert context.current==(10 if not small_enabled else 3)
+    assert journal.load()["status"]=="confirmed" and not journal.pending_path.exists()
+    assert not any(key.endswith("stock") for key in calls)
+    assert context.clicks.count((770,449))==1
+    if not small_enabled:assert (766,228) not in context.clicks
+    if not large_enabled:assert (766,376) not in context.clicks
 
 
-def test_changing_prefixed_stock_never_becomes_a_refill_reservation(monkeypatch,tmp_path):
-    import agent.realtime.stamina_refill as module
-    answers=iter((177,178)*5)
-    monkeypatch.setattr(module,"recognize_song_title",lambda *a,**kw:SimpleNamespace(text=f"x{next(answers)}",confidence=.96))
-    context=FakeContext(current=0,stock=(1018,177))
-    image=np.zeros((720,1280,3),np.uint8)
-    refill=StaminaRefill(context,detector=SimpleNamespace(page=lambda _im,page:context.state==page),
-        capture=lambda _:image,foreground=lambda _:None,sleep=lambda _:None)
-    refill.ocr=lambda frame,key:refill.read_number(frame,key) if key=="large_stock" else context.ocr(frame,key)
+@pytest.mark.parametrize("stock,rounds,minimum,expected", [
+    ((0,0),None,None,None), ((100,0),None,None,18),
+    ((0,1),None,None,10), ((5,0),None,None,5),
+    ((8,1),6,9,18), ((2,1),6,9,12), ((2,0),1,None,None),
+    ((8,0),3,9,None), ((9,0),3,9,9), ((0,2),1,None,10),
+    ((4,1),8,None,14), ((0,1),8,None,10),
+])
+def test_actual_selection_replans_with_bounded_available_capacity(tmp_path,stock,rounds,minimum,expected):
+    context=FakeContext(stock=stock)
     journal=RefillJournal(tmp_path,915)
-    with pytest.raises(RuntimeError,match="数字未稳定"):
-        refill.ensure(3,options(),journal)
+    refill=runner(context)
+    if expected is None:
+        with pytest.raises(RuntimeError,match="不足"):
+            refill.ensure(3,options(),journal,remaining_rounds=rounds,minimum_required=minimum)
+        assert journal.load()["reserved_points"]==0 and not journal.pending_path.exists()
+        assert (770,603) not in context.clicks and (770,449) not in context.clicks
+        assert refill.return_home_safely() and context.state=="menu"
+    else:
+        assert refill.ensure(3,options(),journal,remaining_rounds=rounds,minimum_required=minimum)
+        assert context.current==expected and journal.load()["reserved_points"]==expected
+        assert context.clicks.count((770,449))==1
+    assert all(0<=preview<=24 for _,preview in context.selection_history)
+    assert len(context.clicks)<100
+    assert len(refill.selection)<=3
+
+
+@pytest.mark.parametrize("point",[(766,228),(766,376)])
+def test_one_dropped_plus_retries_non_consuming_selection_only(tmp_path,point):
+    context=FakeContext()
+    context.dropped_clicks[point]=1
+    assert runner(context).ensure(3,options(),RefillJournal(tmp_path,916),remaining_rounds=8)
+    assert context.current==24 and context.clicks.count(point)==(5 if point[1]==228 else 3)
+    assert context.clicks.count((770,449))==1
+
+
+@pytest.mark.parametrize("dropped_minus",[0,1,2])
+def test_replan_reduces_selected_small_before_adding_large(tmp_path,dropped_minus):
+    context=FakeContext(stock=(2,2))
+    context.dropped_clicks[(532,228)]=dropped_minus
+    journal=RefillJournal(tmp_path,917)
+    if dropped_minus==2:
+        with pytest.raises(RuntimeError,match="减选未送达"):
+            runner(context).ensure(3,options(),journal,remaining_rounds=6)
+        assert (770,603) not in context.clicks and journal.load()["reserved_points"]==0
+    else:
+        assert runner(context).ensure(3,options(),journal,remaining_rounds=6)
+        assert context.current==20
+        assert context.clicks.count((532,228))==2+dropped_minus
+        second_large=[i for i,point in enumerate(context.clicks) if point==(766,376)][1]
+        assert max(i for i,point in enumerate(context.clicks) if point==(532,228))<second_large
+    assert all(preview<=24 for _,preview in context.selection_history)
+
+
+@pytest.mark.parametrize("conflict",["preview","other-count","current"])
+def test_abnormal_selection_change_never_becomes_capacity_limit(tmp_path,conflict):
+    context=FakeContext(stock=(2,2))
+    original=context.ocr
+    def read(image,key):
+        value=original(image,key)
+        if context.clicks[-1:]==[(532,228)]:
+            if (conflict,key) in {("preview","preview"),("other-count","large_count"),("current","current")}:
+                return value+1
+        return value
+    context.ocr=read
+    journal=RefillJournal(tmp_path,918)
+    with pytest.raises(RuntimeError,match="预览"):
+        runner(context).ensure(3,options(),journal,remaining_rounds=6)
     assert (770,603) not in context.clicks and (770,449) not in context.clicks
     assert journal.load()["reserved_points"]==0 and not journal.pending_path.exists()
+
+
+@pytest.mark.parametrize("point",[(766,376),(532,228)])
+def test_stop_during_capacity_probe_or_replan_stops_all_further_input(tmp_path,point):
+    context=FakeContext(stock=(2,2))
+    context.after_click=lambda:setattr(context.tasker,"stopping",True) if context.clicks[-1]==point else None
+    journal=RefillJournal(tmp_path,919)
+    refill=runner(context)
+    with pytest.raises(ScreenRefreshCancelled):
+        refill.ensure(3,options(),journal,remaining_rounds=6)
+    assert context.clicks[-1]==point
+    assert (770,603) not in context.clicks and journal.load()["reserved_points"]==0
+
+
+@pytest.mark.parametrize("kind,point,changes", [
+    ("small",(766,228),{"stamina_refill_large_enabled":False}),
+    ("large",(766,376),{"stamina_refill_small_enabled":False}),
+])
+def test_unavailable_allowed_type_is_probed_twice_without_using_disabled_type(tmp_path,kind,point,changes,capsys):
+    context=FakeContext(stock=(0,0))
+    refill=runner(context)
+    journal=RefillJournal(tmp_path,920)
+    with pytest.raises(RuntimeError,match="不足"):
+        refill.ensure(3,options(**changes),journal)
+    assert context.clicks.count(point)==2
+    assert not any(p in context.clicks for p in {(766,228),(766,376)}-{point})
+    assert refill.selection[-1]["limited_kind"]==kind
+    assert refill.selection[-1]["reason"]=="plus-unchanged-twice"
+    assert f"selection_limit kind={kind} capacity=0" in capsys.readouterr().out
+    assert (770,449) not in context.clicks and not journal.pending_path.exists()
+
+
+def test_large_selection_precedes_small_and_replanned_unknown_consumption_is_never_repeated(tmp_path):
+    context=FakeContext(stock=(4,1),result_unknown=True)
+    journal=RefillJournal(tmp_path,921)
+    refill=runner(context)
+    with pytest.raises(RuntimeError):
+        refill.ensure(3,options(),journal,remaining_rounds=8)
+    assert context.clicks.index((766,376))<context.clicks.index((766,228))
+    assert journal.load()["reserved_points"]==14 and journal.pending_path.exists()
+    assert context.clicks.count((770,449))==1
+    before=list(context.clicks)
+    context.state="menu"
+    with pytest.raises(RuntimeError,match="未决"):
+        runner(context).ensure(3,options(),journal,remaining_rounds=8)
+    assert context.clicks==before
+
+
+@pytest.mark.skipif(not os.environ.get("MAABANGDREAM_STAMINA_ITEMS_FIXTURE"),reason="未指定本地体力初始选择页真实截图")
+def test_real_items_fixture_passes_page_and_four_number_two_frame_gate():
+    from agent.realtime.stamina_refill import imread_unicode
+    # 截图由本地环境变量只读引入；重复同图只核验离线读数，不代表真实送达或消费验收。
+    image=imread_unicode(os.environ["MAABANGDREAM_STAMINA_ITEMS_FIXTURE"])
+    assert image is not None and image.shape[:2]==(720,1280)
+    context=FakeContext()
+    refill=StaminaRefill(context,capture=lambda _:image,sleep=lambda _:None)
+    assert refill.detector.page(image,"items")
+    assert refill.stable("items",("small_count","large_count","current","preview"),attempts=2)==(0,0,0,0)
+    assert len(refill.history)==2 and not context.clicks
+    assert all(set(frame["readings"])=={"small_count","large_count","current","preview"} for frame in refill.history)
 
 
 def test_success_amount_mismatch_retains_reservation_and_does_not_close(tmp_path):

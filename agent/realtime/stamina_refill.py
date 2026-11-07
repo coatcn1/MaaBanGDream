@@ -46,8 +46,6 @@ TEMPLATE_REGIONS = {
 }
 NUMBER_REGIONS = {
     "top": (979, 23, 32, 33),
-    "small_stock": (390, 245, 98, 24),
-    "large_stock": (390, 393, 98, 24),
     "small_count": (647, 209, 34, 41),
     "large_count": (647, 357, 34, 41),
     "current": (716, 473, 48, 37),
@@ -261,6 +259,7 @@ class StaminaRefill:
         self.history = []
         self.last_known_current = None
         self.navigation = None
+        self.selection = []
 
     def stopped(self):
         if self.context.tasker.stopping:
@@ -312,25 +311,14 @@ class StaminaRefill:
             value = values.pop()
             self.readings[key]["value"] = value
             return value
-        if key in {"top", "current", "success_points"}:
+        if key in {"current", "success_points"}:
             reading = recognize_song_title(image, roi=NUMBER_REGIONS[key])
         else:
-            if key in {"small_stock", "large_stock"}:
-                # 完整保留乘号和最多四位库存；窄框会漏千位，残留乘号还可能被读成数字。
-                # 只提取白字，避免绿色道具底图降低置信度，不放宽消费所需的读数门槛。
-                ink = (crop.min(axis=2) >= 180) & (crop.max(axis=2) - crop.min(axis=2) < 60)
-                crop = cv2.cvtColor(np.where(ink, 0, 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
-            elif key == "preview":
-                hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-                ink = (hsv[:, :, 1] > 60) & (hsv[:, :, 2] > 120)
-                crop = cv2.cvtColor(np.where(ink, 0, 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
             crop = cv2.copyMakeBorder(crop, 5, 5, 5, 5, cv2.BORDER_CONSTANT, value=(255, 255, 255))
             reading = recognize_song_title(crop, roi=(0, 0, crop.shape[1], crop.shape[0]))
         detail = {"roi": list(NUMBER_REGIONS[key]), "text": reading.text if reading else None,
                   "confidence": float(reading.confidence) if reading else None}
         self.readings[key] = detail
-        if key in {"small_stock", "large_stock"}:
-            detail["variant"] = "stock-white-mask"
         if reading is None or reading.confidence < .90:
             raise ValueError(f"体力读数置信度不足：{key}")
         text = reading.text.strip()
@@ -339,15 +327,10 @@ class StaminaRefill:
             if match is None:
                 raise ValueError("体力回复成功正文不符合预期")
             text = match.group(1)
-        elif key in {"small_stock", "large_stock"}:
-            match = re.fullmatch(r"[x×]((?:[0-9]|'[0-9]'|\"[0-9]\"){1,4})", text)
-            if match is None:
-                raise ValueError(f"体力库存必须包含完整乘号与数字：{key}")
-            text = match.group(1)
         # 本地字典的数字字符保留 YAML 引号；只接受逐个数字的字典包装，不纠正字母。
         if re.fullmatch(r"(?:[0-9]|'[0-9]'|\"[0-9]\")+", text):
             text = text.replace("'", "").replace('"', "")
-        value = parse_number(text, 9999 if key.endswith("stock") else 99)
+        value = parse_number(text, 99)
         detail["value"] = value
         return value
 
@@ -455,7 +438,7 @@ class StaminaRefill:
                 imwrite_unicode(folder / "failure.png",self.last_frame)
             RefillJournal.atomic_write(folder / "failure.json", {
                 "stage":self.stage,"error":str(error),"last_known_current":self.last_known_current,
-                "history":self.history,"navigation":self.navigation})
+                "history":self.history,"navigation":self.navigation,"selection":self.selection})
             return str(folder)
         except Exception as exc:
             print(f"StaminaRefill diagnostics_warning={type(exc).__name__}: {exc}",flush=True)
@@ -480,6 +463,55 @@ class StaminaRefill:
             self.click(*actions[page])
         return False
 
+    def select_refill(self, current, required, options, remaining_rounds, minimum_required):
+        """以逐步加减选回执收紧本次容量，不读取或推断精确库存。"""
+        keys = ("small_count", "large_count", "current", "preview")
+        capacities = [REFILL_PLAN_CAP if options["stamina_refill_small_enabled"] else 0,
+                      REFILL_PLAN_CAP//10 if options["stamina_refill_large_enabled"] else 0]
+        selected = [0, 0]
+        # 每种类型最多收紧一次；单步无变化只重试一次，所有选择均受24点上限约束。
+        for _ in range(3):
+            planned = plan_refill(current, required, *capacities, remaining_rounds,
+                                  minimum_required=minimum_required)
+            self.selection.append({"capacities": list(capacities), "selected": list(selected), "planned": list(planned)})
+            tightened = False
+            # 重规划先减后加；先加大罐可减少无库存时需要撤销的小罐数量。
+            for direction in (-1, 1):
+                for index, y in ((1, 376), (0, 228)):
+                    steps = max(0, (planned[index]-selected[index])*direction)
+                    for _ in range(steps):
+                        before = (*selected, current, current+selected[0]+10*selected[1])
+                        after = list(selected)
+                        after[index] += direction
+                        expected = (*after, current, current+after[0]+10*after[1])
+                        if not 0 <= expected[-1] <= REFILL_PLAN_CAP:
+                            raise RuntimeError("体力选择超出计划上限，拒绝消费")
+                        for attempt in range(2):
+                            self.click(766 if direction == 1 else 532, y)
+                            observed = self.stable("items", keys)
+                            if observed == expected:
+                                selected = after
+                                break
+                            if observed != before:
+                                raise RuntimeError("体力数量或预览与计划冲突，拒绝消费")
+                        else:
+                            if direction == -1:
+                                raise RuntimeError("体力减选未送达，拒绝消费")
+                            capacities[index] = selected[index]
+                            self.selection[-1].update(limited_kind=("small", "large")[index],
+                                                       limit=selected[index], reason="plus-unchanged-twice")
+                            print(f"StaminaRefill selection_limit kind={('small','large')[index]} capacity={selected[index]} reason=plus-unchanged-twice", flush=True)
+                            tightened = True
+                        if tightened:
+                            break
+                    if tightened:
+                        break
+                if tightened:
+                    break
+            if not tightened:
+                return tuple(selected)
+        raise RuntimeError("体力可选容量重规划耗尽，拒绝消费")
+
     def ensure(self, required, options, journal, *, remaining_rounds=1, minimum_required=None):
         options = validate_refill_options(options)
         if type(required) is not int or not 0 <= required <= 99:
@@ -502,8 +534,8 @@ class StaminaRefill:
             self.click(1149, 39)
             self.stable("choose")
             self.deliver_items_page()
-            keys = ("small_stock", "large_stock", "small_count", "large_count", "current", "preview")
-            stock_s, stock_l, count_s, count_l, actual, preview = self.stable("items", keys)
+            keys = ("small_count", "large_count", "current", "preview")
+            count_s, count_l, actual, preview = self.stable("items", keys)
             if (count_s, count_l) != (0, 0) or preview != actual or actual < current:
                 raise RuntimeError("体力选择初始读数冲突，拒绝消费")
             # 切页期间可能自然恢复；选择页完整读数是本次计划的新基线，下降仍拒绝。
@@ -516,8 +548,7 @@ class StaminaRefill:
                 data["available_points"] = observed
                 journal.save(data)
                 return True
-            small, large = plan_refill(current, required, stock_s, stock_l, remaining_rounds,
-                small_enabled=options["stamina_refill_small_enabled"], large_enabled=options["stamina_refill_large_enabled"], minimum_required=minimum_required)
+            small, large = self.select_refill(current, required, options, remaining_rounds, minimum_required)
             planned_target = current+small+10*large
             remaining_required = None if remaining_rounds is None else max(target,required*remaining_rounds)
             print(f"StaminaRefill plan next_required={target} planned_target={planned_target} remaining_required={remaining_required} remaining_rounds={remaining_rounds} small={small} large={large}", flush=True)
@@ -529,15 +560,6 @@ class StaminaRefill:
                 data["available_points"] = observed
                 journal.save(data)
                 return True
-            selected_s = selected_l = 0
-            for amount, y, kind in ((small, 228, "small"), (large, 376, "large")):
-                for _ in range(amount):
-                    self.click(766, y)
-                    selected_s += kind == "small"
-                    selected_l += kind == "large"
-                    expected = (stock_s, stock_l, selected_s, selected_l, current, current+selected_s+10*selected_l)
-                    if self.stable("items", keys) != expected:
-                        raise RuntimeError("体力数量或预览与计划冲突，拒绝消费")
             points = small + 10*large
             self.click(770, 603)
             self.stable("confirm")
