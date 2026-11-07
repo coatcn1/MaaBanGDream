@@ -278,9 +278,15 @@ class FinalCoverResolver:
         reject_member_loading: bool = False,
         trust_preparation_identity: bool = True,
         preparation_song_fingerprint: str | None = None,
+        allow_full: bool = True,
     ) -> None:
         if selection is None and repository is None:
             raise ValueError("缺少最终封面谱面解析器")
+        if type(allow_full) is not bool:
+            raise ValueError("allow_full 必须是布尔值")
+        if not allow_full and selection is not None and _is_full_song(selection):
+            raise FinalCoverIdentityConflict("最终封面歌曲身份冲突：联机模式不允许 FULL 谱面")
+        self.allow_full = allow_full
         self.reject_member_loading = bool(reject_member_loading)
         self.wide_title_trial = final_cover_wide_title_trial_enabled()
         if self.reject_member_loading:
@@ -372,7 +378,8 @@ class FinalCoverResolver:
                 prepared = self.repository.resolve(
                     UNKNOWN_SONG_ID, self.difficulty, level=None, title=self._preparation_title,
                 ).selection
-                if (prepared is not None and not prepared.level_drift_tolerated
+                if (prepared is not None and (self.allow_full or not _is_full_song(prepared))
+                    and not prepared.level_drift_tolerated
                     and prepared.level == self.observed_level
                     and fingerprint is not None and any(
                         same_song(fingerprint, item,
@@ -424,6 +431,7 @@ class FinalCoverResolver:
             self.difficulty,
             level=(None if self.independent_final_title_enabled else self.observed_level),
             title=normalized,
+            allow_full=self.allow_full,
         )
         if probe.selection is None:
             return False
@@ -437,11 +445,13 @@ class FinalCoverResolver:
         assert self.repository is not None
         identify_title = getattr(self.repository, "identify_by_cover_title", None)
         catalog_identity = (
-            identify_title(song_id, reading.text).identity if callable(identify_title) else None
+            identify_title(song_id, reading.text, full_badge=(None if self.allow_full else False)).identity
+            if callable(identify_title) else None
         )
         title_only = self.repository.resolve(
             UNKNOWN_SONG_ID, self.difficulty, title=reading.text,
             level=(None if self.independent_final_title_enabled else self.observed_level),
+            allow_full=self.allow_full,
         )
         if title_only.selection is not None and not any(
             same_song(song_id, fingerprint, max_distance=LOOSE_SAME_SONG_DISTANCE)
@@ -450,6 +460,7 @@ class FinalCoverResolver:
             return "conflict"
         resolved = self.repository.resolve(
             song_id, self.difficulty, title=reading.text, level=self.observed_level,
+            allow_full=self.allow_full,
         )
         if resolved.selection is None:
             return "conflict" if catalog_identity is not None else "missing"
@@ -520,6 +531,7 @@ class FinalCoverResolver:
             return None
         selected = self.repository.resolve(
             song_id, self.difficulty, level=None, title=None,
+            allow_full=self.allow_full,
         ).selection
         if (
             selected is None
@@ -785,6 +797,7 @@ class FinalCoverResolver:
             self.difficulty,
             level=self.observed_level,
             title=self.observed_title,
+            allow_full=self.allow_full,
         )
         self.last_selection = resolution.selection
         if resolution.selection is None:

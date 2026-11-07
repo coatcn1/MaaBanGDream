@@ -1274,6 +1274,7 @@ class VersusLiveFlow:
                 PROJECT_ROOT / "resource" / "charts"
             ),
             reject_member_loading=self.settings["versus_member_loading_guard_enabled"],
+            allow_full=False,
         )
 
     def watch_member_exit_before_black(
