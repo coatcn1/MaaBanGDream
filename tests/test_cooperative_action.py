@@ -1292,7 +1292,7 @@ def test_cooperative_interface_exposes_requested_modes_and_five_difficulties():
         case["name"] for case in options["CooperativeMemberExitPolicy"]["cases"]
     ] == ["Fail", "Reconnect"]
     debug = options["CooperativeDebug"]
-    assert debug["default_case"] == "Light"
+    assert debug["default_case"] == "Opening"
     assert [case["name"] for case in debug["cases"]] == [
         "Light", "Off", "Full", "Opening",
     ]
