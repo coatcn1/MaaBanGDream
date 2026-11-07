@@ -54,6 +54,45 @@ print(json.dumps(effective))
     }
 
 
+def test_cooperative_config_delays_survive_real_maafw_option_overrides(tmp_path):
+    import subprocess
+    import sys
+
+    pipeline = load(ROOT / "resource/pipeline/cooperative_live.json")
+    interface = load(ROOT / "interface.json")
+    names = ["CooperativeLive", "CooperativeProcessConflictGuard", "CooperativeLiveStaminaRefillConfigure"]
+    names += [name for name, node in pipeline.items() if node.get("custom_action") == "CooperativeLiveConfigure"]
+    assert len(names) == 13
+    for name in names:
+        assert pipeline[name]["recognition"] == "DirectHit"
+        assert pipeline[name]["pre_delay"] == pipeline[name]["post_delay"] == 0
+    overrides = [case["pipeline_override"] for option in interface["option"].values()
+                 for case in option.get("cases", ())
+                 if any(name in case.get("pipeline_override", {}) for name in names)]
+    code = """
+import json, sys
+from maa.resource import Resource
+from maa.toolkit import Toolkit
+data = json.load(sys.stdin)
+Toolkit.init_option(data['log_dir'])
+resource = Resource()
+assert resource.override_pipeline(data['pipeline'])
+for override in data['overrides']:
+    assert resource.override_pipeline(override)
+    for name in data['names']:
+        node = resource.get_node_data(name)
+        assert node['pre_delay'] == node['post_delay'] == 0, (name, node)
+print('ok')
+"""
+    result = subprocess.run([sys.executable, "-c", code], input=json.dumps({
+        "log_dir": str(tmp_path), "pipeline": pipeline, "names": names, "overrides": overrides,
+    }), text=True, capture_output=True, check=True)
+    assert result.stdout.strip() == "ok"
+    # 页面恢复和主页点击继续使用既有过渡等待。
+    assert "post_delay" not in pipeline["CooperativeRecover"]
+    assert pipeline["CooperativeHomeLive"]["post_delay"] == 1000
+
+
 def test_all_count_inputs_accept_zero_and_reject_out_of_range():
     import re
 
