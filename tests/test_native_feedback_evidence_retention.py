@@ -71,7 +71,7 @@ def test_real_c1_late_valid_vote_spacing_requires_ten_second_window():
         tap(sampler, at, TimingFeedback.SLOW, token=token)
     assert sampler.VOTE_WINDOW_SECONDS == 10
     assert sampler.summary["requests"] == 1
-    assert backend._phase_slot[3] == -15
+    assert backend._phase_slot[3] == -60
 
 
 def test_expired_votes_cannot_accumulate_across_continuous_fresh_but_directionless_frames():

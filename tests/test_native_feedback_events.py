@@ -15,7 +15,11 @@ def sampler_fixture():
     backend, applied = _phase_backend()
     backend._feedback_input_snapshot = (-.03, -10)
     backend._feedback_input_history = ()
-    sampler = NativeLifeFeedback(backend)
+    backend._simple_single_tap_feedback = True
+    backend._feedback_tickets = SimpleNamespace(events=[])
+    backend._session.supports_post_random_display_large_step = lambda: True
+    backend._session.apply_future_phase = lambda *args, **kwargs: applied.append(args) or "applied"
+    sampler = NativeLifeFeedback(backend, detector=SimpleNamespace(scores=lambda _: dict(category="GREAT")))
     backend._test_ticket_state = FeedbackObservationState()
     backend.feedback_observation_snapshot = lambda: backend._test_ticket_state
     backend._test_direction = None
@@ -36,10 +40,12 @@ def frame(sampler, direction, now, *, eligible=True, request=None, token=None, c
     if direction is not None and direction != backend._test_direction:
         state = backend._test_ticket_state
         sequence = state.judgement_sequence + 1
-        ticket = (FeedbackObservationTicket("test", token, chunk, source.planned_s, source.actual_s, .5, sequence)
+        ticket = (FeedbackObservationTicket("test", token, chunk, source.planned_s, source.actual_s, .5, sequence, execution_engine_s=source.actual_s, execution_engine_uncertainty_ms=.5)
                   if eligible and token not in backend._test_tokens else None)
         backend._test_ticket_state = FeedbackObservationState(ticket, sequence, source.actual_s, .5)
         backend._test_tokens.add(token)
+        if ticket is not None:
+            backend._feedback_tickets.events.append(dict(event="ticket-created", action_tokens=[token]))
     backend._test_direction = direction
     sampler.capture_due(now)
     assert sampler.fresh({"sequence": sampler.last_sequence + 1,
@@ -63,7 +69,7 @@ def two_events(sampler, direction=TimingFeedback.FAST, start=0):
     frame(sampler, direction, start + .25)
 
 
-@pytest.mark.parametrize("direction,delta", [(TimingFeedback.FAST, 15), (TimingFeedback.SLOW, -15)])
+@pytest.mark.parametrize("direction,delta", [(TimingFeedback.FAST, 60), (TimingFeedback.SLOW, -60)])
 def test_three_single_tap_tickets_request_production_step(direction, delta):
     sampler, backend, _ = sampler_fixture()
     two_events(sampler, direction)

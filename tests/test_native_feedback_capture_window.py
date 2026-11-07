@@ -161,8 +161,8 @@ def test_production_compiler_homogeneous_chord_binds_one_commit_ticket(tmp_path)
         actions=[dict(action=row, engine_due_s=101.) for row in backend._actions], final_chunk=True))
     commands = [row for row in backend._expected_commands if row.receipts]
     assert len(commands) == 1 and len(commands[0].receipts) == 2
-    assert all(row["feedback_single_tap"] for row in commands[0].receipts)
+    assert not any(row["feedback_single_tap"] for row in commands[0].receipts)
     backend._feedback_tickets.observe_commit(commands[0].receipts, 101.001, 1, .5)
     state = backend.feedback_observation_snapshot()
-    assert state.ticket.action_tokens == (1, 2)
-    assert backend._feedback_tickets.summary["ticket-created"] == 1
+    assert state.ticket is None
+    assert backend._feedback_tickets.summary["ticket-created"] == 0

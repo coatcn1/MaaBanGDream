@@ -9,6 +9,7 @@ import queue
 import math
 import os
 import json
+import hashlib
 from collections import deque
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -73,6 +74,7 @@ class NativePhaseStatus:
     transient_clock_identity: ClockIdentity | None = None
     transient_trust_revision: int | None = None
     applied_host_s: float | None = None
+    feedback_source: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +104,11 @@ class NativeExecutedAction:
     kind: str
     command: str
     single_tap: bool
+    note_index: int | None = None
+    original_due_s: float | None = None
+    intentional_random_great: bool = False
+    feedback_identity_trusted: bool = False
+    structural_single_tap: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +125,12 @@ class NativeExecutionCommit:
     device_uncertainty_s: float = JLOG_DEVICE_UNCERTAINTY_S
     actions: tuple[NativeExecutedAction, ...] = ()
     last_release_host_upper_s: float | None = None
+    device_input_start_s: float | None = None
+    input_start_execution_s: float | None = None
+    input_start_command_cursor: int | None = None
+    device_commit_start_s: float | None = None
+    input_clock_key: tuple | None = None
+    input_provenance: tuple | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +144,8 @@ class NativeMappedCommit:
     observation_generation: int
     clock_identity: ClockIdentity
     trust_revision: int
+    input_start_host_lower_s: float | None = None
+    input_start_host_upper_s: float | None = None
 
     @property
     def uncertainty_ms(self):
@@ -182,6 +197,8 @@ class _ExpectedCommand:
     receipts: tuple[dict[str, object], ...] = ()
     last_in_chunk: bool = False
     used_offsets: Any | None = None
+    publication_clock_key: tuple | None = None
+    publication_provenance: tuple | None = None
 
 
 class _ExecutionTimingTrace:
@@ -983,6 +1000,10 @@ class NativeStartPhotogate:
 class NativeMinitouchBackend:
     """显式启用后独占输入，并以 C++ PlaybackSession 滚动发布。"""
 
+    STARTUP_PROBE_MAX_ATTEMPTS = 4
+    STARTUP_PROBE_REFINE_SECONDS = .250
+    STARTUP_PROBE_MIN_REMAINING_SECONDS = .050
+
     exclusive = True
 
     _clock_relation_required = True
@@ -1037,6 +1058,13 @@ class NativeMinitouchBackend:
             raise RuntimeError("谱面没有可编译的动作")
         self._run_id = run_id or str(uuid.uuid4())
         canonical_actions = self._actions
+        self._simple_single_tap_feedback = bool(life_feedback_enabled)
+        self._game_clock_feedback_enabled = not self._simple_single_tap_feedback
+        self._random_great_feedback_enabled = False
+        self._random_great_identity_enabled = False
+        self._random_great_feedback_plan = None
+        self._random_great_feedback_identity_chain = None
+        self._random_great_feedback_disabled_reason = None
         self._random_great_report = {"enabled": False, "status": "disabled", "actual_great_measured": False}
         if random_great_fallback_reason:
             self._random_great_report.update(status="fallback", reason=random_great_fallback_reason,
@@ -1056,12 +1084,11 @@ class NativeMinitouchBackend:
                         lane_centers=lane_centers, judgement_y=judgement_y))
                 report["denominator_source"] = "verified-chart-visible+catalog" if expected_notes is not None else "chart-visible"
                 report["phase_feedback_requested"] = bool(life_feedback_enabled)
-                report["phase_feedback_suppressed"] = True
-                report["phase_feedback_suppressed_reason"] = "intentional-random-great"
+                self._random_great_feedback_enabled = bool(report['selected']) and bool(life_feedback_enabled)
+                self._random_great_identity_enabled = self._random_great_feedback_enabled
+                report["phase_feedback_suppressed"] = bool(report['selected']) and not self._random_great_identity_enabled
+                report["phase_feedback_suppressed_reason"] = "intentional-random-great" if report["phase_feedback_suppressed"] else None
                 self._actions, self._random_great_report = planned, report
-                # 有意的 FAST/SLOW 不进入游戏相位仲裁，避免反馈抵消计划。
-                life_feedback_enabled = False
-                observation_clock_trial_enabled = False
                 visual_refresh_enabled = False
             except Exception as exc:
                 self._random_great_report = {"enabled": False, "status": "fallback", "actual_great_measured": False,
@@ -1070,6 +1097,13 @@ class NativeMinitouchBackend:
             else:
                 safe_print("NativeRandomGreat " + json.dumps({key: value for key, value in report.items()
                     if key != "selected_notes"}, ensure_ascii=False), flush=True)
+        if self._random_great_identity_enabled:
+            try:
+                from .native_random_great import build_random_great_feedback_plan
+                self._random_great_feedback_plan = build_random_great_feedback_plan(
+                    canonical_actions, self._actions, chart_sha256=hashlib.sha256(Path(chart_path).read_bytes()).hexdigest())
+            except Exception as exc:
+                self._random_great_feedback_disabled_reason = 'plan-identity:' + type(exc).__name__
         self._cooperative_jitter_report = None
         if cooperative_jitter_enabled:
             try:
@@ -1148,7 +1182,7 @@ class NativeMinitouchBackend:
                                     else bool(observation_clock_trial_enabled))
         # 预武装与正式消费共享一次选择；保留显式 False 和旧环境试验兼容，
         # 后续采样器不得因进程环境变化切换当前局的反馈模型。
-        self._native_visual_refresh_enabled = (
+        self._native_visual_refresh_enabled = not self._simple_single_tap_feedback and (
             os.environ.get("MAABANGDREAM_NATIVE_VISUAL_REFRESH_TRIAL") == "1"
             if visual_refresh_enabled is None else bool(visual_refresh_enabled)
         )
@@ -1169,6 +1203,8 @@ class NativeMinitouchBackend:
             self._native_ownership_cleanup_done.set()
         self._observation_clock_reader_failed = False
         self._execution_commits: tuple[NativeExecutionCommit, ...] = ()
+        self._geometry_input_proof_disabled_reason = None
+        self._observed_touch_transaction = None
         self._mapped_execution_commits: tuple[NativeMappedCommit, ...] = ()
         self._observation_mapping_disabled_reason = None
         self._observation_refresh_key = None
@@ -1239,7 +1275,11 @@ class NativeMinitouchBackend:
         if self.life_feedback_enabled:
             try:
                 self._feedback_tickets = FeedbackTicketStream(self._run_id)
-                self._feedback_single_taps = SingleTapEligibility(self._actions, allow_groups=True)
+                self._feedback_single_taps = SingleTapEligibility(self._actions, allow_groups=False)
+                if self._random_great_identity_enabled and self._random_great_feedback_plan is not None:
+                    from .native_feedback_ticket import FeedbackReceiptIdentityChain
+                    self._random_great_feedback_identity_chain = FeedbackReceiptIdentityChain(
+                        self._random_great_feedback_plan, self._actions)
             except Exception as exc:
                 self._feedback_ticket_disabled_reason = f"init:{type(exc).__name__}: {exc}"
         if self.life_feedback_enabled and not all(callable(method) for method in (
@@ -1293,8 +1333,18 @@ class NativeMinitouchBackend:
         self._probe_published_at: float | None = None
         self._probe_expected: deque[str] = deque()
         self._probe_complete = threading.Event()
+        self._startup_probe_refinement_enabled = bool(self._native_clock_trial and self.life_feedback_enabled and self._require_probe)
+        self._startup_probe_lock = threading.RLock()
+        self._startup_probe_active = None
+        self._startup_probe_samples = ()
+        self._startup_probe_frozen = False
+        self._startup_probe_selection = None
+        self._startup_probe_reason = 'pending' if self._startup_probe_refinement_enabled else 'disabled'
         self._playback_observation_started = False
         self._observation_cancelled = False
+        self._cancelled_probe_snapshot = None
+        self._cancelled_prestart_logs = None
+        self._startup_probe_source_generation = None
         self._expected_commands: deque[_ExpectedCommand] = deque()
         self._published_commands = 0
         self._observed_commands = 0
@@ -1647,7 +1697,10 @@ class NativeMinitouchBackend:
             self._startup_timing_trial["reason"] = "applied"
 
     def _fail_observation(self, reason: str) -> None:
-        self._observation_error = reason
+        if getattr(self, "_observation_cancelled", False) and self._observation_error is not None:
+            reason = self._observation_error
+        else:
+            self._observation_error = reason
         raise RuntimeError(f"Native jlog 执行证据无效：{reason}")
 
     def _record_chunk_timing(self, values: dict[str, object]) -> None:
@@ -1761,7 +1814,8 @@ class NativeMinitouchBackend:
                 cursor, lines = self._device.logs_since(self._log_cursor)
                 records = [(line, self._clock()) for line in lines]
         except Exception as exc:  # noqa: BLE001 - 游标丢失必须终止 Native
-            self._observation_error = f"读取 jlog 失败：{type(exc).__name__}: {exc}"
+            if not (getattr(self, "_observation_cancelled", False) and self._observation_error is not None):
+                self._observation_error = f"读取 jlog 失败：{type(exc).__name__}: {exc}"
             raise
         self._log_cursor = cursor
         for raw_cursor, (line, received_s) in enumerate(records, cursor - len(records) + 1):
@@ -1769,7 +1823,7 @@ class NativeMinitouchBackend:
                 continue
             event = native_engine.parse_minitouch_log(line)
             if event is None:
-                if self._playback_observation_started:
+                if self._playback_observation_started or getattr(self, "_observation_cancelled", False):
                     self._fail_observation("无法解析设备返回的 jlog 行")
                 continue
             start_ms = float(event["start_ms"])
@@ -1804,7 +1858,15 @@ class NativeMinitouchBackend:
             command = str(event["command"]).strip()
             if not command:
                 self._fail_observation("jlog 命令为空")
+            if self._observation_cancelled and not self._playback_observation_started:
+                if type(received_s) not in (int, float) or not math.isfinite(received_s):
+                    self._fail_observation("取消期 jlog 宿主接收时间不可信")
+                self._observe_cancelled_prestart(command, received_s, raw_cursor, timestamped_reader)
+                continue
             if not self._playback_observation_started:
+                if getattr(self, '_startup_probe_refinement_enabled', False):
+                    self._observe_startup_probe(command, start_ms, end_ms, received_s, raw_cursor)
+                    continue
                 if not self._probe_expected:
                     continue
                 expected_probe = self._probe_expected[0]
@@ -1914,6 +1976,15 @@ class NativeMinitouchBackend:
                 )
             self._expected_commands.popleft()
             self._observed_commands += 1
+            accepted_token = int(expected.receipts[-1]['action_token']) if expected.receipts else None
+            input_transaction = None
+            if getattr(self, 'life_feedback_enabled', False) and not getattr(self, '_geometry_input_proof_disabled_reason', None):
+                try:
+                    input_transaction = self._observe_input_transaction(command, start_ms / 1000, end_ms / 1000,
+                        publication_context=(expected.publication_clock_key, expected.publication_provenance))
+                except Exception as exc:
+                    self._geometry_input_proof_disabled_reason = 'input-transaction:' + type(exc).__name__
+                    self._observed_touch_transaction = None
             self._calibrator.observe(event)
             wait_estimator = getattr(self, "_wait_cost_estimator", None)
             if wait_estimator is not None:
@@ -2002,7 +2073,15 @@ class NativeMinitouchBackend:
                         ))
                 if self.life_feedback_enabled and not getattr(self, "_execution_commit_disabled_reason", None):
                     try:
-                        self._publish_execution_commit(device_commit_s, actual_s, float(received_s), expected)
+                        if getattr(self, '_random_great_identity_enabled', False):
+                            self._publish_execution_commit(device_commit_s, actual_s, float(received_s), expected,
+                                input_start_device_s=input_transaction[0] if input_transaction is not None else None,
+                                input_start_cursor=input_transaction[1] if input_transaction is not None else None,
+                                commit_start_device_s=start_ms / 1000,
+                                input_clock_key=input_transaction[2] if input_transaction is not None else None,
+                                input_provenance=input_transaction[3] if input_transaction is not None else None)
+                        else:
+                            self._publish_execution_commit(device_commit_s, actual_s, float(received_s), expected)
                     except Exception as exc:
                         # 原会话已接受输入；附加证据失败只关闭此观察源，不倒改执行账本。
                         self._execution_commit_disabled_reason = type(exc).__name__
@@ -2026,9 +2105,13 @@ class NativeMinitouchBackend:
                 tickets = getattr(self, "_feedback_tickets", None)
                 if tickets is not None and not getattr(self, "_feedback_ticket_disabled_reason", None):
                     try:
-                        tickets.observe_commit(expected.receipts, actual_s, expected.chunk_sequence,
-                            self._clock_uncertainty_ms if self._clock_basis == "probe-midpoint" else None,
-                            device_actual_s=device_commit_s)
+                        # RX 是真实执行后的宿主上界，只作渲染等待起点，不用于估算相位。
+                        simple = getattr(self, '_simple_single_tap_feedback', False)
+                        tickets.observe_commit(expected.receipts, float(received_s) if simple else actual_s, expected.chunk_sequence,
+                            0.0 if simple else self._clock_uncertainty_ms if self._clock_basis == "probe-midpoint" else None,
+                            device_actual_s=device_commit_s, execution_engine_s=actual_s if simple else None,
+                            execution_engine_uncertainty_ms=(self._clock_uncertainty_ms
+                                if simple and self._clock_basis == "probe-midpoint" else None))
                     except Exception as exc:
                         self._disable_feedback_tickets("observe-commit", exc)
             try:
@@ -2036,7 +2119,7 @@ class NativeMinitouchBackend:
                 note_accept = getattr(self._device, 'note_log_owner_accept', None)
                 if callable(note_accept):
                     note_accept(raw_cursor, self._clock(),
-                        action_token=token if expected.receipts else None,
+                        action_token=accepted_token,
                         owner_observe_s=owner_observe_s, formal_cursor=self._observed_commands)
             except Exception:
                 pass
@@ -2127,10 +2210,7 @@ class NativeMinitouchBackend:
                     raise RuntimeError("minitouch 准备已取消")
                 # 首读延迟探测：发一条 w 0，回读 jlog 估计 publish->设备读取的
                 # 单程延迟，用它对齐整曲脚本的绝对起点。
-                self._probe_expected = deque(("c", "w 0", "c"))
-                self._probe_complete.clear()
-                self._probe_published_at = self._clock()
-                self._device.publish("c\nw 0\nc\n")
+                self._publish_startup_probe_locked()
             if self._device_start_cancel.is_set():
                 raise RuntimeError("minitouch probe 完成时准备已取消")
             if getattr(self, '_native_clock_trial', False) and self.life_feedback_enabled:
@@ -2181,7 +2261,9 @@ class NativeMinitouchBackend:
                     self._observation_clock = NativeClockObserver(self._run_id,
                         lease_current=self._native_device_claim.current,
                         adb_path=self._native_adb_path, serial=self._native_serial,
-                        cleanup_allowed=self._native_observer_cleanup_allowed)
+                        cleanup_allowed=self._native_observer_cleanup_allowed,
+                        wide_probe_retry_enabled=self._native_clock_trial,
+                        )
                 self._observation_clock.start()
         except Exception as exc:
             self._native_ownership_warning = "observer-start:" + type(exc).__name__
@@ -2350,6 +2432,8 @@ class NativeMinitouchBackend:
             raise RuntimeError(f"minitouch 启动探测在 {float(timeout_s):g} 秒内未完成")
         if should_stop is not None and should_stop():
             raise InterruptedError("用户已停止任务")
+        if self._require_probe and getattr(self, '_startup_probe_refinement_enabled', False):
+            self._refine_startup_probe(deadline, observe_wait, should_stop)
         if self._state == "arming":
             self._state = "armed"
         return True
@@ -2528,6 +2612,15 @@ class NativeMinitouchBackend:
                     sequence, mapping_end_s=self._diagnostic_clock_s()
                 )
             receipt_by_commit: dict[int, list[dict[str, object]]] = {}
+            identity_chain = getattr(self, '_random_great_feedback_identity_chain', None)
+            identity_eligible = set()
+            if identity_chain is not None and not self._random_great_feedback_disabled_reason:
+                try:
+                    identity_chain.register_chunk(sequence, list(chunk.get('actions', [])), registered_host_s=self._clock())
+                    identity_eligible = {identity_chain.plan.identity_for(item['action']).ordinal
+                        for item in chunk.get('actions', []) if self._feedback_single_taps.eligible(item['action'])}
+                except Exception as exc:
+                    self._disable_feedback_tickets('source-identity', exc)
             eligibility = getattr(self, "_feedback_single_taps", None)
             eligible_due = set()
             if eligibility is not None:
@@ -2545,6 +2638,17 @@ class NativeMinitouchBackend:
                 receipt["feedback_single_tap"] = (receipt.get("action_kind") == "tap"
                     and receipt.get("command") == "d"
                     and round(float(receipt["planned_engine_s"]), 6) in eligible_due)
+                if getattr(self, '_random_great_identity_enabled', False):
+                    receipt['feedback_single_tap'] = False
+                    if identity_chain is not None and not self._random_great_feedback_disabled_reason:
+                        try:
+                            receipt.update(identity_chain.bind_receipt(receipt))
+                            receipt['feedback_single_tap'] = (self._random_great_feedback_enabled
+                                and receipt['identity_ordinal'] in identity_eligible
+                                and not receipt['intentional_random_great']
+                                and receipt.get('action_kind') == 'tap' and receipt.get('command') == 'd')
+                        except Exception as exc:
+                            self._disable_feedback_tickets('receipt-identity', exc)
                 line_index = int(receipt["line_index"])
                 token = int(receipt["action_token"])
                 if line_index < 0 or line_index >= len(commands):
@@ -2582,12 +2686,19 @@ class NativeMinitouchBackend:
                 self._update_first_chunk_pipeline(
                     sequence, receipt_end_s=self._diagnostic_clock_s()
                 )
+            publication_key = publication_provenance = None
+            try:
+                publication_key, publication_provenance = self._input_observation_context()
+            except Exception as exc:
+                self._geometry_input_proof_disabled_reason = 'publication-context:' + type(exc).__name__
             records = [
                 _ExpectedCommand(
                     command=command,
                     chunk_sequence=sequence,
                     receipts=tuple(receipt_by_commit.get(index, ())),
                     last_in_chunk=index == len(commands) - 1,
+                    publication_clock_key=publication_key,
+                    publication_provenance=publication_provenance,
                     used_offsets=(
                         used_offsets if index == len(commands) - 1 else None
                     ),
@@ -2834,6 +2945,8 @@ class NativeMinitouchBackend:
             self._finish_when_fully_published()
             return True
         if operation == "cancel":
+            if not getattr(self, "_playback_observation_started", False):
+                self._freeze_cancelled_probe()
             # reset 后的 r/jlog 不属于谱面命令；取消只保留“不完整”证据，
             # 不把预期中断误报为命令失配。
             self._observation_cancelled = True
@@ -3124,17 +3237,50 @@ class NativeMinitouchBackend:
         return (() if getattr(self, "_execution_commit_disabled_reason", None)
             else getattr(self, "_execution_commits", ()))
 
-    def _publish_execution_commit(self, device_s, actual_s, received_s, expected):
+    def _publish_execution_commit(self, device_s, actual_s, received_s, expected, *,
+                                  input_start_device_s=None, input_start_cursor=None, commit_start_device_s=None,
+                                  input_clock_key=None, input_provenance=None):
+        input_start_s = None
+        offset = self._device_clock_offset_s
+        uncertainty_ms = self._clock_uncertainty_ms
+        if (input_start_device_s is not None and math.isfinite(input_start_device_s)
+                and commit_start_device_s is not None and math.isfinite(commit_start_device_s)
+                and input_start_device_s <= commit_start_device_s <= device_s and type(input_start_cursor) is int
+                and 0 < input_start_cursor < self._observed_commands
+                and offset is not None and math.isfinite(offset) and self._clock_basis == 'probe-midpoint'
+                and uncertainty_ms is not None and math.isfinite(uncertainty_ms) and 0 <= uncertainty_ms <= 1):
+            input_start_s = input_start_device_s + offset
+        input_key = input_clock_key
+        current_key, current_provenance = self._input_observation_context()
+        if input_key is None or (input_key, input_provenance) != (current_key, current_provenance):
+            input_start_s = None
         commit = NativeExecutionCommit(self._run_id, self._observed_commands,
             device_s, actual_s, received_s, expected.chunk_sequence,
             tuple(int(row["action_token"]) for row in expected.receipts),
             actions=tuple(NativeExecutedAction(int(row['action_token']), float(row['planned_engine_s']),
-                str(row.get('action_kind', '')), str(row.get('command', '')), bool(row.get('feedback_single_tap')))
-                for row in expected.receipts))
+                str(row.get('action_kind', '')), str(row.get('command', '')), bool(row.get('feedback_single_tap')),
+                row.get('note_index'), row.get('original_due_s'), bool(row.get('intentional_random_great')),
+                bool(row.get('feedback_identity_trusted')), bool(row.get('feedback_structural_single_tap')))
+                for row in expected.receipts), device_input_start_s=input_start_device_s,
+            input_start_execution_s=input_start_s, input_start_command_cursor=input_start_cursor,
+            device_commit_start_s=commit_start_device_s, input_clock_key=input_key, input_provenance=input_provenance)
         if any(action.kind == 'up' or action.kind == 'flick' and action.command == 'm' for action in commit.actions):
             self._feedback_release_host_upper_s = received_s
         commit = replace(commit, last_release_host_upper_s=self._feedback_release_host_upper_s)
-        self._execution_commits = (*getattr(self, "_execution_commits", ()), commit)[-64:]
+        chain = getattr(self, '_random_great_feedback_identity_chain', None)
+        if chain is not None and not self._random_great_feedback_disabled_reason:
+            try:
+                # 起点覆盖事务内最早d/m/u，不能把c.end或单独c.start当成尚未输入的证明。
+                uncertainty_s = JLOG_DEVICE_UNCERTAINTY_S + (uncertainty_ms / 1000 if input_start_s is not None else 0)
+                chain.record_execution(expected.receipts, actual_s, uncertainty_s, start_s=input_start_s,
+                                       clock_key=input_key, provenance=input_provenance)
+            except Exception as exc:
+                self._disable_feedback_tickets('executed-identity', exc)
+        if getattr(self, '_random_great_feedback_enabled', False):
+            if any(not action.feedback_identity_trusted for action in commit.actions
+                   if action.kind in {'tap', 'flick', 'down', 'up'}):
+                self._random_great_feedback_disabled_reason = 'untrusted-executed-identity'
+        self._execution_commits = (*getattr(self, '_execution_commits', ()), commit)[-64:]
 
     def _observation_clock_ready(self, snapshot, now):
         # now可能是原图首次观察时刻；采样线程可在其后发布新probe，健康检查另取当前H。
@@ -3258,6 +3404,10 @@ class NativeMinitouchBackend:
             return
         self._feedback_ticket_disabled_reason = f"{stage}:{type(exc).__name__}: {exc}"
         self._feedback_single_taps = None
+        if getattr(self, "_random_great_identity_enabled", False):
+            self._random_great_feedback_disabled_reason = self._feedback_ticket_disabled_reason
+            safe_print("NativeFeedback disabled=" + self._feedback_ticket_disabled_reason, flush=True)
+            return
         # 附加观察异常只撤销自己的未应用请求，不能中断已发布输入或视觉来源。
         try:
             self.revoke_future_phase("ticket-observer-error")
@@ -3458,11 +3608,18 @@ class NativeMinitouchBackend:
 
     def request_future_phase(self, delta_ms: float, observed_s: float, *, owner: str = "feedback",
                              expected_owner_totals=None, visual_qualification=None,
-                             expected_observation_context=None) -> bool:
+                             expected_observation_context=None, ordinary_action_tokens=None) -> bool:
         """非阻塞单槽请求，不等待 owner，也不触碰 C++ 会话。"""
         self._phase_request_rejection_reason = None
+        stop = getattr(self, '_native_input_stop_requested', None)
+        if stop is not None and stop.is_set():
+            self._phase_request_rejection_reason = "stopped"
+            return False
         if not self.life_feedback_enabled:
             self._phase_request_rejection_reason = "disabled"
+            return False
+        if owner == 'feedback' and getattr(self, '_random_great_judgement_suppressed', False):
+            self._phase_request_rejection_reason = 'random-judgement-feedback-disabled'
             return False
         if not self._phase_lock.acquire(False):
             self._phase_request_rejection_reason = "owner-lock-busy"
@@ -3489,7 +3646,26 @@ class NativeMinitouchBackend:
             if self._phase_closed or self._state != "running" or self._phase_slot is not None:
                 self._phase_request_rejection_reason = "closed-not-running-or-slot-busy"
                 return False
-            if delta_ms not in {-15.0, 15.0} or not math.isfinite(observed_s):
+            # 普通单键只接受三张实际执行票；大步仍经过同一 owner、触点及未来切片门。
+            allowed_steps = {-15.0, 15.0}
+            simple_request = ordinary_action_tokens is not None
+            if simple_request:
+                if (owner != 'feedback' or not getattr(self, '_simple_single_tap_feedback', False)
+                        or len(ordinary_action_tokens) != 3 or len(set(ordinary_action_tokens)) != 3):
+                    self._phase_request_rejection_reason = 'ordinary-single-tap-identity-untrusted'
+                    return False
+                tickets = getattr(self, '_feedback_tickets', None)
+                issued = {token for row in getattr(tickets, 'events', ()) if row.get('event') == 'ticket-created'
+                          for token in row.get('action_tokens', ())}
+                if not set(ordinary_action_tokens) <= issued:
+                    self._phase_request_rejection_reason = 'ordinary-single-tap-not-executed'
+                    return False
+                capability = getattr(self._session, 'supports_post_random_display_large_step', None)
+                if not callable(capability) or capability() is not True:
+                    self._phase_request_rejection_reason = 'ordinary-single-tap-large-step-unavailable'
+                    return False
+                allowed_steps = {-60., -30., 30., 60.}
+            if delta_ms not in allowed_steps or not math.isfinite(observed_s):
                 self._phase_request_rejection_reason = "invalid-request"
                 return False
             if getattr(self, '_native_clock_trial', False):
@@ -3521,6 +3697,7 @@ class NativeMinitouchBackend:
                 owner=owner,
                 owner_cumulative_phase_ms=self.phase_owner_cumulative(owner),
                 cumulative_phase_ms=self.phase_status_snapshot().cumulative_phase_ms,
+                feedback_source='ordinary-single-tap' if simple_request else None,
             ), "requested")
             return True
         finally:
@@ -3638,8 +3815,10 @@ class NativeMinitouchBackend:
 
                     if self._phase_slot is None:
                         return
-                    reason = str(self._session.apply_future_phase(
-                        delta_ms, contact_available_s))
+                    if self.phase_status_snapshot().feedback_source == 'ordinary-single-tap' and abs(delta_ms) in {30., 60.}:
+                        reason = str(self._session.apply_future_phase(delta_ms, contact_available_s, post_random_display_large_step=True))
+                    else:
+                        reason = str(self._session.apply_future_phase(delta_ms, contact_available_s))
                     if reason == "unsafe-gap":
                         self._sync_visual_phase_guard_locked()
                         if self._phase_slot is None:
@@ -4054,6 +4233,7 @@ class NativeMinitouchBackend:
             "run_id": self._run_id,
             "native_random_great": getattr(self, "_random_great_report", {"enabled": False, "status": "disabled"}),
             "life_feedback": {"enabled": getattr(self, "life_feedback_enabled", False),
+                              "ordinary_single_tap_enabled": getattr(self, "_simple_single_tap_feedback", False),
                               "configuration": {
                                   "observation_clock_enabled": getattr(self, "_native_clock_trial", False),
                                   "visual_refresh_requested": getattr(self, "_native_visual_refresh_enabled", False),
@@ -4146,6 +4326,7 @@ class NativeMinitouchBackend:
             "chunk_timing": self._chunk_timing_report(),
             "frozen_offsets": dict(self._frozen_offsets),
             "frozen_timing_offset_ms": self._frozen_timing_offset_ms,
+            "startup_probe": self._startup_probe_report(),
             "executed_observation_supported": True,
             "executed_observation_complete": observation_complete,
             "executed_observation_reason": observation_reason,
@@ -4215,4 +4396,259 @@ class NativeMinitouchBackend:
         jitter_report = getattr(self, "_cooperative_jitter_report", None)
         if jitter_report is not None:
             defaults["cooperative_jitter"] = jitter_report
+        cancelled_logs = getattr(self, '_cancelled_prestart_logs', None)
+        if cancelled_logs is not None:
+            defaults["cancelled_prestart_logs"] = dict(cancelled_logs)
         return defaults
+
+    def _freeze_cancelled_probe(self):
+        if getattr(self, "_cancelled_probe_snapshot", None) is not None:
+            return
+        # 只冻结原有最多三条探测，不等锁、不发送，不再发布探测完成或时钟资格。
+        active = getattr(self, "_startup_probe_active", None)
+        expected = tuple(getattr(self, "_probe_expected", ()))
+        if len(expected) > 3:
+            expected = ()
+        self._cancelled_probe_snapshot = dict(expected=expected, index=0,
+            generation=getattr(self._device, "_reset_generation", None),
+            source_generation=getattr(self, "_startup_probe_source_generation", None),
+            before_cancel=not getattr(self, "_observation_cancelled", False),
+            refined=bool(getattr(self, "_startup_probe_refinement_enabled", False)),
+            probe_generation=None if active is None else active.get("generation"),
+            last_cursor=None if active is None else active.get("last_cursor"),
+            raw_start_cursor=None if active is None else active.get("raw_start_cursor"),
+            host_send_s=getattr(self, "_probe_published_at", None))
+
+    def _record_cancelled_prestart_log(self, command, cursor, category):
+        try:
+            state = getattr(self, "_cancelled_prestart_logs", None)
+            if state is None:
+                state = dict(total=0, cleanup_candidates=0, queued_probe=0, unknown=0,
+                    possible_touch=0, dropped=0, samples=(), authorization=False,
+                    no_touch_evidence=False, release_authority="NativeMinitouchDevice")
+                self._cancelled_prestart_logs = state
+            state["total"] += 1
+            state[category] += 1
+            if command.split(" ", 1)[0] in {"d", "m"}:
+                state["possible_touch"] += 1
+            if len(state["samples"]) < 16:
+                state["samples"] += (dict(cursor=cursor, command=command[:96], category=category),)
+            else:
+                state["dropped"] += 1
+        except Exception:
+            # 附加诊断不得改变清理、原异常或独立设备释放状态机。
+            pass
+
+    def _observe_cancelled_prestart(self, command, received_s, cursor, reader):
+        self._freeze_cancelled_probe()
+        snapshot = self._cancelled_probe_snapshot
+        release_window = False
+        try:
+            # 仅接受原Device方法的同代原始游标；注入reader或缺来源不能猜边界。
+            if (isinstance(self._device, NativeMinitouchDevice)
+                    and getattr(reader, "__self__", None) is self._device
+                    and getattr(reader, "__func__", None) is NativeMinitouchDevice.log_records_since):
+                lock = self._device._reset_lock
+                if lock.acquire(blocking=False):
+                    try:
+                        # 与既有release_diagnostics相同字段，非阻塞读取；锁忙绝不等清理。
+                        generation = snapshot["generation"]
+                        current_generation = self._device._reset_generation
+                        fence = self._device._release_send_cursor
+                        release_window = (type(generation) is int and generation > 0
+                            and snapshot["before_cancel"] is True
+                            and type(snapshot["source_generation"]) is int
+                            and snapshot["source_generation"] == generation
+                            and type(current_generation) is int and generation == current_generation
+                            and type(fence) is int and fence >= 0 and type(cursor) is int and cursor > fence)
+                    finally:
+                        lock.release()
+        except Exception:
+            release_window = False
+        if release_window:
+            candidate = command in {"w 0", "c", "r", *(f"u {i}" for i in range(10))}
+            self._record_cancelled_prestart_log(command, cursor,
+                "cleanup_candidates" if candidate else "unknown")
+            return
+        # 已排队的旧probe仍核验，但只推进取消诊断副本，绝不更新原完成事件、样本或映射。
+        expected, index = snapshot["expected"], snapshot["index"]
+        valid = index < len(expected) and command == expected[index]
+        if snapshot["refined"]:
+            start, previous = snapshot["raw_start_cursor"], snapshot["last_cursor"]
+            valid = (valid and type(snapshot["generation"]) is int
+                and snapshot["generation"] == snapshot["probe_generation"] == getattr(self._device, "_reset_generation", None)
+                and type(start) is int and cursor > start
+                and (previous is None or cursor == previous + 1))
+        sent = snapshot["host_send_s"]
+        valid = valid and type(sent) in (int, float) and math.isfinite(sent) and received_s >= sent
+        self._record_cancelled_prestart_log(command, cursor, "queued_probe" if valid else "unknown")
+        if not valid:
+            self._fail_observation("取消前启动探测未闭合、命令失配或来源不明")
+        snapshot["index"] += 1
+        snapshot["last_cursor"] = cursor
+
+    def _publish_startup_probe_locked(self):
+        if self._device_start_cancel.is_set():
+            raise InterruptedError('启动探测已取消')
+        if not getattr(self, '_startup_probe_refinement_enabled', False):
+            self._startup_probe_source_generation = getattr(self._device, "_reset_generation", None)
+            self._probe_expected = deque(('c', 'w 0', 'c'))
+            self._probe_complete.clear()
+            self._probe_published_at = self._clock()
+            self._device.publish('c\nw 0\nc\n')
+            return
+        with self._startup_probe_lock:
+            if (self._startup_probe_active is not None or self._probe_expected or self._startup_probe_frozen
+                    or self._playback_observation_started or self._first_action_anchor_s is not None
+                    or self._state in {'ready', 'running'}):
+                raise RuntimeError('启动探测存在未闭合回执或时间轴已冻结')
+            generation = getattr(self._device, '_reset_generation', None)
+            if type(generation) is not int or generation <= 0:
+                raise RuntimeError('启动探测缺少本轮设备generation')
+            if self._startup_probe_samples and generation != self._startup_probe_samples[0]['generation']:
+                raise RuntimeError('启动探测设备generation变化')
+            self._probe_expected = deque(('c', 'w 0', 'c'))
+            self._probe_complete.clear()
+            self._probe_published_at = self._clock()
+            self._startup_probe_active = dict(attempt=len(self._startup_probe_samples) + 1,
+                generation=generation, host_send_s=self._probe_published_at, raw_start_cursor=self._log_cursor,
+                first_cursor=None, last_cursor=None, complete=False)
+            self._startup_probe_source_generation = generation
+            self._device.publish('c\nw 0\nc\n')
+
+    def _observe_startup_probe(self, command, start_ms, end_ms, received_s, cursor):
+        with self._startup_probe_lock:
+            sample = self._startup_probe_active
+            if sample is None or not self._probe_expected:
+                self._fail_observation('启动探测收到未发布或迟到的jlog')
+            if (getattr(self._device, '_reset_generation', None) != sample['generation']
+                    or cursor <= sample['raw_start_cursor'] or sample['last_cursor'] is not None
+                    and cursor != sample['last_cursor'] + 1):
+                self._fail_observation('启动探测generation或连续原始游标不匹配')
+            if command != self._probe_expected[0]:
+                self._fail_observation('启动探测命令失配：' + command)
+            if not math.isfinite(received_s) or received_s < sample['host_send_s']:
+                self._fail_observation('启动探测宿主接收时间不可信')
+            if sample['first_cursor'] is None:
+                sample['first_cursor'] = cursor
+            sample['last_cursor'] = cursor
+            sample['host_last_received_s'] = received_s
+            self._probe_expected.popleft()
+            if command == 'w 0':
+                device_s = start_ms / 1000
+                lower_d, upper_d = device_time_enclosure(device_s, JLOG_DEVICE_UNCERTAINTY_S)
+                lower = math.nextafter(sample['host_send_s'] - upper_d, -math.inf)
+                upper = math.nextafter(received_s - lower_d, math.inf)
+                sample.update(host_wait_received_s=received_s, device_wait_start_s=device_s,
+                    offset_lower_s=lower, offset_upper_s=upper,
+                    uncertainty_ms=(upper - lower) * 500,
+                    round_trip_s=received_s - sample['host_send_s'])
+            if not self._probe_expected:
+                # 必须等尾c闭合才发布样本；w0到达不能提前授资格或改变输入时间轴。
+                sample['complete'] = True
+                self._startup_probe_samples = (*self._startup_probe_samples, dict(sample))
+                self._startup_probe_active = None
+                self._probe_published_at = None
+                self._probe_complete.set()
+
+    def _refine_startup_probe(self, deadline, observe_wait, should_stop):
+        if self._startup_probe_frozen:
+            return
+        refine_deadline = min(deadline, time.monotonic() + self.STARTUP_PROBE_REFINE_SECONDS)
+        try:
+            while True:
+                if self._device_start_cancel.is_set() or should_stop is not None and should_stop():
+                    raise InterruptedError('用户已停止任务')
+                samples = self._startup_probe_samples
+                if not samples or self._startup_probe_active is not None or not self._probe_complete.is_set():
+                    raise RuntimeError('启动探测尚未完整排空')
+                if max(row['offset_lower_s'] for row in samples) > min(row['offset_upper_s'] for row in samples):
+                    raise RuntimeError('启动探测offset区间不相容或设备时钟跳变')
+                best = min(samples, key=lambda row: row['uncertainty_ms'])
+                if best['uncertainty_ms'] <= 1:
+                    reason = 'qualified-first' if len(samples) == 1 else 'qualified-refinement'
+                    break
+                if (len(samples) >= self.STARTUP_PROBE_MAX_ATTEMPTS
+                        or refine_deadline - time.monotonic() < self.STARTUP_PROBE_MIN_REMAINING_SECONDS):
+                    best, reason = samples[0], 'coarse-complete-no-qualified-sample'
+                    break
+                with self._device_start_commit_lock:
+                    if should_stop is not None and should_stop():
+                        raise InterruptedError('用户已停止任务')
+                    self._publish_startup_probe_locked()
+                if should_stop is not None and should_stop():
+                    raise InterruptedError('用户已停止任务')
+                while not self._probe_complete.is_set() and time.monotonic() < refine_deadline:
+                    if self._device_start_cancel.is_set() or should_stop is not None and should_stop():
+                        raise InterruptedError('用户已停止任务')
+                    self._probe_complete.wait(timeout=min(.05, max(0., refine_deadline - time.monotonic())))
+                    if not self._probe_complete.is_set():
+                        observe_wait()
+                if not self._probe_complete.is_set():
+                    raise RuntimeError('已发送的启动探测在总预算内未完整回读')
+            with self._device_start_commit_lock, self._startup_probe_lock:
+                if (self._device_start_cancel.is_set() or should_stop is not None and should_stop()):
+                    raise InterruptedError('用户已停止任务')
+                if (self._startup_probe_active is not None or self._probe_expected
+                        or not self._probe_complete.is_set() or self._playback_observation_started
+                        or self._first_action_anchor_s is not None or self._state in {'ready', 'running'}
+                        or getattr(self._device, '_reset_generation', None) != best['generation']):
+                    raise RuntimeError('启动探测冻结时会话或回执边界已变化')
+                # 选择真实单个样本的完整区间；不以多样本交集伪造更高精度，曲中绝不再写。
+                self._device_clock_offset_s = (best['offset_lower_s'] + best['offset_upper_s']) / 2
+                self._clock_uncertainty_ms = best['uncertainty_ms']
+                self._first_read_delay_s = min(.015, max(.001, best['round_trip_s'] / 2))
+                self._clock_basis = 'probe-midpoint'
+                self._startup_probe_selection = best['attempt']
+                self._startup_probe_reason = reason
+                self._startup_probe_frozen = True
+        except RuntimeError as exc:
+            self._startup_probe_reason = 'failed:' + str(exc)
+            self._state = 'failed'
+            self._cancel_device_start(.05)
+            self._emergency_stop_device_with_budget(.05)
+            raise
+
+    def _startup_probe_report(self):
+        if not getattr(self, '_startup_probe_refinement_enabled', False):
+            return dict(enabled=False, reason='disabled')
+        with self._startup_probe_lock:
+            return dict(enabled=self._startup_probe_refinement_enabled, frozen=self._startup_probe_frozen,
+                max_attempts=self.STARTUP_PROBE_MAX_ATTEMPTS, refinement_budget_s=self.STARTUP_PROBE_REFINE_SECONDS,
+                selected_attempt=self._startup_probe_selection, reason=self._startup_probe_reason,
+                attempts=[dict(row) for row in self._startup_probe_samples],
+                pending=dict(self._startup_probe_active) if self._startup_probe_active is not None else None)
+
+    def _input_observation_context(self):
+        if not (getattr(self, '_random_great_identity_enabled', False)
+                or getattr(self, '_random_great_feedback_enabled', False)):
+            return None, None
+        snapshot = self.observation_clock_snapshot()
+        if not self._observation_clock_ready(snapshot, self._clock()):
+            return None, None
+        return (snapshot.identity, snapshot.epoch, snapshot.trust_revision), self.observation_provenance()
+
+    def _observe_input_transaction(self, command, start_s, end_s, *, publication_context=(None, None)):
+        """触控写入可能早于SYN_REPORT；只积累连续核验命令，不改既有end执行统计。"""
+        kind = command.split(' ', 1)[0]
+        transaction = getattr(self, '_observed_touch_transaction', None)
+        if kind in {'d', 'm', 'u'}:
+            if transaction is None:
+                key, provenance = self._input_observation_context()
+                if (key, provenance) != publication_context:
+                    key = provenance = None
+                self._observed_touch_transaction = (start_s, self._observed_commands, key, provenance)
+            elif transaction[2:] != publication_context:
+                self._observed_touch_transaction = transaction[:2] + (None, None)
+            return None
+        self._observed_touch_transaction = None
+        if kind == 'c':
+            if transaction is not None and transaction[0] <= start_s <= end_s:
+                key, provenance = self._input_observation_context()
+                if (transaction[2] is None or (transaction[2], transaction[3]) != (key, provenance)
+                        or transaction[2:] != publication_context):
+                    return transaction[:2] + (None, None)
+                return transaction
+        elif transaction is not None:
+            self._geometry_input_proof_disabled_reason = 'touch-transaction-without-commit'
+        return None

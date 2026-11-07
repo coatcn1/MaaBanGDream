@@ -25,7 +25,7 @@ def tap(sampler, now, direction=TimingFeedback.FAST, **kwargs):
 def rejected_request(monkeypatch):
     sampler, backend, _ = sampler_fixture()
     calls = []
-    monkeypatch.setattr(backend, "request_future_phase", lambda delta, observed: calls.append((delta, observed)) or False)
+    monkeypatch.setattr(backend, "request_future_phase", lambda delta, observed, **kwargs: calls.append((delta, observed)) or False)
     for now in (0, .1, .2):
         tap(sampler, now)
     assert len(calls) == 1
@@ -74,7 +74,7 @@ def test_blank_frames_do_not_create_requests_without_new_tickets(monkeypatch):
 def test_request_exception_consumes_votes_before_call(monkeypatch):
     sampler, backend, _ = sampler_fixture()
     calls = []
-    def fail(delta, observed):
+    def fail(delta, observed, **kwargs):
         calls.append((delta, observed))
         raise OSError("request unavailable")
     monkeypatch.setattr(backend, "request_future_phase", fail)
@@ -132,7 +132,7 @@ def test_target_local_drop_keeps_waiting_slow_request_and_native_applies_once(re
     for now in (0, .1, .2):
         tap(sampler, now, TimingFeedback.SLOW)
     original = backend._phase_slot
-    assert original[3] == -15 and sampler.summary["accepted_requests"] == 1
+    assert original[3] == -60 and sampler.summary["accepted_requests"] == 1
     backend._compiler.phase_boundary_safe = lambda: False
     backend._consume_phase_candidate()
     assert backend.phase_status_snapshot().state == "waiting-touch-boundary"
@@ -159,11 +159,11 @@ def test_target_local_drop_keeps_waiting_slow_request_and_native_applies_once(re
     backend._compiler.phase_boundary_safe = lambda: True
     backend._consume_phase_candidate()
     sampler.refresh_phase_status(1.)
-    assert session.future_phase_offset_ms == -15
+    assert session.future_phase_offset_ms == -60
     assert backend.phase_status_snapshot().state == "applied"
     assert sampler.summary["requests"] == sampler.summary["accepted_requests"] == sampler.summary["applied_requests"] == 1
     backend._consume_phase_candidate()
-    assert session.future_phase_offset_ms == -15
+    assert session.future_phase_offset_ms == -60
 
 
 @pytest.mark.parametrize("invalid", ["reverse", "mixed", "scene", "reused-gap", "gap", "stop"])

@@ -1,0 +1,41 @@
+{
+  "bundle_sha256": "eaa5bb5aa21e2caefa31ec76476cb825b14617b81f3176cc56467c46a377b475",
+  "asset_name": "Judge.asset",
+  "atlas_path_id": 3240743892394613584,
+  "texture_path_id": 6166949094856833809,
+  "texture_size": [
+    512,
+    256
+  ],
+  "coordinate_convention": "NGUI atlas x/y top-left; UnityPy PIL RGBA orientation; crop keeps source alpha, transparent padding restored",
+  "sprites": [
+    {
+      "name": "judge_perfect",
+      "png_sha256": "b5603c8838067de679e63b0728054023aee1bb1aef0696f4cd09db718443e096",
+      "source_rect_top_left": [
+        0,
+        177,
+        287,
+        79
+      ],
+      "png_size": [
+        287,
+        79
+      ]
+    },
+    {
+      "name": "judge_great",
+      "png_sha256": "fbaf17bfcbb2111050fec1a38448a7ef99fb67a49196d4e0cb0a193c20d2fb46",
+      "source_rect_top_left": [
+        0,
+        105,
+        225,
+        70
+      ],
+      "png_size": [
+        225,
+        70
+      ]
+    }
+  ]
+}

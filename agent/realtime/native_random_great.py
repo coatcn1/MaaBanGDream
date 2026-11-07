@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+from types import MappingProxyType
 import random
 
 from .chart_timeline import ChartTimeline
@@ -21,7 +22,7 @@ RANDOM_GREAT_DEFAULTS = {
     "native_random_great_level_start": 26,
     "native_random_great_per_level_percent": 1.0,
     "native_random_great_max_percent": 10.0,
-    "native_random_great_offset_ms": 45,
+    "native_random_great_offset_ms": 60,
 }
 RANDOM_GREAT_MODES = frozenset({"formal", "challenge", "cooperative", "versus", "continuous", "medley"})
 
@@ -86,6 +87,59 @@ class RandomGreatSafetyContext:
     action_signature: tuple
     max_contacts: int
     judgement_y: float
+
+
+@dataclass(frozen=True, slots=True)
+class RandomGreatFeedbackAction:
+    ordinal: int
+    note_index: int
+    original_due_s: float
+    planned_due_s: float
+    kind: str
+    planned_key: tuple
+    intentional: bool
+
+
+@dataclass(frozen=True, slots=True)
+class RandomGreatFeedbackPlan:
+    actions: tuple[RandomGreatFeedbackAction, ...]
+    random_note_indices: frozenset[int]
+    chart_sha256: str
+    _by_planned_key: object
+
+    def identity_for(self, action):
+        return self._by_planned_key[_signature((action,))[0]]
+
+
+def build_random_great_feedback_plan(original, planned, *, chart_sha256=""):
+    """安全控制集合取完整动作差异；诊断截断和随机方向比例不参与归属。"""
+    if len(original) != len(planned):
+        raise ValueError("随机反馈原谱与计划动作数量不一致")
+    identities, lookup, random_notes, original_keys = [], {}, set(), set()
+    seen_notes, tap_notes = set(), set()
+    for ordinal, (before, after) in enumerate(zip(original, planned)):
+        old_key, key = _signature((before,))[0], _signature((after,))[0]
+        note = before.get("note_index")
+        if (type(note) is not int or note < 0 or not math.isfinite(float(before["due_s"]))
+                or not math.isfinite(float(after["due_s"])) or old_key in original_keys or key in lookup):
+            raise ValueError("随机反馈原谱动作身份缺失或不唯一")
+        if note in tap_notes or before["kind"] == "tap" and note in seen_notes:
+            raise ValueError("随机反馈 TAP 与其他原谱动作共用身份")
+        seen_notes.add(note)
+        if before["kind"] == "tap":
+            tap_notes.add(note)
+        changed = before != after
+        if changed and (before["kind"] != "tap" or before | {"due_s": after["due_s"]} != after):
+            raise ValueError("随机反馈计划包含未知动作修改")
+        identity = RandomGreatFeedbackAction(ordinal, note, float(before["due_s"]),
+            float(after["due_s"]), str(before["kind"]), key, changed)
+        identities.append(identity)
+        lookup[key] = identity
+        original_keys.add(old_key)
+        if changed:
+            random_notes.add(note)
+    return RandomGreatFeedbackPlan(tuple(identities), frozenset(random_notes), str(chart_sha256),
+                                   MappingProxyType(lookup))
 
 
 def _signature(actions):

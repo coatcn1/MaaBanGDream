@@ -9,7 +9,7 @@ from test_native_feedback_episode import tap
 from test_native_feedback_events import sampler_fixture, frame
 
 
-@pytest.mark.parametrize("direction,step", [(TimingFeedback.FAST, 15), (TimingFeedback.SLOW, -15)])
+@pytest.mark.parametrize("direction,step", [(TimingFeedback.FAST, 30), (TimingFeedback.SLOW, -30)])
 @pytest.mark.skipif(not native_engine.available(), reason="Native 未构建")
 def test_three_applied_steps_need_new_effect_sources_but_no_blank(direction, step):
     sampler, backend, _ = sampler_fixture()
@@ -35,7 +35,7 @@ def test_three_applied_steps_need_new_effect_sources_but_no_blank(direction, ste
             first_adjusted_due_s=cycle + .4, first_affected_chunk_sequence=cycle + 2,
             first_affected_action_token=1), "effect-published")
         sampler.refresh_phase_status(cycle + .4)
-        assert session.future_phase_offset_ms == step * (cycle + 1)
+        assert session.future_phase_offset_ms == step * (cycle + 2)
     assert sampler.summary["accepted_requests"] == sampler.summary["applied_requests"] == 3
 
 
@@ -61,7 +61,7 @@ def test_pending_observations_never_carry_votes_past_expiry():
 def test_rejected_request_retries_only_after_three_new_tickets(monkeypatch):
     sampler, backend, _ = sampler_fixture()
     calls = []
-    monkeypatch.setattr(backend, "request_future_phase", lambda delta, at: calls.append((delta, at)) or False)
+    monkeypatch.setattr(backend, "request_future_phase", lambda delta, at, **kwargs: calls.append((delta, at)) or False)
     for now in (.1, .2, .3):
         tap(sampler, now)
     for now in (.5, .6):
@@ -176,7 +176,7 @@ def test_phase_limit_uses_request_delta_after_local_drop_and_reverse_restores_he
     for now in (.8, .9, 1.):
         tap(sampler, now, TimingFeedback.SLOW)
     assert sampler.summary["requests"] == 2
-    def apply(delta, safe):
+    def apply(delta, safe, **kwargs):
         backend._session.future_phase_offset_ms += delta
         return "applied"
     backend._session.apply_future_phase = apply
@@ -185,7 +185,7 @@ def test_phase_limit_uses_request_delta_after_local_drop_and_reverse_restores_he
     backend._publish_phase_status(replace(backend.phase_status_snapshot(), first_adjusted_due_s=1.1,
         first_affected_chunk_sequence=2, first_affected_action_token=1), "effect-published")
     sampler.refresh_phase_status(1.1)
-    assert backend._session.future_phase_offset_ms == 180 and sampler._blocked_direction is None
+    assert backend._session.future_phase_offset_ms == 135 and sampler._blocked_direction is None
     for now in (1.2, 1.3, 1.4):
         tap(sampler, now, chunk=2)
     assert sampler.summary["requests"] == 3
@@ -206,7 +206,7 @@ def test_directionless_target_keeps_votes_but_reverse_needs_three_new_observatio
     tap(sampler, .5, TimingFeedback.SLOW)
     tap(sampler, .6, TimingFeedback.SLOW)
     assert sampler.summary["requests"] == 1
-    assert backend._phase_slot[3] == -15
+    assert backend._phase_slot[3] == -60
 
 
 def test_duplicate_ticket_cannot_supply_third_continuous_vote():

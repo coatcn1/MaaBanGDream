@@ -34,6 +34,8 @@ struct PendingTouchEvent {
     double planned_engine_s = 0.0;
     bool emits_receipt = false;
     ActionKind action_kind = ActionKind::Tap;
+    int source_note_index = -1;
+    double source_due_s = 0.0;
 };
 
 }  // namespace detail
@@ -52,6 +54,8 @@ struct TouchExecutionReceipt {
     uint64_t action_token = 0;
     TouchCommandKind command = TouchCommandKind::Down;
     ActionKind action_kind = ActionKind::Tap;
+    int source_note_index = -1;
+    double source_due_s = 0.0;
 };
 
 // 分动作类型的延迟补偿，与参考仓库 autodori 的 up/down/move/wait/interval

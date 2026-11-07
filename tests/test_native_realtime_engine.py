@@ -2853,7 +2853,7 @@ def test_native_device_stop_requires_bounded_remote_pid_evidence(monkeypatch):
         return True
 
     monkeypatch.setattr(no_pid, "_run_adb_cleanup", no_pid_cleanup)
-    assert no_pid.stop_with_deadline(0.1) is True
+    assert no_pid.stop_with_deadline(0.1) is False
     assert no_pid._spawned is False
     assert no_pid._socket_name in no_pid_calls[0][1]
 
@@ -2861,6 +2861,13 @@ def test_native_device_stop_requires_bounded_remote_pid_evidence(monkeypatch):
     forward_warning._spawned = True
     forward_warning._pid = 8642
     forward_warning._port = 24680
+    forward_warning._closed = False
+    forward_warning._max_contacts = 3
+    forward_warning._client = SimpleNamespace(
+        connected=True,
+        publish=lambda text: _ack_release_text(forward_warning, text) or True,
+        close=lambda: None,
+    )
     monkeypatch.setattr(
         forward_warning,
         "_run_adb_cleanup",
@@ -3140,27 +3147,33 @@ def test_native_device_old_reset_ack_does_not_confirm_current_release(
     assert "本轮 reset" in str(device.last_release_error)
 
 
-def test_native_device_without_possible_touch_needs_no_reset_ack(monkeypatch):
+@pytest.mark.parametrize("receipt", ["complete", "missing-final-commit", "late-down", "send-failed", "timeout"])
+def test_native_probe_only_generation_requires_complete_release(monkeypatch, receipt):
     device = NativeMinitouchDevice("adb", "serial")
-    monkeypatch.setattr(
-        device, "_run_adb_cleanup", lambda *args, timeout_s: True
-    )
+    device._reset_generation = 1
+    device._closed = False
+    device._max_contacts = 3
+    published = []
 
-    assert device.stop_with_deadline(0.05) is True
-    assert device.release_diagnostics == {
-        "reset_requested": False,
-        "reset_sent": False,
-        "reset_executed": False,
-        "reset_execution_latency_ms": None,
-        "release_proof": "no-touch-possible-and-cleanup",
-        "forced_kill_used": False,
-        "release_sequence_confirmed": False,
-        "release_contacts": [],
-        "release_scope": "minitouch-protocol-and-cleanup",
-        "release_sequence_error": None,
-        "release_generation": 0,
-        "release_send_cursor": None,
-    }
+    def publish(text):
+        published.append(text)
+        if receipt == "send-failed":
+            return False
+        if receipt == "timeout":
+            return True
+        commands = text.splitlines()
+        if receipt == "missing-final-commit":
+            commands.pop()
+        elif receipt == "late-down":
+            commands.append("d 0 10 10 50")
+        _ack_release_text(device, "\n".join(commands))
+        return True
+
+    device._client = SimpleNamespace(connected=True, publish=publish, close=lambda: None)
+    monkeypatch.setattr(device, "_run_adb_cleanup", lambda *args, timeout_s: True)
+    assert device.stop_with_deadline(0.1) is (receipt == "complete")
+    assert published[0].splitlines() == ["w 0", "w 0", "u 0", "u 1", "u 2", "c", "r", "c"]
+    assert device.release_diagnostics["release_sequence_confirmed"] is (receipt == "complete")
 
 
 def test_native_device_stop_deadline_survives_blocked_reset_and_log_lock(
@@ -3208,7 +3221,7 @@ def test_native_device_stop_deadline_survives_blocked_reset_and_log_lock(
     try:
         started = time.monotonic()
         # 没有建立触点时清理不需要等待诊断内存锁，更不能等待诊断磁盘。
-        assert locked.stop_with_deadline(0.05) is True
+        assert locked.stop_with_deadline(0.05) is False
         elapsed = time.monotonic() - started
     finally:
         locked._log_lock.release()
@@ -3421,3 +3434,11 @@ def test_prearm_optional_observer_and_broken_stdout_still_reach_ready(monkeypatc
     assert backend.wait_until_ready(2, wait_observer=observe, should_stop=lambda: False)
     assert observations == [True]
     assert backend._state == "armed"
+
+
+def test_native_device_without_handshake_cannot_confirm_release(monkeypatch):
+    device = NativeMinitouchDevice("adb", "serial")
+    monkeypatch.setattr(device, "_run_adb_cleanup", lambda *args, timeout_s: True)
+    assert device.stop_with_deadline(0.05) is False
+    assert device.release_diagnostics["release_sequence_confirmed"] is False
+    assert device.release_diagnostics["release_sequence_error"] == "invalid-contact-handshake"

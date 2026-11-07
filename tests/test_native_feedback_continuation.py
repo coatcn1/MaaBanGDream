@@ -100,10 +100,10 @@ def test_same_run_foreign_sequence_cannot_clear_our_pending():
     assert sampler.summary["requests"] == 1
 
 
-def test_thirteen_production_steps_reach_195_and_reverse_application_releases_headroom():
+def test_large_production_steps_respect_200_limit_and_reverse_releases_headroom():
     sampler, backend, _ = sampler_fixture()
     backend._session.future_phase_offset_ms = 0
-    def apply(delta, _safe):
+    def apply(delta, _safe, **kwargs):
         candidate = backend._session.future_phase_offset_ms + delta
         if abs(candidate) > 200:
             return "phase-limit"
@@ -126,16 +126,16 @@ def test_thirteen_production_steps_reach_195_and_reverse_application_releases_he
         start = .1 + index * .8
         separated_pair(sampler, TimingFeedback.FAST, start, chunk=index + 1)
         consume(start, index + 1)
-    assert backend._session.future_phase_offset_ms == 195
+    assert backend._session.future_phase_offset_ms == 180
     assert sampler._blocked_direction is TimingFeedback.FAST
     separated_pair(sampler, TimingFeedback.SLOW, 11.3, chunk=15)
     assert sampler._blocked_direction is TimingFeedback.FAST
     consume(11.3, 15)
-    assert backend._session.future_phase_offset_ms == 180
+    assert backend._session.future_phase_offset_ms == 150
     assert sampler._blocked_direction is None
     separated_pair(sampler, TimingFeedback.FAST, 12.1, chunk=16)
     consume(12.1, 16)
-    assert backend._session.future_phase_offset_ms == 195
+    assert backend._session.future_phase_offset_ms == 180
 
 
 def test_request_cooldown_never_retries_from_timer_or_old_blank_frames():

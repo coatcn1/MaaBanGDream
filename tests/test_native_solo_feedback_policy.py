@@ -81,9 +81,10 @@ def test_explicit_backend_flags_override_environment_and_report_selection(tmp_pa
         visual_refresh_enabled=visual,
     )
     assert backend._native_clock_trial is clock
-    assert backend._native_visual_refresh_enabled is visual
-    assert (NativeLifeFeedback(backend)._visual_refresh is not None) is (clock and visual)
+    assert not backend._native_visual_refresh_enabled
+    assert NativeLifeFeedback(backend)._visual_refresh is None
+    assert NativeLifeFeedback(backend)._simple
     assert backend.report()["life_feedback"]["configuration"] == {
-        "observation_clock_enabled": clock, "visual_refresh_requested": visual,
-        "visual_refresh_selected": clock and visual,
+        "observation_clock_enabled": clock, "visual_refresh_requested": False,
+        "visual_refresh_selected": False,
     }

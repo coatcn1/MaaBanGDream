@@ -207,6 +207,9 @@ void expand_action(
     }
     for (std::size_t index = first_event; index < events.size(); ++index) {
         events[index].action_kind = action.kind;
+        // 来源时刻与实际命令时刻分开；长条尾 FLICK 的首 MOVE 可落入下一块。
+        events[index].source_note_index = action.note_index;
+        events[index].source_due_s = timed.due;
     }
 }
 
@@ -631,6 +634,8 @@ std::vector<std::string> TouchScriptCompiler::compile(
                 event.action_token,
                 command,
                 event.action_kind,
+                event.source_note_index,
+                event.source_due_s,
             });
         }
     };

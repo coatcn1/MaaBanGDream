@@ -118,7 +118,7 @@ def test_same_run_reproducible_other_runs_randomized_without_mutation():
     assert len(differences) == report["selected"]
     for old, new in differences:
         assert old | {"due_s": new["due_s"]} == new
-        assert abs(new["due_s"] - old["due_s"]) == pytest.approx(.045)
+        assert abs(new["due_s"] - old["due_s"]) == pytest.approx(.060)
     assert [row["due_s"] for row in first] == sorted(row["due_s"] for row in first)
 
 
@@ -197,12 +197,12 @@ def test_real_backend_disables_phase_feedback_but_default_and_modes_do_not(tmp_p
             random_great_options=options, start_gate_mode=mode, chart_level=26, expected_notes=100,
             run_id="backend-plan")
         assert backend.report()["native_random_great"]["enabled"] is expected
-        assert backend.life_feedback_enabled is (not expected)
+        assert backend.life_feedback_enabled
         assert (backend._actions != baseline) is expected
         if expected:
             assert backend.request_future_phase(15, 1) is False
             assert backend._consume_phase_candidate() is None
-            assert backend._feedback_tickets is None
+            assert backend._feedback_tickets is not None
 
 
 @requires_native
@@ -220,7 +220,7 @@ def test_planning_or_denominator_failure_keeps_original_actions_and_task(tmp_pat
     assert backend._actions == baseline
     assert backend.report()["native_random_great"]["status"] == "fallback"
     assert backend.life_feedback_enabled
-    assert backend._native_clock_trial and backend._native_visual_refresh_enabled
+    assert backend._native_clock_trial and not backend._native_visual_refresh_enabled
 
 
 @requires_native
@@ -233,8 +233,8 @@ def test_optional_plan_logging_failure_keeps_complete_valid_plan(tmp_path, monke
         observation_clock_trial_enabled=True, visual_refresh_enabled=True)
     report = backend.report()["native_random_great"]
     assert report["status"] == "planned" and report["selected"] == 2
-    assert report["phase_feedback_requested"] and report["phase_feedback_suppressed"]
-    assert not backend.life_feedback_enabled and not backend._native_clock_trial and not backend._native_visual_refresh_enabled
+    assert report["phase_feedback_requested"] and not report["phase_feedback_suppressed"]
+    assert backend.life_feedback_enabled and backend._native_clock_trial and not backend._native_visual_refresh_enabled
 
 
 @pytest.mark.parametrize("terminal", ["completed", "life-failed", "stop"])
@@ -372,7 +372,7 @@ def test_direction_only_candidate_moves_away_to_200ms_visible_non_tap_guard(tmp_
 
 
 @requires_native
-@pytest.mark.parametrize("middle,both", [(1.755, 1), (1.755001, 0)])
+@pytest.mark.parametrize("middle,both", [(1.740, 1), (1.740001, 0)])
 def test_offset_non_tap_200ms_boundary_is_inclusive_without_rounding_to_frame(tmp_path, middle, both):
     _, _, _, _, report = geometry_plan(tmp_path, connections=[{"beat": .5, "lane": 6},
         {"beat": middle, "lane": 6}, {"beat": 5, "lane": 6}])
@@ -417,7 +417,7 @@ def test_new_backend_plan_freezes_offsets_and_unknown_path_falls_back_with_origi
     path.write_text(json.dumps(raw), encoding="utf-8")
     fallback = NativeMinitouchBackend(path, **kwargs)
     assert fallback._actions == actions and fallback._random_great_report["status"] == "fallback"
-    assert fallback.life_feedback_enabled and fallback._native_clock_trial and fallback._native_visual_refresh_enabled
+    assert fallback.life_feedback_enabled and fallback._native_clock_trial and not fallback._native_visual_refresh_enabled
 
 
 @pytest.mark.parametrize("fast_only,slow_only,both,desired,expected", [
@@ -485,3 +485,35 @@ def test_real_chart_new_hold_policy_keeps_raw_chords_non_taps_and_native_receipt
                 assert parts[1] in active
                 active.remove(parts[1])
         assert not active
+
+
+def test_default_great_offset_60_keeps_explicit_legacy_45_and_profile_defaults(tmp_path):
+    assert RANDOM_GREAT_DEFAULTS["native_random_great_offset_ms"] == 60
+    assert validate_random_great_options({})["native_random_great_offset_ms"] == 60
+    assert RealtimeProfileStore(tmp_path).runtime_options()["native_random_great_offset_ms"] == 60
+    legacy = {"native_random_great_offset_ms": 45}
+    assert validate_random_great_options(legacy)["native_random_great_offset_ms"] == 45
+    store = RealtimeProfileStore(tmp_path)
+    store.update_runtime_options(legacy)
+    assert RealtimeProfileStore(tmp_path).runtime_options()["native_random_great_offset_ms"] == 45
+
+
+@requires_native
+@pytest.mark.parametrize("offset", [45, 60])
+def test_306_selected_random_keys_keep_requested_offset_and_source_identity(offset):
+    from agent.realtime.native_random_great import build_random_great_feedback_plan
+    path = ROOT / "resource/charts/bestdori/306/expert.json"
+    original = native_engine.compile_chart(path).compile_actions({})
+    ordinary, total = chart_random_great_inputs(path)
+    shifted, report = plan_random_great(original, options=ENABLED | {"native_random_great_offset_ms": offset},
+        mode="formal", run_id="gr60-default-compare", level=28, total_judgements=total,
+        ordinary_single_note_indices=ordinary, safety_context=build_random_great_safety_context(path, original))
+    identity = build_random_great_feedback_plan(original, shifted)
+    changed = [(before, after) for before, after in zip(original, shifted) if before != after]
+    assert len(changed) == report["selected"] > 0
+    assert len(identity.random_note_indices) == report["selected"]
+    assert report["original_judgement_gap_ms"] == 2 * offset + 70
+    for before, after in changed:
+        assert before["kind"] == "tap"
+        assert abs(after["due_s"] - before["due_s"]) == pytest.approx(offset / 1000)
+        assert before["note_index"] in identity.random_note_indices

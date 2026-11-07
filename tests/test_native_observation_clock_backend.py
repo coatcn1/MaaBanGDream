@@ -82,7 +82,8 @@ def test_real_backend_injection_preserves_raw_device_execution_and_host_domains(
     ticket = backend.feedback_observation_snapshot().ticket
     assert ticket.device_actual_s == pytest.approx(device_commit)
     assert ticket.device_uncertainty_s == .000002
-    assert ticket.actual_s == pytest.approx(commit.actual_execution_s)
+    assert ticket.actual_s == pytest.approx(commit.received_host_s)
+    assert ticket.execution_engine_s == pytest.approx(commit.actual_execution_s)
     view = backend.observation_clock_snapshot().commit_view(commit.device_actual_s,
         now_s=200.4508, execution_offset_s=100, device_uncertainty_s=commit.device_uncertainty_s)
     assert view is not None
