@@ -712,6 +712,8 @@ class NativeMinitouchDevice:
         self._closed = False
         with self._reset_lock:
             self._reset_generation += 1
+            # 新代必须重新握手，不能借用上一代合法触点容量确认释放。
+            self._max_contacts = 0
             self._last_reset_sent = False
             self._reset_requested = False
             self._reset_request_cursor = None
@@ -855,12 +857,19 @@ class NativeMinitouchDevice:
         if len(parts) != 5:
             self.stop()
             raise MinitouchStartError(f"异常握手头：{handshake['^']}")
-        self._max_contacts = int(parts[1])
-        self._max_x = int(parts[2])
-        self._max_y = int(parts[3])
-        if not 1 <= self._max_contacts <= 10 or self._max_x <= 0 or self._max_y <= 0:
+        # 完整字段验证前不公开触点容量，防止畸形坐标留下可用于释放的半份握手。
+        try:
+            max_contacts, max_x, max_y, max_pressure = map(int, parts[1:])
+        except ValueError as exc:
+            self.stop()
+            raise MinitouchStartError("minitouch 握手字段不是整数") from exc
+        if not 1 <= max_contacts <= 10 or max_x <= 0 or max_y <= 0 or max_pressure <= 0:
             self.stop()
             raise MinitouchStartError("minitouch 握手触点数量或坐标范围无效")
+        with self._reset_lock:
+            self._max_x = max_x
+            self._max_y = max_y
+            self._max_contacts = max_contacts
         # MuMu 等模拟器的物理触摸面可能是竖屏（如 720x1280），而游戏截图
         # 是横屏；读取当前 SurfaceOrientation，后续发布命令时据此把逻辑
         # 坐标映射回物理坐标，避免所有触点被压到同一列。
@@ -946,9 +955,6 @@ class NativeMinitouchDevice:
             self._publishing_closed = True
             if self._reset_requested:
                 return self._reset_executed
-            if not self._touch_possible:
-                self._release_proof = "no-touch-possible"
-                return True
             if type(self._max_contacts) is not int or not 1 <= self._max_contacts <= 10:
                 self._release_sequence_error = "invalid-contact-handshake"
                 self._release_proof = "release-sequence-unconfirmed"
@@ -1056,8 +1062,8 @@ class NativeMinitouchDevice:
         def remaining() -> float:
             return max(0.0, deadline - time.monotonic())
 
-        with self._reset_lock:
-            reset_required = self._touch_possible or self._reset_requested
+        # 探测阶段未发 DOWN 也必须完成本代释放协议，清理本身不能替代回执。
+        reset_required = True
         reset_confirmed = not reset_required
         if reset_required:
             self.request_reset()

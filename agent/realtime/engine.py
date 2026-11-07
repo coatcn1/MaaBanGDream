@@ -336,7 +336,7 @@ class RealtimeEngine:
             self.native_backend, matcher=NativeGameClockMatcher(
                 chart_path=getattr(self.native_backend, "_game_clock_chart_path", None),
                 environment=getattr(self.native_backend, "_game_clock_environment", None))))
-            if native_feedback is not None and callable(getattr(self.native_backend, "set_visual_phase_guard", None)) else None)
+            if native_feedback is not None and not getattr(self.native_backend, "_simple_single_tap_feedback", False) and callable(getattr(self.native_backend, "set_visual_phase_guard", None)) else None)
         def feedback_call(callback, default=None):
             nonlocal native_feedback
             if native_feedback is None or native_feedback.disabled_reason or stopping():

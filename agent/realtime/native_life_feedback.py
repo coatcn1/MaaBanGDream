@@ -24,6 +24,14 @@ class NativeLifeFeedback:
 
     def __init__(self, backend, *, detector=None):
         self.backend = backend
+        self._simple = bool(getattr(backend, '_simple_single_tap_feedback', False))
+        self._single_tap_burst = False
+        self._single_tap_sample_after = float('-inf')
+        self._single_tap_first_effect = False
+        self._grade_extractor = detector
+        if self._simple and detector is None:
+            from .native_judgement_grade import OrdinaryVisualExtractor
+            self._grade_extractor = OrdinaryVisualExtractor()
         self.events = deque(maxlen=128)
         self.sniff_records = deque(maxlen=self.SNIFF_CAPACITY)
         self.sniff_dropped = 0
@@ -70,9 +78,9 @@ class NativeLifeFeedback:
         self.burst_started_at = None
         self.last_sniff = None
         self.roi_worthy = False
-        self._clocked = ClockedFeedbackEvidence(backend) if getattr(backend, '_native_clock_trial', False) else None
+        self._clocked = ClockedFeedbackEvidence(backend) if getattr(backend, '_native_clock_trial', False) and not self._simple else None
         self._visual_refresh = (NativeVisualRefreshEvidence(backend)
-            if (getattr(backend, '_native_clock_trial', False) and getattr(backend, 'life_feedback_enabled', False)
+            if (not self._simple and getattr(backend, '_native_clock_trial', False) and getattr(backend, 'life_feedback_enabled', False)
                 and getattr(backend, '_native_visual_refresh_enabled', False)) else None)
         self._visual_refresh_context = None
         self._visual_refresh_capture_due = float('-inf')
@@ -156,7 +164,8 @@ class NativeLifeFeedback:
             self.scene_valid = True
 
     def capture_due(self, now):
-        if self.disabled_reason:
+        stop = getattr(self.backend, '_native_input_stop_requested', None)
+        if self.disabled_reason or stop is not None and stop.is_set():
             return None
         if self._visual_refresh is not None:
             self.refresh_phase_status(now)
@@ -198,6 +207,8 @@ class NativeLifeFeedback:
         self._expire_votes(now)
         if self._guard_active:
             return None
+        if self._terminal_phase_reason is not None:
+            return None
         state = self._state()
         if self._target is not None:
             # 预取的图可能早已完成，须先消费其时间上下界，不能按迟到的处理时刻丢票。
@@ -214,7 +225,10 @@ class NativeLifeFeedback:
                 self._consume_target()
         if self._target is None and state is not None and state.ticket is not None:
             ticket = state.ticket
-            if ticket.action_token not in self._consumed_tokens:
+            if (ticket.action_token not in self._consumed_tokens
+                    and (not self._simple or self._single_tap_burst or now >= self._single_tap_sample_after)):
+                if self._simple:
+                    self._single_tap_sample_after = now + .2
                 self._target = ticket
                 self._target_capture_due = max(now, ticket.actual_s + ticket.clock_uncertainty_ms / 1000 + self.RENDER_WAIT_SECONDS)
                 self._event(dict(event="ticket-selected", timestamp=now, **asdict(ticket)))
@@ -283,6 +297,7 @@ class NativeLifeFeedback:
         self._pending_frame_at = None
         self.frame_evidence = dict(frame_sequence=sequence, request_s=request_s,
             reused=metadata.get("reused", True), observed_s=now,
+            first_done_observed_s=metadata.get("first_done_observed_s"),
             request_age_ms=(now - request_s) * 1000 if type(request_s) in {int, float} else None)
         upper = metadata.get("first_done_observed_s")
         # first_done 是宿主首次确认截图完成的上界，不能当作设备精确渲染时刻。
@@ -325,10 +340,16 @@ class NativeLifeFeedback:
         if (source is None or source.run_id != effect.run_id or effect.first_adjusted_due_s is None
                 or effect.first_affected_chunk_sequence is None or effect.first_affected_action_token is None):
             return False
+        # 渲染等待使用 RX 宿主上界；效果先后只比较原 engine 执行域，禁止混域。
+        executed = source.execution_engine_s if self._simple else source.actual_s
+        uncertainty = source.execution_engine_uncertainty_ms if self._simple else source.clock_uncertainty_ms
+        if (executed is None or not math.isfinite(executed) or uncertainty is None
+                or not math.isfinite(uncertainty) or not 0 <= uncertainty <= 1):
+            return False
         return (source.chunk_sequence >= effect.first_affected_chunk_sequence
                 and (effect.first_affected_action_token is None or source.action_token >= effect.first_affected_action_token)
                 and source.planned_s >= effect.first_adjusted_due_s
-                and source.actual_s - source.clock_uncertainty_ms / 1000 >= effect.first_adjusted_due_s)
+                and executed - uncertainty / 1000 >= effect.first_adjusted_due_s)
 
     def _sniff(self, now, kind, slow, fast, decision, source):
         record = dict(timestamp=now, **self.frame_evidence, scene_valid=self.scene_valid,
@@ -351,7 +372,7 @@ class NativeLifeFeedback:
         self.last_sniff = record
 
     def sniff_report(self):
-        return dict(schema_version=3, capacity=self.SNIFF_CAPACITY, dropped=self.sniff_dropped,
+        return dict(ordinary_single_tap=dict(enabled=self._simple, burst=self._single_tap_burst, first_effect=self._single_tap_first_effect), schema_version=3, capacity=self.SNIFF_CAPACITY, dropped=self.sniff_dropped,
                     raw_roi_included=False, ignored_reasons=dict(self.ignored_reasons),
                     continuation=dict(post_effect_blank_required=False, new_effect_source_required=True,
                                       direction_vote_window_seconds=self.VOTE_WINDOW_SECONDS,
@@ -364,7 +385,8 @@ class NativeLifeFeedback:
 
     def observe_frame(self, image, now):
         self.roi_worthy = False
-        if self._pending_frame_at != now or self.disabled_reason:
+        stop = getattr(self.backend, '_native_input_stop_requested', None)
+        if self._pending_frame_at != now or self.disabled_reason or stop is not None and stop.is_set():
             return
         self._pending_frame_at = None
         if not self.scene_valid or not isinstance(image, np.ndarray) or image.shape != (720, 1280, 3):
@@ -374,6 +396,8 @@ class NativeLifeFeedback:
         target_at_entry = self._target
         self.roi_worthy = target_at_entry is not None
         self.refresh_phase_status(now)
+        if self._terminal_phase_reason is not None:
+            return
         kind, slow, fast = probe_judgement_feedback(image)
         minimum = TimingFeedbackDetector.MIN_COLOURED_PIXELS
         signals = {direction for direction, pixels in ((TimingFeedback.FAST, fast), (TimingFeedback.SLOW, slow)) if pixels >= minimum}
@@ -385,7 +409,8 @@ class NativeLifeFeedback:
                 and status.state in {"requested", "waiting-touch-boundary", "waiting-gap", "waiting-execution-receipts"}):
             # 局部丢票可能已清空趋势，真实反色仍须能否定本来源的 pending。
             direction = TimingFeedback.FAST if status.delta_ms > 0 else TimingFeedback.SLOW
-        if self._clocked is None and direction is not None and signals and any(value != direction for value in signals):
+        if (self._clocked is None and not getattr(self.backend, '_random_great_feedback_enabled', False)
+                and direction is not None and signals and any(value != direction for value in signals)):
             self._clear_trend("direction-reversed")
         if signals:
             self.summary["raw_sightings"] += 1
@@ -405,12 +430,16 @@ class NativeLifeFeedback:
         if self._clocked is not None:
             self._observe_clocked_frame(kind, signals, slow, fast, now)
             return
+        self._simple_frame = image
         state, target = self._state(), self._target
         decision = self._observe_signal(kind, signals, state, now)
         self._sniff(now, kind, slow, fast, decision, target_at_entry or target)
 
     def _observe_signal(self, kind, signals, state, now):
         request_s = self.frame_evidence["request_s"]
+        if (self._simple and getattr(self.backend, '_random_great_feedback_enabled', False)
+                and getattr(self.backend, '_random_great_feedback_disabled_reason', None)):
+            return self._ignore('random-feedback-identity-untrusted')
         if self._guard_active:
             return self._ignore("visual-owner-active")
         if len(signals) > 1:
@@ -451,6 +480,12 @@ class NativeLifeFeedback:
             return self._ignore("neutral-target")
         self._blank_baseline = None
         self._consume_target()
+        if self._simple:
+            grade = self._grade_extractor.scores(self._simple_frame).get('category')
+            if grade != 'GREAT':
+                return self._ignore('ordinary-grade-not-great')
+            self._single_tap_burst = True
+            self.summary['burst_single_tap_sampling'] += 1
         if kind is None:
             self._clear_trend("ambiguous-colour")
             return self._ignore("ambiguous-colour")
@@ -501,13 +536,16 @@ class NativeLifeFeedback:
             return self._ignore("pending-or-blocked")
         if now - self._last_submit_s < .3:
             return self._ignore("request-cooldown")
-        delta = 15.0 if kind is TimingFeedback.FAST else -15.0
+        step = (30. if self._single_tap_first_effect else 60.) if self._simple else 15.
+        delta = step if kind is TimingFeedback.FAST else -step
         # 每次提交消耗当前三票，拒绝也必须从全新目标重新收集，不能定时重放。
         self._last_submit_s = now
         self.summary["requests"] += 1
+        action_tokens = tuple(vote[1] for vote in self.votes)
         self.votes.clear()
         accepted = self.backend.request_future_phase(delta, observation_s,
-            **({'expected_observation_context': refresh_context} if refresh_id is not None else {}))
+            **({'expected_observation_context': refresh_context} if refresh_id is not None else
+               {'ordinary_action_tokens': action_tokens} if self._simple else {}))
         self.summary["accepted_requests" if accepted else "rejected_requests"] += 1
         reason = getattr(self.backend, "_phase_request_rejection_reason", None) if not accepted else None
         if reason:
@@ -723,14 +761,17 @@ class NativeLifeFeedback:
             self._effect_status = effect
             # 只有真实反向应用释放了完整一步余量，才解除对应方向的上限阻塞。
             cumulative = effect.cumulative_phase_ms
-            if (self._blocked_direction is TimingFeedback.FAST and cumulative <= 185
-                    or self._blocked_direction is TimingFeedback.SLOW and cumulative >= -185):
+            release_room = (170 if self._single_tap_first_effect else 140) if self._simple else 185
+            if (self._blocked_direction is TimingFeedback.FAST and cumulative <= release_room
+                    or self._blocked_direction is TimingFeedback.SLOW and cumulative >= -release_room):
                 self._blocked_direction = None
             if effect.request_sequence in self._owned_sequences:
                 # revoke 与 owner 应用交错时仍保留真实已应用相位，不能遗失效果边界。
                 if self._last_applied_sequence != effect.request_sequence:
                     self._last_applied_sequence = effect.request_sequence
                     self.summary["applied_requests"] += 1
+                    if self._simple:
+                        self._single_tap_first_effect = True
             if (effect.owner == "feedback" and self._pending_observed_s is not None
                     and effect.original_observed_s == self._pending_observed_s
                     and (self._pending_sequence is None or effect.request_sequence == self._pending_sequence)):
@@ -741,6 +782,8 @@ class NativeLifeFeedback:
                 if self._last_applied_sequence != effect.request_sequence:
                     self._last_applied_sequence = effect.request_sequence
                     self.summary["applied_requests"] += 1
+                    if self._simple:
+                        self._single_tap_first_effect = True
                 self._pending_observed_s = self._pending_sequence = None
         if self._pending_observed_s is not None:
             same = (status.original_observed_s == self._pending_observed_s
