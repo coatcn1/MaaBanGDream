@@ -156,8 +156,8 @@ def test_hidden_guard_pulse_without_phase_change_still_invalidates_old_votes():
 def test_immediate_apply_before_requested_snapshot_is_counted_once(monkeypatch):
     sampler, backend, _ = sampler_fixture()
     request = backend.request_future_phase
-    def immediate_apply(delta, observed_s):
-        accepted = request(delta, observed_s)
+    def immediate_apply(delta, observed_s, **kwargs):
+        accepted = request(delta, observed_s, **kwargs)
         assert accepted
         backend._phase_slot = None
         backend._publish_phase_status(replace(backend.phase_status_snapshot(), state="applied",
@@ -276,7 +276,7 @@ def test_guard_observer_clears_votes_without_revoking_accepted_slot_then_needs_n
     assert not backend.request_future_phase(15, .3, owner="game-clock")
     assert backend._phase_slot == original
     backend._consume_phase_candidate()
-    assert calls == [(15, .5)]
+    assert calls == [(60, .5)]
     status = backend.phase_status_snapshot()
     backend._publish_phase_status(replace(status, first_adjusted_due_s=.6,
         first_affected_chunk_sequence=2, first_affected_action_token=1), "effect-published")

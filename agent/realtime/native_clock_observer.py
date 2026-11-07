@@ -3,6 +3,8 @@
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 import queue
+import json
+import math
 import re
 import secrets
 import socket
@@ -171,7 +173,8 @@ class NativeClockObserver:
     """不获得或释放租约，也不提供输入；lease_current 必须是本地缓存校验。"""
 
     def __init__(self, run_id, *, lease_current, adb_path=None, serial=None, adb=None,
-                 assets_root=ASSET_ROOT, socket_factory=socket.create_connection, cleanup_allowed=None):
+                 assets_root=ASSET_ROOT, socket_factory=socket.create_connection, cleanup_allowed=None,
+                 wide_probe_retry_enabled=False):
         if (type(run_id) is not str or not 1 <= len(run_id) <= 128
                 or any(ord(value) < 32 for value in run_id) or not callable(lease_current)):
             raise ValueError("clock observer requires run and current Native lease")
@@ -189,6 +192,12 @@ class NativeClockObserver:
         self._cleanup_deadline = None
         self._cleanup_allowed = cleanup_allowed
         self._unavailable = threading.Event()
+        self._wide_probe_retry_enabled = wide_probe_retry_enabled is True
+        self._probe_schedule_disabled_reason = None
+        self._probe_retry_context = None
+        self._probe_short_retries = 0
+        self._probe_schedule_counts = dict(short_waits=0, budget_exhausted=0, too_old=0, contexts=0)
+        self._probe_schedule_event = None
 
     def start(self):
         # 此锁只覆盖本地线程发布，不覆盖 ADB/RPC；并发 start 不创建第二个同名 helper。
@@ -215,7 +224,66 @@ class NativeClockObserver:
                 and not self._unavailable.is_set() and not self._closed.is_set() else None)
 
     def report(self):
-        return dict(run_id=self.run_id, **asdict(self._status), closed=self._closed.is_set())
+        return dict(run_id=self.run_id, **asdict(self._status), closed=self._closed.is_set(),
+                    probe_schedule=dict(enabled=self._wide_probe_retry_enabled, base_wait_s=.05,
+                        short_wait_s=.005, maximum_short_retries=2, counts=dict(self._probe_schedule_counts),
+                        disabled_reason=self._probe_schedule_disabled_reason))
+
+    def _probe_schedule_before(self):
+        try:
+            return self._mapper.snapshot() if self._wide_probe_retry_enabled and not self._stop.is_set() else None
+        except Exception as exc:
+            self._probe_schedule_disabled_reason = type(exc).__name__
+            self._wide_probe_retry_enabled = False
+            return None
+
+    def _probe_schedule_after(self, before, sample, qualified):
+        self._probe_schedule_event = None
+        try:
+            if before is None or not self._wide_probe_retry_enabled or self._stop.is_set():
+                return .05
+            after = self._mapper.snapshot()
+            if qualified:
+                if after.reason is None and after.probes:
+                    last = after.probes[-1]
+                    context = (after.identity,after.epoch,last.sequence,last.host_receive_s)
+                    if context != self._probe_retry_context:
+                        self._probe_retry_context, self._probe_short_retries = context, 0
+                        self._probe_schedule_counts['contexts'] += 1
+                return .05
+            # 唯一允许补采的是 mapper 已确认的宽点丢弃：同一可信快照完全未变。
+            # 身份、RT/mono、处理耗时、wire 或真正连续性失败均不能走此分支。
+            width = sample.offset_bounds[1]-sample.offset_bounds[0]
+            if (after is not before or before.reason is not None or before.recovery_sequence is None
+                    or len(before.probes)<3 or not math.isfinite(width) or width<=.002):
+                return .05
+            last = before.probes[-1]
+            context = (before.identity,before.epoch,last.sequence,last.host_receive_s)
+            if context != self._probe_retry_context:
+                self._probe_retry_context, self._probe_short_retries = context, 0
+                self._probe_schedule_counts['contexts'] += 1
+            now = time.perf_counter()
+            age = now-last.host_receive_s
+            delay = .05
+            reason = 'isolated-wide-budget-exhausted'
+            if self._probe_short_retries>=2:
+                self._probe_schedule_counts['budget_exhausted'] += 1
+            elif not math.isfinite(age) or not 0<=age or age+.005>before.maximum_bracket_s:
+                self._probe_schedule_counts['too_old'] += 1
+                reason = 'isolated-wide-too-old'
+            else:
+                self._probe_short_retries += 1
+                self._probe_schedule_counts['short_waits'] += 1
+                delay, reason = .005, 'isolated-wide-short-wait'
+            self._probe_schedule_event = dict(reason=reason,wait_s=delay,short_retries=self._probe_short_retries,
+                last_good_sequence=last.sequence,last_good_host_receive_s=last.host_receive_s,
+                epoch=before.epoch,last_good_age_ms=age*1000)
+            return delay
+        except Exception as exc:
+            # 补采策略异常只退回原 50ms 节拍；诊断、输入和 mapper 均不依赖此附加策略。
+            self._probe_schedule_disabled_reason = type(exc).__name__
+            self._wide_probe_retry_enabled = False
+            return .05
 
     def request_stop(self):
         self._stop.set()
@@ -388,11 +456,13 @@ class NativeClockObserver:
             while not self._stop.is_set():
                 self._guard()
                 sample = self._client.query()
+                schedule_before = self._probe_schedule_before()
                 qualified = self._mapper.observe(sample)
+                next_delay = self._probe_schedule_after(schedule_before, sample, qualified)
                 self._status = replace(self._status, samples=self._status.samples + 1,
                     qualified_samples=self._status.qualified_samples + int(qualified))
-                # 错过的时隙不补 burst；单 socket 始终只有一个在途请求。
-                if self._stop.wait(.05):
+                # 不补欠账、不零延迟 burst；短等待也可立即响应停止，每轮重新核租约。
+                if self._stop.wait(next_delay):
                     break
         except Exception as exc:
             if not self._stop.is_set():

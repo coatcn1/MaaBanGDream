@@ -25,8 +25,10 @@ class Device:
     def __init__(self, order, *, release=True, start_error=False):
         self.order, self.release, self.start_error = order, release, start_error
         self.logs = []
+        self._reset_generation = 0
 
     def start(self, **_kwargs):
+        self._reset_generation += 1
         self.order.append('input-start')
         if self.start_error:
             raise OSError('injected device startup failure')

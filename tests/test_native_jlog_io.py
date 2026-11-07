@@ -183,7 +183,7 @@ def test_new_device_cannot_overlap_same_path_writer_or_close_its_stream(tmp_path
         assert report["enabled"] is False
         assert report["missing_lines"] == 1
         assert report["warnings"] == ["previous-generation-writer-pending"]
-        assert replacement.stop_with_deadline(.1)
+        assert replacement.stop_with_deadline(.1) is False
         assert stream.closed is False
     finally:
         stream.unblock.set()
@@ -219,7 +219,7 @@ def test_blocked_close_is_reported_and_cannot_pollute_new_generation(tmp_path):
     try:
         assert replacement._start_jlog_writer() is None
         started = time.perf_counter()
-        assert original.stop_with_deadline(.1)
+        assert original.stop_with_deadline(.1) is False
         assert time.perf_counter() - started < .1
         time.sleep(.03)
         assert original.jlog_io_diagnostics["drain_status"] == "timeout"

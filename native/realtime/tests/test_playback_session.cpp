@@ -694,7 +694,36 @@ static void test_future_phase_limits_stop_and_reservations() {
     CHECK_EQ(session.apply_future_phase(2, 0), std::string("not-running"));
 }
 
+static void test_explicit_large_step_keeps_old_limits_and_original_safety_gates() {
+    Fixture fixture;
+    PlaybackSession session(fixture.callbacks());
+    CHECK(session.arm({tap(0), tap(.98), tap(1.5)}, EngineConfig{}));
+    CHECK(session.start(0));
+    CHECK(session.publish());
+    const auto published = fixture.chunks.front();
+    CHECK_EQ(session.apply_future_phase(-30, 0), std::string("invalid-request"));
+    CHECK_EQ(session.apply_future_phase(-60, 0), std::string("invalid-request"));
+    CHECK_EQ(session.apply_future_phase(-20, 0, true), std::string("invalid-request"));
+    CHECK_EQ(session.apply_future_phase(-30.001, 0, true), std::string("invalid-request"));
+    CHECK_EQ(session.apply_future_phase(-45, 0, true), std::string("invalid-request"));
+    CHECK_EQ(session.apply_future_phase(-60, .92, true), std::string("unsafe-gap"));
+    CHECK(std::abs(session.future_phase_offset_ms()) < 1e-9);
+    CHECK_EQ(session.apply_future_phase(-60, 0, true), std::string("applied"));
+    for (int index = 0; index < 4; ++index) {
+        CHECK_EQ(session.apply_future_phase(-30, 0, true), std::string("applied"));
+    }
+    CHECK(std::abs(session.future_phase_offset_ms() + 180) < 1e-9);
+    CHECK_EQ(session.apply_future_phase(-30, 0, true), std::string("phase-limit"));
+    CHECK_EQ(session.apply_future_phase(30, 0), std::string("invalid-request"));
+    CHECK_EQ(session.apply_future_phase(60, 0, true), std::string("applied"));
+    CHECK_EQ(published.actions.front().engine_due_s, fixture.chunks.front().actions.front().engine_due_s);
+    CHECK(session.cancel("stop"));
+    CHECK_EQ(session.apply_future_phase(30, 0, true), std::string("not-running"));
+}
+
+
 int run_playback_session_tests() {
+    test_explicit_large_step_keeps_old_limits_and_original_safety_gates();
     test_future_phase_shifts_only_unpublished_groups_and_final_tail();
     test_future_phase_limits_stop_and_reservations();
     test_absolute_windows_respect_watermarks_and_final_marker();

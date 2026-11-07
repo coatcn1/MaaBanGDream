@@ -644,6 +644,32 @@ void test_tail_flick_receipt_uses_first_move_without_new_down() {
     CHECK(script_has_valid_contact_lifecycle(script));
 }
 
+void test_receipt_source_identity_survives_pending_without_changing_script() {
+    TouchScriptCompiler identified;
+    TouchScriptCompiler anonymous;
+    EngineConfig config;
+    ScheduledAction head = action(ActionKind::Down, 1, 0.1, 2, 42);
+    ScheduledAction tail = action(ActionKind::Flick, 3, 0.5, 2, 42);
+    auto plain_head = head;
+    auto plain_tail = tail;
+    plain_head.note_index = -1;
+    plain_tail.note_index = -1;
+    const auto first = identified.compile({head, tail}, config, 0, false, .5);
+    CHECK(first == anonymous.compile({plain_head, plain_tail}, config, 0, false, .5));
+    const auto first_receipts = identified.last_execution_receipts();
+    CHECK_EQ(first_receipts.size(), static_cast<std::size_t>(1));
+    CHECK_EQ(first_receipts[0].source_note_index, 42);
+    CHECK(std::abs(first_receipts[0].source_due_s - .1) < 1e-9);
+    const auto second = identified.compile({}, config, .5, true, .7);
+    CHECK(second == anonymous.compile({}, config, .5, true, .7));
+    const auto receipts = identified.last_execution_receipts();
+    CHECK_EQ(receipts.size(), static_cast<std::size_t>(1));
+    CHECK_EQ(receipts[0].source_note_index, 42);
+    CHECK_EQ(receipts[0].action_token, static_cast<uint64_t>(2));
+    CHECK(std::abs(receipts[0].source_due_s - .5) < 1e-9);
+    CHECK(std::abs(receipts[0].planned_engine_s - .51) < 1e-9);
+}
+
 void test_reset_contacts_clears_receipts_and_token_sequence() {
     TouchScriptCompiler compiler;
     EngineConfig config;
@@ -983,6 +1009,7 @@ static void test_phase_boundary_rejects_hold_and_pending_transient() {
 }
 
 int run_touch_script_tests() {
+    test_receipt_source_identity_survives_pending_without_changing_script();
     test_phase_boundary_rejects_hold_and_pending_transient();
     test_commit_intervals_do_not_accumulate_phase();
     test_wait_cost_recovery_trial_repays_known_positive_wait_cost();

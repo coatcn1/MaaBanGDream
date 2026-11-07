@@ -348,6 +348,8 @@ py::list execution_receipts_to_list(const TouchScriptCompiler& compiler) {
         item["action_token"] = receipt.action_token;
         item["command"] = touch_command_name(receipt.command);
         item["action_kind"] = action_kind_name(receipt.action_kind);
+        item["source_note_index"] = receipt.source_note_index;
+        item["source_due_s"] = receipt.source_due_s;
         result.append(std::move(item));
     }
     return result;
@@ -670,7 +672,9 @@ PYBIND11_MODULE(maabangdream_realtime, module) {
             py::arg("window_end_cap_s") = std::numeric_limits<double>::quiet_NaN())
         .def("supports_window_end_cap", &PlaybackSession::supports_window_end_cap)
         .def("apply_future_phase", &PlaybackSession::apply_future_phase,
-            py::arg("delta_ms"), py::arg("contact_available_s"))
+            py::arg("delta_ms"), py::arg("contact_available_s"),
+            py::arg("post_random_display_large_step") = false)
+        .def("supports_post_random_display_large_step", &PlaybackSession::supports_post_random_display_large_step)
         .def_property_readonly("future_phase_offset_ms",
             &PlaybackSession::future_phase_offset_ms)
         .def("poll",

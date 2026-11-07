@@ -6,6 +6,9 @@ import ipaddress
 import json
 import os
 import math
+import threading
+import functools
+from contextlib import contextmanager
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -109,6 +112,81 @@ def reject_mfa_gui() -> None:
             raise DeviceSafetyError('An MFA GUI instance is open; verify it is idle and close it before headless run')
 
 
+_REGISTRY_LOCKS: dict[str, threading.RLock] = {}
+_REGISTRY_LOCKS_LOCK = threading.Lock()
+_REGISTRY_LOCAL = threading.local()
+
+
+def reject_reparse_path(path: Path) -> Path:
+    """登记与审计路径不能经过符号链接或 Windows 重解析点。"""
+    absolute = Path(os.path.abspath(path))
+    for part in (absolute, *absolute.parents):
+        try:
+            value = part.lstat()
+        except FileNotFoundError:
+            continue
+        if part.is_symlink() or getattr(value, 'st_file_attributes', 0) & 0x400:
+            raise DeviceSafetyError('Reparse path is forbidden for lease recovery')
+    return absolute
+
+
+@contextmanager
+def registry_transaction(registry: Path):
+    """线程与跨进程共用互斥；锁文件永久留在登记表同级，嵌套调用不解锁外层。"""
+    registry = reject_reparse_path(registry)
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    key = os.path.normcase(str(registry))
+    with _REGISTRY_LOCKS_LOCK:
+        lock = _REGISTRY_LOCKS.setdefault(key, threading.RLock())
+    with lock:
+        held = getattr(_REGISTRY_LOCAL, 'held', set())
+        if key in held:
+            yield
+            return
+        file = reject_reparse_path(registry.parent / ('.' + registry.name + '.transaction.lock'))
+        with file.open('a+b') as stream:
+            stream.seek(0, os.SEEK_END)
+            if stream.tell() == 0:
+                stream.write(b'0')
+                stream.flush()
+            stream.seek(0)
+            if os.name == 'nt':
+                import msvcrt
+                msvcrt.locking(stream.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(stream, fcntl.LOCK_EX)
+            _REGISTRY_LOCAL.held = held | {key}
+            try:
+                yield
+            finally:
+                _REGISTRY_LOCAL.held = held
+                stream.seek(0)
+                if os.name == 'nt':
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(stream, fcntl.LOCK_UN)
+
+
+def _serialized_registry(method):
+    @functools.wraps(method)
+    def call(self, *args, **kwargs):
+        registry = getattr(self, 'registry_root', None) or self.registry
+        with registry_transaction(registry):
+            return method(self, *args, **kwargs)
+    return call
+
+
+def assert_no_pending_recovery(registry: Path) -> None:
+    audit = registry / 'no-touch-recovery'
+    if audit.exists():
+        reject_reparse_path(audit)
+        for transaction in audit.iterdir():
+            reject_reparse_path(transaction)
+            if not transaction.is_dir() or not (transaction / 'completed.json').is_file():
+                raise DeviceSafetyError('Unfinished no-touch recovery requires explicit resume')
+
+
 class RuntimeLease:
     """原子占用共享登记表；停止状态不确定时禁止自动回收租约。"""
 
@@ -125,7 +203,9 @@ class RuntimeLease:
                       'created_at': psutil.Process(os.getpid()).create_time(),
                       'runtime_root': str(self.runtime_root), 'boot_id': self.boot_id}
 
+    @_serialized_registry
     def acquire(self) -> None:
+        assert_no_pending_recovery(self.registry_root)
         self.registry_root.mkdir(parents=True, exist_ok=True)
         try:
             for path in self.paths:
@@ -157,6 +237,7 @@ class RuntimeLease:
             path.rmdir()
             self.acquired.remove(path)
 
+    @_serialized_registry
     def release(self) -> None:
         # run_slot 尚未收束时先保留完整 owner，不能删掉 owner 后才发现目录非空。
         for path in self.acquired:
@@ -262,7 +343,9 @@ class NativeRunDeviceClaim:
         self._root = self.registry / ('root-' + hashlib.sha256(root_key.encode()).hexdigest())
         self._slot = self._device / 'native-run-slot'
 
+    @_serialized_registry
     def acquire(self):
+        assert_no_pending_recovery(self.registry)
         if self._state not in {'new', 'unavailable'}:
             raise DeviceSafetyError('Native claim cannot acquire twice')
         self._slot_acquired = False
@@ -323,6 +406,7 @@ class NativeRunDeviceClaim:
         if self._state == 'active':
             self._state = 'cleanup-authorized'
 
+    @_serialized_registry
     def finish(self, *, input_released, observer_terminal) -> bool:
         if self._state == 'released':
             return True

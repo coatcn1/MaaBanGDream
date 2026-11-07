@@ -1,6 +1,7 @@
 from collections import deque
 from dataclasses import FrozenInstanceError, replace
 from types import SimpleNamespace
+import os
 
 import pytest
 
@@ -28,6 +29,9 @@ def fixture(tmp_path, monkeypatch, *, shift=0., residual=.002):
     backend = native_play.NativeMinitouchBackend(chart, adb_path='unused', serial='unused', device=device,
         life_feedback_enabled=True, observation_clock=mapper, observation_clock_trial_enabled=True,
         run_id=identity.run_id, clock=lambda: now[0])
+    # 此夹具隔离HEAD保留的旧观察器时间合同；正常配置由simple路径验证。
+    backend._simple_single_tap_feedback = False
+    backend._native_visual_refresh_enabled = os.environ.get('MAABANGDREAM_NATIVE_VISUAL_REFRESH_TRIAL') == '1'
     backend._device_clock_offset_s = 100
     backend._clock_basis, backend._clock_uncertainty_ms = 'probe-midpoint', .5
     backend._playback_observation_started = True
