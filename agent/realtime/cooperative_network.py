@@ -3,12 +3,14 @@
 网络隔离约束：
 - 禁止 `svc wifi` / 飞行模式——它们会顺带打断 MuMu 的 adb 通道，导致
   引擎截图与触控全部中断；
-- 必须用 iptables 按游戏 UID 屏蔽出口流量（需要 root），并且 finally
-  恢复网络、有界重试，绝不把模拟器留在网络隔离状态。
+- 按游戏 UID 屏蔽出口流量（需要 root）：MuMu 12 的内核没有 iptables
+  ``owner`` 模块，使用 ``ip rule ... blackhole``；其他环境回退到 iptables
+  ``owner``。必须 finally 恢复网络、有界重试，绝不把模拟器留在网络隔离状态。
 """
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Sequence
 
 
@@ -48,17 +50,12 @@ def resolve_game_uid(shell: AdbShell) -> int | None:
     return None
 
 
-class GameNetworkGate:
-    """按 UID 屏蔽/恢复游戏出口流量；退出时必须恢复网络。"""
+class _RootShellAdapter:
+    """把需要 root 的 shell 命令统一走 ``su -c``。"""
 
-    def __init__(self, shell: AdbShell, *, chain_suffix: str = "mbdr_game") -> None:
-        self._shell = shell
-        self._chain = f"OUTPUT_{chain_suffix}"
-        self._blocked = False
-        # 设备 shell 是否为 root 的探测结果缓存；None 表示尚未探测。
-        self._root_shell_available: bool | None = None
-        # 最近一次失败的可读原因，供上层把 fail-closed 的细节交给用户。
-        self.last_error: str | None = None
+    _shell: AdbShell
+    # 设备 shell 是否为 root 的探测结果缓存；None 表示尚未探测。
+    _root_shell_available: bool | None
 
     def _shell_ok(self, args: Sequence[str]) -> bool:
         code, _ = self._shell(args)
@@ -88,6 +85,22 @@ class GameNetworkGate:
     def _root_shell_ok(self, args: Sequence[str]) -> bool:
         code, _ = self._root_shell(args)
         return code == 0
+
+
+class GameNetworkGate(_RootShellAdapter):
+    """按 UID 屏蔽/恢复游戏出口流量；退出时必须恢复网络。
+
+    依赖 iptables 的 ``owner`` match。MuMu 12 的内核没有该模块，
+    这类设备请使用 :class:`UidBlackholeGate`。
+    """
+
+    def __init__(self, shell: AdbShell, *, chain_suffix: str = "mbdr_game") -> None:
+        self._shell = shell
+        self._chain = f"OUTPUT_{chain_suffix}"
+        self._blocked = False
+        self._root_shell_available: bool | None = None
+        # 最近一次失败的可读原因，供上层把 fail-closed 的细节交给用户。
+        self.last_error: str | None = None
 
     def block(self) -> bool:
         """把游戏 UID 的出口流量 REJECT；重复调用是幂等的。"""
@@ -139,6 +152,138 @@ class GameNetworkGate:
         return code != 0  # 链已删除才算恢复成功
 
     def __enter__(self) -> "GameNetworkGate":
+        self.block()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.restore()
+
+
+class UidBlackholeGate(_RootShellAdapter):
+    """用 uidrange 策略路由屏蔽游戏出口流量。
+
+    MuMu 12 的内核没有 iptables ``owner`` match，``GameNetworkGate`` 在
+    这类设备上写不了规则；改用 ``ip rule ... blackhole`` 按 UID 黑洞，
+    ADB（adbd 的 UID）不受影响。pref 必须小于 Android 自带的 fwmark
+    规则（16000），否则游戏带 fwmark 的包会先命中那里。
+    """
+
+    def __init__(
+        self, shell: AdbShell, *, pref: int = 100, uid: int | None = None
+    ) -> None:
+        self._shell = shell
+        self._pref = int(pref)
+        # 任务入口可以在控制器空闲时预先解析 UID；跳车发生在引擎刚停止之后，
+        # 那时反向控制器可能已被替换，post_shell 会立即失败（2026-10-23 实测）。
+        self._uid: int | None = int(uid) if uid is not None else None
+        self._blocked = False
+        self._root_shell_available: bool | None = None
+        # 最近一次失败的可读原因，供上层把 fail-closed 的细节交给用户。
+        self.last_error: str | None = None
+
+    def _resolve_uid(self) -> int | None:
+        if self._uid is not None:
+            return self._uid
+        # 跳车时控制器状态可能瞬时不可用；有界重试后再 fail-closed。
+        for _ in range(3):
+            uid = resolve_game_uid(self._shell)
+            if uid is not None:
+                return uid
+            time.sleep(0.3)
+        return None
+
+    def _family(self, *, ipv6: bool) -> tuple[str, ...]:
+        return ("ip", "-6") if ipv6 else ("ip",)
+
+    def _rule_args(self, *, ipv6: bool) -> tuple[str, ...]:
+        return (
+            *self._family(ipv6=ipv6),
+            "rule", "add", "uidrange", f"{self._uid}-{self._uid}",
+            "blackhole", "pref", str(self._pref),
+        )
+
+    def _delete_args(self, *, ipv6: bool) -> tuple[str, ...]:
+        return (
+            *self._family(ipv6=ipv6),
+            "rule", "del", "uidrange", f"{self._uid}-{self._uid}",
+            "blackhole", "pref", str(self._pref),
+        )
+
+    def _rule_present(self, *, ipv6: bool) -> bool:
+        code, output = self._root_shell(
+            (*self._family(ipv6=ipv6), "rule", "show")
+        )
+        if code != 0:
+            return False
+        needle = f"uidrange {self._uid}-{self._uid} blackhole"
+        return any(needle in line for line in output.splitlines())
+
+    def block(self) -> bool:
+        """把游戏 UID 的出口流量黑洞掉；重复调用是幂等的。"""
+        if self._blocked:
+            return True
+        self.last_error = None
+        uid = self._resolve_uid()
+        if uid is None:
+            self.last_error = "无法解析游戏 UID"
+            return False
+        self._uid = uid
+        if not self._root_shell_ok(self._rule_args(ipv6=False)):
+            self.last_error = "IPv4 uidrange 规则写入失败（需要 root）"
+            return False
+        # IPv6 规则失败不阻断：没有 IPv6 路由的设备上本来就不需要它。
+        self._root_shell_ok(self._rule_args(ipv6=True))
+        if not self._rule_present(ipv6=False):
+            self._root_shell(self._delete_args(ipv6=False))
+            self.last_error = "IPv4 uidrange 规则写入后未生效"
+            return False
+        self._blocked = True
+        return True
+
+    def restore(self) -> bool:
+        """删除规则并确认没有残留；重复调用是幂等的。"""
+        if self._uid is None:
+            return True
+        self._root_shell(self._delete_args(ipv6=False))
+        self._root_shell(self._delete_args(ipv6=True))
+        still_blocked = self._rule_present(
+            ipv6=False
+        ) or self._rule_present(ipv6=True)
+        self._blocked = still_blocked
+        if still_blocked:
+            self.last_error = "uidrange 规则删除后仍存在"
+            return False
+        return True
+
+    def cleanup_stale(self) -> bool:
+        """删除上次崩溃遗留的同类规则（按 pref 匹配，不限 UID）。"""
+        cleaned = True
+        for ipv6 in (False, True):
+            family = self._family(ipv6=ipv6)
+            for _ in range(8):
+                code, output = self._root_shell((*family, "rule", "show"))
+                if code != 0:
+                    cleaned = False
+                    break
+                stale = [
+                    line
+                    for line in output.splitlines()
+                    if line.startswith(f"{self._pref}:")
+                    and "uidrange" in line
+                    and "blackhole" in line
+                ]
+                if not stale:
+                    break
+                if not self._root_shell_ok(
+                    (*family, "rule", "del", "pref", str(self._pref))
+                ):
+                    cleaned = False
+                    break
+            else:
+                cleaned = False
+        return cleaned
+
+    def __enter__(self) -> "UidBlackholeGate":
         self.block()
         return self
 
