@@ -52,13 +52,22 @@ def test_plan_batches_long_tasks_and_covers_reachable_tail(current,rounds,expect
 
 
 def test_plan_respects_inventory_switches_and_game_ceiling():
-    assert plan_refill(1,3,1,206,1)==(0,1)
-    assert plan_refill(0,3,10,206,1,small_enabled=False)==(0,1)
+    assert plan_refill(1,3,1,206,4)==(1,1)
+    assert plan_refill(0,3,10,206,4,small_enabled=False)==(0,1)
     assert plan_refill(0,3,10,206,None,large_enabled=False)==(10,0)
     assert plan_refill(0,11,1,206,1)==(1,1)
     with pytest.raises(RuntimeError):plan_refill(98,99,0,206,1)
     with pytest.raises(RuntimeError):plan_refill(0,3,10,206,1,small_enabled=False,large_enabled=False)
     with pytest.raises(RuntimeError):plan_refill(0,3,2,0,1)
+
+
+def test_finite_tail_refuses_excess_and_prefers_exact_coverage():
+    assert plan_refill(1, 3, 0, 2, 4) == (0, 1)
+    assert plan_refill(1, 3, 1, 2, 4) == (1, 1)
+    with pytest.raises(RuntimeError, match="剩余.*需求"):
+        plan_refill(2, 3, 0, 1, 1)
+    with pytest.raises(RuntimeError, match="剩余.*需求"):
+        plan_refill(0, 3, 12, 1, 2, minimum_required=9)
 
 
 @pytest.mark.parametrize("bad", [True,-1,1.0,"4"])
@@ -154,7 +163,7 @@ def test_success_reserves_before_confirm_without_cumulative_limit(tmp_path):
 def test_large_only_counts_ten_points(tmp_path):
     context = FakeContext()
     journal = RefillJournal(tmp_path, 102)
-    assert runner(context).ensure(1, options(stamina_refill_small_enabled=False), journal)
+    assert runner(context).ensure(1, options(stamina_refill_small_enabled=False), journal, remaining_rounds=10)
     assert context.current == 10
     assert journal.load()["reserved_points"] == 10
     assert (766,228) not in context.clicks
@@ -311,7 +320,7 @@ def test_low_confidence_stock_is_never_read_by_actual_refill(tmp_path,small_enab
     context.ocr=read
     journal=RefillJournal(tmp_path,914)
     assert runner(context).ensure(3,options(stamina_refill_small_enabled=small_enabled,
-        stamina_refill_large_enabled=large_enabled),journal)
+        stamina_refill_large_enabled=large_enabled),journal,remaining_rounds=1 if small_enabled else 4)
     assert context.current==(10 if not small_enabled else 3)
     assert journal.load()["status"]=="confirmed" and not journal.pending_path.exists()
     assert not any(key.endswith("stock") for key in calls)
@@ -324,7 +333,7 @@ def test_low_confidence_stock_is_never_read_by_actual_refill(tmp_path,small_enab
     ((0,0),None,None,None), ((100,0),None,None,18),
     ((0,1),None,None,10), ((5,0),None,None,5),
     ((8,1),6,9,18), ((2,1),6,9,12), ((2,0),1,None,None),
-    ((8,0),3,9,None), ((9,0),3,9,9), ((0,2),1,None,10),
+    ((8,0),3,9,None), ((9,0),3,9,9), ((0,2),1,None,None),
     ((4,1),8,None,14), ((0,1),8,None,10),
 ])
 def test_actual_selection_replans_with_bounded_available_capacity(tmp_path,stock,rounds,minimum,expected):
@@ -341,7 +350,8 @@ def test_actual_selection_replans_with_bounded_available_capacity(tmp_path,stock
         assert refill.ensure(3,options(),journal,remaining_rounds=rounds,minimum_required=minimum)
         assert context.current==expected and journal.load()["reserved_points"]==expected
         assert context.clicks.count((770,449))==1
-    assert all(0<=preview<=24 for _,preview in context.selection_history)
+    cap = 24 if rounds is None else min(24, 3 * rounds)
+    assert all(0<=preview<=cap for _,preview in context.selection_history)
     assert len(context.clicks)<100
     assert len(refill.selection)<=3
 
@@ -356,26 +366,25 @@ def test_one_dropped_plus_retries_non_consuming_selection_only(tmp_path,point):
 
 
 @pytest.mark.parametrize("dropped_minus",[0,1,2])
-def test_replan_reduces_selected_small_before_adding_large(tmp_path,dropped_minus):
-    context=FakeContext(stock=(2,2))
+def test_replan_reduces_selection_before_confirming(tmp_path,dropped_minus):
+    context=FakeContext(current=1,stock=(8,1))
     context.dropped_clicks[(532,228)]=dropped_minus
     journal=RefillJournal(tmp_path,917)
     if dropped_minus==2:
         with pytest.raises(RuntimeError,match="减选未送达"):
-            runner(context).ensure(3,options(),journal,remaining_rounds=6)
+            runner(context).ensure(2,options(),journal,remaining_rounds=22)
         assert (770,603) not in context.clicks and journal.load()["reserved_points"]==0
     else:
-        assert runner(context).ensure(3,options(),journal,remaining_rounds=6)
-        assert context.current==20
-        assert context.clicks.count((532,228))==2+dropped_minus
-        second_large=[i for i,point in enumerate(context.clicks) if point==(766,376)][1]
-        assert max(i for i,point in enumerate(context.clicks) if point==(532,228))<second_large
+        assert runner(context).ensure(2,options(),journal,remaining_rounds=22)
+        assert context.current==18
+        assert context.clicks.count((532,228))==1+dropped_minus
+        assert max(i for i,point in enumerate(context.clicks) if point==(532,228))<context.clicks.index((770,603))
     assert all(preview<=24 for _,preview in context.selection_history)
 
 
 @pytest.mark.parametrize("conflict",["preview","other-count","current"])
 def test_abnormal_selection_change_never_becomes_capacity_limit(tmp_path,conflict):
-    context=FakeContext(stock=(2,2))
+    context=FakeContext(current=1,stock=(8,1))
     original=context.ocr
     def read(image,key):
         value=original(image,key)
@@ -386,19 +395,19 @@ def test_abnormal_selection_change_never_becomes_capacity_limit(tmp_path,conflic
     context.ocr=read
     journal=RefillJournal(tmp_path,918)
     with pytest.raises(RuntimeError,match="预览"):
-        runner(context).ensure(3,options(),journal,remaining_rounds=6)
+        runner(context).ensure(2,options(),journal,remaining_rounds=22)
     assert (770,603) not in context.clicks and (770,449) not in context.clicks
     assert journal.load()["reserved_points"]==0 and not journal.pending_path.exists()
 
 
 @pytest.mark.parametrize("point",[(766,376),(532,228)])
 def test_stop_during_capacity_probe_or_replan_stops_all_further_input(tmp_path,point):
-    context=FakeContext(stock=(2,2))
+    context=FakeContext(current=1,stock=(8,1))
     context.after_click=lambda:setattr(context.tasker,"stopping",True) if context.clicks[-1]==point else None
     journal=RefillJournal(tmp_path,919)
     refill=runner(context)
     with pytest.raises(ScreenRefreshCancelled):
-        refill.ensure(3,options(),journal,remaining_rounds=6)
+        refill.ensure(2,options(),journal,remaining_rounds=22)
     assert context.clicks[-1]==point
     assert (770,603) not in context.clicks and journal.load()["reserved_points"]==0
 
@@ -412,7 +421,7 @@ def test_unavailable_allowed_type_is_probed_twice_without_using_disabled_type(tm
     refill=runner(context)
     journal=RefillJournal(tmp_path,920)
     with pytest.raises(RuntimeError,match="不足"):
-        refill.ensure(3,options(**changes),journal)
+        refill.ensure(3,options(**changes),journal,remaining_rounds=4)
     assert context.clicks.count(point)==2
     assert not any(p in context.clicks for p in {(766,228),(766,376)}-{point})
     assert refill.selection[-1]["limited_kind"]==kind
@@ -747,7 +756,7 @@ def test_completed_task_or_zero_cost_does_not_read_stamina(tmp_path):
 
 @pytest.mark.parametrize("current,small,large,rounds,minimum,expected", [
     (0,7,0,None,None,(7,0)), (0,0,1,None,None,(0,1)),
-    (0,5,0,8,None,(5,0)), (0,0,3,2,None,(0,1)),
+    (0,5,0,8,None,(5,0)), (0,0,3,4,None,(0,1)),
     (0,8,1,6,9,(8,1)), (3,0,2,None,9,(0,2)),
     (0,9,0,30,9,(9,0)), (0,100,0,None,None,(18,0)),
 ])
@@ -762,9 +771,10 @@ def test_all_small_inventory_combinations_obey_cap_and_tail_coverage():
             for current in range(minimum):
                 for small in range(6):
                     for large in range(3):
-                        for rounds in (group,group*2,group*8,None):
-                            feasible=[current+s+10*l for s in range(small+1) for l in range(large+1)
-                                      if minimum<=current+s+10*l<=24]
+                        for rounds in (*range(1,10),group*8,None):
+                            cap=24 if rounds is None else min(24,cost*rounds)
+                            feasible=[(current+s+10*l,s+l) for s in range(small+1) for l in range(large+1)
+                                      if minimum<=current+s+10*l<=cap]
                             if not feasible:
                                 with pytest.raises(RuntimeError):
                                     plan_refill(current,cost,small,large,rounds,minimum_required=minimum)
@@ -772,11 +782,11 @@ def test_all_small_inventory_combinations_obey_cap_and_tail_coverage():
                             s,l=plan_refill(current,cost,small,large,rounds,minimum_required=minimum)
                             after=current+s+10*l
                             assert 0<=s<=small and 0<=l<=large
-                            assert minimum<=after<=24
+                            assert minimum<=after<=cap
                             if rounds is not None and cost*rounds<=24:
-                                covering=[value for value in feasible if value>=cost*rounds]
-                                expected=min(covering) if covering else max(feasible)
-                                assert after==expected
+                                best=max(value for value,_ in feasible)
+                                assert after==best
+                                assert s+l==min(items for value,items in feasible if value==best)
 
 
 @pytest.mark.parametrize("rounds", [None,15])
@@ -828,6 +838,41 @@ def test_fifteen_round_home_budget_uses_two_batches_without_final_excess(tmp_pat
     assert context.current==0 and context.stock==(599,203)
     assert context.clicks.count((770,449))==2
     assert journal.load()['reserved_points']==35
+
+
+def test_large_only_finite_tail_consumes_one_can_then_skips_last_round(monkeypatch, tmp_path):
+    from agent.realtime import stamina_task
+
+    context = FakeContext(current=1, stock=(20, 2))
+    argv = SimpleNamespace(task_detail=SimpleNamespace(task_id=913))
+    refill_options = options(stamina_refill_small_enabled=False)
+    state = stamina_task.TaskStamina(refill_options, "CooperativeLive", 3)
+    journal = RefillJournal(tmp_path, 913)
+    warnings = []
+    monkeypatch.setitem(stamina_task._TASKS, 913, state)
+    monkeypatch.setattr(stamina_task, "RefillJournal", lambda *_: journal)
+    monkeypatch.setattr(stamina_task, "StaminaRefill", runner)
+    monkeypatch.setattr(StaminaRefill, "save_failure", lambda self, error: "模拟诊断")
+    monkeypatch.setattr(stamina_task, "report_task_warning", lambda _context, _label, message: warnings.append(message))
+
+    stamina_task.allocate_home(context, argv, 4)
+    assert state.available == context.current == 11
+    assert context.stock == (20, 1)
+    assert not state.degraded
+    for _ in range(3):
+        stamina_task.reserve_attempt(argv)
+        context.current -= 3
+    assert state.available == context.current == 2
+
+    stamina_task.allocate_home(context, argv, 1)
+    assert state.degraded and state.available == context.current == 2
+    assert state.options == refill_options
+    assert context.state == "menu" and context.stock == (20, 1)
+    assert context.clicks.count((770, 603)) == context.clicks.count((770, 449)) == 1
+    assert context.clicks.count((766, 376)) == 1
+    assert (766, 228) not in context.clicks
+    assert journal.load()["reserved_points"] == 10 and not journal.pending_path.exists()
+    assert len(warnings) == 1 and all(text in warnings[0] for text in ("继续原任务", "剩余", "小火罐"))
 
 
 @pytest.mark.parametrize('mode',['CooperativeLive','VersusLive'])

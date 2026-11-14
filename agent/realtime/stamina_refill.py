@@ -95,7 +95,7 @@ def home_refill_target(required, remaining_rounds, minimum_required=None):
 
 
 def plan_refill(current, required, small, large, remaining_rounds=None, *, small_enabled=True, large_enabled=True, minimum_required=None):
-    """不足下一局/整组时批量补充；尾段优先覆盖，长期目标约20且不超过24。"""
+    """不足下一局或整组时批量补充，补后计划不超过24点及有限任务的剩余需求。"""
     if any(type(v) is not int or v < 0 for v in (current, required, small, large)):
         raise ValueError("体力计划参数无效")
     if not 0 <= current <= 99:
@@ -105,19 +105,22 @@ def plan_refill(current, required, small, large, remaining_rounds=None, *, small
         return (0, 0)
     small = min(small if small_enabled else 0, REFILL_PLAN_CAP)
     large = min(large if large_enabled else 0, REFILL_PLAN_CAP//10)
+    demand = None if remaining_rounds is None else required * remaining_rounds
+    cap = REFILL_PLAN_CAP if demand is None else min(REFILL_PLAN_CAP, demand)
     candidates = [(current+s+10*l, s, l) for l in range(large+1) for s in range(small+1)
-                  if minimum <= current+s+10*l <= REFILL_PLAN_CAP]
+                  if minimum <= current+s+10*l <= cap]
     if not candidates:
+        if demand is not None and demand < minimum:
+            raise RuntimeError(f"剩余{remaining_rounds}局总需求{demand}点，低于下一局或完整组曲所需{minimum}点，跳过自动补充")
+        if cap < REFILL_PLAN_CAP:
+            raise RuntimeError(
+                f"剩余{remaining_rounds}局总需求{demand}点，当前{current}点，下一局或完整组曲需要{minimum}点。"
+                "可用火罐不足以在剩余需求内补够，可等待自然恢复或检查小火罐库存和使用设置"
+            )
         raise RuntimeError("体力道具不足以覆盖下一局或完整组曲")
-    demand = None if remaining_rounds is None else max(minimum,required*remaining_rounds)
     if demand is not None and demand <= REFILL_PLAN_CAP:
-        covering = [item for item in candidates if item[0] >= demand]
-        # 尾段可一次补完时，先减少结束后的多余体力；大罐颗粒度造成的最小超量仍允许。
-        if covering:
-            _, s, l = min(covering, key=lambda item:(item[0]-demand,item[1]+item[2],-item[2],item[1]))
-        else:
-            # 库存不够覆盖尾段也继续使用可行补给，不能把软目标升级为失败门禁。
-            _, s, l = min(candidates, key=lambda item:(-item[0],item[1]+item[2],-item[2],item[1]))
+        # 正好覆盖优先；凑不齐时，在上限内尽量覆盖，等量时少用道具。
+        _, s, l = min(candidates, key=lambda item:(-item[0],item[1]+item[2],-item[2],item[1]))
         return s, l
 
     def rank(item):
@@ -469,7 +472,8 @@ class StaminaRefill:
         capacities = [REFILL_PLAN_CAP if options["stamina_refill_small_enabled"] else 0,
                       REFILL_PLAN_CAP//10 if options["stamina_refill_large_enabled"] else 0]
         selected = [0, 0]
-        # 每种类型最多收紧一次；单步无变化只重试一次，所有选择均受24点上限约束。
+        cap = REFILL_PLAN_CAP if remaining_rounds is None else min(REFILL_PLAN_CAP, required * remaining_rounds)
+        # 每种类型最多收紧一次；单步无变化只重试一次。
         for _ in range(3):
             planned = plan_refill(current, required, *capacities, remaining_rounds,
                                   minimum_required=minimum_required)
@@ -484,7 +488,7 @@ class StaminaRefill:
                         after = list(selected)
                         after[index] += direction
                         expected = (*after, current, current+after[0]+10*after[1])
-                        if not 0 <= expected[-1] <= REFILL_PLAN_CAP:
+                        if not 0 <= expected[-1] <= cap:
                             raise RuntimeError("体力选择超出计划上限，拒绝消费")
                         for attempt in range(2):
                             self.click(766 if direction == 1 else 532, y)
@@ -550,7 +554,7 @@ class StaminaRefill:
                 return True
             small, large = self.select_refill(current, required, options, remaining_rounds, minimum_required)
             planned_target = current+small+10*large
-            remaining_required = None if remaining_rounds is None else max(target,required*remaining_rounds)
+            remaining_required = None if remaining_rounds is None else required * remaining_rounds
             print(f"StaminaRefill plan next_required={target} planned_target={planned_target} remaining_required={remaining_required} remaining_rounds={remaining_rounds} small={small} large={large}", flush=True)
             if small + large == 0:
                 self.click(505, 603)
