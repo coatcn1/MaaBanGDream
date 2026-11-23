@@ -3021,9 +3021,9 @@ class RealtimeProfilePlay(CustomAction):
                         selected_chart.path,
                     )
                     native_backend.configure_timing_offset(timing_offset_ms)
-                    configure_early_start = getattr(native_backend, "configure_early_start", None)
-                    if callable(configure_early_start):
-                        configure_early_start(getattr(settings, "environment", None))
+                    configure_environment = getattr(native_backend, "configure_environment", None)
+                    if callable(configure_environment):
+                        configure_environment(getattr(settings, "environment", None))
                     print(
                         "RealtimeProfilePlay native_prearmed=consumed "
                         f"chart={selected_chart.path} "

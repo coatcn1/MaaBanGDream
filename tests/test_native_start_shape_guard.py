@@ -35,11 +35,12 @@ def test_default_multiplayer_gate_keeps_partial_height_first_chord(mode):
 
 
 @pytest.mark.parametrize("mode", ["cooperative-playfield-confirmed", "versus-playfield-confirmed"])
-def test_default_multiplayer_broad_fix_keeps_original_popup_detector(mode):
+def test_default_multiplayer_popup_requires_solid_panel(mode):
     result = NativeStartPhotogate(mode=mode)
     assert not result._spatial_transition_guard
-    assert not result._popup_detector._require_solid_panel
-    assert result._popup_detector(popup_image(False))
+    assert result._popup_detector._require_solid_panel
+    assert result._popup_detector(popup_image(True))
+    assert not result._popup_detector(popup_image(False))
 
 
 def test_partial_height_connected_first_notes_are_not_a_broad_transition():
@@ -80,6 +81,29 @@ def test_real_panel_kept_and_sparse_white_pink_shape_rejected():
     assert old(popup_image(True)) and candidate(popup_image(True))
     assert old(popup_image(False))
     assert not candidate(popup_image(False))
+
+
+@pytest.mark.parametrize("mode", ["cooperative-playfield-confirmed", "versus-playfield-confirmed"])
+def test_sparse_white_pink_first_chord_triggers_without_clearing_baseline(mode):
+    image = np.zeros((720, 1280, 3), np.uint8)
+    first_chord = popup_image(False)
+    old = NativeStartPhotogate(
+        stable_duration_ms=0, grace_ms=0, mode=mode,
+        playfield_detector=lambda _: True,
+        popup_detector=CooperativePreparePopupDetector(),
+    )
+    result = NativeStartPhotogate(
+        stable_duration_ms=0, grace_ms=0, mode=mode,
+        playfield_detector=lambda _: True,
+    )
+    freeze(old, image)
+    freeze(result, image)
+
+    # 白色轮廓与粉色音符满足旧几何条件，会在首音到达时错误清空基线。
+    assert old.observe(first_chord, 1.02) is None
+    assert not old.frozen and old.prepare_popup_frames == 1
+    assert result.observe(first_chord, 1.02) is not None
+    assert result.triggered and result.prepare_popup_frames == 0
 
 
 def test_trial_environment_is_opt_in(monkeypatch):
@@ -133,7 +157,7 @@ def test_backend_wires_trial_only_for_native_cooperative_or_versus(monkeypatch):
             device=SimpleNamespace(request_reset=lambda: None), session_factory=stop, timing_trial_enabled=False)
     assert not backend._photogate.report()["photogate_spatial_transition_guard"]
     assert backend._photogate.report()["photogate_broad_shape_guard"]
-    assert not backend._photogate._popup_detector._require_solid_panel
+    assert backend._photogate._popup_detector._require_solid_panel
 
 
 @pytest.mark.parametrize("mode", ["single-playfield-first-note", "calibration-playfield-first-note"])
@@ -145,12 +169,12 @@ def test_single_and_calibration_keep_original_broad_policy(mode):
     assert result._popup_detector is None
 
 
-def test_default_broad_report_does_not_claim_solid_popup_trial():
+def test_default_broad_report_includes_solid_popup_requirement():
     report = NativeStartPhotogate(mode="cooperative-playfield-confirmed").report()
     assert report["photogate_broad_shape_guard"]
     assert report["photogate_broad_change_policy"] == "column-mean-then-all-band-rows"
     assert not report["photogate_spatial_transition_guard"]
-    assert report["photogate_popup_min_panel_fill"] is None
+    assert report["photogate_popup_min_panel_fill"] == .75
 
 
 def test_shape_mismatch_fails_closed_without_array_broadcasting():

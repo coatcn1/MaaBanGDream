@@ -280,4 +280,4 @@ def test_deferred_and_rebuilt_prearm_keeps_formal_frozen_options(monkeypatch, tm
                     project_root=tmp_path, runtime_options=env.options)
     assert [backend.options["life_feedback_enabled"] for backend in env.backends] == [life, life]
     assert all(backend.options["wait_jitter_trial_enabled"] for backend in env.backends)
-    assert [backend.options["early_start_enabled"] for backend in env.backends] == [life, life]
+    assert all("early_start_enabled" not in backend.options for backend in env.backends)

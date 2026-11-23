@@ -798,8 +798,9 @@ def test_prepare_popup_detector_identifies_only_cooperative_popup():
     assert detector(_synthetic_prepare_popup()) is True
 
 
-def test_prepare_popup_detector_handles_scaled_popup():
-    detector = CooperativePreparePopupDetector()
+@pytest.mark.parametrize("require_solid_panel", [False, True])
+def test_prepare_popup_detector_handles_scaled_popup(require_solid_panel):
+    detector = CooperativePreparePopupDetector(require_solid_panel=require_solid_panel)
 
     # 缩放动画中弹窗可能只有完整尺寸的几成，仍必须被识别。
     frame = _synthetic_playfield()

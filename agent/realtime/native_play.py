@@ -429,8 +429,7 @@ class NativeStartPhotogate:
             self._playfield_detector = playfield_detector
         self.mode = str(mode)
         self._spatial_transition_guard = bool(spatial_transition_guard)
-        # 广域形状保护独立于旧试验的弹窗实心要求；只修默认协力连线误拦，
-        # 不改变既有弹窗检测、单人策略或显式旧试验的组合行为。
+        # 广域形状保护区分同步连线与整行转场；弹窗实体面板另行确认。
         self._broad_shape_guard = (
             self._spatial_transition_guard
             or self.mode.startswith(("cooperative", "versus"))
@@ -447,7 +446,8 @@ class NativeStartPhotogate:
             popup_detector
             if popup_detector is not None
             else (
-                CooperativePreparePopupDetector(require_solid_panel=self._spatial_transition_guard)
+                # 双 FLICK 和连接线也能围成白色轮廓，只有实心面板才清除首音基线。
+                CooperativePreparePopupDetector(require_solid_panel=True)
                 if self._popup_gate_enabled
                 else None
             )
@@ -482,71 +482,6 @@ class NativeStartPhotogate:
         self._diagnostic_pair = deque(maxlen=2)
         self._diagnostic_warnings = deque(maxlen=2)
         self._trigger_evidence = None
-        self._early_gate = None
-        self._early_rois = None
-        self._life_fallback_enabled = False
-        self._life_detector = None
-        self._life_peak = None
-        self._grace_life_min = None
-        self._grace_stream_since_s = None
-        self._grace_settle_until_s = None
-        self._life_trigger = None
-        self._low_confidence_trigger = None
-
-    def configure_early_start(self, environment, actions, *, geometry_supported=True):
-        from .early_start_gate import EarlyStartGate
-        from .life_monitor import LifeDetector
-
-        self._early_gate = EarlyStartGate(
-            environment, actions, geometry_supported=geometry_supported
-        )
-        if not self._early_gate.eligible:
-            return
-        self._early_original_guard = self._spatial_transition_guard
-        self._early_original_broad_guard = self._broad_shape_guard
-        self._early_original_popup_detector = self._popup_detector
-        self._life_fallback_enabled = True
-        self._life_detector = LifeDetector()
-        # 独立新候选复用形状保护，不改变旧环境开关的含义。
-        self._spatial_transition_guard = True
-        self._broad_shape_guard = True
-        if isinstance(self._popup_detector, CooperativePreparePopupDetector):
-            self._popup_detector = CooperativePreparePopupDetector(
-                require_solid_panel=True
-            )
-
-    def _read_start_life(self, image):
-        if not self._life_fallback_enabled or self._life_detector is None:
-            return None
-        try:
-            reading = self._life_detector.detect(image)
-            value = int(reading.value)
-            return value if reading.visible and 0 <= value <= 1000 else None
-        except Exception:
-            return None
-
-    def _observe_life_peak(self, value):
-        if value is not None:
-            self._life_peak = (
-                value if self._life_peak is None else max(self._life_peak, value)
-            )
-
-    def _trigger_start_life(self, frame_s, reference_s, source, value, score):
-        self.triggered = True
-        self.triggered_at_s = frame_s
-        self.trigger_source = source
-        self.trigger_score = score
-        self._life_trigger = dict(
-            source=source,
-            confidence="low; observed life drop, not reconstructed first-note time; phase unknown",
-            observed_s=frame_s,
-            reference_s=reference_s,
-            life=value,
-            life_peak=self._life_peak,
-        )
-        self._record_event("trigger", frame_s, score)
-        return reference_s + self._latency_s
-
     def set_frame_metadata(self, metadata):
         self._diagnostic_metadata = dict(metadata)
 
@@ -575,12 +510,7 @@ class NativeStartPhotogate:
                 self._diagnostic_pair.clear()
         # 诊断异常不能改写或掩盖原门控返回值，Legacy 未开启元数据时不复制图像。
         anchor = self._observe_control(image, now)
-        if (
-            observation is not None
-            and self.trigger_source != "upper-first-pair-crossing"
-            and self._life_trigger is None
-            and self._low_confidence_trigger is None
-        ):
+        if observation is not None:
             try:
                 roi, data = observation
                 data["current_change"] = (sum(abs(a - b) for a, b in zip(data["mean_bgr"],
@@ -618,8 +548,6 @@ class NativeStartPhotogate:
         self.frozen_at_s = None
         self.waited_frames = 0
         self.frozen = False
-        self._grace_life_min = None
-        self._grace_stream_since_s = None
 
     def _record_event(
         self,
@@ -686,11 +614,6 @@ class NativeStartPhotogate:
                 if isinstance(self._popup_detector, CooperativePreparePopupDetector)
                 and self._popup_detector._require_solid_panel else None
             ),
-            "photogate_early_start": self._early_gate.report() if self._early_gate is not None else None,
-            "photogate_life_fallback_enabled": self._life_fallback_enabled,
-            "photogate_life_peak": self._life_peak,
-            "photogate_life_trigger": self._life_trigger,
-            "photogate_low_confidence_trigger": self._low_confidence_trigger,
             "photogate_prepare_popup_frames": self.prepare_popup_frames,
             "photogate_prepare_popup_blocked_events": (
                 self.prepare_popup_blocked_events
@@ -727,14 +650,11 @@ class NativeStartPhotogate:
                 self._record_event("playfield-lost", frame_s, 0.0)
             self._playfield_active = False
             self._prepare_popup_active = False
-            if self._early_gate is not None:
-                self._early_gate.invalidate("playfield-lost")
             self._reset_band_state()
             return None
         if not self._playfield_active:
             self._playfield_active = True
             self.playfield_seen_at_s = frame_s
-            self._life_peak = None
             self._reset_band_state()
             self._record_event("playfield-visible", frame_s, 0.0)
         if self._popup_gate_enabled:
@@ -744,10 +664,6 @@ class NativeStartPhotogate:
                 raise RuntimeError("协力弹窗门控缺少检测器")
             popup_visible = bool(self._popup_detector(image))
             if popup_visible:
-                # 弹窗遮挡后的生命读数不能与遮挡前峰值直接比较；消失后重新取基线。
-                self._life_peak = None
-                if self._early_gate is not None:
-                    self._early_gate.invalidate("prepare-popup-visible")
                 self.prepare_popup_frames += 1
                 if not self._prepare_popup_active:
                     self._prepare_popup_active = True
@@ -764,43 +680,7 @@ class NativeStartPhotogate:
                 self.prepare_popup_blocked_events += 1
                 self._record_event("prepare-popup-gone", frame_s, 0.0)
                 self._reset_band_state()
-                self._life_peak = None
-                self._grace_settle_until_s = frame_s + 0.120
                 return None
-        if self._life_fallback_enabled and image.shape[:2] != (720, 1280):
-            # Profile 是声明环境；真实帧尺寸变化后撤销本候选，不能继续按未校准几何读生命。
-            self._early_gate.disabled = True
-            self._early_gate.rejected_reason = "frame-resolution-mismatch"
-            self._life_fallback_enabled = False
-            self._life_detector = None
-            self._life_peak = None
-            self._spatial_transition_guard = self._early_original_guard
-            self._broad_shape_guard = self._early_original_broad_guard
-            self._popup_detector = self._early_original_popup_detector
-            self._reset_band_state()
-            return None
-        start_life = self._read_start_life(image)
-        self._observe_life_peak(start_life)
-        if (
-            self._early_gate is not None
-            and self._early_gate.eligible
-            and start_life is not None
-            and self._life_peak - start_life >= 12
-        ):
-            self._early_gate.disabled = True
-            self._early_gate.rejected_reason = "life-drop-before-trusted-upper-crossing"
-        if self._early_gate is not None:
-            anchor = self._early_gate.observe(
-                image, frame_s, self._diagnostic_metadata or {}
-            )
-            if anchor is not None:
-                self.triggered = True
-                self.triggered_at_s = frame_s
-                self.trigger_source = "upper-first-pair-crossing"
-                self._trigger_evidence = dict(self._early_gate.evidence)
-                self._early_rois = self._early_gate.rois
-                self._record_event("trigger", frame_s, 0.0)
-                return anchor
         if self._last_color is None:
             self._last_color = current
             self._previous_frame_s = frame_s
@@ -816,23 +696,10 @@ class NativeStartPhotogate:
                 self._record_event("broad-shape-mismatch", frame_s, 0.0)
                 self._reset_band_state()
                 return None
-        lower_gap = (
-            self._life_fallback_enabled
-            and self._previous_frame_s is not None
-            and frame_s - self._previous_frame_s > 0.6
-        )
-        if lower_gap:
-            # 候选不跨长时间缺帧插值首拍；仍可明确采用当前帧的低置信接管。
-            self._previous_change = None
         change_score = float(abs(current - self._last_color).sum())
         self.last_change_score = change_score
 
         if not self.frozen:
-            life = start_life
-            if life is not None and self._life_peak - life >= 12:
-                return self._trigger_start_life(
-                    frame_s, frame_s, "life-drop-current-frame", life, change_score
-                )
             if change_score <= self._change_threshold:
                 if self.stable_since_s is None:
                     self.stable_since_s = (
@@ -866,43 +733,6 @@ class NativeStartPhotogate:
         assert self.frozen_at_s is not None
         if frame_s - self.frozen_at_s < self._grace_s:
             if change_score >= self._change_threshold:
-                if self._life_fallback_enabled:
-                    life = start_life
-                    if life is not None:
-                        self._grace_life_min = (
-                            life
-                            if self._grace_life_min is None
-                            else min(self._grace_life_min, life)
-                        )
-                    columns = (
-                        image[from_row : to_row + 1, :, :3]
-                        .astype("float64")
-                        .mean(axis=0)
-                    )
-                    broad = (
-                        self._frozen_columns is not None
-                        and columns.shape == self._frozen_columns.shape
-                        and int(
-                            (
-                                np.abs(columns - self._frozen_columns).sum(axis=1)
-                                >= self._BROAD_COLUMN_MIN
-                            ).sum()
-                        )
-                        >= self._BROAD_COLUMN_FRACTION * image.shape[1]
-                    )
-                    settled = (
-                        self._grace_settle_until_s is None
-                        or frame_s >= self._grace_settle_until_s
-                    )
-                    if broad or not settled:
-                        self._grace_stream_since_s = None
-                    if not broad and settled and self._grace_stream_since_s is None:
-                        self._grace_stream_since_s = frame_s
-                    if (life is not None and self._life_peak is not None and self._grace_life_min is not None
-                            and self._life_peak-self._grace_life_min>=30):
-                        reference = self._grace_stream_since_s
-                        return self._trigger_start_life(frame_s,frame_s if reference is None else reference,
-                            "grace-life-drop-current-frame" if reference is None else "grace-life-drop-observed-candidate",life,change_score)
                 self.ignored_prelude_events += 1
                 self._record_event("ignored-prelude", frame_s, change_score)
             self._previous_change = change_score
@@ -910,19 +740,13 @@ class NativeStartPhotogate:
             self._last_color = current
             return None
 
-        if (self._life_fallback_enabled and start_life is not None
-                and self._life_peak - start_life >= 12):
-            return self._trigger_start_life(
-                frame_s, frame_s, "after-grace-life-drop-current-frame", start_life, change_score
-            )
-
         if (
             change_score >= self._change_threshold
             and self._popup_gate_enabled
             and self._frozen_columns is not None
         ):
             # 先按原列均值筛出广域变化，再区分全高度转场和局部高度连接线。
-            # 弹窗本身仍由前面的原检测器处理，不与广域形状策略耦合。
+            # 弹窗主体由前面的实心面板检测处理，与判定带形状保护分别复核。
             current_columns = image[
                 from_row : to_row + 1, :, :3
             ].astype("float64").mean(axis=0)
@@ -976,13 +800,6 @@ class NativeStartPhotogate:
             trigger_source = "direct-threshold"
 
         if trigger_s is not None:
-            if lower_gap:
-                trigger_source = "lower-gap-direct-current-frame"
-                self._low_confidence_trigger = {
-                    "source": trigger_source,
-                    "confidence": "low; current observed frame; phase unknown",
-                    "observed_s": frame_s,
-                }
             self.triggered = True
             self.triggered_at_s = frame_s
             self.trigger_score = change_score
@@ -1032,7 +849,6 @@ class NativeMinitouchBackend:
         timing_trial_enabled: bool | None = None,
         wait_jitter_trial_enabled: bool | None = None,
         life_feedback_enabled: bool = False,
-        early_start_enabled: bool = False,
         observation_clock: Any | None = None,
         observation_clock_trial_enabled: bool | None = None,
         visual_refresh_enabled: bool | None = None,
@@ -1322,10 +1138,6 @@ class NativeMinitouchBackend:
         self._phase_applied_history = ()
         self._phase_applied_history_disabled_reason = None
         self._state = "idle"
-        self._early_start_trial_requested = (
-            str(start_gate_mode).strip().lower() in ("cooperative", "versus")
-            and early_start_enabled
-        )
         self._first_read_delay_s = 0.004
         self._first_action_anchor_s: float | None = None
         self._start_last_sequence: int | None = None
@@ -2454,22 +2266,11 @@ class NativeMinitouchBackend:
         value = getattr(self._device, "max_contacts", None)
         return value if type(value) is int else None
 
-    def configure_early_start(self, environment) -> None:
+    def configure_environment(self, environment) -> None:
+        """冻结游戏时钟恢复环境，首音始终由判定线门控确认。"""
         config = getattr(self, "_config", {})
         self._game_clock_environment = (environment if config.get("judgement_y") == TOUCH_Y
             and tuple(config.get("lane_centers", ())) == tuple(LANE_CENTERS) else None)
-        if not getattr(self, "_early_start_trial_requested", False):
-            return
-        if self._state not in ("idle", "arming", "armed", "ready"):
-            raise RuntimeError("首音候选只能在输入启动前配置")
-        config = self._config
-        geometry_supported = (
-            config.get("judgement_y") == TOUCH_Y
-            and tuple(config.get("lane_centers", ())) == tuple(LANE_CENTERS)
-        )
-        self._photogate.configure_early_start(
-            environment, self._actions, geometry_supported=geometry_supported
-        )
 
     def observe_start_frame_metadata(self, metadata):
         self._start_frame_metadata = dict(metadata)
@@ -2509,9 +2310,7 @@ class NativeMinitouchBackend:
         self._start_decision = {
             "source": self._photogate.trigger_source,
             "confidence": (
-                getattr(self._photogate, "_life_trigger", None)
-                or getattr(self._photogate, "_low_confidence_trigger", None)
-                or getattr(self._photogate, "_trigger_evidence", None)
+                getattr(self._photogate, "_trigger_evidence", None)
                 or {}
             ).get("confidence"),
             "observed_s": float(now),
@@ -2532,9 +2331,7 @@ class NativeMinitouchBackend:
                     "probe_first_read_s": self._first_read_delay_s,
                     "chart_first_due_s": self._actions[0]["due_s"],
                     "final_anchor_s": float(anchor) - self._frozen_timing_offset_ms / 1000 - self._first_read_delay_s}
-                rois = getattr(self._photogate, "_early_rois", None)
-                if rois is None:
-                    rois = tuple(item[0] for item in self._photogate._diagnostic_pair)
+                rois = tuple(item[0] for item in self._photogate._diagnostic_pair)
                 packet["remaining_first_action_budget_s"] = packet["final_anchor_s"] - float(now)
                 self._start_evidence_ticket = self._start_evidence_writer.submit(self._run_id, rois, packet)
         except Exception as exc:
