@@ -429,8 +429,7 @@ class NativeStartPhotogate:
             self._playfield_detector = playfield_detector
         self.mode = str(mode)
         self._spatial_transition_guard = bool(spatial_transition_guard)
-        # 广域形状保护独立于旧试验的弹窗实心要求；只修默认协力连线误拦，
-        # 不改变既有弹窗检测、单人策略或显式旧试验的组合行为。
+        # 广域形状保护区分同步连线与整行转场；弹窗实体面板另行确认。
         self._broad_shape_guard = (
             self._spatial_transition_guard
             or self.mode.startswith(("cooperative", "versus"))
@@ -447,7 +446,8 @@ class NativeStartPhotogate:
             popup_detector
             if popup_detector is not None
             else (
-                CooperativePreparePopupDetector(require_solid_panel=self._spatial_transition_guard)
+                # 双 FLICK 和连接线也能围成白色轮廓，只有实心面板才清除首音基线。
+                CooperativePreparePopupDetector(require_solid_panel=True)
                 if self._popup_gate_enabled
                 else None
             )
