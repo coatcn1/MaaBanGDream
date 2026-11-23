@@ -326,6 +326,8 @@ def controller_adb_endpoint(controller: Any) -> tuple[str, str]:
 
 
 def frozen_native_runtime_options(live_run, runtime_options):
+    runtime_options = dict(runtime_options)
+    runtime_options.pop("native_early_start_enabled", None)
     if live_run is None:
         return dict(runtime_options)
     from .live_session import current_live_run, update_live_run
@@ -334,10 +336,11 @@ def frozen_native_runtime_options(live_run, runtime_options):
         live_run = current
     snapshot = getattr(live_run, "native_runtime_options", None)
     if snapshot is not None:
-        return dict(runtime_options) | snapshot
+        snapshot = dict(snapshot)
+        snapshot.pop("native_early_start_enabled", None)
+        return runtime_options | snapshot
     snapshot = {key: bool(runtime_options.get(key, False)) for key in (
-        "native_realtime_enabled", "native_life_feedback_enabled", "native_wait_jitter_filter_enabled",
-        "native_early_start_enabled")}
+        "native_realtime_enabled", "native_life_feedback_enabled", "native_wait_jitter_filter_enabled")}
     snapshot["cooperative_jitter_enabled"] = bool(runtime_options.get("cooperative_jitter_enabled", True))
     from .native_random_great import validate_random_great_options
     snapshot.update(validate_random_great_options(runtime_options))
@@ -421,7 +424,6 @@ def prepare_native_for_settings_gate(
             "MAABANGDREAM_NATIVE_DRIFT_RATE_CORRECTION"
         ),
         wait_jitter_trial_enabled=bool(runtime_options.get("native_wait_jitter_filter_enabled", False)),
-        early_start_enabled=bool(runtime_options.get("native_early_start_enabled", False)),
         random_great_options=runtime_options,
         chart_level=getattr(selection, "level", None),
         expected_notes=getattr(selection, "expected_notes", None),

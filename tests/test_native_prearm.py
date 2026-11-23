@@ -325,7 +325,7 @@ def test_experimental_options_only_enable_feedback_for_formal_modes(tmp_path, mo
     )
     assert constructed[0]["life_feedback_enabled"] is enabled
     assert constructed[0]["wait_jitter_trial_enabled"] is True
-    assert constructed[0]["early_start_enabled"] is True
+    assert "early_start_enabled" not in constructed[0]
 
 
 @pytest.mark.parametrize("stopped",[False,True])
