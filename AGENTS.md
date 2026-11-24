@@ -101,7 +101,8 @@ Realtime：取证→必要独立审查→最小实现→定向测试→离线rep
 
 ### 输入与触点
 - 截图/检测/跟踪/派发热路径不阻塞等待或同步ADB前台查询。
-- Native停止须本轮generation全部合法触点`UP → commit → reset → commit`完整发送，并有本轮请求游标后的连续jlog执行回执及本地/设备清理证据才置`release_confirmed=true`；单个/历史`r`、断socket、kill不代替序列。证据只证明minitouch协议/清理，不是内核evdev触点实读。
+- Native停止须本轮全触点`UP → commit → reset → commit`完整发送、请求后连续jlog及本地/设备清理才确认`release_confirmed=true`；历史`r`、断线、kill不替代，只证明协议清理。
+- 仅用户明确授权、独立预审固定摘要证明旧会话全程无触点、日志完整、原owner/运输终止且同实例新boot，才走`no-touch-recovery`：核原双owner，共享互斥下预留新双锁、归档原锁、审计续做；不冒充旧代UP。可能触点/缺证/变身份仍须同代全UP，禁通用删锁/重启回收。
 - Legacy HOLD/Slide仅由连续轨迹和离散拓扑事件建立；长条头DOWN后抑制同轨重复TAP。
 - 普通紫色外圈非FLICK；仅成组同向粉色箭头/折线才升级FLICK。
 - 密集同轨不按固定宽度合并，阈值随透视/音符头尺寸缩放。
@@ -170,7 +171,7 @@ Realtime：取证→必要独立审查→最小实现→定向测试→离线rep
 - MFA/MBD与ALAS等不得同时控制同设备。
 - MuMu可监听`127.0.0.1:5555/7555`并影子雷电ADB；冲突仅用端口归属已核验独立地址。空闲时重建主连接/截图上下文，不改保存序列号，不重启共享ADB；MuMu主ADB `127.0.0.1:16384`。
 - 同时核前台应用/设备指纹/物理模拟器，不只信序列号。
-- 双设备独立Agent/控制器/资源/Profile/日志根，共享租约防同设备别名并发；本次触点释放凭据到手才释租。无头前关确认空闲GUI，不删互斥；脚本起房前核双方消耗0及演奏器就绪。
+- 双设备独立Agent/控制器/资源/Profile/日志，共享租约防别名并发；按上述释放/审计门禁释租。无头前关确认空闲GUI；脚本起房前核双方消耗0及演奏器就绪。
 
 ## 更新/打包/许可
 - Release仅用户明确要求、`main`干净、验证及所需真机验收完成才做；见`docs/release-package.md`、`docs/release-notes-template.md`、技能release runbook。

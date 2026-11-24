@@ -13,14 +13,14 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.5.4-ff6f9f" alt="Version"></a>
+  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.5.5-ff6f9f" alt="Version"></a>
   <img src="https://img.shields.io/badge/MaaFramework-5.10.2-4c8bf5" alt="MaaFramework">
   <img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?logo=windows11&logoColor=white" alt="Windows">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-6f42c1" alt="License"></a>
 </p>
 
-v1.5.4 改进协力双 FLICK 开场检测，统一使用判定线确认首音。更新内容见[发行说明](docs/release-notes-v1.5.4.md)，开发变更见 [CHANGELOG](CHANGELOG.md)。
+v1.5.5 改进协力开演、挑战重试和结算识别，新增按需截图。更新内容见[发行说明](docs/release-notes-v1.5.5.md)，开发变更见 [CHANGELOG](CHANGELOG.md)。
 
 ## ✨ 功能
 
@@ -31,12 +31,12 @@ v1.5.4 改进协力双 FLICK 开场检测，统一使用判定线确认首音。
 - 🎼 **Bestdori 本地谱面辅助** — Hard / Expert / Special 谱面结构与时序
 - 🔄 **MFA 谱面同步** — 定时增量更新或手动同步，空闲时维护本地曲库
 - 🎯 **实时演奏校准** — 一次排练、一次正式验证，生成匹配的 Profile
-- 🎲 **随机 GREAT（实验）** — 比例与难度加成可配置，默认关闭
+- 🎲 **协力随机 GREAT** — 比例与难度加成可配置，默认关闭
 - 🏆 **挑战演出** — 四档点数、五档难度，支持连续轮次
 - 🎼 **组曲演奏** — 自由巡演 / 课题巡演，支持断点续跑与逐首结果
 - 🔋 **主页体力补充** — 按任务选择小火罐、大火罐或智能补充，有限次数按剩余用量补火
 - ⏩ **结算容错与可选检查** — 结果读取异常保留完成状态，可跳过成绩数字检查
-- 🧪 **调试记录** — 开场截图、轻量 Trace 或完整记录，关联整局证据
+- 🧪 **调试记录** — 按需截图、开场截图、轻量 Trace 或完整记录
 - 📹 **手动流程录像** — 录制界面操作，生成可逐帧定位的 MKV 与首末帧
 - 🎁 **交换所抽箱** — 默认预览，按抽数或活动币预算规划抽取与换箱
 
