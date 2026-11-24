@@ -13,14 +13,14 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.5.3-ff6f9f" alt="Version"></a>
+  <a href="https://github.com/coatcn1/MaaBanGDream/releases"><img src="https://img.shields.io/badge/Version-v1.5.4-ff6f9f" alt="Version"></a>
   <img src="https://img.shields.io/badge/MaaFramework-5.10.2-4c8bf5" alt="MaaFramework">
   <img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?logo=windows11&logoColor=white" alt="Windows">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-6f42c1" alt="License"></a>
 </p>
 
-v1.5.3 改进缓存清理、有限次数补火与协力开演。更新内容见[发行说明](docs/release-notes-v1.5.3.md)，开发变更见 [CHANGELOG](CHANGELOG.md)。
+v1.5.4 改进协力双 FLICK 开场检测，统一使用判定线确认首音。更新内容见[发行说明](docs/release-notes-v1.5.4.md)，开发变更见 [CHANGELOG](CHANGELOG.md)。
 
 ## ✨ 功能
 
