@@ -276,7 +276,7 @@ def test_guard_observer_clears_votes_without_revoking_accepted_slot_then_needs_n
     assert not backend.request_future_phase(15, .3, owner="game-clock")
     assert backend._phase_slot == original
     backend._consume_phase_candidate()
-    assert calls == [(60, .5)]
+    assert calls == [(45, .5)]
     status = backend.phase_status_snapshot()
     backend._publish_phase_status(replace(status, first_adjusted_due_s=.6,
         first_affected_chunk_sequence=2, first_affected_action_token=1), "effect-published")

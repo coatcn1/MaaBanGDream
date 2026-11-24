@@ -675,6 +675,8 @@ PYBIND11_MODULE(maabangdream_realtime, module) {
             py::arg("delta_ms"), py::arg("contact_available_s"),
             py::arg("post_random_display_large_step") = false)
         .def("supports_post_random_display_large_step", &PlaybackSession::supports_post_random_display_large_step)
+        .def("supports_ordinary_single_tap_45ms", &PlaybackSession::supports_ordinary_single_tap_45ms)
+        .def("supports_ordinary_single_tap_step_range", &PlaybackSession::supports_ordinary_single_tap_step_range)
         .def_property_readonly("future_phase_offset_ms",
             &PlaybackSession::future_phase_offset_ms)
         .def("poll",

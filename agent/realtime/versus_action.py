@@ -107,6 +107,7 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "debug_recording": False,
     "diagnostic_trace": True,
     "opening_recording": False,
+    "adaptive_diagnostics": False,
     "disconnect_jump_enabled": False,
     "song_choice": "unspecified",
 }
@@ -235,6 +236,7 @@ def versus_play_params(
         "debug_recording": bool(settings["debug_recording"]),
         "diagnostic_trace": bool(settings["diagnostic_trace"]),
         "opening_recording": bool(settings.get("opening_recording",False)),
+        "adaptive_diagnostics": bool(settings.get("adaptive_diagnostics", False)),
         "duration_seconds": 600,
         "startup_timeout_seconds": 60,
         "dpi": 240,
@@ -481,15 +483,15 @@ class VersusLiveFlow:
                 print(f"VersusStartup diagnostics_warning={type(exc).__name__}: {exc}", flush=True)
 
     def _start_startup_diagnostics(self):
-        # 开局逐帧 PNG 只在「完整录像」档开：这是每局最多 600 帧 / 128 MB 的原始帧流，
-        # 「轻量 Trace」档保留主运行录制器的 trace 与关键帧，但不在这里存逐帧原图。
-        if not self.settings.get("debug_recording", False) or getattr(self, "_startup_recorder", None) is not None:
+        # 按需档先缓存已有画面，只有失败时保存；完整录像沿用逐帧留存。
+        if not (self.settings.get("debug_recording", False) or self.settings.get("adaptive_diagnostics", False)) or getattr(self, "_startup_recorder", None) is not None:
             return
         try:
             run = current_live_run()
             self._startup_recorder = CooperativeStartupRecorder(
                 PROJECT_ROOT / "debug" / "recordings", getattr(run, "run_id", None),
                 loading_guard_enabled=self.settings["versus_member_loading_guard_enabled"],
+                retain_on_failure=bool(self.settings.get("adaptive_diagnostics", False)),
             )
             print(f"VersusStartup recording={self._startup_recorder.output_dir}", flush=True)
         except Exception as exc:

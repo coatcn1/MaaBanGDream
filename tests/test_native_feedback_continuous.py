@@ -35,7 +35,7 @@ def test_three_applied_steps_need_new_effect_sources_but_no_blank(direction, ste
             first_adjusted_due_s=cycle + .4, first_affected_chunk_sequence=cycle + 2,
             first_affected_action_token=1), "effect-published")
         sampler.refresh_phase_status(cycle + .4)
-        assert session.future_phase_offset_ms == step * (cycle + 2)
+        assert session.future_phase_offset_ms == (45 if step > 0 else -45) + step * cycle
     assert sampler.summary["accepted_requests"] == sampler.summary["applied_requests"] == 3
 
 
@@ -185,7 +185,7 @@ def test_phase_limit_uses_request_delta_after_local_drop_and_reverse_restores_he
     backend._publish_phase_status(replace(backend.phase_status_snapshot(), first_adjusted_due_s=1.1,
         first_affected_chunk_sequence=2, first_affected_action_token=1), "effect-published")
     sampler.refresh_phase_status(1.1)
-    assert backend._session.future_phase_offset_ms == 135 and sampler._blocked_direction is None
+    assert backend._session.future_phase_offset_ms == 150 and sampler._blocked_direction is None
     for now in (1.2, 1.3, 1.4):
         tap(sampler, now, chunk=2)
     assert sampler.summary["requests"] == 3
@@ -206,7 +206,7 @@ def test_directionless_target_keeps_votes_but_reverse_needs_three_new_observatio
     tap(sampler, .5, TimingFeedback.SLOW)
     tap(sampler, .6, TimingFeedback.SLOW)
     assert sampler.summary["requests"] == 1
-    assert backend._phase_slot[3] == -60
+    assert backend._phase_slot[3] == -45
 
 
 def test_duplicate_ticket_cannot_supply_third_continuous_vote():

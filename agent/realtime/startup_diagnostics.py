@@ -6,6 +6,7 @@ import json
 import queue
 import threading
 import time
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 
@@ -42,7 +43,7 @@ def cover_diagnostic(resolver):
 class CooperativeStartupRecorder:
     def __init__(self, root: Path, run_id, *, queue_capacity=8, max_frames=600,
                  max_events=10000, max_bytes=128 * 1024 * 1024, close_timeout=0.2,
-                 loading_guard_enabled=None):
+                 loading_guard_enabled=None, retain_on_failure=False):
         self.output_dir = Path(root) / (
             "cooperative-startup-" + datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         )
@@ -53,6 +54,10 @@ class CooperativeStartupRecorder:
         self.max_events = max_events
         self.max_bytes = max_bytes
         self.close_timeout = close_timeout
+        self.retain_on_failure = bool(retain_on_failure)
+        self._failure_frames = deque()
+        self._failure_frame_bytes = 0
+        self._first_failure_frame = None
         self._queue = queue.Queue(maxsize=queue_capacity)
         self._events = []
         self._lock = threading.Lock()
@@ -121,6 +126,9 @@ class CooperativeStartupRecorder:
                 except queue.Empty:
                     continue
                 try:
+                    if self.retain_on_failure:
+                        self._retain_failure_frame(image, event)
+                        continue
                     if self._bytes + image.nbytes > self.max_bytes:
                         with self._lock:
                             event["image_status"] = "dropped-storage-limit"
@@ -141,6 +149,8 @@ class CooperativeStartupRecorder:
                 finally:
                     self._queue.task_done()
         finally:
+            if self.retain_on_failure:
+                self._flush_failure_frames()
             if self._last_image is not None:
                 try:
                     if not imwrite_unicode(self.output_dir / "last-frame.png", self._last_image,
@@ -154,6 +164,61 @@ class CooperativeStartupRecorder:
                     self._errors += 1
             self._persist(finalized=True)
 
+    def _retain_failure_frame(self, image, event):
+        # 热路径只入有界队列，结果已知后才编码；首帧和最近画面覆盖启动失败现场。
+        limit = min(self.max_bytes, 64 * 1024 * 1024)
+        if self._first_failure_frame is None and image.nbytes <= limit:
+            self._first_failure_frame = (image, event)
+            self._failure_frame_bytes += image.nbytes
+        else:
+            self._failure_frames.append((image, event))
+            self._failure_frame_bytes += image.nbytes
+        with self._lock:
+            event["image_status"] = "buffered"
+        while self._failure_frames and (
+            len(self._failure_frames) > 23 or self._failure_frame_bytes > limit
+        ):
+            old_image, old_event = self._failure_frames.popleft()
+            self._failure_frame_bytes -= old_image.nbytes
+            with self._lock:
+                old_event.pop("image", None)
+                old_event["image_status"] = "dropped-buffer-limit"
+                self._dropped += 1
+
+    def _flush_failure_frames(self):
+        frames = list(self._failure_frames)
+        if self._first_failure_frame is not None:
+            frames.insert(0, self._first_failure_frame)
+        self._failure_frames.clear()
+        self._first_failure_frame = None
+        self._failure_frame_bytes = 0
+        for image, event in frames:
+            if self._outcome == "completed":
+                with self._lock:
+                    event.pop("image", None)
+                    event["image_status"] = "discarded-normal"
+                continue
+            try:
+                if not imwrite_unicode(self.output_dir / event["image"], image,
+                                       [cv2.IMWRITE_PNG_COMPRESSION, 1]):
+                    raise OSError("无法保存协力启动异常帧")
+                size = (self.output_dir / event["image"]).stat().st_size
+                with self._lock:
+                    event["image_status"] = "saved"
+                    self._saved += 1
+                    self._bytes += size
+            except Exception as exc:
+                with self._lock:
+                    event["image_status"] = "write-error"
+                    event["write_error"] = f"{type(exc).__name__}: {exc}"
+                    self._errors += 1
+        if self._outcome == "completed":
+            with self._lock:
+                self._last_image = None
+                if self._last_event is not None:
+                    self._last_event.pop("image", None)
+                    self._last_event["image_status"] = "discarded-normal"
+
     def _persist(self, *, finalized):
         try:
             with self._write_lock:
@@ -164,6 +229,7 @@ class CooperativeStartupRecorder:
                     events = [dict(event) for event in self._events]
                     summary = {
                         "run_id": self.run_id, "outcome": self._outcome,
+                        "retention_policy": "failure-only" if self.retain_on_failure else "all",
                         "startup_policy": "final-cover-first",
                         "loading_guard_enabled": self.loading_guard_enabled,
                         "frames_observed": len(events), "frames_saved": self._saved,

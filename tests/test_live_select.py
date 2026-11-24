@@ -301,6 +301,46 @@ def test_delivery_budget_and_click_limit_do_not_report_false_success(delivery_cl
     assert delivery_clock.now == 4.0
 
 
+@pytest.mark.parametrize("successful_click", [2, 3])
+def test_challenge_delivery_waits_for_second_or_third_click(delivery_clock, successful_click, capsys):
+    context = DeliveryContext([(100, 200)])
+    recognize = context.run_recognition
+
+    def challenge_recognition(node, image):
+        if node == "ChallengeSongMarker":
+            assert image is context.tasker.controller.cached_image
+            return SimpleNamespace(hit=len(context.tasker.controller.clicks) >= successful_click)
+        return recognize(node, image)
+
+    context.run_recognition = challenge_recognition
+    assert live_select.LiveSelectFind().run(context, delivery_argv(
+        expected="挑战演出", delivery_node="ChallengeSongMarker", delivery_label="选曲页",
+        delivery_timeout_ms=15000, delivery_retry_interval_ms=4000,
+    ))
+    assert len(context.tasker.controller.clicks) == successful_click
+    assert delivery_clock.now == (successful_click - 1) * 4 + 0.5
+    assert "已确认进入“挑战演出”选曲页" in capsys.readouterr().out
+
+
+def test_challenge_loading_waits_for_late_song_page_without_clicking_old_entry(delivery_clock):
+    context = DeliveryContext([(100, 200), "loading"])
+    recognize = context.run_recognition
+
+    def challenge_recognition(node, image):
+        if node == "ChallengeSongMarker":
+            assert image is context.tasker.controller.cached_image
+            return SimpleNamespace(hit=delivery_clock.now >= 14)
+        return recognize(node, image)
+
+    context.run_recognition = challenge_recognition
+    assert live_select.LiveSelectFind().run(context, delivery_argv(
+        expected="挑战演出", delivery_node="ChallengeSongMarker", delivery_label="选曲页",
+        delivery_timeout_ms=15000, delivery_retry_interval_ms=4000,
+    ))
+    assert context.tasker.controller.clicks == [(140, 220)]
+    assert delivery_clock.now == 14
+
+
 @pytest.mark.parametrize("stage", ["before", "guard", "after_click", "delivery", "retry_source"])
 def test_delivery_stop_has_priority_over_next_input(monkeypatch, delivery_clock, stage):
     context = DeliveryContext([(100, 200)])

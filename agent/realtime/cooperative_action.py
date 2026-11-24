@@ -113,6 +113,7 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "debug_recording": False,
     "diagnostic_trace": True,
     "opening_recording": False,
+    "adaptive_diagnostics": False,
     "disconnect_jump_enabled": False,
     "song_choice": "unspecified",
 }
@@ -135,6 +136,17 @@ COOPERATIVE_DIFFICULTY_TARGETS = {
 MEMBER_DOWNLOAD_TIMEOUT_SECONDS = 60.0
 ROOM_SONG_CHOICE_TIMEOUT_SECONDS = 180.0
 SONG_CHOICE_TO_READY_TIMEOUT_SECONDS = 60.0
+AUTOMATIC_SONG_CHOICE_SECONDS = 20.0
+AUTOMATIC_SONG_DECISION_SECONDS = 10.0
+AUTOMATIC_PREPARATION_SECONDS = 30.0
+
+
+class _AutomaticPreparationTransition(Exception):
+    """在本局已见选歌页后，把自动开演观察交回外层，避免继续点击旧页面。"""
+
+    def __init__(self, image, reason):
+        self.image = image
+        self.reason = reason
 POST_SCORE_NAVIGATION_TIMEOUT_SECONDS = 60.0
 HOME_LIVE_POINT = (1175, 645)
 # 跳车按钮点击点：弹窗1“通信已中断。是否继续演出？”点左侧“中断”；
@@ -240,6 +252,7 @@ def cooperative_play_params(
         "debug_recording": bool(settings["debug_recording"]),
         "diagnostic_trace": bool(settings["diagnostic_trace"]),
         "opening_recording": bool(settings.get("opening_recording",False)),
+        "adaptive_diagnostics": bool(settings.get("adaptive_diagnostics", False)),
         "duration_seconds": 600,
         "startup_timeout_seconds": 60,
         "dpi": 240,
@@ -490,6 +503,9 @@ class CooperativeLiveFlow:
             self._startup_recorder = CooperativeStartupRecorder(
                 PROJECT_ROOT / "debug" / "recordings", getattr(run, "run_id", None),
                 loading_guard_enabled=self.settings["cooperative_member_loading_guard_enabled"],
+                retain_on_failure=bool(self.settings.get("adaptive_diagnostics", False)) or not (
+                    self.settings.get("debug_recording", False) or self.settings.get("opening_recording", False)
+                ),
             )
             print(f"CooperativeStartup recording={self._startup_recorder.output_dir}", flush=True)
         except Exception as exc:
@@ -576,7 +592,11 @@ class CooperativeLiveFlow:
                     if self.detector.detect(image).visible:
                         return name, image
                 elif self.visible(image, name):
+                    if getattr(self, "_observing_preparation_countdown", False):
+                        self._observe_preparation_countdown(name, image)
                     return name, image
+            if getattr(self, "_observing_preparation_countdown", False):
+                self._observe_preparation_countdown(None, image)
             if time.monotonic() >= deadline:
                 return None, image
             time.sleep(interval)
@@ -1053,7 +1073,54 @@ class CooperativeLiveFlow:
                 return state
             time.sleep(min(0.1, remaining))
 
+    def _observe_preparation_countdown(self, state, image) -> None:
+        now = time.monotonic()
+        if state == "song_unspecified" and getattr(self, "_song_choice_observed_at", None) is None:
+            self._song_choice_observed_at = now
+            self._automatic_preparation_deadline = now + (
+                AUTOMATIC_SONG_CHOICE_SECONDS + AUTOMATIC_SONG_DECISION_SECONDS
+                + AUTOMATIC_PREPARATION_SECONDS
+            )
+            print("CooperativeLive countdown stage=song-choice automatic_ready_seconds=60", flush=True)
+        if state == "ready_button" and getattr(self, "_preparation_observed_at", None) is None:
+            self._preparation_observed_at = now
+            deadline = now + AUTOMATIC_PREPARATION_SECONDS
+            previous = getattr(self, "_automatic_preparation_deadline", None)
+            self._automatic_preparation_deadline = min(previous, deadline) if previous is not None else deadline
+            print("CooperativeLive countdown stage=preparation automatic_ready_seconds=30", flush=True)
+        deadline = getattr(self, "_automatic_preparation_deadline", None)
+        if deadline is None:
+            return
+        if state is None and isinstance(image, np.ndarray) and image.shape[:2] == (720, 1280):
+            if _frame_is_black_transition(image):
+                raise _AutomaticPreparationTransition(image, "black-transition")
+            resolver = getattr(self, "_preparation_cover_resolver", None)
+            run = current_live_run()
+            run_id = getattr(run, "run_id", None)
+            if resolver is None or getattr(self, "_preparation_cover_run_id", None) != run_id:
+                resolver = self.make_final_cover_entry_resolver()
+                self._preparation_cover_resolver = resolver
+                self._preparation_cover_run_id = run_id
+            if resolver is not None:
+                resolution = resolver.observe(image)
+                if resolution is not None:
+                    update_live_run(startup_final_cover_image=image.copy(),
+                                    startup_final_cover_resolution=resolution)
+                    raise _AutomaticPreparationTransition(image, "final-cover")
+        if now >= deadline:
+            raise _AutomaticPreparationTransition(image, "countdown-expired")
+
     def wait_for_preparation(self) -> None:
+        self._observing_preparation_countdown = True
+        try:
+            self._wait_for_preparation_page()
+        except _AutomaticPreparationTransition as transition:
+            self._automatic_start_transition = transition
+            print(f"CooperativeLive automatic_ready observation={transition.reason}", flush=True)
+        finally:
+            self._observing_preparation_countdown = False
+
+    def _wait_for_preparation_page(self) -> None:
         choice_deadline = (
             time.monotonic() + ROOM_SONG_CHOICE_TIMEOUT_SECONDS
         )
@@ -1070,6 +1137,8 @@ class CooperativeLiveFlow:
             )
             if self.stopped():
                 raise InterruptedError("用户已停止任务")
+            # 真实轮询已处理当前图；这里仅兼容直接返回阶段的调用者，不重复计封面帧。
+            self._observe_preparation_countdown(state, None)
             if state == "ready_button":
                 # 首轮已提前确认时不把筛歌窗口顺延到后续轮次。
                 self.song_choice_pause_pending = False
@@ -1125,7 +1194,56 @@ class CooperativeLiveFlow:
             task_detail=getattr(getattr(self, "stamina_argv", None), "task_detail", None),
         )
 
+    def _observe_automatic_start(self, transition, failure_reason=None) -> None:
+        if self.stopped():
+            raise InterruptedError("用户已停止任务")
+        self._start_startup_diagnostics()
+        run = current_live_run()
+        if not (transition.reason == "final-cover" and run is not None
+                and run.startup_final_cover_resolution is not None):
+            self.watch_member_exit_before_black(
+                initial_image=transition.image, continue_after_black=True,
+            )
+        if not getattr(self, "_preparation_gates_complete", False):
+            detail = failure_reason or "未能实读本局准备页的实际难度与 Profile"
+            raise FinalCoverStartupFailure(f"已转入自动准备后的封面观察，但{detail}；未启动演奏输入")
+
     def prepare(self) -> None:
+        transition = getattr(self, "_automatic_start_transition", None)
+        if transition is not None:
+            self._observe_automatic_start(transition)
+            return
+        try:
+            self._prepare_from_page()
+        except _AutomaticPreparationTransition as transition:
+            self._observe_automatic_start(transition)
+
+    def _wait_for_automatic_start(self, initial_image) -> np.ndarray:
+        # 页面已自行推进时，只观察当前画面直至转场或本局截止，不重发准备页坐标。
+        deadline = self._automatic_preparation_deadline
+        image = initial_image
+        while True:
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
+            check_preplay_connection_failed(self, image)
+            if self.visible(image, "member_exit_title", 0.93):
+                raise MemberExited("协力成员退出房间")
+            if self.visible(image, "ready_button"):
+                self._observe_preparation_countdown("ready_button", None)
+                return image
+            self._observe_preparation_countdown(None, image)
+            if time.monotonic() >= deadline:
+                raise _AutomaticPreparationTransition(image, "countdown-expired")
+            time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
+            image = self.capture()
+
+    def _prepare_from_page(self) -> None:
+        if getattr(self, "_automatic_preparation_deadline", None) is not None:
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
+            image = self.capture()
+            if not self.visible(image, "ready_button"):
+                self._wait_for_automatic_start(image)
         difficulty = str(self.settings["difficulty"])
         difficulty_params = {
             "difficulty": difficulty,
@@ -1147,6 +1265,12 @@ class CooperativeLiveFlow:
         if not RealtimeDifficultySelect().run(
             self.context, self.action_argv(difficulty_params)
         ):
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
+            if getattr(self, "_automatic_preparation_deadline", None) is not None:
+                image = self.capture()
+                if not self.visible(image, "ready_button"):
+                    self._wait_for_automatic_start(image)
             raise RuntimeError(f"协力准备页未能选择并复核 {difficulty} 难度")
         run = current_live_run()
         if run is None or not run.prepared_for_play:
@@ -1175,6 +1299,11 @@ class CooperativeLiveFlow:
             self.context, self.action_argv(performance_params)
         ):
             raise RuntimeError("协力准备页流速复核失败")
+        self._preparation_gates_complete = True
+        self._preparation_cover_resolver = None
+        deadline = getattr(self, "_automatic_preparation_deadline", None)
+        if deadline is not None and time.monotonic() >= deadline:
+            raise _AutomaticPreparationTransition(None, "countdown-expired")
         run = current_live_run()
         initial_image = None if run is None else run.cooperative_prestart_image
         if initial_image is not None:
@@ -1207,9 +1336,16 @@ class CooperativeLiveFlow:
         """
         image = initial_image
         for attempt in range(4):
+            if self.stopped():
+                raise InterruptedError("用户已停止任务")
             reused = image is not None
             if image is None:
                 image = self.capture()
+            deadline = getattr(self, "_automatic_preparation_deadline", None)
+            if deadline is not None:
+                self._observe_preparation_countdown("ready_button" if self.visible(image, "ready_button") else None, image)
+                if not self.visible(image, "ready_button"):
+                    image = self._wait_for_automatic_start(image)
             if live_performance_mode_is_off(image):
                 print(
                     "CooperativeLive performance_mode=off confirmed=true "
@@ -1365,6 +1501,9 @@ class CooperativeLiveFlow:
     def watch_member_exit_before_black(
         self,
         timeout: float = MEMBER_DOWNLOAD_TIMEOUT_SECONDS,
+        *,
+        initial_image=None,
+        continue_after_black: bool = False,
     ) -> str:
         """准备完毕到黑场转场之间的成员退出弹窗窗口。
 
@@ -1383,6 +1522,7 @@ class CooperativeLiveFlow:
         final_cover_resolver = self.make_final_cover_entry_resolver()
         started_at = time.monotonic()
         deadline = started_at + float(timeout)
+        black_seen = False
 
         def finish(outcome: str) -> str:
             elapsed_ms = (time.monotonic() - started_at) * 1000.0
@@ -1397,13 +1537,19 @@ class CooperativeLiveFlow:
         while time.monotonic() < deadline:
             if self.stopped():
                 raise InterruptedError("用户已停止任务")
-            image = self.capture()
+            image = initial_image if initial_image is not None else self.capture()
+            initial_image = None
             if _frame_is_black_transition(image):
                 self._startup_record(image, "ready-transition", black=True, outcome="black")
                 # 整屏黑场转场已经开始，成员退出弹窗窗口已过。
-                return finish("black")
-            check_preplay_connection_failed(self, image)
-            if self.visible(image, "member_exit_title", 0.93):
+                if not continue_after_black:
+                    return finish("black")
+                black_seen = True
+                time.sleep(0.1)
+                continue
+            if not black_seen:
+                check_preplay_connection_failed(self, image)
+            if not black_seen and self.visible(image, "member_exit_title", 0.93):
                 self._startup_record(image, "ready-transition", member_exit=True)
                 finish("member-exit")
                 self.dismiss_member_exit()
@@ -1844,6 +1990,14 @@ class CooperativeLiveFlow:
         requested = str(self.settings.get("difficulty", "Expert"))
         reset_live_run(mode="cooperative", difficulty=requested,
             requested_difficulty=requested, prepared_for_play=False)
+        self._song_choice_observed_at = None
+        self._preparation_observed_at = None
+        self._automatic_preparation_deadline = None
+        self._automatic_start_transition = None
+        self._preparation_cover_resolver = None
+        self._preparation_cover_run_id = None
+        self._preparation_gates_complete = False
+        self._observing_preparation_countdown = False
         self._room_entry_evidence = None
         try:
             task_id = getattr(self, "task_id", None)

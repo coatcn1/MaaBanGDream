@@ -1888,6 +1888,7 @@ def _completed_play_harness(
         assert kwargs["cooperative_mode"] is (run_mode in ("cooperative", "versus"))
         assert kwargs["robust_navigation"] is True
         assert kwargs["timeout_seconds"] == 180.0
+        assert kwargs["pggbm_read_timeout_seconds"] == (None if calibration_report else 3.0)
         if collection_exception is not None:
             raise collection_exception
         if collect_callback is not None:
@@ -2837,6 +2838,51 @@ def test_recorder_creation_failure_is_nonfatal_at_profile_play_callsite(monkeypa
     monkeypatch.setattr(profile_play_action,'RealtimeDebugRecorder',broken)
     test_profile_play_refreshes_proxy_at_safety_boundaries(monkeypatch)
     assert 'create_warning' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("run_mode", ["formal", "continuous", "cooperative", "versus", "challenge", "medley", "calibration-formal"])
+@pytest.mark.parametrize("adaptive", [False, True])
+def test_distinct_opening_and_adaptive_modes_reach_common_play_recorder(monkeypatch, tmp_path, run_mode, adaptive):
+    monkeypatch.setattr(profile_play_action, "opening_recording_enabled", lambda argv: True)
+    monkeypatch.setattr(profile_play_action, "adaptive_diagnostics_enabled", lambda argv: adaptive)
+    created = []
+    factory = profile_play_action._create_debug_recorder
+
+    def observe(*args, **kwargs):
+        created.append(kwargs)
+        return factory(*args, **kwargs)
+
+    monkeypatch.setattr(profile_play_action, "_create_debug_recorder", observe)
+    root, writes, recorder = _completed_play_harness(
+        monkeypatch, tmp_path, debug_recording=False, run_mode=run_mode,
+        calibration_report=run_mode.startswith("calibration"),
+    )
+    assert len(created) == 1
+    assert created[0]["opening_seconds"] == 20.0
+    assert created[0]["compact_on_success"] is adaptive
+    assert len(writes) == 1
+    assert list((root / "screencap").glob("realtime-result-*.json"))
+
+
+def test_adaptive_failed_result_write_keeps_same_frame_checkpoint(monkeypatch, tmp_path):
+    monkeypatch.setattr(profile_play_action, "opening_recording_enabled", lambda argv: True)
+    monkeypatch.setattr(profile_play_action, "adaptive_diagnostics_enabled", lambda argv: True)
+    checkpoints = []
+    original = profile_play_action._recorder_checkpoint
+
+    def observe(recorder, image, phase, status, **kwargs):
+        if status == "screenshot-error":
+            checkpoints.append((image, phase))
+        return original(recorder, image, phase, status, **kwargs)
+
+    monkeypatch.setattr(profile_play_action, "_recorder_checkpoint", observe)
+    root, writes, _ = _completed_play_harness(
+        monkeypatch, tmp_path, debug_recording=False, screenshot_success=False,
+    )
+    assert len(checkpoints) == 1 and checkpoints[0][1] == "result"
+    assert checkpoints[0][0].shape == (720, 1280, 3)
+    payload = json.loads(next((root / "screencap").glob("realtime-result-*.json")).read_text(encoding="utf-8"))
+    assert payload["completed"] is True and payload["result_screenshot_error"]
 
 
 def test_recorder_metadata_checkpoint_and_lifecycle_failures_are_nonfatal_at_play_callsite(monkeypatch,tmp_path,capsys):

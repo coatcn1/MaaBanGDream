@@ -1147,7 +1147,7 @@ def test_cooperative_play_continues_to_the_jump_out_gate_after_depletion():
         {
             "difficulty": "Hard",
             "debug_recording": False,
-            "diagnostic_trace": False, "opening_recording": False}
+            "diagnostic_trace": False, "opening_recording": False, "adaptive_diagnostics": False}
     )
     assert MEMBER_DOWNLOAD_TIMEOUT_SECONDS == 60.0
     assert cooperative_action.ROOM_SONG_CHOICE_TIMEOUT_SECONDS == 180.0
@@ -1167,7 +1167,7 @@ def test_cooperative_play_uses_effective_fallback_difficulty():
         {
             "difficulty": "Special",
             "debug_recording": False,
-            "diagnostic_trace": False, "opening_recording": False},
+            "diagnostic_trace": False, "opening_recording": False, "adaptive_diagnostics": False},
         effective_difficulty="Expert",
     )
 
@@ -1208,7 +1208,7 @@ def test_cooperative_prepare_falls_back_special_to_effective_expert(monkeypatch)
     flow.context = SimpleNamespace(tasker=SimpleNamespace(stopping=False))
     flow.settings = {
         "difficulty": "Special",
-        "debug_recording": False, "opening_recording": False}
+        "debug_recording": False, "opening_recording": False, "adaptive_diagnostics": False}
     flow.ensure_performance_mode_off = lambda initial_image=None: (
         reused.append(("mode", initial_image)),
         initial_image,
@@ -1292,9 +1292,9 @@ def test_cooperative_interface_exposes_requested_modes_and_five_difficulties():
         case["name"] for case in options["CooperativeMemberExitPolicy"]["cases"]
     ] == ["Fail", "Reconnect"]
     debug = options["CooperativeDebug"]
-    assert debug["default_case"] == "Opening"
+    assert debug["default_case"] == "Adaptive"
     assert [case["name"] for case in debug["cases"]] == [
-        "Light", "Off", "Full", "Opening",
+        "Light", "Off", "Full", "Opening", "Adaptive",
     ]
     params = {
         case["name"]: case["pipeline_override"]["CooperativeDebugConfigure"][
@@ -1303,10 +1303,11 @@ def test_cooperative_interface_exposes_requested_modes_and_five_difficulties():
         for case in debug["cases"]
     }
     assert params == {
-        "Light": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": False},
-        "Off": {"debug_recording": False, "diagnostic_trace": False, "opening_recording": False},
-        "Full": {"debug_recording": True, "diagnostic_trace": True, "opening_recording": False},
-        "Opening": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": True},
+        "Light": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": False, "adaptive_diagnostics": False},
+        "Off": {"debug_recording": False, "diagnostic_trace": False, "opening_recording": False, "adaptive_diagnostics": False},
+        "Full": {"debug_recording": True, "diagnostic_trace": True, "opening_recording": False, "adaptive_diagnostics": False},
+        "Opening": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": True, "adaptive_diagnostics": False},
+        "Adaptive": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": True, "adaptive_diagnostics": True},
     }
     room_code = options["CooperativeRoomCode"]
     assert "description" not in room_code
@@ -2345,7 +2346,7 @@ def test_manual_song_choice_observes_until_player_confirms(monkeypatch, capsys):
     assert capsys.readouterr().out.count("等待玩家手动选歌并确认") == 1
 
 
-def test_manual_song_choice_timeout_is_bounded_without_jump(monkeypatch):
+def test_manual_song_choice_automatic_ready_starts_observation_without_jump(monkeypatch):
     flow = _bare_flow()
     flow.settings = {"song_choice": "manual"}
     now = [0.0]
@@ -2354,9 +2355,9 @@ def test_manual_song_choice_timeout_is_bounded_without_jump(monkeypatch):
     flow.wait_for = lambda *_args, **_kw: ("song_unspecified", None)
     flow.click = lambda _point: pytest.fail("manual timeout must not click")
     flow.jump_after_startup_failure = lambda _reason: pytest.fail("manual timeout must not switch background")
-    with pytest.raises(RoomPreparationTimeout, match="手动选歌"):
-        flow.wait_for_preparation()
-    assert now[0] == 180.0
+    flow.wait_for_preparation()
+    assert 60 <= now[0] < 60.2
+    assert flow._automatic_start_transition.reason == "countdown-expired"
 
 
 @pytest.mark.parametrize("event", ["stop", "member_exit"])

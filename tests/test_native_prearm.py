@@ -265,7 +265,8 @@ def test_settings_prearm_skips_without_reliable_local_chart(tmp_path):
     assert constructed == []
 
 
-def test_settings_prearm_success_arms_waits_and_caches_exact_key(tmp_path):
+@pytest.mark.parametrize("initial_step", [30, 37, 45])
+def test_settings_prearm_success_arms_waits_and_caches_exact_key(tmp_path, initial_step):
     timers = TimerFactory()
     manager = NativePrearmManager(timer_factory=timers)
     chart = tmp_path / "charts" / "48" / "expert.json"
@@ -284,7 +285,7 @@ def test_settings_prearm_success_arms_waits_and_caches_exact_key(tmp_path):
         live_run=_confirmed_run(mode="cooperative"),
         difficulty="Expert",
         project_root=tmp_path,
-        runtime_options={"native_realtime_enabled": True},
+        runtime_options={"native_realtime_enabled": True, "native_life_feedback_initial_step_ms": initial_step},
         repository=_repository(chart),
         backend_factory=factory,
         manager=manager,
@@ -300,6 +301,7 @@ def test_settings_prearm_success_arms_waits_and_caches_exact_key(tmp_path):
     assert constructed[0]["run_id"] == "run-48"
     assert constructed[0]["start_gate_mode"] == "cooperative"
     assert constructed[0]["judgement_y"] == 590
+    assert constructed[0]["life_feedback_initial_step_ms"] == initial_step
     assert manager.consume("run-48", chart) is backend
     assert timers.timers[0].seconds == 25
 

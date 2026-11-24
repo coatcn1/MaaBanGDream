@@ -354,6 +354,39 @@ def test_entry_background_writer_persists_input_phases_and_terminal_frame(tmp_pa
     assert (output / "last-frame.png").is_file()
 
 
+@pytest.mark.parametrize("outcome,full_video,adaptive,expected_frames", [
+    ("completed", False, True, False), ("failed", False, True, True),
+    ("completed", True, False, True), ("completed", False, False, True),
+])
+def test_cooperative_entry_compacts_only_successful_nonvideo_capture(
+    tmp_path, outcome, full_video, adaptive, expected_frames,
+):
+    cache = entry.RoomEntryEvidence(
+        {"opening_recording": True, "debug_recording": full_video, "adaptive_diagnostics": adaptive}, "cooperative", 42, {},
+    )
+    cache.observe(np.full((20, 20, 3), 99, np.uint8), 1, {})
+    cache.close(tmp_path, outcome)
+    deadline = time.monotonic() + 3
+    output = None
+    while time.monotonic() < deadline:
+        paths = list((tmp_path / cache.attempt_id).glob("*/summary.json"))
+        if paths:
+            try:
+                summary = json.loads(paths[0].read_text(encoding="utf-8"))
+                if summary["finalized"]:
+                    output = paths[0].parent
+                    break
+            except json.JSONDecodeError:
+                pass
+        time.sleep(.01)
+    assert output is not None
+    assert bool(list(output.glob("*.png"))) is expected_frames
+    rows = [json.loads(row) for row in
+            (output / "observations.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert rows[-1]["outcome"] == outcome
+    assert all(row["task_id"] == 42 for row in rows)
+
+
 def test_background_writer_close_failure_is_only_a_warning(tmp_path, monkeypatch, capsys):
     cache = entry.RoomEntryEvidence({"diagnostic_trace": True}, "versus", 42, {})
     cache.observe(np.zeros((1, 1, 3)), 1.0, {})

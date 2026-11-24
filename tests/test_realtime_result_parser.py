@@ -10,6 +10,7 @@ import pytest
 from agent.realtime.result_parser import LiveResult, ResultParser, adjusted_timing_offset
 from agent.realtime.result_samples_v2 import RESULT_CROPS_V2_ZLIB_BASE64
 from agent.realtime.result_samples_v6 import (
+    PERFECT_877_CROP_ZLIB_BASE64,
     RESULT_CROPS_V6_ZLIB_BASE64,
     RESULT_CROPS_V7_ZLIB_BASE64,
 )
@@ -136,6 +137,34 @@ def test_result_parser_reads_three_hundred_seventy_seven_variant():
     value, _confidence = ResultParser._read_digits(crop)
 
     assert value == 377
+
+
+def test_result_parser_reads_captured_eight_with_leading_zero_without_expected_total():
+    binary = np.frombuffer(zlib.decompress(base64.b64decode(PERFECT_877_CROP_ZLIB_BASE64)),
+                           dtype=np.uint8).reshape(32, 56)
+    crop = (255 - binary)[:, :, None].repeat(3, axis=2)
+    value, confidence = ResultParser._read_digits(crop)
+    assert value == 877
+    assert confidence >= ResultParser.MIN_FIELD_CONFIDENCE
+
+
+@pytest.mark.parametrize("name", [
+    "realtime-result-timeout-20261119-110415-04760c8a.png",
+    "realtime-result-timeout-20261119-112124-4c61277d.png",
+])
+def test_result_parser_reads_saved_full_877_frames_when_available(name):
+    from pathlib import Path
+    from agent.realtime.vision_io import imread_unicode
+
+    path = Path(__file__).resolve().parents[1] / "screencap" / name
+    if not path.is_file():
+        pytest.skip("现场完整截图仅保留在本地，脱敏 PERFECT 裁剪由独立用例覆盖")
+    image = imread_unicode(path)
+    parser = ResultParser()
+    raw = parser.parse(image)
+    assert raw == LiveResult(877, 1, 0, 0, 2, 0, 1, confidence=raw.confidence)
+    assert raw.total == 880
+    assert parser.resolve_expected_total(image, expected_notes=880, fallback=raw) == raw
 
 
 def test_result_parser_reads_hard_result_nine_variants():
@@ -290,3 +319,23 @@ def test_result_parser_rejects_impossible_fast_slow_total():
     result = LiveResult(10, 0, 0, 0, 0, 8, 5)
     with pytest.raises(ValueError, match="结算统计不一致"):
         ResultParser._validate_result(result)
+
+
+def test_cooperative_result_reads_real_slow_sixty_seven_without_total_repair():
+    from agent.realtime.result_parser import CooperativeResultParser
+    from agent.realtime.result_samples_v6 import COOPERATIVE_560_RESULT_CROPS_ZLIB_BASE64
+
+    crops = np.frombuffer(
+        zlib.decompress(base64.b64decode(COOPERATIVE_560_RESULT_CROPS_ZLIB_BASE64)),
+        dtype=np.uint8,
+    ).reshape(7, 32, 60)
+    image = np.full((720, 1280, 3), 255, dtype=np.uint8)
+    parser = CooperativeResultParser()
+    for crop, (x1, y1, x2, y2) in zip(crops, parser.FIELDS.values()):
+        image[y1:y2, x1:x2] = (255 - crop[:, :x2 - x1])[:, :, None]
+
+    result = parser.parse(image)
+
+    assert result == LiveResult(490, 67, 0, 0, 3, 0, 67, confidence=result.confidence)
+    assert result.total == 560
+    assert parser.resolve_expected_total(image, expected_notes=560, fallback=result) == result

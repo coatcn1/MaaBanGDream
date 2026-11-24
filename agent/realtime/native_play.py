@@ -24,7 +24,9 @@ from .native_minitouch import NativeMinitouchDevice
 from .playfield_monitor import LANE_CENTERS, PlayfieldDetector
 from .prepare_popup import CooperativePreparePopupDetector
 from .native_start_evidence import shared_start_evidence_writer
-from .native_feedback_ticket import FeedbackTicketStream, SingleTapEligibility
+from .native_feedback_ticket import (
+    DEFAULT_FEEDBACK_INITIAL_STEP_MS, FeedbackTicketStream, SingleTapEligibility, validate_feedback_initial_step,
+)
 from .native_observation_clock import (
     ClockIdentity, JLOG_DEVICE_UNCERTAINTY_S, ObservationClockSnapshot, device_time_enclosure,
 )
@@ -186,6 +188,10 @@ def resolve_native_start_gate_policy(run_mode: str | None) -> NativeStartGatePol
         stable_duration_ms=250.0,
         grace_ms=500.0,
     )
+
+
+class NativeStaleStartCaptureError(RuntimeError):
+    """协力首音截图迟到，无法安全发布已经逾期的首批输入。"""
 
 
 @dataclass(slots=True)
@@ -849,6 +855,7 @@ class NativeMinitouchBackend:
         timing_trial_enabled: bool | None = None,
         wait_jitter_trial_enabled: bool | None = None,
         life_feedback_enabled: bool = False,
+        life_feedback_initial_step_ms: int = DEFAULT_FEEDBACK_INITIAL_STEP_MS,
         observation_clock: Any | None = None,
         observation_clock_trial_enabled: bool | None = None,
         visual_refresh_enabled: bool | None = None,
@@ -873,6 +880,7 @@ class NativeMinitouchBackend:
         if not self._actions:
             raise RuntimeError("谱面没有可编译的动作")
         self._run_id = run_id or str(uuid.uuid4())
+        self._life_feedback_initial_step_ms = validate_feedback_initial_step(life_feedback_initial_step_ms)
         canonical_actions = self._actions
         self._simple_single_tap_feedback = bool(life_feedback_enabled)
         self._game_clock_feedback_enabled = not self._simple_single_tap_feedback
@@ -1009,6 +1017,7 @@ class NativeMinitouchBackend:
         self._native_adb_path, self._native_serial = adb_path, serial
         self._borrowed_device_lease = borrowed_device_lease
         self._native_device_claim = None
+        self._native_startup_rollback_status = None
         self._native_ownership_setup_done = threading.Event()
         self._native_ownership_setup_done.set()
         self._native_ownership_cleanup_done = threading.Event()
@@ -1058,13 +1067,18 @@ class NativeMinitouchBackend:
         self._require_probe = (
             device is None if require_probe is None else bool(require_probe)
         )
+        normalized_start_mode = str(start_gate_mode or "realtime").strip().lower()
         start_policy = resolve_native_start_gate_policy(start_gate_mode)
+        self._stale_start_capture_guard_enabled = (
+            normalized_start_mode == "cooperative"
+            and os.environ.get("MAABANGDREAM_NATIVE_STALE_START_GUARD") == "1"
+        )
         self._photogate = photogate or NativeStartPhotogate(
             stable_duration_ms=start_policy.stable_duration_ms,
             grace_ms=start_policy.grace_ms,
             mode=start_policy.mode,
             spatial_transition_guard=(
-                str(start_gate_mode).strip().lower() in ("cooperative", "versus")
+                normalized_start_mode in ("cooperative", "versus")
                 and native_start_shape_trial_enabled()
             ),
         )
@@ -1090,7 +1104,9 @@ class NativeMinitouchBackend:
         self._feedback_ticket_disabled_reason = None
         if self.life_feedback_enabled:
             try:
-                self._feedback_tickets = FeedbackTicketStream(self._run_id)
+                self._feedback_tickets = FeedbackTicketStream(self._run_id,
+                    random_great_feedback_guard_enabled=(
+                        self._random_great_identity_enabled and self._simple_single_tap_feedback))
                 self._feedback_single_taps = SingleTapEligibility(self._actions, allow_groups=False)
                 if self._random_great_identity_enabled and self._random_great_feedback_plan is not None:
                     from .native_feedback_ticket import FeedbackReceiptIdentityChain
@@ -2001,6 +2017,7 @@ class NativeMinitouchBackend:
             self._device_cleanup_lock.release()
 
     def _start_device(self) -> None:
+        startup_options = {}
         try:
             if getattr(self, '_native_clock_trial', False):
                 identity = probe_native_boot_identity(self._native_adb_path, self._native_serial,
@@ -2011,10 +2028,12 @@ class NativeMinitouchBackend:
                                              borrow=self._borrowed_device_lease)
                 claim.acquire()
                 self._native_device_claim = claim
-                if self._device_start_cancel.is_set():
+                if isinstance(self._device, NativeMinitouchDevice):
+                    startup_options["rollback_boot_id"] = claim.boot_id
+                elif self._device_start_cancel.is_set():
                     claim.stopping()
                     raise RuntimeError("Native 设备 claim 已取消")
-            self._device.start(cancel_event=self._device_start_cancel)
+            self._device.start(cancel_event=self._device_start_cancel, **startup_options)
             # 与 stop 的取消提交共用一把锁：锁内检查通过后可能先完成一次
             # probe，但 stop 必须随后取得锁并清理；反过来则绝不允许迟到发布。
             with self._device_start_commit_lock:
@@ -2035,7 +2054,10 @@ class NativeMinitouchBackend:
             )
         except Exception as exc:  # noqa: BLE001 - 后续由主循环 fail-closed
             cancelled = self._device_start_cancel.is_set()
-            cleanup_ok = self._stop_device_with_budget(0.5)
+            if startup_options:
+                self._native_startup_rollback_status = self._device.startup_rollback_status
+            cleanup_ok = (self._native_startup_rollback_status is None
+                          and self._stop_device_with_budget(0.5))
             if not cancelled:
                 self._device_error = f"{type(exc).__name__}: {exc}"
             print(
@@ -2043,7 +2065,8 @@ class NativeMinitouchBackend:
                 if cancelled
                 else "NativeMinitouch device_start_failed ",
                 f"reason={type(exc).__name__}: {exc} "
-                f"cleanup_confirmed={str(cleanup_ok).lower()}",
+                f"cleanup_confirmed={str(cleanup_ok).lower()} "
+                f"startup_rollback={self._native_startup_rollback_status}",
                 flush=True,
             )
             if getattr(self, '_native_clock_trial', False):
@@ -2103,8 +2126,19 @@ class NativeMinitouchBackend:
             terminal = source is None or source.wait_closed(3.1)
             claim = self._native_device_claim
             if claim is not None:
+                startup_rollback = getattr(self, "_native_startup_rollback_status", None) == "confirmed"
+                if startup_rollback:
+                    startup_worker = self._device_thread
+                    if startup_worker is not None:
+                        startup_worker.join(0.05)
+                    owner = self._publisher_thread
+                    startup_rollback = (startup_worker is not None and not startup_worker.is_alive()
+                                        and (owner is None or not owner.is_alive()))
+                    if not startup_rollback:
+                        self._native_ownership_warning = "startup-worker-not-terminal"
                 claim.stopping()
-                claim.finish(input_released=self._release_confirmed is True, observer_terminal=terminal)
+                claim.finish(input_released=self._release_confirmed is True, observer_terminal=terminal,
+                             startup_rollback=startup_rollback)
             if not terminal:
                 self._native_ownership_warning = 'observer-worker-not-terminal'
         except Exception as exc:
@@ -2292,7 +2326,8 @@ class NativeMinitouchBackend:
         if metadata.get("reused") is True:
             return None
         sequence = metadata.get("sequence")
-        if isinstance(sequence, int) and not isinstance(sequence, bool):
+        has_sequence = isinstance(sequence, int) and not isinstance(sequence, bool)
+        if has_sequence:
             previous = getattr(self, "_start_last_sequence", None)
             if previous is not None and sequence <= previous:
                 return None
@@ -2307,6 +2342,9 @@ class NativeMinitouchBackend:
         anchor = self._photogate.observe(image, now)
         if anchor is None:
             return None
+        # Profile 正值表示提前输入，仅在首拍映射时折入绝对锚点。
+        adjusted_anchor = float(anchor) - self._frozen_timing_offset_ms / 1000.0 - self._first_read_delay_s
+        remaining_budget_s = adjusted_anchor - float(now)
         self._start_decision = {
             "source": self._photogate.trigger_source,
             "confidence": (
@@ -2317,10 +2355,7 @@ class NativeMinitouchBackend:
             "gate_anchor_s": float(anchor),
             "profile_timing_offset_ms": self._frozen_timing_offset_ms,
             "first_read_delay_s": self._first_read_delay_s,
-            "remaining_first_action_budget_s": float(anchor)
-            - self._frozen_timing_offset_ms / 1000.0
-            - self._first_read_delay_s
-            - float(now),
+            "remaining_first_action_budget_s": remaining_budget_s,
         }
         try:
             packet = getattr(self._photogate, "_trigger_evidence", None)
@@ -2330,15 +2365,40 @@ class NativeMinitouchBackend:
                     "profile_timing_offset_ms": self._frozen_timing_offset_ms,
                     "probe_first_read_s": self._first_read_delay_s,
                     "chart_first_due_s": self._actions[0]["due_s"],
-                    "final_anchor_s": float(anchor) - self._frozen_timing_offset_ms / 1000 - self._first_read_delay_s}
+                    "final_anchor_s": adjusted_anchor}
                 rois = tuple(item[0] for item in self._photogate._diagnostic_pair)
-                packet["remaining_first_action_budget_s"] = packet["final_anchor_s"] - float(now)
+                packet["remaining_first_action_budget_s"] = remaining_budget_s
                 self._start_evidence_ticket = self._start_evidence_writer.submit(self._run_id, rois, packet)
         except Exception as exc:
             self._start_evidence_warning = "首音证据入队失败：" + type(exc).__name__
         if self._device_error is not None:
             self._state = "failed"
             raise RuntimeError(f"minitouch 准备失败：{self._device_error}")
+        if (
+            getattr(self, "_stale_start_capture_guard_enabled", False)
+            and self._photogate.trigger_source in ("interpolated-threshold-crossing", "direct-threshold")
+            and has_sequence
+            and sequence > 0
+            and metadata.get("reused") is False
+        ):
+            request_s = metadata.get("request_s")
+            done_observed_s = metadata.get("first_done_observed_s")
+            if (
+                type(request_s) in (int, float)
+                and type(done_observed_s) in (int, float)
+                and 0.0 <= request_s <= done_observed_s <= now
+                and math.isfinite(now)
+            ):
+                # 完成观察是宿主轮询上界，只量化等待，不用于重估游戏相位。
+                request_wait_s = done_observed_s - request_s
+                self._start_decision["capture_request_wait_ms"] = request_wait_s * 1000.0
+                if request_wait_s >= 0.500 and remaining_budget_s <= -0.150:
+                    self._start_decision["rejection_reason"] = "stale-async-start-capture"
+                    self._state = "failed"
+                    raise NativeStaleStartCaptureError(
+                        f"首音截图请求等待 {request_wait_s * 1000.0:.1f} ms，"
+                        f"首动作预算 {remaining_budget_s * 1000.0:+.1f} ms，已拒绝启动 Native 输入"
+                    )
         if (
             self._device_thread is None
             or self._device_thread.is_alive()
@@ -2349,13 +2409,7 @@ class NativeMinitouchBackend:
             self._emergency_stop_device_with_budget(0.05)
             raise RuntimeError("首拍已到达，但 minitouch 尚未 ready")
         self._state = "ready"
-        # 沿用 Profile 既有语义：正值表示提前输入。该值只在
-        # 首拍映射时折入绝对锚点，本局内不再学习或改写。
-        return (
-            float(anchor)
-            - self._frozen_timing_offset_ms / 1000.0
-            - self._first_read_delay_s
-        )
+        return adjusted_anchor
 
     def _publish_chunk(self, chunk: dict[str, object]) -> bool:
         """把 C++ 会话给出的绝对时刻切片编译后原样追加到设备队列。"""
@@ -3461,7 +3515,21 @@ class NativeMinitouchBackend:
                 if not callable(capability) or capability() is not True:
                     self._phase_request_rejection_reason = 'ordinary-single-tap-large-step-unavailable'
                     return False
-                allowed_steps = {-60., -30., 30., 60.}
+                initial_step = getattr(self, '_life_feedback_initial_step_ms', DEFAULT_FEEDBACK_INITIAL_STEP_MS)
+                allowed_steps = {-initial_step, -30., 30., initial_step}
+                if delta_ms not in allowed_steps:
+                    self._phase_request_rejection_reason = "invalid-request"
+                    return False
+                if delta_ms in {-45., 45.}:
+                    capability = getattr(self._session, 'supports_ordinary_single_tap_45ms', None)
+                    if not callable(capability) or capability() is not True:
+                        self._phase_request_rejection_reason = 'ordinary-single-tap-45ms-unavailable'
+                        return False
+                elif delta_ms not in {-30., 30.}:
+                    capability = getattr(self._session, 'supports_ordinary_single_tap_step_range', None)
+                    if not callable(capability) or capability() is not True:
+                        self._phase_request_rejection_reason = 'ordinary-single-tap-step-range-unavailable'
+                        return False
             if delta_ms not in allowed_steps or not math.isfinite(observed_s):
                 self._phase_request_rejection_reason = "invalid-request"
                 return False
@@ -3612,7 +3680,9 @@ class NativeMinitouchBackend:
 
                     if self._phase_slot is None:
                         return
-                    if self.phase_status_snapshot().feedback_source == 'ordinary-single-tap' and abs(delta_ms) in {30., 60.}:
+                    if (self.phase_status_snapshot().feedback_source == 'ordinary-single-tap'
+                            and abs(delta_ms) in {30., getattr(
+                                self, '_life_feedback_initial_step_ms', DEFAULT_FEEDBACK_INITIAL_STEP_MS)}):
                         reason = str(self._session.apply_future_phase(delta_ms, contact_available_s, post_random_display_large_step=True))
                     else:
                         reason = str(self._session.apply_future_phase(delta_ms, contact_available_s))
@@ -3722,7 +3792,10 @@ class NativeMinitouchBackend:
                         self._native_ownership_finisher.start()
                     except Exception as exc:
                         self._native_ownership_warning = 'claim-finisher-start:' + type(exc).__name__
-                    if self._borrowed_device_lease is None and self._release_confirmed is True:
+                    if self._borrowed_device_lease is None and (
+                        self._release_confirmed is True
+                        or getattr(self, "_native_startup_rollback_status", None) == "confirmed"
+                    ):
                         self.wait_native_cleanup(3.2)
 
     def _stop_input(self) -> None:
@@ -4101,6 +4174,7 @@ class NativeMinitouchBackend:
             "state": self._state,
             "native_device_claim": (dict(required=True, ownership_warning=self._native_ownership_warning,
                 cleanup_done=self._native_ownership_cleanup_done.is_set(),
+                startup_rollback_status=getattr(self, "_native_startup_rollback_status", None),
                 **(self._native_device_claim.report() if self._native_device_claim is not None
                    else {'state': 'not-acquired', 'settled': self._native_ownership_setup_done.is_set()}))
                 if getattr(self, '_native_clock_trial', False) else {'required': False}),

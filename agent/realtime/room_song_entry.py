@@ -218,6 +218,9 @@ class RoomEntryEvidence:
         self.enabled = any(settings.get(key, False) for key in
                            ("debug_recording", "opening_recording", "diagnostic_trace"))
         self.keep_frames = bool(settings.get("debug_recording") or settings.get("opening_recording"))
+        self.adaptive_diagnostics = bool(settings.get("adaptive_diagnostics", False)) or (
+            mode == "cooperative" and not self.keep_frames
+        )
         self.attempt_id = f"room-entry-{mode}-{datetime.now():%Y%m%d-%H%M%S-%f}-{uuid4().hex[:8]}"
         self.mode, self.task_id, self.positions = mode, task_id, positions
         self.phase, self.target = "room-entry", None
@@ -298,6 +301,10 @@ class RoomEntryEvidence:
         # 失败和停止只落盘已缓存末帧；不从这里截图或访问 LiveRun。
         events.append(terminal)
         last_image = self.last_image
+        # 按需档正常完成只保存阶段和模板分数，异常才保存已缓存的房间截图。
+        if self.adaptive_diagnostics and outcome == "completed":
+            frames = {}
+            last_image = None
         destination = root / self.attempt_id
 
         def write_cached():

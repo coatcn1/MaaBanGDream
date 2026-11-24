@@ -13,11 +13,12 @@ from test_native_life_feedback import _feedback_image
 from test_native_random_great import ENABLED, write_chart
 
 
-def fixture():
+def fixture(initial_step=45):
     stream = FeedbackTicketStream("simple")
     requests = []
     state = [NativePhaseStatus("simple", 0)]
     backend = SimpleNamespace(_simple_single_tap_feedback=True, _run_id="simple",
+        _life_feedback_initial_step_ms=initial_step,
         _native_input_stop_requested=threading.Event(), _random_great_feedback_enabled=True,
         _random_great_feedback_disabled_reason=None,
         feedback_observation_snapshot=stream.snapshot, phase_status_snapshot=lambda: state[0],
@@ -31,9 +32,11 @@ def fixture():
 
 def observe(stream, sampler, token, at, direction=TimingFeedback.SLOW, *, intentional=False, reused=False):
     receipt = dict(action_token=token, planned_engine_s=at, action_kind="tap", command="d",
-        feedback_single_tap=not intentional)
+        feedback_single_tap=not intentional, feedback_identity_trusted=True,
+        intentional_random_great=intentional)
     stream.publish_receipts([receipt], final_chunk=True)
-    stream.observe_commit([receipt], at, 1, 0., execution_engine_s=at, execution_engine_uncertainty_ms=0.)
+    stream.observe_commit([receipt], at, 1, 0., device_actual_s=at,
+        execution_engine_s=at, execution_engine_uncertainty_ms=0.)
     due = sampler.capture_due(at + .001)
     now = at + .055
     if due is not None:
@@ -45,9 +48,11 @@ def observe(stream, sampler, token, at, direction=TimingFeedback.SLOW, *, intent
     return due
 
 
-@pytest.mark.parametrize("direction,delta", [(TimingFeedback.SLOW, -60.), (TimingFeedback.FAST, 60.)])
-def test_three_executed_ordinary_keys_request_without_perfect_and_then_new_keys_30(direction, delta):
-    backend, stream, state, sampler, requests = fixture()
+@pytest.mark.parametrize("direction,delta", [(TimingFeedback.SLOW, -45.), (TimingFeedback.FAST, 45.)])
+@pytest.mark.parametrize("initial_step", [30, 37, 45])
+def test_three_executed_ordinary_keys_request_without_perfect_and_then_new_keys_30(direction, delta, initial_step):
+    delta = initial_step if delta > 0 else -initial_step
+    backend, stream, state, sampler, requests = fixture(initial_step)
     for token in range(1, 4):
         observe(stream, sampler, token, token * .1, direction)
     assert [r[0] for r in requests] == [delta]
@@ -59,7 +64,7 @@ def test_three_executed_ordinary_keys_request_without_perfect_and_then_new_keys_
     sampler.refresh_phase_status(.4)
     for token in range(4, 7):
         observe(stream, sampler, token, token * .1, direction)
-    assert [r[0] for r in requests] == [delta, delta / 2]
+    assert [r[0] for r in requests] == [delta, 30. if delta > 0 else -30.]
     assert requests[1][2]["ordinary_action_tokens"] == (4, 5, 6)
 
 
@@ -96,7 +101,7 @@ def test_mixed_direction_restarts_three_key_trend():
         observe(stream, sampler, token, token * .1, direction)
     assert not requests
     observe(stream, sampler, 6, .6)
-    assert [r[0] for r in requests] == [-60.]
+    assert [r[0] for r in requests] == [-45.]
     assert requests[0][2]["ordinary_action_tokens"] == (4, 5, 6)
 
 
@@ -117,7 +122,7 @@ def test_normal_native_random_configuration_selects_simple_path_without_trial_fl
         monkeypatch.delenv(name, raising=False)
     backend = NativeMinitouchBackend(write_chart(tmp_path), adb_path="unused", serial="unused",
         device=SimpleNamespace(request_reset=lambda: True), life_feedback_enabled=True,
-        random_great_options=ENABLED, start_gate_mode="formal", expected_notes=100,
+        random_great_options=ENABLED, start_gate_mode="cooperative", expected_notes=100,
         observation_clock_trial_enabled=True, visual_refresh_enabled=True)
     sampler = NativeLifeFeedback(backend)
     assert backend._random_great_feedback_enabled
@@ -127,6 +132,7 @@ def test_normal_native_random_configuration_selects_simple_path_without_trial_fl
     assert not hasattr(backend, "request_input_probe")
     assert not hasattr(backend, "configure_ordinary_proof")
     assert backend._session.supports_post_random_display_large_step()
+    assert backend._session.supports_ordinary_single_tap_45ms()
 
 
 def test_observer_real_backend_mailbox_requires_three_executed_tokens_and_large_step_capability():
@@ -135,18 +141,35 @@ def test_observer_real_backend_mailbox_requires_three_executed_tokens_and_large_
     backend._simple_single_tap_feedback = True
     backend._feedback_tickets = FeedbackTicketStream("test")
     backend._session.supports_post_random_display_large_step = lambda: True
+    backend._session.supports_ordinary_single_tap_45ms = lambda: True
     backend._session.apply_future_phase = lambda *args, **kwargs: calls.append((args, kwargs)) or "applied"
     sampler = NativeLifeFeedback(backend, detector=SimpleNamespace(scores=lambda _: dict(category="GREAT")))
     sampler.observe_scene(0, visible=True)
-    assert not backend.request_future_phase(-60, .1, ordinary_action_tokens=(1, 2, 3))
+    assert not backend.request_future_phase(-45, .1, ordinary_action_tokens=(1, 2, 3))
     assert backend._phase_request_rejection_reason == "ordinary-single-tap-not-executed"
     for token in range(1, 4):
         observe(backend._feedback_tickets, sampler, token, token * .1)
-    assert backend._phase_slot[3] == -60
+    assert backend._phase_slot[3] == -45
     assert backend.phase_status_snapshot().feedback_source == "ordinary-single-tap"
     assert not calls
     backend._consume_phase_candidate()
-    assert calls == [((-60., .5), dict(post_random_display_large_step=True))]
+    assert calls == [((-45., .5), dict(post_random_display_large_step=True))]
+
+
+def test_old_native_capability_rejects_45ms_before_applying():
+    from test_native_life_feedback import _phase_backend
+    backend, calls = _phase_backend()
+    backend._simple_single_tap_feedback = True
+    backend._feedback_tickets = FeedbackTicketStream("test")
+    backend._session.supports_post_random_display_large_step = lambda: True
+    backend._session.supports_ordinary_single_tap_45ms = None
+    for token in range(1, 4):
+        backend._feedback_tickets.observe_commit(
+            [dict(action_token=token, planned_engine_s=token * .1, action_kind="tap",
+                command="d", feedback_single_tap=True)], token * .1, 1, 0.)
+    assert not backend.request_future_phase(-45., .4, ordinary_action_tokens=(1, 2, 3))
+    assert backend._phase_request_rejection_reason == "ordinary-single-tap-45ms-unavailable"
+    assert backend._phase_slot is None and not calls
 
 
 def test_render_host_upper_bound_cannot_prove_engine_effect_execution():
@@ -159,6 +182,23 @@ def test_render_host_upper_bound_cannot_prove_engine_effect_execution():
     assert not sampler._source_follows_effect(source)
     assert not sampler._source_follows_effect(replace(source, execution_engine_s=None))
     assert sampler._source_follows_effect(replace(source, execution_engine_s=10.1))
+
+
+def test_random_great_guard_preserves_previous_votes_and_next_valid_vote_completes_trend():
+    _, _, _, sampler, requests = fixture()
+    stream = FeedbackTicketStream("simple", random_great_feedback_guard_enabled=True)
+    sampler.backend.feedback_observation_snapshot = stream.snapshot
+    observe(stream, sampler, 1, .1)
+    observe(stream, sampler, 2, .2)
+    assert sampler.summary["direction_votes"] == 2
+    observe(stream, sampler, 3, .3, intentional=True)
+    observe(stream, sampler, 4, .4)
+    observe(stream, sampler, 5, .599999)
+    assert sampler.summary["direction_votes"] == 2
+    assert not requests
+    observe(stream, sampler, 6, .6)
+    assert [row[0] for row in requests] == [-45.]
+    assert requests[0][2]["ordinary_action_tokens"] == (1, 2, 6)
 
 
 def test_phase_limit_at_180_keeps_fast_blocked_until_full_next_step_room():
@@ -175,13 +215,16 @@ def test_phase_limit_at_180_keeps_fast_blocked_until_full_next_step_room():
     assert sampler._blocked_direction is None
 
 
-@pytest.mark.parametrize("direction, expected", [(TimingFeedback.SLOW, -60.), (TimingFeedback.FAST, 60.)])
-def test_real_cpp_receipts_feed_three_votes_and_apply_once(direction, expected):
+@pytest.mark.parametrize("direction, expected", [(TimingFeedback.SLOW, -45.), (TimingFeedback.FAST, 45.)])
+@pytest.mark.parametrize("initial_step", [30, 37, 45])
+def test_real_cpp_receipts_feed_three_votes_and_apply_once(direction, expected, initial_step):
     from agent.realtime.native_feedback_ticket import FeedbackReceiptIdentityChain
     from agent.realtime.native_random_great import build_random_great_feedback_plan
     from test_native_life_feedback import _phase_backend
     backend, _ = _phase_backend()
     backend._simple_single_tap_feedback = True
+    backend._life_feedback_initial_step_ms = initial_step
+    expected = initial_step if expected > 0 else -initial_step
     backend._feedback_tickets = FeedbackTicketStream("test")
     actions = [dict(kind="tap", due_s=at, lane=index, contact=-1, note_index=index,
         target_x=190 + 150 * index, flick_direction=None) for index, at in enumerate((.1, .2, .3))]

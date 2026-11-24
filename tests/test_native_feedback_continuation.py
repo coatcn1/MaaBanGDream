@@ -126,16 +126,16 @@ def test_large_production_steps_respect_200_limit_and_reverse_releases_headroom(
         start = .1 + index * .8
         separated_pair(sampler, TimingFeedback.FAST, start, chunk=index + 1)
         consume(start, index + 1)
-    assert backend._session.future_phase_offset_ms == 180
+    assert backend._session.future_phase_offset_ms == 195
     assert sampler._blocked_direction is TimingFeedback.FAST
     separated_pair(sampler, TimingFeedback.SLOW, 11.3, chunk=15)
     assert sampler._blocked_direction is TimingFeedback.FAST
     consume(11.3, 15)
-    assert backend._session.future_phase_offset_ms == 150
+    assert backend._session.future_phase_offset_ms == 165
     assert sampler._blocked_direction is None
     separated_pair(sampler, TimingFeedback.FAST, 12.1, chunk=16)
     consume(12.1, 16)
-    assert backend._session.future_phase_offset_ms == 180
+    assert backend._session.future_phase_offset_ms == 195
 
 
 def test_request_cooldown_never_retries_from_timer_or_old_blank_frames():

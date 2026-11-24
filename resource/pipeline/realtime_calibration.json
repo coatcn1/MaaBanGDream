@@ -134,7 +134,8 @@
     "custom_action_param": {
       "debug_recording": false,
       "diagnostic_trace": true,
-      "opening_recording": false
+      "opening_recording": false,
+      "adaptive_diagnostics": false
     },
     "next": [
       "RealtimeCalibrationRun"

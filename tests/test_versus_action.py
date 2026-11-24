@@ -71,15 +71,16 @@ def test_versus_interface_exposes_room_types_difficulties_and_flow_options():
         "Unspecified", "Random", "Current",
     ]
     debug = options["VersusDebug"]
-    assert debug["default_case"] == "Opening"
+    assert debug["default_case"] == "Adaptive"
     assert {
         c["name"]: c["pipeline_override"]["VersusDebugConfigure"]["custom_action_param"]
         for c in debug["cases"]
     } == {
-        "Light": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": False},
-        "Off": {"debug_recording": False, "diagnostic_trace": False, "opening_recording": False},
-        "Full": {"debug_recording": True, "diagnostic_trace": True, "opening_recording": False},
-        "Opening": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": True},
+        "Light": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": False, "adaptive_diagnostics": False},
+        "Off": {"debug_recording": False, "diagnostic_trace": False, "opening_recording": False, "adaptive_diagnostics": False},
+        "Full": {"debug_recording": True, "diagnostic_trace": True, "opening_recording": False, "adaptive_diagnostics": False},
+        "Opening": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": True, "adaptive_diagnostics": False},
+        "Adaptive": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": True, "adaptive_diagnostics": True},
     }
     count = options["VersusCount"]
     assert count["inputs"][0]["verify"] == r"^(?:0|[1-9][0-9]{0,2})$"
@@ -164,7 +165,7 @@ def test_agent_server_registers_versus_action():
 
 def test_versus_play_params_carry_the_versus_run_mode():
     params = versus_play_params({"difficulty": "Expert", "debug_recording": False,
-                                 "diagnostic_trace": True, "opening_recording": False})
+                                 "diagnostic_trace": True, "opening_recording": False, "adaptive_diagnostics": False})
     assert params["run_mode"] == "versus"
     assert params["difficulty"] == "Expert"
     assert params["confirm_final_cover"] is True

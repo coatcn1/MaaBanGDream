@@ -73,7 +73,7 @@ from .run_reporting import (
 )
 from .timing_feedback import AdaptiveTimingController, TimingFeedbackDetector
 from .touch_planner import RealtimePlanner, sliding_holds_enabled
-from .runtime_options import debug_recording_enabled, diagnostic_trace_enabled, opening_recording_enabled
+from .runtime_options import adaptive_diagnostics_enabled, debug_recording_enabled, diagnostic_trace_enabled, opening_recording_enabled
 from .song_title_ocr import (
     FINAL_COVER_TITLE_ROI,
     recognize_song_title,
@@ -1432,7 +1432,7 @@ def _plausible_result(
     return True, None
 
 
-COOPERATIVE_RESULT_READ_TIMEOUT_SECONDS = 3.0
+RESULT_JUDGEMENT_READ_TIMEOUT_SECONDS = 3.0
 
 
 def _read_stable_cooperative_judgements(
@@ -1444,7 +1444,7 @@ def _read_stable_cooperative_judgements(
     candidate_at = 0.0
     image = first_image
     interval = max(0.05, float(stability_interval_seconds))
-    read_deadline = min(deadline, clock() + COOPERATIVE_RESULT_READ_TIMEOUT_SECONDS)
+    read_deadline = min(deadline, clock() + RESULT_JUDGEMENT_READ_TIMEOUT_SECONDS)
     last_reason = "no judgement sample within read budget"
 
     def unreadable(reason):
@@ -1544,6 +1544,7 @@ def collect_result(
     clock=time.monotonic,
     before_input=lambda: None,
     timeout_seconds: float = 60.0,
+    pggbm_read_timeout_seconds: float | None = None,
     slow_phase_seconds: float = 30.0,
     slow_interval_seconds: float = 1.5,
     medium_interval_seconds: float = 1.0,
@@ -1698,6 +1699,10 @@ def collect_result(
                     f"中间返回{navigation.back_attempts}次"
                 ),
             )
+        if pggbm_read_timeout_seconds is not None:
+            # 页面已确认，读分失稳不能占满等待结算页出现的预算。
+            deadline = min(deadline, clock() + pggbm_read_timeout_seconds)
+            last_reason = "PGGBM 已识别，判定数字未在读取时限内稳定"
 
     def post_result_back() -> None:
         accelerated_back(
@@ -2086,7 +2091,7 @@ def collect_result(
                 )
             continue
         candidate = None
-        page_state = "unknown"
+        page_state = "judgement-details-invalid" if details_marker_visible else "unknown"
         interval = min(slow_interval_seconds, medium_interval_seconds)
         if not _wait_until(
             min(deadline, now + interval),
@@ -2526,6 +2531,7 @@ class RealtimeProfilePlay(CustomAction):
                 params.get("debug_recording", False) or debug_recording_enabled(argv)
             )
             opening_recording = params.get("opening_recording", False) is True or opening_recording_enabled(argv)
+            adaptive_diagnostics = params.get("adaptive_diagnostics", False) is True or adaptive_diagnostics_enabled(argv)
             diagnostic_trace = bool(
                 opening_recording or debug_recording
                 or params.get(
@@ -2580,6 +2586,12 @@ class RealtimeProfilePlay(CustomAction):
                     recorder = _create_debug_recorder(
                         PROJECT_ROOT / "debug" / "recordings",
                         opening_seconds=20.0, session_kind=_recording_kind(run_mode),
+                        compact_on_success=adaptive_diagnostics,
+                        normal_completion_gate=lambda: (
+                            not native_requested or not _native_execution_gate_failures(
+                                dict(native_backend.report())
+                            )
+                        ),
                     )
                 except Exception as exc:
                     print(f"OpeningRecorder create_warning={exc}",flush=True)
@@ -3671,6 +3683,9 @@ class RealtimeProfilePlay(CustomAction):
                     lambda: context.tasker.stopping,
                     before_input=lambda: _fresh_foreground_controller(context),
                     timeout_seconds=180.0,
+                    pggbm_read_timeout_seconds=(
+                        None if params.get("calibration_report") else RESULT_JUDGEMENT_READ_TIMEOUT_SECONDS
+                    ),
                     expected_notes=(
                         selected_chart.expected_notes
                         if selected_chart is not None else None
@@ -3684,7 +3699,9 @@ class RealtimeProfilePlay(CustomAction):
                         stopping=lambda: context.tasker.stopping,
                     ),
                 )
-                if recorder is not None and outcome.image is not None:
+                if recorder is not None and outcome.image is not None and not (
+                    adaptive_diagnostics and outcome.status is ResultCollectionStatus.STABLE
+                ):
                     _recorder_checkpoint(
                         recorder,
                         outcome.image,
@@ -3851,6 +3868,11 @@ class RealtimeProfilePlay(CustomAction):
                 result_status="stable",
             )
             if screenshot_error is not None:
+                if adaptive_diagnostics and recorder is not None:
+                    _recorder_checkpoint(
+                        recorder, result, "result", "screenshot-error",
+                        details={"reason": screenshot_error},
+                    )
                 stable_payload["result_screenshot_error"] = screenshot_error
             _write_json_atomic(result_report_path, stable_payload)
             if screenshot_error is not None:

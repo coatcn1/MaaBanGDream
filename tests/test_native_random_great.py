@@ -13,7 +13,7 @@ from agent.realtime.native_prearm import frozen_native_runtime_options, resolve_
 from agent.realtime.native_random_great import (
     RANDOM_GREAT_DEFAULTS, RANDOM_GREAT_MODES, chart_random_great_inputs,
     plan_random_great, validate_random_great_options, build_random_great_safety_context,
-    _balanced_sample,
+    _balanced_sample, _tail_candidate_pool,
 )
 from agent.realtime.profile_store import RealtimeProfileStore
 
@@ -29,7 +29,7 @@ def action(due, index, kind="tap", contact=-1):
 
 
 def plan(actions, **overrides):
-    return plan_random_great(actions, **(dict(options=ENABLED, mode="formal", run_id="random-great-test",
+    return plan_random_great(actions, **(dict(options=ENABLED, mode="cooperative", run_id="random-great-test",
         level=26, total_judgements=100, ordinary_single_note_indices=set(range(1000))) | overrides))
 
 
@@ -55,13 +55,15 @@ def test_configurable_formula_and_missing_level_fallback():
     assert fallback["level_source"] == "base-fallback"
 
 
-@pytest.mark.parametrize("mode", sorted(RANDOM_GREAT_MODES))
-def test_only_formal_modes_apply(mode):
+@pytest.mark.parametrize("mode", ["cooperative", "versus"])
+def test_only_multiplayer_modes_apply(mode):
+    assert RANDOM_GREAT_MODES == frozenset({"cooperative", "versus"})
     _, report = plan([action(i, i) for i in range(100)], mode=mode)
     assert report["enabled"] and report["selected"] == 2
 
 
-@pytest.mark.parametrize("mode", ["rehearsal", "calibration-formal", "calibration-rehearsal", "legacy", "unknown", ""])
+@pytest.mark.parametrize("mode", ["formal", "challenge", "continuous", "medley",
+    "rehearsal", "calibration-formal", "calibration-rehearsal", "legacy", "unknown", ""])
 def test_other_modes_preserve_exact_actions(mode):
     actions = [action(i, i) for i in range(100)]
     result, report = plan(actions, mode=mode)
@@ -75,6 +77,16 @@ def test_disabled_default_does_not_modify_or_reorder_actions():
     assert result == original == actions
     assert all(left is right for left, right in zip(result, actions))
     assert report["selected"] == 0
+
+
+def test_move_only_actions_keep_no_selection_report_without_tail_endpoints():
+    actions = [action(1., 0, kind="move", contact=0), action(2., 0, kind="move", contact=0)]
+    result, report = plan(actions)
+    assert result == actions
+    assert all(before is after for before, after in zip(actions, result))
+    assert report["desired"] == report["shortfall"] == 2
+    assert report["selected"] == report["eligible"] == 0
+    assert report["preferred_tail_start_s"] is None and report["selection_pool"] == 0
 
 
 @pytest.mark.parametrize("key,value", [
@@ -98,7 +110,7 @@ def test_old_options_roundtrip_and_all_fields_freeze_before_next_run(tmp_path):
     assert {key: old[key] for key in RANDOM_GREAT_DEFAULTS} == RANDOM_GREAT_DEFAULTS
     options = old | ENABLED | {"native_random_great_base_percent": 3.5, "native_random_great_level_start": 25,
                               "native_random_great_per_level_percent": .5, "native_random_great_max_percent": 7,
-                              "native_random_great_offset_ms": 50}
+                              "native_random_great_offset_ms": 50, "native_life_feedback_initial_step_ms": 37}
     assert store.update_runtime_options(options) == options
     run = reset_live_run(mode="formal", difficulty="Expert")
     assert frozen_native_runtime_options(run, options) == options
@@ -120,6 +132,72 @@ def test_same_run_reproducible_other_runs_randomized_without_mutation():
         assert old | {"due_s": new["due_s"]} == new
         assert abs(new["due_s"] - old["due_s"]) == pytest.approx(.060)
     assert [row["due_s"] for row in first] == sorted(row["due_s"] for row in first)
+
+
+def test_sufficient_safe_tail_keeps_random_greats_in_last_20_percent():
+    actions = [action(i, i) for i in range(100)]
+    for seed in range(20):
+        result, report = plan(actions, level=34, run_id=f"tail-{seed}")
+        changed = [before for before, after in zip(actions, result) if before != after]
+        assert report["selection_policy"] == "tail-preferred-v1"
+        assert report["preferred_tail_start_s"] == pytest.approx(79.2)
+        assert report["selection_pool_start_s"] == 80
+        assert report["selection_pool"] == report["eligible_in_preferred_tail"] == 19
+        assert report["desired"] == report["balanced_target"] == report["selected"] == 10
+        assert report["selected_in_preferred_tail"] == 10 and report["selected_before_preferred_tail"] == 0
+        assert all(before["due_s"] >= 80 for before in changed)
+        assert result[0] == actions[0] and result[-1] == actions[-1]
+        assert abs(report["fast"] - report["slow"]) <= 1
+
+
+def test_tail_widens_only_to_latest_pool_edge_that_preserves_balanced_quota():
+    actions = [action(i, i) for i in range(10)]
+    signs = [(-1, 1), (-1, 1), (-1,), (1,), (1,), (-1, 1), (-1,), (-1,), (-1,), (-1,)]
+    candidates = [(i, allowed, False) for i, allowed in enumerate(signs)]
+    pool, target = _tail_candidate_pool(candidates, actions, 8., 6)
+    assert target == 6
+    assert [row[0] for row in pool] == list(range(3, 10))
+    for seed in range(20):
+        selected = _balanced_sample(pool, 6, random.Random(seed))
+        assert len(selected) == 6
+        assert sum(sign < 0 for _, sign in selected) == 3
+        assert all(sign in row[1] for row, sign in selected)
+    assert len(_balanced_sample(pool[1:], 6, random.Random(0))) < target
+
+
+def test_one_sided_tail_widens_without_inventing_more_balanced_candidates():
+    actions = [action(i, i) for i in range(10)]
+    candidates = [(0, (1,), False)] + [(i, (-1,), False) for i in range(1, 10)]
+    pool, target = _tail_candidate_pool(candidates, actions, 8., 8)
+    assert pool == candidates and target == 3
+    for seed in range(20):
+        selected = _balanced_sample(pool, 8, random.Random(seed))
+        assert len(selected) == 3
+        assert abs(sum(sign < 0 for _, sign in selected) - sum(sign > 0 for _, sign in selected)) == 1
+
+
+def test_tail_shortfall_retains_all_available_safe_singles_and_reports_widening():
+    actions = [action(i, i) for i in range(5)]
+    _, report = plan(actions, level=28)
+    assert report["desired"] == 4
+    assert report["eligible"] == report["balanced_target"] == report["selected"] == 3
+    assert report["shortfall"] == 1
+    assert report["selection_pool_start_s"] == 1
+    assert report["selected_in_preferred_tail"] == 0
+    assert report["selected_before_preferred_tail"] == 3
+
+
+def test_tail_pool_keeps_odd_extra_direction_random_when_both_signs_are_safe():
+    actions = [action(i, i) for i in range(10)]
+    candidates = [(i, (-1, 1), False) for i in range(6, 10)]
+    pool, target = _tail_candidate_pool(candidates, actions, 6., 3)
+    assert pool == candidates and target == 3
+    fast_counts = set()
+    for seed in range(30):
+        selected = _balanced_sample(pool, 3, random.Random(seed))
+        fast_counts.add(sum(sign < 0 for _, sign in selected))
+        assert len(selected) == 3
+    assert fast_counts == {1, 2}
 
 
 def test_raw_visible_points_include_slide_middle_and_ignore_hidden_and_degenerate_types(tmp_path):
@@ -190,7 +268,9 @@ def write_chart(tmp_path):
 def test_real_backend_disables_phase_feedback_but_default_and_modes_do_not(tmp_path):
     path = write_chart(tmp_path)
     baseline = native_engine.compile_chart(path).compile_actions({})
-    for mode, options, expected in (("formal", {}, False), ("formal", ENABLED, True),
+    for mode, options, expected in (("cooperative", {}, False), ("cooperative", ENABLED, True),
+            ("versus", ENABLED, True), ("formal", ENABLED, False), ("challenge", ENABLED, False),
+            ("continuous", ENABLED, False), ("medley", ENABLED, False),
             ("calibration-formal", ENABLED, False), ("rehearsal", ENABLED, False)):
         backend = NativeMinitouchBackend(path, adb_path="unused", serial="unused",
             device=SimpleNamespace(request_reset=lambda: True), life_feedback_enabled=True,
@@ -199,6 +279,7 @@ def test_real_backend_disables_phase_feedback_but_default_and_modes_do_not(tmp_p
         assert backend.report()["native_random_great"]["enabled"] is expected
         assert backend.life_feedback_enabled
         assert (backend._actions != baseline) is expected
+        assert backend._feedback_tickets.report()["random_great_feedback_guard"]["enabled"] is expected
         if expected:
             assert backend.request_future_phase(15, 1) is False
             assert backend._consume_phase_candidate() is None
@@ -214,7 +295,7 @@ def test_planning_or_denominator_failure_keeps_original_actions_and_task(tmp_pat
         monkeypatch.setattr("agent.realtime.native_random_great.plan_random_great", lambda *a, **kw: (_ for _ in ()).throw(OSError("planner fault")))
     backend = NativeMinitouchBackend(path, adb_path="unused", serial="unused",
         device=SimpleNamespace(request_reset=lambda: True), life_feedback_enabled=True,
-        random_great_options=ENABLED, start_gate_mode="formal", chart_level=26,
+        random_great_options=ENABLED, start_gate_mode="cooperative", chart_level=26,
         expected_notes=99 if failure == "count" else 100,
         observation_clock_trial_enabled=True, visual_refresh_enabled=True)
     assert backend._actions == baseline
@@ -229,7 +310,7 @@ def test_optional_plan_logging_failure_keeps_complete_valid_plan(tmp_path, monke
     monkeypatch.setattr("builtins.print", lambda *a, **kw: (_ for _ in ()).throw(OSError("stdout fault")))
     backend = NativeMinitouchBackend(path, adb_path="unused", serial="unused",
         device=SimpleNamespace(request_reset=lambda: True), life_feedback_enabled=True,
-        random_great_options=ENABLED, start_gate_mode="formal", chart_level=26, expected_notes=100,
+        random_great_options=ENABLED, start_gate_mode="cooperative", chart_level=26, expected_notes=100,
         observation_clock_trial_enabled=True, visual_refresh_enabled=True)
     report = backend.report()["native_random_great"]
     assert report["status"] == "planned" and report["selected"] == 2
@@ -405,7 +486,7 @@ def test_new_backend_plan_freezes_offsets_and_unknown_path_falls_back_with_origi
     options = ENABLED | {"native_random_great_base_percent": 20, "native_random_great_max_percent": 20}
     kwargs = dict(adb_path="unused", serial="unused", device=SimpleNamespace(request_reset=lambda: True),
         life_feedback_enabled=True, observation_clock_trial_enabled=True, visual_refresh_enabled=True,
-        random_great_options=options, start_gate_mode="formal", chart_level=26, expected_notes=5)
+        random_great_options=options, start_gate_mode="cooperative", chart_level=26, expected_notes=5)
     backend = NativeMinitouchBackend(path, **kwargs)
     assert backend._random_great_report["selected_with_active_hold"] == 1
     frozen = copy.deepcopy(backend._actions)
@@ -427,12 +508,20 @@ def test_balanced_direction_quotas_choose_feasible_candidates_before_sampling(fa
     candidates = [(i, (-1,), False) for i in range(fast_only)]
     candidates += [(i + 100, (1,), False) for i in range(slow_only)]
     candidates += [(i + 200, (-1, 1), False) for i in range(both)]
+    last_index = max((row[0] for row in candidates), default=0)
+    actions = [action(i, i) for i in range(last_index + 1)]
+    pool, target = _tail_candidate_pool(candidates, actions, last_index * .8, desired)
+    assert target == expected
     for seed in range(20):
         selected = _balanced_sample(candidates, desired, random.Random(seed))
         assert len(selected) == expected
         assert len({row[0] for row, _ in selected}) == expected
         assert abs(sum(sign == -1 for _, sign in selected) - sum(sign == 1 for _, sign in selected)) <= 1
         assert all(sign in row[1] for row, sign in selected)
+        tail_selected = _balanced_sample(pool, desired, random.Random(seed))
+        assert len(tail_selected) == expected
+        assert abs(sum(sign == -1 for _, sign in tail_selected) - sum(sign == 1 for _, sign in tail_selected)) <= 1
+        assert all(sign in row[1] for row, sign in tail_selected)
 
 
 @requires_native
@@ -506,7 +595,7 @@ def test_306_selected_random_keys_keep_requested_offset_and_source_identity(offs
     original = native_engine.compile_chart(path).compile_actions({})
     ordinary, total = chart_random_great_inputs(path)
     shifted, report = plan_random_great(original, options=ENABLED | {"native_random_great_offset_ms": offset},
-        mode="formal", run_id="gr60-default-compare", level=28, total_judgements=total,
+        mode="cooperative", run_id="gr60-default-compare", level=28, total_judgements=total,
         ordinary_single_note_indices=ordinary, safety_context=build_random_great_safety_context(path, original))
     identity = build_random_great_feedback_plan(original, shifted)
     changed = [(before, after) for before, after in zip(original, shifted) if before != after]
