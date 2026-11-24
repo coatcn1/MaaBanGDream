@@ -199,7 +199,7 @@ def test_segmented_settings_merge_without_overwriting_other_choices():
         "difficulty": "Special",
         "count": 3,
         "debug_recording": True,
-        "diagnostic_trace": True, "opening_recording": False}
+        "diagnostic_trace": True, "opening_recording": False, "adaptive_diagnostics": False}
     with pytest.raises(ValueError, match="巡演类型"):
         configure_medley_settings({"tour_type": "invalid"})
     settings = configure_medley_settings({"count": 6})
@@ -811,7 +811,7 @@ def test_play_requires_final_cover_title_when_earlier_reads_failed(monkeypatch):
     flow = _bare_flow()
     task_detail = SimpleNamespace(task_id=71)
     flow.argv = SimpleNamespace(task_detail=task_detail)
-    flow.settings = {"debug_recording": False, "diagnostic_trace": True, "opening_recording": False}
+    flow.settings = {"debug_recording": False, "diagnostic_trace": True, "opening_recording": False, "adaptive_diagnostics": False}
     flow.context = SimpleNamespace(
         tasker=SimpleNamespace(stopping=False),
     )

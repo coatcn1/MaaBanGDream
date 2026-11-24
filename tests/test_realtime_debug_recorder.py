@@ -34,6 +34,66 @@ def test_control_window_small_roi_keeps_original_mapping_without_full_frame(tmp_
     assert image.shape==(42,140,3) and np.all(image==80)
 
 
+@pytest.mark.parametrize("completed", [False, True])
+def test_compact_opening_retains_failure_frames_and_normal_result_only(tmp_path, completed):
+    recorder = RealtimeDebugRecorder(tmp_path, opening_seconds=20, compact_on_success=True)
+    image = np.full((24, 32, 3), 99, np.uint8)
+    _opening_record(recorder, image, 1, "final-cover")
+    recorder.save_checkpoint(image, "preflight", "ready")
+    if completed:
+        recorder.mark_normal_completion()
+    recorder.close()
+    recorder.save_checkpoint(image, "engine", "completed")
+    recorder.save_checkpoint(image, "cleanup", "completed")
+    recorder.save_checkpoint(image, "result", "advanced")
+
+    pngs = list(recorder.output_dir.rglob("*.png"))
+    checkpoints = [json.loads(row) for row in
+                   (recorder.output_dir / "checkpoints.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert len(pngs) == (1 if completed else 5)
+    assert checkpoints[-1]["phase"] == "result"
+    assert checkpoints[-1]["screenshot_status"] == "saved"
+    assert (recorder.output_dir / "trace.jsonl").stat().st_size > 0
+    summary = json.loads((recorder.output_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary["opening_frame_index"] == (None if completed else "opening_frames.jsonl")
+    if not completed:
+        assert (recorder.output_dir / summary["opening_frame_index"]).is_file()
+    if completed:
+        assert all(row["screenshot"] is None for row in checkpoints[:-1])
+
+
+@pytest.mark.parametrize("gate", [lambda: False, lambda: (_ for _ in ()).throw(ValueError("missing"))])
+def test_compact_opening_missing_integrity_keeps_original_evidence(tmp_path, gate):
+    recorder = RealtimeDebugRecorder(tmp_path, opening_seconds=20, compact_on_success=True,
+                                     normal_completion_gate=gate)
+    _opening_record(recorder, np.zeros((24, 32, 3), np.uint8), 1, "final-cover")
+    recorder.mark_normal_completion()
+    recorder.close()
+    assert recorder._normal_completion is False
+    assert len(list(recorder.output_dir.glob("opening/*.png"))) == 1
+
+
+@pytest.mark.parametrize("completed", [False, True])
+def test_compact_normal_life_window_keeps_first_trigger_last_and_all_feedback(tmp_path, completed):
+    recorder = RealtimeDebugRecorder(tmp_path, opening_seconds=20, compact_on_success=True)
+    frame = np.full((24, 32, 3), 99, np.uint8)
+    recorder._native_life_triggered_at = 3.0
+    for index in range(7):
+        recorder._write_event(frame, float(index), -1, f"native-life-drop-{index}", "life=500", 0)
+    recorder._write_event(frame[:4, :5], 8, -1, "native-feedback-00-000", "candidate", 0)
+    if completed:
+        recorder.mark_normal_completion()
+    recorder.close()
+
+    rows = [json.loads(row) for row in
+            (recorder.output_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == 8
+    assert sum(row["screenshot"] is not None for row in rows) == (4 if completed else 8)
+    assert rows[-1]["screenshot_status"] == "saved"
+    if completed:
+        assert [row["timestamp"] for row in rows[:-1] if row["screenshot"]] == [0, 3, 6]
+
+
 def test_native_life_drop_keeps_bounded_before_and_after_evidence(tmp_path):
     recorder = RealtimeDebugRecorder(tmp_path, video_enabled=False)
     frame = np.zeros((72, 128, 3), dtype=np.uint8)

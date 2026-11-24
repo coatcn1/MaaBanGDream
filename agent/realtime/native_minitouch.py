@@ -23,6 +23,7 @@ import time
 from collections import deque
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from . import native_engine
 
@@ -239,6 +240,9 @@ class NativeMinitouchDevice:
         self._full_stop_lock = threading.Lock()
         self._publish_lock = threading.Lock()
         self._publishing_closed = False
+        self._startup_pending = False
+        self._startup_spawn_attempted = False
+        self._startup_rollback_status: str | None = None
         self._published_tail_command: str | None = None
         self._release_commands: tuple[str, ...] = ()
         self._release_contacts: tuple[int, ...] = ()
@@ -257,6 +261,7 @@ class NativeMinitouchDevice:
     def connected(self) -> bool:
         return (
             not self._closed
+            and not self._startup_pending
             and self._client is not None
             and self._client.connected
         )
@@ -270,6 +275,10 @@ class NativeMinitouchDevice:
     def last_release_error(self) -> str | None:
         """最近一次有界释放无法确认时的原因。"""
         return self._last_release_error
+
+    @property
+    def startup_rollback_status(self) -> str | None:
+        return self._startup_rollback_status
 
     @property
     def reset_executed(self) -> bool:
@@ -460,7 +469,7 @@ class NativeMinitouchDevice:
             )
         return (completed.stdout or "").strip()
 
-    def _run_adb_cleanup(self, *args: str, timeout_s: float) -> bool:
+    def _run_adb_cleanup(self, *args: str, timeout_s: float, expected_line: str | None = None) -> bool:
         """在剩余释放预算内执行一次 ADB 清理并返回可核验结果。"""
         if timeout_s <= 0:
             return False
@@ -476,7 +485,9 @@ class NativeMinitouchDevice:
             )
         except (OSError, subprocess.TimeoutExpired):
             return False
-        return completed.returncode == 0
+        return completed.returncode == 0 and (
+            expected_line is None or expected_line in (completed.stdout or "").splitlines()
+        )
 
     @staticmethod
     def _raise_if_cancelled(
@@ -706,14 +717,21 @@ class NativeMinitouchDevice:
         self,
         *,
         cancel_event: threading.Event | None = None,
+        rollback_boot_id: str | None = None,
     ) -> None:
         """push 二进制、启动 minitouch、forward 并完成握手。"""
-        self._raise_if_cancelled(cancel_event)
-        self._closed = False
-        with self._reset_lock:
+        with self._full_stop_lock, self._reset_lock:
+            if (self._startup_pending or not self._closed or self._spawned or self._port
+                    or self._process is not None or self._client is not None):
+                raise MinitouchStartError("minitouch 上一轮尚未收束")
+            self._startup_rollback_status = None
+            self._closed = False
+            self._startup_pending = True
+            self._startup_spawn_attempted = False
             self._reset_generation += 1
             # 新代必须重新握手，不能借用上一代合法触点容量确认释放。
             self._max_contacts = 0
+            self._max_x = self._max_y = 0
             self._last_reset_sent = False
             self._reset_requested = False
             self._reset_request_cursor = None
@@ -738,6 +756,36 @@ class NativeMinitouchDevice:
             self._release_sequence_error = None
             self._release_log_batches = 0
             self._release_log_carry_pending = False
+        try:
+            self._raise_if_cancelled(cancel_event)
+            self._start_transport(cancel_event)
+            with self._reset_lock:
+                self._raise_if_cancelled(cancel_event)
+                if self._closed or self._publishing_closed:
+                    raise MinitouchStartError("minitouch 准备已取消")
+                self._startup_pending = False
+        except Exception as startup_error:
+            # 只有本调用知道输入发布入口从未开放；后续停止不能补造这份证据。
+            if rollback_boot_id is not None:
+                try:
+                    self._startup_rollback_status = self._rollback_startup(rollback_boot_id, 1.0)
+                except Exception as exc:
+                    self._startup_rollback_status = f"cleanup-error:{type(exc).__name__}"
+                    try:
+                        self.emergency_stop_with_deadline(0.25)
+                    except Exception as fallback_error:
+                        startup_error.add_note(f"minitouch 本地断开失败：{type(fallback_error).__name__}")
+            with self._reset_lock:
+                self._publishing_closed = True
+                self._startup_pending = False
+            if rollback_boot_id is None:
+                try:
+                    self.stop()
+                except Exception as exc:
+                    startup_error.add_note(f"minitouch 启动清理失败：{type(exc).__name__}")
+            raise
+
+    def _start_transport(self, cancel_event: threading.Event | None) -> None:
         self._start_jlog_writer()
         self._raise_if_cancelled(cancel_event)
         if not native_engine.available():
@@ -757,6 +805,7 @@ class NativeMinitouchDevice:
         self._run_adb("shell", "chmod", "777", _DEVICE_BINARY)
         self._raise_if_cancelled(cancel_event)
 
+        self._startup_spawn_attempted = True
         self._process = subprocess.Popen(
             [
                 self._adb,
@@ -795,7 +844,6 @@ class NativeMinitouchDevice:
                 break
             self._cancel_aware_wait(cancel_event, 0.05)
         if not detected:
-            self.stop()
             raise MinitouchStartError(
                 f"minitouch 设备检测超时；stderr 尾部："
                 f"{list(self._stderr_lines)[-3:]}"
@@ -825,6 +873,7 @@ class NativeMinitouchDevice:
                 self._cancel_aware_wait(cancel_event, 0.2)
                 continue
             handshake = {}
+            carry = ""
             deadline = time.monotonic() + 2.0
             while time.monotonic() < deadline:
                 self._raise_if_cancelled(cancel_event)
@@ -832,7 +881,8 @@ class NativeMinitouchDevice:
                 self._raise_if_cancelled(cancel_event)
                 if not chunk:
                     continue
-                for line in chunk.replace("\r\n", "\n").split("\n"):
+                *lines, carry = (carry + chunk).split("\n")
+                for line in lines:
                     line = line.strip()
                     if not line:
                         continue
@@ -840,6 +890,14 @@ class NativeMinitouchDevice:
                     if kind in ("v", "^", "$"):
                         handshake[kind] = line
                         self._record_log_line(line)
+                if len(carry) > 4096:
+                    raise MinitouchStartError("minitouch 握手行超出长度限制")
+            # PID 只取完整行，握手字段非法时仍可按本轮进程定向清理。
+            self._pid = None
+            pid_parts = handshake.get("$", "").split()
+            if len(pid_parts) == 2 and pid_parts[1].isascii() and pid_parts[1].isdecimal():
+                if len(pid_parts[1]) <= 10 and (pid := int(pid_parts[1])) > 1:
+                    self._pid = pid
             if handshake.get("^"):
                 break
             client.close()
@@ -847,7 +905,6 @@ class NativeMinitouchDevice:
             self._client = None
             self._cancel_aware_wait(cancel_event, 0.3)
         if client is None or not handshake.get("^"):
-            self.stop()
             raise MinitouchStartError(
                 f"minitouch 握手超时；stderr 尾部：{list(self._stderr_lines)[-3:]}"
             )
@@ -855,16 +912,14 @@ class NativeMinitouchDevice:
         self._client = client
         parts = handshake["^"].split()
         if len(parts) != 5:
-            self.stop()
             raise MinitouchStartError(f"异常握手头：{handshake['^']}")
         # 完整字段验证前不公开触点容量，防止畸形坐标留下可用于释放的半份握手。
         try:
             max_contacts, max_x, max_y, max_pressure = map(int, parts[1:])
         except ValueError as exc:
-            self.stop()
             raise MinitouchStartError("minitouch 握手字段不是整数") from exc
-        if not 1 <= max_contacts <= 10 or max_x <= 0 or max_y <= 0 or max_pressure <= 0:
-            self.stop()
+        # 无压感设备合法上报 0，压力为负仍属于非法范围。
+        if not 1 <= max_contacts <= 10 or max_x <= 0 or max_y <= 0 or max_pressure < 0:
             raise MinitouchStartError("minitouch 握手触点数量或坐标范围无效")
         with self._reset_lock:
             self._max_x = max_x
@@ -878,11 +933,6 @@ class NativeMinitouchDevice:
         except MinitouchStartError:
             rotation_text = ""
         self._surface_rotation = _parse_surface_rotation(rotation_text)
-        if handshake.get("$"):
-            try:
-                self._pid = int(handshake["$"].split()[1])
-            except (IndexError, ValueError):
-                self._pid = None
         self._raise_if_cancelled(cancel_event)
         # 握手完成后再启动日志排空线程，避免与握手读取抢同一套接字。
         self._log_thread = threading.Thread(
@@ -891,6 +941,61 @@ class NativeMinitouchDevice:
             daemon=True,
         )
         self._log_thread.start()
+
+    def _rollback_startup(self, boot_id: str, timeout_s: float) -> str:
+        """只清理本轮从未开放输入的启动资源，独立于触点释放协议。"""
+        deadline = time.monotonic() + timeout_s
+
+        def remaining() -> float:
+            return max(0.0, deadline - time.monotonic())
+
+        if not self._full_stop_lock.acquire(timeout=remaining()):
+            return "cleanup-busy"
+        try:
+            errors = []
+            # 先查实本轮设备和唯一 socket 对应的进程。没有 PID 时不能由
+            # /proc 中没搜到、ADB 退出或 kill 返回值推断远端已清理。
+            if self._startup_spawn_attempted:
+                identity = str(UUID(boot_id))
+                if self._pid is None:
+                    errors.append("missing-pid")
+                elif self._terminate_startup_process(identity, self._pid, min(0.5, remaining())):
+                    self._pid = None
+                    self._spawned = False
+                else:
+                    errors.append("remote-process-unconfirmed")
+            if not self.emergency_stop_with_deadline(min(0.25, remaining())):
+                errors.append("local-transport-unconfirmed")
+            if self._stderr_thread is not None and self._stderr_thread.ident is not None:
+                self._stderr_thread.join(timeout=min(0.05, remaining()))
+                if self._stderr_thread.is_alive():
+                    errors.append("stderr-worker-not-terminal")
+            if self._port:
+                local = f"tcp:{self._port}"
+                registration = f"{self._serial} {local} localabstract:{self._socket_name}"
+                registered = self._run_adb_cleanup(
+                    "forward", "--list", timeout_s=remaining(), expected_line=registration
+                )
+                if registered and self._run_adb_cleanup("forward", "--remove", local, timeout_s=remaining()):
+                    self._port = 0
+                else:
+                    errors.append("forward-unconfirmed")
+            return ",".join(errors) if errors else "confirmed"
+        finally:
+            self._full_stop_lock.release()
+
+    def _terminate_startup_process(self, boot_id: str, pid: int, timeout_s: float) -> bool:
+        # 设备身份、PID、程序和 socket 必须同时匹配。ADB 超时负责约束退出等待。
+        proof = "startup-process-closed"
+        command = (
+            f'boot=$(cat /proc/sys/kernel/random/boot_id) && [ "$boot" = "{boot_id}" ] || exit 1; '
+            f'args=$(tr "\\000" " " < /proc/{pid}/cmdline) || exit 1; '
+            f'[ "$args" = "{_DEVICE_BINARY} -n {self._socket_name} " ] || exit 1; '
+            f'kill -9 {pid} 2>/dev/null || exit 1; '
+            f'while [ -d /proc/{pid} ]; do sleep 0.02 || exit 1; done; '
+            f'printf "%s\n" "{proof}"'
+        )
+        return self._run_adb_cleanup("shell", command, timeout_s=timeout_s, expected_line=proof)
 
     def publish(self, text: str) -> None:
         """追加一段已定时脚本；时序由设备端 w 保证。"""
@@ -905,7 +1010,7 @@ class NativeMinitouchDevice:
         # 串行化现有发布与释放批次；状态锁不得覆盖 socket 写入或等待。
         with self._publish_lock:
             with self._reset_lock:
-                if self._publishing_closed:
+                if self._publishing_closed or self._startup_pending:
                     raise MinitouchStartError("minitouch 输入发布已封闭")
                 if self._closed or not self._client or not self._client.connected:
                     raise MinitouchStartError("minitouch 未连接")
@@ -953,6 +1058,8 @@ class NativeMinitouchDevice:
         """异步封闭新发布并发送本轮 UP/commit/reset；不等待传输或回执。"""
         with self._reset_lock:
             self._publishing_closed = True
+            if self._startup_pending or self._startup_rollback_status is not None:
+                return False
             if self._reset_requested:
                 return self._reset_executed
             if type(self._max_contacts) is not int or not 1 <= self._max_contacts <= 10:
@@ -995,7 +1102,8 @@ class NativeMinitouchDevice:
             return False
         success = True
         try:
-            self._closed = True
+            with self._reset_lock:
+                self._closed = True
             if self._client is not None:
                 try:
                     self._client.close()
@@ -1177,6 +1285,13 @@ class NativeMinitouchDevice:
         if not self._full_stop_lock.acquire(timeout=remaining()):
             return False
         try:
+            with self._reset_lock:
+                if self._startup_pending:
+                    # 启动线程尚可创建进程/端口，由它在退出时清理；这里只封住发布。
+                    self._publishing_closed = True
+                    return False
+                if self._startup_rollback_status is not None:
+                    return False
             return self._stop_with_deadline_impl(remaining())
         finally:
             self._full_stop_lock.release()

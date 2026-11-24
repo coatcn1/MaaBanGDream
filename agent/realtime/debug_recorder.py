@@ -97,6 +97,8 @@ class RealtimeDebugRecorder:
         close_timeout_seconds: float = 2.0,
         session_kind: str = "realtime",
         opening_seconds: float | None = None,
+        compact_on_success: bool = False,
+        normal_completion_gate=None,
     ) -> None:
         # 目录名带演奏类型（单人正式/单人排练/协力/挑战/校准等），便于
         # 直接区分录像来源；重试可能在同一秒重新建包，微秒后缀避免诊断
@@ -108,6 +110,9 @@ class RealtimeDebugRecorder:
         self.video_fps = video_fps
         self.video_enabled = bool(video_enabled) and opening_seconds is None
         self.opening_seconds = None if opening_seconds is None else max(0.0,float(opening_seconds))
+        self.compact_on_success = bool(compact_on_success) and opening_seconds is not None
+        self._normal_completion = False
+        self._normal_completion_gate = normal_completion_gate
         self._opening_first_note_at = None
         self._opening_cutoff = None
         self._opening_window_reached = False
@@ -223,12 +228,26 @@ class RealtimeDebugRecorder:
 
     @property
     def recording_mode(self):
+        if self.compact_on_success:
+            return "adaptive-screenshots+trace"
         return "opening-screenshots+trace" if self.opening_seconds is not None else "video" if self.video_enabled else "trace-only"
 
     def mark_first_note(self, timestamp: float) -> None:
         if self.opening_seconds is not None and self._opening_first_note_at is None:
             self._opening_first_note_at = float(timestamp)
             self._opening_cutoff = float(timestamp) + self.opening_seconds
+
+    def mark_normal_completion(self) -> None:
+        """只由已完成演奏及触点清理的调用者确认，缺少确认时保留失败证据。"""
+        if self.compact_on_success and not self._closed:
+            if self._normal_completion_gate is not None:
+                try:
+                    if not self._normal_completion_gate():
+                        return
+                except Exception:
+                    # 完整性报告缺失时保留证据，诊断不能改变输入收尾。
+                    return
+            self._normal_completion = True
 
     def record_phase(
         self,
@@ -285,6 +304,11 @@ class RealtimeDebugRecorder:
                 "screenshot": relative.as_posix(),
                 "details": deepcopy(dict(details or {})),
             }
+            if self._normal_completion and phase != "result" and status == "completed":
+                payload.update(screenshot=None, screenshot_status="discarded-normal")
+                self._write_checkpoint_index(payload)
+                self._refresh_checkpoint_summary()
+                return None
             if self.opening_seconds is not None and not self._closed:
                 if len(self._opening_checkpoints) < 8:
                     self._opening_checkpoints.append((relative, image.copy(), payload))
@@ -547,6 +571,8 @@ class RealtimeDebugRecorder:
         return {
             "schema_version": 2,
             "recording_mode": self.recording_mode,
+            "retention_policy": "compact-success" if self.compact_on_success else "all",
+            "normal_completion": self._normal_completion,
             "opening_seconds_after_first_note": self.opening_seconds,
             "opening_first_note_observed_at": self._opening_first_note_at,
             "opening_cutoff_timestamp": self._opening_cutoff,
@@ -567,7 +593,10 @@ class RealtimeDebugRecorder:
             "event_screenshots_dropped": sum(self._event_dropped_reasons.values()),
             "event_screenshot_drop_reasons": dict(self._event_dropped_reasons),
             "event_screenshot_flush_status": self._opening_event_flush_status,
-            "opening_frame_index": "opening_frames.jsonl" if self.opening_seconds is not None else None,
+            "opening_frame_index": (
+                "opening_frames.jsonl"
+                if self.opening_seconds is not None and not self._normal_completion else None
+            ),
             "opening_continuous_frame_evidence": False if self.opening_seconds is not None else None,
             "video_enabled": self.video_enabled,
             "record_worker_finalized": bool(record_worker_finalized),
@@ -844,8 +873,22 @@ class RealtimeDebugRecorder:
     def _flush_opening_events(self):
         self._opening_event_flush_status = "flushing"
         failure = None
+        normal_life_frames = set()
+        if self._normal_completion:
+            life_frames = [index for index, (_, _, payload) in enumerate(self._opening_events)
+                           if payload["kind"].startswith("native-life-drop-")]
+            if life_frames:
+                normal_life_frames.update((life_frames[0], life_frames[-1]))
+                trigger = next((index for index in life_frames
+                    if self._opening_events[index][2]["timestamp"] == self._native_life_triggered_at), None)
+                if trigger is not None:
+                    normal_life_frames.add(trigger)
         try:
-            for relative, image, payload in self._opening_events:
+            for index, (relative, image, payload) in enumerate(self._opening_events):
+                if (self._normal_completion and payload["kind"].startswith("native-life-drop-")
+                    and index not in normal_life_frames):
+                    self._finish_event(payload, None, "discarded-normal")
+                    continue
                 try:
                     (self.output_dir / "events").mkdir(exist_ok=True)
                     if not imwrite_unicode(self.output_dir / relative, image):
@@ -924,6 +967,12 @@ class RealtimeDebugRecorder:
             self._opening_next_after_at = timestamp + .25
 
     def _flush_opening_frames(self):
+        if self._normal_completion:
+            self._opening_pins.clear()
+            self._opening_before.clear()
+            self._opening_after.clear()
+            self._opening_flush_status = "discarded-normal"
+            return
         self._opening_flush_status = "flushing"
         frames = {entry["trace_frame"]: entry for entry in (
             *self._opening_pins.values(), *self._opening_before, *self._opening_after)}
@@ -951,6 +1000,10 @@ class RealtimeDebugRecorder:
         with self._checkpoint_lock:
             try:
                 for relative, image, payload in self._opening_checkpoints:
+                    if self._normal_completion:
+                        payload.update(screenshot=None, screenshot_status="discarded-normal")
+                        self._write_checkpoint_index(payload)
+                        continue
                     try:
                         (self.output_dir / relative).parent.mkdir(exist_ok=True)
                         if not imwrite_unicode(self.output_dir / relative, image):

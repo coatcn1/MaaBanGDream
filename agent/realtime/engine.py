@@ -1456,6 +1456,13 @@ class RealtimeEngine:
                 )
             if self.debug_recorder is not None:
                 try:
+                    # 只在输入已清理且未归零时压缩诊断留存，异常默认保留已有缓存。
+                    mark_normal = getattr(self.debug_recorder, "mark_normal_completion", None)
+                    if (callable(mark_normal) and base_stats is not None
+                        and base_stats.completed and not base_stats.stopped
+                        and not base_stats.life_depleted and not cleanup_errors
+                        and run_error is None and not stopping()):
+                        mark_normal()
                     self.debug_recorder.close()
                 except Exception as exc:
                     recorder_error = f"{type(exc).__name__}: {exc}"

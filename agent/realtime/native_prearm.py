@@ -17,6 +17,7 @@ from .chart_repository import (
     LocalChartRepository,
 )
 from .optional_diagnostics import safe_print
+from .native_feedback_ticket import DEFAULT_FEEDBACK_INITIAL_STEP_MS, validate_feedback_initial_step
 
 
 DEFAULT_TTL_SECONDS = 30.0
@@ -341,6 +342,8 @@ def frozen_native_runtime_options(live_run, runtime_options):
         return runtime_options | snapshot
     snapshot = {key: bool(runtime_options.get(key, False)) for key in (
         "native_realtime_enabled", "native_life_feedback_enabled", "native_wait_jitter_filter_enabled")}
+    snapshot["native_life_feedback_initial_step_ms"] = validate_feedback_initial_step(
+        runtime_options.get("native_life_feedback_initial_step_ms", DEFAULT_FEEDBACK_INITIAL_STEP_MS))
     snapshot["cooperative_jitter_enabled"] = bool(runtime_options.get("cooperative_jitter_enabled", True))
     from .native_random_great import validate_random_great_options
     snapshot.update(validate_random_great_options(runtime_options))
@@ -425,6 +428,8 @@ def prepare_native_for_settings_gate(
         ),
         wait_jitter_trial_enabled=bool(runtime_options.get("native_wait_jitter_filter_enabled", False)),
         random_great_options=runtime_options,
+        life_feedback_initial_step_ms=runtime_options.get(
+            "native_life_feedback_initial_step_ms", DEFAULT_FEEDBACK_INITIAL_STEP_MS),
         chart_level=getattr(selection, "level", None),
         expected_notes=getattr(selection, "expected_notes", None),
         # 仅双开路径使用内存漏键；只漏键时已选中旧谱面副本，不可重复删除。

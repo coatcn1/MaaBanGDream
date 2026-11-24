@@ -745,7 +745,8 @@
     "custom_action_param": {
       "debug_recording": false,
       "diagnostic_trace": true,
-      "opening_recording": false
+      "opening_recording": false,
+      "adaptive_diagnostics": false
     },
     "next": [
       "RealtimeLiveHomeLive"
@@ -945,7 +946,8 @@
       "save_result_frame": true,
       "result_back_attempts": 30,
       "result_back_interval_seconds": 1.5,
-      "opening_recording": false
+      "opening_recording": false,
+      "adaptive_diagnostics": false
     },
     "next": [
       "RealtimeLiveReturnHome"
@@ -978,7 +980,8 @@
       "save_result_frame": true,
       "result_back_attempts": 30,
       "result_back_interval_seconds": 1.5,
-      "opening_recording": false
+      "opening_recording": false,
+      "adaptive_diagnostics": false
     },
     "next": [
       "RealtimeLiveReturnHome"
@@ -1011,7 +1014,8 @@
       "save_result_frame": true,
       "result_back_attempts": 30,
       "result_back_interval_seconds": 1.5,
-      "opening_recording": false
+      "opening_recording": false,
+      "adaptive_diagnostics": false
     },
     "next": [
       "RealtimeLiveReturnHome"
@@ -1044,7 +1048,8 @@
       "save_result_frame": true,
       "result_back_attempts": 30,
       "result_back_interval_seconds": 1.5,
-      "opening_recording": false
+      "opening_recording": false,
+      "adaptive_diagnostics": false
     },
     "next": [
       "RealtimeLiveReturnHome"
@@ -1077,7 +1082,8 @@
       "save_result_frame": true,
       "result_back_attempts": 30,
       "result_back_interval_seconds": 1.5,
-      "opening_recording": false
+      "opening_recording": false,
+      "adaptive_diagnostics": false
     },
     "next": [
       "RealtimeLiveReturnHome"
@@ -1107,7 +1113,8 @@
       "save_result_frame": true,
       "result_back_attempts": 30,
       "result_back_interval_seconds": 1.5,
-      "opening_recording": false
+      "opening_recording": false,
+      "adaptive_diagnostics": false
     },
     "next": [
       "RealtimeLiveReturnHome"
@@ -1137,7 +1144,8 @@
       "save_result_frame": true,
       "result_back_attempts": 30,
       "result_back_interval_seconds": 1.5,
-      "opening_recording": false
+      "opening_recording": false,
+      "adaptive_diagnostics": false
     },
     "next": [
       "RealtimeLiveReturnHome"
@@ -1167,7 +1175,8 @@
       "save_result_frame": true,
       "result_back_attempts": 30,
       "result_back_interval_seconds": 1.5,
-      "opening_recording": false
+      "opening_recording": false,
+      "adaptive_diagnostics": false
     },
     "next": [
       "RealtimeLiveReturnHome"
@@ -1197,7 +1206,8 @@
       "save_result_frame": true,
       "result_back_attempts": 30,
       "result_back_interval_seconds": 1.5,
-      "opening_recording": false
+      "opening_recording": false,
+      "adaptive_diagnostics": false
     },
     "next": [
       "RealtimeLiveReturnHome"
@@ -1227,7 +1237,8 @@
       "save_result_frame": true,
       "result_back_attempts": 30,
       "result_back_interval_seconds": 1.5,
-      "opening_recording": false
+      "opening_recording": false,
+      "adaptive_diagnostics": false
     },
     "next": [
       "RealtimeLiveReturnHome"

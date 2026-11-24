@@ -176,6 +176,7 @@ def test_selection_state_is_written_atomically(tmp_path):
             "native_life_feedback_enabled": False,
             "native_wait_jitter_filter_enabled": False,
             "native_random_great_enabled": False,
+            "native_life_feedback_initial_step_ms": 45,
             "native_random_great_base_percent": 2.0,
             "native_random_great_level_start": 26,
             "native_random_great_per_level_percent": 1.0,
@@ -218,6 +219,7 @@ def test_runtime_options_default_and_atomic_update_do_not_invalidate_profile(tmp
             "native_life_feedback_enabled": False,
             "native_wait_jitter_filter_enabled": False,
             "native_random_great_enabled": False,
+            "native_life_feedback_initial_step_ms": 45,
             "native_random_great_base_percent": 2.0,
             "native_random_great_level_start": 26,
             "native_random_great_per_level_percent": 1.0,
@@ -241,6 +243,7 @@ def test_runtime_options_default_and_atomic_update_do_not_invalidate_profile(tmp
         {
             "operation": "update-runtime-options",
             "runtime_options": {
+                "native_life_feedback_initial_step_ms": 37,
                 "calibration_note_speeds": {
                     "Easy": 1.5,
                     "Normal": 2.5,
@@ -253,6 +256,8 @@ def test_runtime_options_default_and_atomic_update_do_not_invalidate_profile(tmp
         root=tmp_path,
     )
     assert result["runtime_options"]["calibration_note_speeds"]["Hard"] == 3.5
+    assert result["runtime_options"]["native_life_feedback_initial_step_ms"] == 37
+    assert store.runtime_options()["native_life_feedback_initial_step_ms"] == 37
     assert store.load(path.name)["accepted"] is True
     assert not list(tmp_path.glob("*.tmp"))
 

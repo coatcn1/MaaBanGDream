@@ -9,6 +9,13 @@ from .native_observation_clock import JLOG_DEVICE_UNCERTAINTY_S, ObservationCloc
 
 
 JUDGEMENT_KINDS = frozenset({"tap", "flick", "down", "up"})
+DEFAULT_FEEDBACK_INITIAL_STEP_MS = 45
+
+
+def validate_feedback_initial_step(value):
+    if type(value) is not int or not 30 <= value <= 45:
+        raise ValueError("native_life_feedback_initial_step_ms 必须是 30..45 的整数")
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -256,8 +263,14 @@ class FeedbackTicketStream:
     STRIDE = 1
     CAPACITY = 256
 
-    def __init__(self, run_id):
+    def __init__(self, run_id, *, random_great_feedback_guard_enabled=False):
+        if type(random_great_feedback_guard_enabled) is not bool:
+            raise ValueError("random_great_feedback_guard_enabled 必须是布尔值")
         self.run_id = run_id
+        self._random_great_guard_enabled = random_great_feedback_guard_enabled
+        self._last_intentional_device_us = None
+        self._last_device_us = None
+        self._guard_clock_error = None
         self._snapshot = FeedbackObservationState()
         self._scheduled = {}
         self._residuals = deque(maxlen=64)
@@ -311,11 +324,14 @@ class FeedbackTicketStream:
         self._judgement_history.append((state.judgement_sequence + 1, sequence, actual_s, uncertainty))
         ticket = None
         reason = "non-single-tap"
+        guard_reason = self._random_great_guard_reason(judgements, device_actual_s)
         if (len(judgements) == len(receipts) and all(row.get("feedback_single_tap")
                 and row.get("action_kind") == "tap" and row.get("command") == "d" for row in judgements)
                 and len({float(row["planned_engine_s"]) for row in judgements}) == 1):
             row = judgements[0]
-            if uncertainty is None or not math.isfinite(uncertainty) or not 0 <= uncertainty <= 1:
+            if guard_reason is not None:
+                reason = guard_reason
+            elif uncertainty is None or not math.isfinite(uncertainty) or not 0 <= uncertainty <= 1:
                 reason = "untrusted-clock"
             else:
                 self._eligible_count += 1
@@ -332,6 +348,35 @@ class FeedbackTicketStream:
                      actual_s=actual_s, judgement_sequence=sequence)
         self._publish(ticket, sequence, actual_s, uncertainty)
 
+    def _random_great_guard_reason(self, judgements, device_actual_s):
+        if not self._random_great_guard_enabled:
+            return None
+        # 只接受连续执行回执的设备时钟。缺失或倒退后停发本流票据，防止跨代拼接。
+        if (type(device_actual_s) not in {int, float} or not math.isfinite(device_actual_s)
+                or not math.isfinite(device_actual_s * 1e6)):
+            self._guard_clock_error = "random-great-feedback-clock-missing"
+        elif self._guard_clock_error is None:
+            now_us = round(device_actual_s * 1e6)
+            if self._last_device_us is not None and now_us < self._last_device_us:
+                self._guard_clock_error = "random-great-feedback-clock-backward"
+            else:
+                self._last_device_us = now_us
+                if any(row.get("feedback_identity_trusted") is True
+                       and row.get("intentional_random_great") is True
+                       and row.get("action_kind") == "tap" and row.get("command") == "d"
+                       for row in judgements):
+                    self._last_intentional_device_us = now_us
+        if self._guard_clock_error is not None:
+            return self._guard_clock_error
+        # jlog 毫秒字段保留三位小数；按其微秒精度比较，避免大纪元时间的浮点相减误差。
+        if (self._last_intentional_device_us is not None
+                and self._last_device_us - self._last_intentional_device_us < 300_000):
+            return "random-great-feedback-guard"
+        return None
+
     def report(self):
         return dict(stride=self.STRIDE, capacity=self.CAPACITY, summary=dict(self.summary),
+                    random_great_feedback_guard=dict(enabled=self._random_great_guard_enabled,
+                        window_ms=300, last_intentional_device_us=self._last_intentional_device_us,
+                        clock_error=self._guard_clock_error),
                     dropped=self.events_dropped, events=list(self.events), snapshot=asdict(self._snapshot))

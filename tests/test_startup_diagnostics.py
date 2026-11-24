@@ -88,3 +88,54 @@ def test_storage_and_event_limits_are_explicit(tmp_path):
     assert summary["last_frame"]["frame_index"] == 1
     assert np.all(imread_unicode(recorder.output_dir / "last-frame.png") == 99)
     assert (recorder.output_dir / "last-frame.png").is_file()
+
+
+def test_successful_compact_startup_keeps_decisions_without_png(tmp_path):
+    recorder = diagnostics.CooperativeStartupRecorder(
+        tmp_path, "run", retain_on_failure=True, close_timeout=1,
+    )
+    image = np.full((16, 24, 3), 99, np.uint8)
+    for index in range(5):
+        recorder.record(image, index, {"phase": "cover", "score": .99})
+    assert not list(recorder.output_dir.glob("*.png"))
+
+    recorder.close("completed")
+
+    assert not list(recorder.output_dir.glob("*.png"))
+    assert len(observations(recorder)) == 5
+    assert all(row["image_status"] == "discarded-normal" for row in observations(recorder))
+    assert all("image" not in row for row in observations(recorder))
+
+
+def test_failed_compact_startup_keeps_bounded_first_and_last_original_frames(tmp_path):
+    recorder = diagnostics.CooperativeStartupRecorder(
+        tmp_path, "run", retain_on_failure=True, queue_capacity=2, close_timeout=1,
+    )
+    for index in range(40):
+        recorder.record(np.full((16, 24, 3), index, np.uint8), index,
+                        {"phase": "cover"})
+        recorder._queue.join()
+    assert not list(recorder.output_dir.glob("*.png"))
+
+    recorder.close("startup-failed")
+
+    assert len(list(recorder.output_dir.glob("*.png"))) <= 25
+    rows = observations(recorder)
+    assert rows[0]["image_status"] == "saved"
+    assert rows[-1]["image_status"] == "saved"
+    assert np.all(imread_unicode(recorder.output_dir / rows[0]["image"]) == 0)
+    assert np.all(imread_unicode(recorder.output_dir / "last-frame.png") == 39)
+    assert any(row["image_status"] == "dropped-buffer-limit" for row in rows)
+
+
+def test_compact_startup_memory_limit_drops_images_without_dropping_decisions(tmp_path):
+    recorder = diagnostics.CooperativeStartupRecorder(
+        tmp_path, "run", retain_on_failure=True, max_bytes=800, close_timeout=1,
+    )
+    for index in range(4):
+        recorder.record(np.full((16, 16, 3), index, np.uint8), index, {"phase": "ready"})
+        recorder._queue.join()
+        assert recorder._failure_frame_bytes <= 800
+    recorder.close("failed")
+    assert len(observations(recorder)) == 4
+    assert len(list(recorder.output_dir.glob("*.png"))) <= 2

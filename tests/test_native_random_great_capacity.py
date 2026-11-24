@@ -176,19 +176,22 @@ def test_real_constructed_fallback_retains_original_feedback_and_canonical_chart
         live_run=run, difficulty="Expert", project_root=tmp_path, runtime_options=options,
         repository=SimpleNamespace(resolve=lambda *a, **kw: SimpleNamespace(selection=selection, reason="matched")),
         backend_factory=factory, manager=manager) is selection
+    baseline = native_engine.compile_chart(path).compile_actions({})
+    if mode == "formal":
+        assert len(instances) == 1 and not stops
+        backend = instances[0]
+        assert backend._actions == baseline and backend.life_feedback_enabled
+        assert backend._native_clock_trial and not backend._native_visual_refresh_enabled
+        assert not backend.report()["native_random_great"]["enabled"]
+        assert manager.consume(run.run_id, path) is backend
+        return
     assert len(instances) == 2 and stops == [instances[0]]
     old, fallback = instances
     assert old._random_great_report["selected_with_active_hold"] > 0 and old.life_feedback_enabled
     assert fallback.life_feedback_enabled
-    if mode == "formal":
-        assert fallback._native_clock_trial and not fallback._native_visual_refresh_enabled
-    baseline = native_engine.compile_chart(path).compile_actions({})
-    if mode == "formal":
-        assert fallback._actions == baseline
-    else:
-        jitter = fallback.report()["cooperative_jitter"]
-        assert old.report()["cooperative_jitter"]["selected"] in {1, 2}
-        assert jitter["selected"] in {1, 2}
-        assert fallback._actions == [row for row in baseline if row["note_index"] not in jitter["dropped_note_indices"]]
+    jitter = fallback.report()["cooperative_jitter"]
+    assert old.report()["cooperative_jitter"]["selected"] in {1, 2}
+    assert jitter["selected"] in {1, 2}
+    assert fallback._actions == [row for row in baseline if row["note_index"] not in jitter["dropped_note_indices"]]
     assert fallback._random_great_report["reason"] == "device-contact-capacity-unverified"
     assert manager.consume(run.run_id, path) is fallback

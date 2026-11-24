@@ -85,16 +85,21 @@ def test_prearm_keeps_both_user_options_effective(tmp_path, monkeypatch, mode, g
     source, total, backend, prepared, _ = _prepare(
         tmp_path, monkeypatch, mode=mode, great=great, jitter=jitter)
     baseline = native_engine.compile_chart(source).compile_actions({})
-    expected_jitter = jitter and mode in {"cooperative", "versus"}
+    multiplayer = mode in {"cooperative", "versus"}
+    expected_great = great and multiplayer
+    expected_jitter = jitter and multiplayer
     removed = len(baseline) - len(backend._actions)
     assert (removed in {1, 2}) if expected_jitter else removed == 0
-    if great:
+    if expected_great:
         report = backend.report()["native_random_great"]
         assert report["enabled"] and report["status"] == "planned"
         assert report["total_judgements"] == total
         assert report["denominator_source"] == "verified-chart-visible+catalog"
         assert prepared.path == source
-    if great and expected_jitter:
+    if not multiplayer:
+        assert backend._actions == baseline and prepared.path == source
+        assert not backend.report()["native_random_great"]["enabled"]
+    if expected_great and expected_jitter:
         report = backend.report()["cooperative_jitter"]
         assert report["enabled"] and report["status"] == "planned"
         assert report["selected"] == removed

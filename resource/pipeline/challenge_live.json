@@ -157,7 +157,8 @@
     "custom_action_param": {
       "debug_recording": false,
       "diagnostic_trace": true,
-      "opening_recording": false
+      "opening_recording": false,
+      "adaptive_diagnostics": false
     },
     "next": [
       "ChallengeProfileCheck"
@@ -348,16 +349,21 @@
         620
       ],
       "click": true,
-      "missing_reason": "当前没有可用的挑战演出活动",
+      "missing_reason": "未找到挑战演出入口",
       "timeout_ms": 10000,
-      "interval_ms": 500
+      "interval_ms": 500,
+      "delivery_node": "ChallengeSongMarker",
+      "delivery_label": "选曲页",
+      "delivery_timeout_ms": 15000,
+      "delivery_retry_interval_ms": 4000,
+      "delivery_max_clicks": 3
     },
     "next": [
-      "ChallengeSongMarker"
+      "ChallengeDifficulty"
     ],
     "focus": {
       "Node.Action.Failed": {
-        "content": "❌ 当前没有可用的挑战演出活动",
+        "content": "挑战演出入口未送达，返回主页后重试",
         "display": [
           "log"
         ]
@@ -369,14 +375,14 @@
         ]
       },
       "Node.Action.Succeeded": {
-        "content": "已找到“挑战演出”入口",
+        "content": "已确认进入挑战演出选曲页",
         "display": [
           "log"
         ]
       }
     },
     "on_error": [
-      "ChallengeNoEvent"
+      "ChallengeEntryRecoverHome"
     ]
   },
   "ChallengeSongMarker": {
@@ -602,7 +608,8 @@
       "save_result_frame": true,
       "result_back_attempts": 30,
       "result_back_interval_seconds": 1.5,
-      "opening_recording": false
+      "opening_recording": false,
+      "adaptive_diagnostics": false
     },
     "next": [
       "ChallengeReturnHome"
@@ -632,7 +639,8 @@
       "save_result_frame": true,
       "result_back_attempts": 30,
       "result_back_interval_seconds": 1.5,
-      "opening_recording": false
+      "opening_recording": false,
+      "adaptive_diagnostics": false
     },
     "next": [
       "ChallengeReturnHome"
@@ -662,7 +670,8 @@
       "save_result_frame": true,
       "result_back_attempts": 30,
       "result_back_interval_seconds": 1.5,
-      "opening_recording": false
+      "opening_recording": false,
+      "adaptive_diagnostics": false
     },
     "next": [
       "ChallengeReturnHome"
@@ -692,7 +701,8 @@
       "save_result_frame": true,
       "result_back_attempts": 30,
       "result_back_interval_seconds": 1.5,
-      "opening_recording": false
+      "opening_recording": false,
+      "adaptive_diagnostics": false
     },
     "next": [
       "ChallengeReturnHome"
@@ -722,7 +732,8 @@
       "save_result_frame": true,
       "result_back_attempts": 30,
       "result_back_interval_seconds": 1.5,
-      "opening_recording": false
+      "opening_recording": false,
+      "adaptive_diagnostics": false
     },
     "next": [
       "ChallengeReturnHome"
@@ -859,7 +870,7 @@
       "task_name": "ChallengeLive",
       "label": "挑战演出",
       "status": "failure",
-      "reason": "当前没有可用的挑战演出活动"
+      "reason": "挑战演出入口未能进入选曲页，返回主页重试后仍失败"
     }
   },
   "ChallengeRoundCompleted": {
@@ -878,6 +889,214 @@
     "focus": {
       "Node.Action.Failed": {
         "content": "❌ 挑战演出进度记录失败",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "ChallengeEntryRecoverHome": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "CommonRecover",
+    "custom_action_param": {
+      "home_node": "ChallengeHomeMarker",
+      "modal_cancel_nodes": [
+        "QuitConfirmCancel"
+      ],
+      "click_nodes": [
+        "AutoLiveLoginTap",
+        "AutoLiveLoginNext",
+        "AutoLiveCommonClose",
+        "AutoLiveStorySkipConfirmLarge",
+        "AutoLiveStorySkipConfirm",
+        "AutoLiveStorySkip",
+        "AutoLiveStoryMenu"
+      ],
+      "escape_interval_ms": 1500,
+      "escape_timeout_ms": 30000,
+      "restart_limit": 0,
+      "restart_wait_ms": 5000,
+      "startup_grace_ms": 0,
+      "login_start_node": "AutoLiveLoginScreenMarker",
+      "login_start_target": [
+        640,
+        635
+      ],
+      "login_marker_priority_attempts": 3,
+      "escape_after_login_start": true,
+      "package": "com.bilibili.star.bili",
+      "login_tap_target": [
+        640,
+        360
+      ]
+    },
+    "next": [
+      "ChallengeEntryRetryHomeLive"
+    ],
+    "on_error": [
+      "ChallengeNoEvent"
+    ],
+    "focus": {
+      "Node.Action.Starting": {
+        "content": "挑战演出入口未送达，正在返回主页重试",
+        "display": [
+          "log"
+        ]
+      }
+    }
+  },
+  "ChallengeEntryRetryHomeLive": {
+    "recognition": "TemplateMatch",
+    "template": "home_live.png",
+    "threshold": 0.82,
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
+    "target": [
+      1085,
+      580,
+      180,
+      130
+    ],
+    "next": [
+      "ChallengeEntryRetryClose",
+      "ChallengeEntryRetrySelectPage"
+    ],
+    "on_error": [
+      "ChallengeNoEvent"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 点击失败：游戏不在前台、控制器拒绝输入或页面位置已变化",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Starting": {
+        "content": "正在点击主页右下角“演出”",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Succeeded": {
+        "content": "已点击“演出”，正在识别选择演出界面",
+        "display": [
+          "log"
+        ]
+      }
+    },
+    "post_delay": 1000
+  },
+  "ChallengeEntryRetrySelectPage": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "LiveSelectFind",
+    "custom_action_param": {
+      "expected": "自由演出",
+      "template_node": "ChallengeFreeLiveTemplate",
+      "roi": [
+        0,
+        100,
+        1280,
+        620
+      ],
+      "click": false,
+      "missing_reason": "无法确认“选择演出”页面",
+      "timeout_ms": 10000,
+      "interval_ms": 500
+    },
+    "next": [
+      "ChallengeEntryRetry"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 无法确认“选择演出”页面",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Starting": {
+        "content": "正在识别选择演出界面（兼容有活动和无活动）",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Succeeded": {
+        "content": "已识别选择演出界面",
+        "display": [
+          "log"
+        ]
+      }
+    },
+    "on_error": [
+      "ChallengeNoEvent"
+    ]
+  },
+  "ChallengeEntryRetry": {
+    "recognition": "DirectHit",
+    "action": "Custom",
+    "custom_action": "LiveSelectFind",
+    "custom_action_param": {
+      "expected": "挑战演出",
+      "template_node": "ChallengeEntryTemplate",
+      "roi": [
+        0,
+        100,
+        1280,
+        620
+      ],
+      "click": true,
+      "missing_reason": "未找到挑战演出入口",
+      "timeout_ms": 10000,
+      "interval_ms": 500,
+      "delivery_node": "ChallengeSongMarker",
+      "delivery_label": "选曲页",
+      "delivery_timeout_ms": 15000,
+      "delivery_retry_interval_ms": 4000,
+      "delivery_max_clicks": 3
+    },
+    "next": [
+      "ChallengeDifficulty"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "返回主页重试后仍未进入挑战演出选曲页",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Starting": {
+        "content": "正在查找“挑战演出”入口",
+        "display": [
+          "log"
+        ]
+      },
+      "Node.Action.Succeeded": {
+        "content": "已确认进入挑战演出选曲页",
+        "display": [
+          "log"
+        ]
+      }
+    },
+    "on_error": [
+      "ChallengeNoEvent"
+    ]
+  },
+  "ChallengeEntryRetryClose": {
+    "recognition": "TemplateMatch",
+    "template": "common_close.png",
+    "threshold": 0.9,
+    "action": "Custom",
+    "custom_action": "ForegroundClick",
+    "next": [
+      "ChallengeEntryRetrySelectPage"
+    ],
+    "on_error": [
+      "ChallengeNoEvent"
+    ],
+    "focus": {
+      "Node.Action.Failed": {
+        "content": "❌ 点击失败：游戏不在前台、控制器拒绝输入或页面位置已变化",
         "display": [
           "log"
         ]

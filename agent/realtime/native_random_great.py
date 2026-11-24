@@ -24,7 +24,7 @@ RANDOM_GREAT_DEFAULTS = {
     "native_random_great_max_percent": 10.0,
     "native_random_great_offset_ms": 60,
 }
-RANDOM_GREAT_MODES = frozenset({"formal", "challenge", "cooperative", "versus", "continuous", "medley"})
+RANDOM_GREAT_MODES = frozenset({"cooperative", "versus"})
 
 
 def validate_random_great_options(options):
@@ -299,6 +299,22 @@ def _balanced_sample(candidates, desired, rng):
     return []
 
 
+def _tail_candidate_pool(candidates, actions, tail_start_s, desired):
+    fast_capacity = sum(-1 in row[1] for row in candidates)
+    slow_capacity = sum(1 in row[1] for row in candidates)
+    target = min(desired, len(candidates), 2 * min(fast_capacity, slow_capacity) + 1)
+    pool, fast, slow = [], 0, 0
+    for row in reversed(candidates):
+        # 尾段安全候选全部保留；不足时仅向前扩到仍能完成全局平衡配额的位置。
+        if (float(actions[row[0]]["due_s"]) < tail_start_s and len(pool) >= target
+                and min(fast, slow) >= target // 2):
+            break
+        pool.append(row)
+        fast += -1 in row[1]
+        slow += 1 in row[1]
+    return list(reversed(pool)), target
+
+
 def _verify_selected_plan(actions, result, selected, visible):
     selected_indices = {row[0] for row, _ in selected}
     shifts = {actions[index]["note_index"]: result[index]["due_s"] for index in selected_indices}
@@ -331,6 +347,9 @@ def plan_random_great(actions, *, options, mode, run_id, level=None, total_judge
                   target_percent=percent, desired=desired, eligible=0, selected=0,
                   planned_percent=0.0, fast=0, slow=0, shortfall=desired, selected_notes=[],
                   actual_great_measured=False, offset_ms=config["native_random_great_offset_ms"],
+                  selection_policy="tail-preferred-v1", preferred_tail_start_s=None,
+                  selection_pool=0, selection_pool_start_s=None, balanced_target=0,
+                  eligible_in_preferred_tail=0, selected_in_preferred_tail=0, selected_before_preferred_tail=0,
                   eligibility_policy="separated-hold-300px-v2" if safety_context is not None else "isolated-v1")
     if not active or not actions:
         return list(actions), report
@@ -349,6 +368,8 @@ def plan_random_great(actions, *, options, mode, run_id, level=None, total_judge
                         for _, row in ordered if row["kind"] != "move")
         ordinary = ordinary_single_note_indices
     judgment_times = sorted(round(row[0] * 1e9) for row in visible)
+    if not judgment_times:
+        return list(actions), report
     counts = Counter(judgment_times)
     non_tap_times = sorted(round(row[0] * 1e9) for row in visible if not row[2])
     candidates, active_contacts = [], set()
@@ -380,7 +401,10 @@ def plan_random_great(actions, *, options, mode, run_id, level=None, total_judge
         if signs:
             candidates.append((index, signs, overlap))
     rng = random.Random(seed)
-    selected = _balanced_sample(candidates, desired, rng)
+    first_visible_s, last_visible_s = judgment_times[0] / 1e9, judgment_times[-1] / 1e9
+    tail_start_s = first_visible_s + .8 * (last_visible_s - first_visible_s)
+    pool, balanced_target = _tail_candidate_pool(candidates, actions, tail_start_s, desired)
+    selected = _balanced_sample(pool, desired, rng)
     result, details = list(actions), []
     for (index, signs, overlap), sign in selected:
         row = actions[index]
@@ -391,6 +415,7 @@ def plan_random_great(actions, *, options, mode, run_id, level=None, total_judge
                                 planned_s=shifted, direction="FAST" if sign < 0 else "SLOW",
                                 during_separated_hold=overlap))
     fast = sum(sign < 0 for _, sign in selected)
+    selected_in_tail = sum(float(actions[row[0]]["due_s"]) >= tail_start_s for row, _ in selected)
     _verify_selected_plan(actions, result, selected, visible)
     report.update(eligible=len(candidates), eligible_both=sum(row[1] == (-1, 1) for row in candidates),
                   eligible_fast_only=sum(row[1] == (-1,) for row in candidates),
@@ -398,6 +423,12 @@ def plan_random_great(actions, *, options, mode, run_id, level=None, total_judge
                   selected=len(selected), planned_percent=len(selected) * 100 / total_judgements,
                   fast=fast, slow=len(selected) - fast, shortfall=max(0, desired - len(selected)),
                   selected_with_active_hold=sum(row[2] for row, _ in selected),
+                  preferred_tail_start_s=tail_start_s, selection_pool=len(pool),
+                  selection_pool_start_s=float(actions[pool[0][0]]["due_s"]) if pool else None,
+                  balanced_target=balanced_target,
+                  eligible_in_preferred_tail=sum(float(actions[row[0]]["due_s"]) >= tail_start_s for row in candidates),
+                  selected_in_preferred_tail=selected_in_tail,
+                  selected_before_preferred_tail=len(selected) - selected_in_tail,
                   selected_notes=details, selected_notes_truncated=len(selected) > len(details))
     report.update(original_judgement_gap_ms=2 * config["native_random_great_offset_ms"] + 70,
                   shifted_non_tap_guard_ms=200, minimum_hold_distance_px=300,

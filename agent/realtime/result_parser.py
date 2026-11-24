@@ -27,6 +27,8 @@ from .result_samples_v5 import (
     RESULT_CROPS_V5_ZLIB_BASE64,
 )
 from .result_samples_v6 import (
+    COOPERATIVE_SLOW_67_GLYPH_ZLIB_BASE64,
+    PERFECT_877_CROP_ZLIB_BASE64,
     RESULT_CROPS_V6_ZLIB_BASE64,
     RESULT_CROPS_V7_ZLIB_BASE64,
 )
@@ -479,6 +481,20 @@ def _install_result_samples_v6() -> None:
         ResultParser._labels = np.concatenate(
             (ResultParser._labels, np.asarray(labels, dtype=np.uint8)), axis=0
         )
+    # 只追加现场误读的 8；其余已正确识别的前导零和 7 不重复加入邻域投票。
+    crop = np.frombuffer(zlib.decompress(base64.b64decode(PERFECT_877_CROP_ZLIB_BASE64)),
+                         dtype=np.uint8).reshape(32, 56)
+    sample = ResultParser._normalise_glyph(crop[:, 14:28])
+    ResultParser._samples = np.concatenate((ResultParser._samples, sample[None]), axis=0)
+    ResultParser._labels = np.concatenate((ResultParser._labels, np.asarray([8], dtype=np.uint8)), axis=0)
+
+    # 现场 6 的闭合边缘接近 8，使用已确认字形避免总数约束漏掉 SLOW。
+    sample = np.frombuffer(
+        zlib.decompress(base64.b64decode(COOPERATIVE_SLOW_67_GLYPH_ZLIB_BASE64)),
+        dtype=np.uint8,
+    ).reshape(32, 20).astype(np.float32)
+    ResultParser._samples = np.concatenate((ResultParser._samples, sample[None]), axis=0)
+    ResultParser._labels = np.concatenate((ResultParser._labels, np.asarray([6], dtype=np.uint8)), axis=0)
 
 
 _install_result_samples_v6()

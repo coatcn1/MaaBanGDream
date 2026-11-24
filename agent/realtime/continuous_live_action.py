@@ -64,6 +64,7 @@ CONTINUOUS_DEFAULT_SETTINGS: dict[str, object] = {
     "debug_recording": False,
     "diagnostic_trace": True,
     "opening_recording": False,
+    "adaptive_diagnostics": False,
 }
 _CONTINUOUS_SETTINGS = dict(CONTINUOUS_DEFAULT_SETTINGS)
 _CONTINUOUS_SETTINGS_LOCK = threading.Lock()

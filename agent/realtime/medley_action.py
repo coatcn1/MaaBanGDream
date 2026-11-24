@@ -315,6 +315,7 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "debug_recording": False,
     "diagnostic_trace": True,
     "opening_recording": False,
+    "adaptive_diagnostics": False,
 }
 _SETTINGS = dict(DEFAULT_SETTINGS)
 _SETTINGS_LOCK = threading.Lock()
@@ -353,7 +354,7 @@ def configure_medley_settings(params: dict[str, object]) -> dict[str, object]:
         if count != 0 and (not 3 <= count <= 999 or count % 3 != 0):
             raise ValueError("组曲次数必须是 3 到 999 的整数且为 3 的倍数，0 表示无限")
         candidate["count"] = count
-        for key in ("debug_recording", "diagnostic_trace", "opening_recording"):
+        for key in ("debug_recording", "diagnostic_trace", "opening_recording", "adaptive_diagnostics"):
             if not isinstance(candidate[key], bool):
                 raise ValueError(f"{key} 必须是布尔值")
         _SETTINGS.clear()
@@ -1718,6 +1719,7 @@ class MedleyFlow:
             "debug_recording": bool(self.settings["debug_recording"]),
             "diagnostic_trace": bool(self.settings["diagnostic_trace"]),
             "opening_recording": bool(self.settings.get("opening_recording",False)),
+            "adaptive_diagnostics": bool(self.settings.get("adaptive_diagnostics", False)),
             "duration_seconds": 600,
             "startup_timeout_seconds": 60,
             "dpi": MEDLEY_DPI,

@@ -18,6 +18,7 @@ def sampler_fixture():
     backend._simple_single_tap_feedback = True
     backend._feedback_tickets = SimpleNamespace(events=[])
     backend._session.supports_post_random_display_large_step = lambda: True
+    backend._session.supports_ordinary_single_tap_45ms = lambda: True
     backend._session.apply_future_phase = lambda *args, **kwargs: applied.append(args) or "applied"
     sampler = NativeLifeFeedback(backend, detector=SimpleNamespace(scores=lambda _: dict(category="GREAT")))
     backend._test_ticket_state = FeedbackObservationState()
@@ -69,7 +70,7 @@ def two_events(sampler, direction=TimingFeedback.FAST, start=0):
     frame(sampler, direction, start + .25)
 
 
-@pytest.mark.parametrize("direction,delta", [(TimingFeedback.FAST, 60), (TimingFeedback.SLOW, -60)])
+@pytest.mark.parametrize("direction,delta", [(TimingFeedback.FAST, 45), (TimingFeedback.SLOW, -45)])
 def test_three_single_tap_tickets_request_production_step(direction, delta):
     sampler, backend, _ = sampler_fixture()
     two_events(sampler, direction)

@@ -255,6 +255,7 @@ def _wait_for_post_boost_entry(context, params, expected, template_node, source,
 
 
 def _confirm_delivery(context, params, expected, template_node, source, delivery_node):
+    delivery_label = str(params.get("delivery_label", "房间选择页"))
     timeout = max(0, int(params.get("delivery_timeout_ms", 12000))) / 1000
     retry_interval = max(1000, int(params.get("delivery_retry_interval_ms", 1500))) / 1000
     max_clicks = min(3, max(1, int(params.get("delivery_max_clicks", 3))))
@@ -272,11 +273,11 @@ def _confirm_delivery(context, params, expected, template_node, source, delivery
         if context.tasker.stopping:
             return True
         if delivered and delivered.hit:
-            log_task("界面导航", "选择演出", "INFO", f"已确认进入“{expected}”房间选择页（点击 {clicks} 次）")
+            log_task("界面导航", "选择演出", "INFO", f"已确认进入“{expected}”{delivery_label}（点击 {clicks} 次）")
             return True
         now = time.monotonic()
         if now >= deadline:
-            log_task("界面导航", "选择演出", "ERROR", f"点击“{expected}”入口后未确认房间选择页（点击 {clicks} 次，等待 {timeout:g} 秒）")
+            log_task("界面导航", "选择演出", "ERROR", f"点击“{expected}”入口后未确认{delivery_label}（点击 {clicks} 次，等待 {timeout:g} 秒）")
             return False
         if clicks < max_clicks and now >= next_click:
             box = _same_source_box(context, image, params, expected, template_node, source)

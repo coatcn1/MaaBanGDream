@@ -38,6 +38,7 @@ from .runtime_options import (
     debug_enabled,
     diagnostic_trace_enabled,
     opening_recording_enabled,
+    adaptive_diagnostics_enabled,
 )
 from .difficulty_action import DIFFICULTY_TARGETS
 from .live_session import append_current_run_event, current_song_id, current_live_run, update_live_run
@@ -106,6 +107,7 @@ def calibration_round_plan(
     excluded_song_ids: list[str] | None = None,
     diagnostic_trace: bool = True,
     opening_recording: bool = False,
+    adaptive_diagnostics: bool = False,
 ) -> tuple[dict, dict]:
     """Build the self-contained pipeline override for one calibration round."""
     play_params = {
@@ -114,6 +116,7 @@ def calibration_round_plan(
         "debug_recording": calibration_debug,
         "diagnostic_trace": diagnostic_trace,
         "opening_recording": opening_recording,
+        "adaptive_diagnostics": adaptive_diagnostics,
         "duration_seconds": 600, "dpi": 240, "game_fps": 60,
         "render_quality": "standard", "note_speed": note_speed,
         "settings_gate_required": True,
@@ -326,6 +329,7 @@ class RealtimeCalibration(CustomAction):
         try:
             params = json.loads(argv.custom_action_param or "{}")
             params["opening_recording"] = opening_recording_enabled(argv)
+            params["adaptive_diagnostics"] = adaptive_diagnostics_enabled(argv)
             return self._run(context, params)
         except InterruptedError as exc:
             if context.tasker.stopping:
@@ -427,6 +431,7 @@ class RealtimeCalibration(CustomAction):
                 calibration_debug=calibration_debug,
                 diagnostic_trace=calibration_trace,
                 opening_recording=bool(params.get("opening_recording",False)),
+                adaptive_diagnostics=bool(params.get("adaptive_diagnostics", False)),
                 formal=formal,
                 play_node=play_node,
                 offset=offset,

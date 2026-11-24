@@ -8,6 +8,7 @@ from agent.realtime.profile_play_action import (
     ResultCollectionStatus,
     collect_result,
 )
+from agent.realtime.result_navigation import ResultNavigationOutcome, ResultNavigationStatus
 from agent.realtime.result_parser import LiveResult
 
 
@@ -564,6 +565,50 @@ def test_result_collection_rejects_stable_impossible_total_against_chart():
     )
     assert outcome.status is ResultCollectionStatus.STABLE
     assert outcome.result.total == 326
+
+
+@pytest.mark.parametrize("read_budget, elapsed", [(3.0, 48.0), (None, 180.0)])
+def test_pggbm_numeric_budget_starts_after_navigation(monkeypatch, read_budget, elapsed):
+    clock = Clock()
+    page = np.ones((720, 1280, 3), dtype=np.uint8)
+    parse_times = []
+
+    def identify_after_loading(_controller, _stopping, _identify, *, timeout_seconds, **_kwargs):
+        assert timeout_seconds == 180.0
+        clock.sleep(45.0)
+        return ResultNavigationOutcome(ResultNavigationStatus.IDENTIFIED, image=page, page_state="pggbm")
+
+    class ResultController:
+        def post_screencap(self):
+            return Job(page)
+
+    class InvalidCountsParser:
+        def parse(self, image):
+            assert image is page
+            parse_times.append(clock.monotonic())
+            return LiveResult(377, 1, 0, 0, 2, 0, 1)
+
+    monkeypatch.setattr(profile_play_action, "navigate_result_pages", identify_after_loading)
+    monkeypatch.setattr(
+        profile_play_action, "_template_click_point",
+        lambda _image, templates, *_args, **_kwargs: (
+            (800, 300) if profile_play_action.JUDGEMENT_DETAILS_TEMPLATE in templates else None
+        ),
+    )
+    outcome = collect_result(
+        ResultController(), lambda: False, parser=InvalidCountsParser(), expected_notes=880,
+        robust_navigation=True, timeout_seconds=180.0, pggbm_read_timeout_seconds=read_budget,
+        clock=clock.monotonic, sleeper=clock.sleep,
+    )
+
+    assert outcome.status is ResultCollectionStatus.TIMED_OUT
+    assert outcome.image is page and outcome.result is None
+    assert outcome.page_state == "judgement-details-invalid"
+    assert outcome.reason == "judgement total 380 does not match chart expected_notes 880"
+    assert outcome.elapsed_seconds == pytest.approx(elapsed)
+    assert parse_times[0] == 45.0
+    if read_budget is not None:
+        assert parse_times == [45.0, 46.0, 47.0]
 
 
 def test_result_collection_uses_expected_total_resolver_before_rejecting():

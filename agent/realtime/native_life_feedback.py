@@ -9,6 +9,7 @@ import numpy as np
 from .timing_feedback import TimingFeedback, TimingFeedbackDetector, probe_judgement_feedback
 from .native_clocked_feedback import ClockedFeedbackEvidence
 from .native_visual_refresh import NativeVisualRefreshEvidence
+from .native_feedback_ticket import DEFAULT_FEEDBACK_INITIAL_STEP_MS, validate_feedback_initial_step
 
 
 class NativeLifeFeedback:
@@ -25,6 +26,8 @@ class NativeLifeFeedback:
     def __init__(self, backend, *, detector=None):
         self.backend = backend
         self._simple = bool(getattr(backend, '_simple_single_tap_feedback', False))
+        self._initial_step_ms = validate_feedback_initial_step(
+            getattr(backend, '_life_feedback_initial_step_ms', DEFAULT_FEEDBACK_INITIAL_STEP_MS))
         self._single_tap_burst = False
         self._single_tap_sample_after = float('-inf')
         self._single_tap_first_effect = False
@@ -372,7 +375,9 @@ class NativeLifeFeedback:
         self.last_sniff = record
 
     def sniff_report(self):
-        return dict(ordinary_single_tap=dict(enabled=self._simple, burst=self._single_tap_burst, first_effect=self._single_tap_first_effect), schema_version=3, capacity=self.SNIFF_CAPACITY, dropped=self.sniff_dropped,
+        return dict(ordinary_single_tap=dict(enabled=self._simple, burst=self._single_tap_burst,
+            first_effect=self._single_tap_first_effect, initial_step_ms=self._initial_step_ms,
+            subsequent_step_ms=30), schema_version=3, capacity=self.SNIFF_CAPACITY, dropped=self.sniff_dropped,
                     raw_roi_included=False, ignored_reasons=dict(self.ignored_reasons),
                     continuation=dict(post_effect_blank_required=False, new_effect_source_required=True,
                                       direction_vote_window_seconds=self.VOTE_WINDOW_SECONDS,
@@ -536,7 +541,7 @@ class NativeLifeFeedback:
             return self._ignore("pending-or-blocked")
         if now - self._last_submit_s < .3:
             return self._ignore("request-cooldown")
-        step = (30. if self._single_tap_first_effect else 60.) if self._simple else 15.
+        step = (30. if self._single_tap_first_effect else float(self._initial_step_ms)) if self._simple else 15.
         delta = step if kind is TimingFeedback.FAST else -step
         # 每次提交消耗当前三票，拒绝也必须从全新目标重新收集，不能定时重放。
         self._last_submit_s = now
@@ -761,7 +766,7 @@ class NativeLifeFeedback:
             self._effect_status = effect
             # 只有真实反向应用释放了完整一步余量，才解除对应方向的上限阻塞。
             cumulative = effect.cumulative_phase_ms
-            release_room = (170 if self._single_tap_first_effect else 140) if self._simple else 185
+            release_room = (200 - (30 if self._single_tap_first_effect else self._initial_step_ms)) if self._simple else 185
             if (self._blocked_direction is TimingFeedback.FAST and cumulative <= release_room
                     or self._blocked_direction is TimingFeedback.SLOW and cumulative >= -release_room):
                 self._blocked_direction = None

@@ -338,6 +338,7 @@ class NativeRunDeviceClaim:
         self._parent_owner = self._slot_owner = None
         self._slot_acquired = False
         self._state, self._warning = 'new', None
+        self._release_reason = None
         self._device = self.registry / ('device-' + hashlib.sha256(self.boot_id.encode()).hexdigest())
         root_key = os.path.normcase(str(self.runtime))
         self._root = self.registry / ('root-' + hashlib.sha256(root_key.encode()).hexdigest())
@@ -407,10 +408,10 @@ class NativeRunDeviceClaim:
             self._state = 'cleanup-authorized'
 
     @_serialized_registry
-    def finish(self, *, input_released, observer_terminal) -> bool:
+    def finish(self, *, input_released, observer_terminal, startup_rollback=False) -> bool:
         if self._state == 'released':
             return True
-        if not input_released or not observer_terminal:
+        if (not input_released and startup_rollback is not True) or not observer_terminal:
             self._state = 'retained'
             return False
         try:
@@ -421,6 +422,7 @@ class NativeRunDeviceClaim:
             self._slot_acquired = False
             if self._lease is not None:
                 self._lease.release()
+            self._release_reason = 'input-released' if input_released else 'unpublished-startup-aborted'
             self._state = 'released'
             return True
         except Exception as exc:
@@ -430,4 +432,5 @@ class NativeRunDeviceClaim:
 
     def report(self):
         return {'state': self._state, 'borrowed': self.borrow is not None,
-                'settled': self._state == 'released', 'warning': self._warning}
+                'settled': self._state == 'released', 'warning': self._warning,
+                'release_reason': self._release_reason}

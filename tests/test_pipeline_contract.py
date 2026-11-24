@@ -164,7 +164,7 @@ def test_all_pipeline_clicks_use_the_foreground_guard():
 def test_interface_references_existing_entry_and_resource():
     interface = load(ROOT / "interface.json")
     assert interface["interface_version"] == 2
-    assert interface["version"] == "1.5.4"
+    assert interface["version"] == "1.5.5"
     assert interface["license"] == "PolyForm-Noncommercial-1.0.0"
     assert interface["github"] == "https://github.com/coatcn1/MaaBanGDream"
     assert "mirrorchyan_rid" not in interface
@@ -932,9 +932,9 @@ def test_realtime_multi_live_contract_and_options():
     ]
     assert nodes["RealtimeLiveRehearsalStart"]["template"] == "rehearsal_start.png"
     debug = interface["option"]["RealtimeLiveDebug"]
-    assert debug["default_case"] == "Opening"
+    assert debug["default_case"] == "Adaptive"
     assert [case["name"] for case in debug["cases"]] == [
-        "Light", "Off", "Full", "Opening",
+        "Light", "Off", "Full", "Opening", "Adaptive",
     ]
     params = {
         case["name"]: case["pipeline_override"]["RealtimeLiveDebugGate"][
@@ -943,10 +943,11 @@ def test_realtime_multi_live_contract_and_options():
         for case in debug["cases"]
     }
     assert params == {
-        "Light": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": False},
-        "Off": {"debug_recording": False, "diagnostic_trace": False, "opening_recording": False},
-        "Full": {"debug_recording": True, "diagnostic_trace": True, "opening_recording": False},
-        "Opening": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": True},
+        "Light": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": False, "adaptive_diagnostics": False},
+        "Off": {"debug_recording": False, "diagnostic_trace": False, "opening_recording": False, "adaptive_diagnostics": False},
+        "Full": {"debug_recording": True, "diagnostic_trace": True, "opening_recording": False, "adaptive_diagnostics": False},
+        "Opening": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": True, "adaptive_diagnostics": False},
+        "Adaptive": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": True, "adaptive_diagnostics": True},
     }
     assert not any(task["name"] == "RealtimeFullSong" for task in interface["task"])
 
@@ -982,7 +983,7 @@ def test_continuous_realtime_live_returns_home_after_internal_result_navigation(
     assert debug_gate["custom_action"] == "ContinuousRealtimeLiveConfigure"
     assert debug_gate["custom_action_param"] == {
         "debug_recording": False,
-        "diagnostic_trace": True, "opening_recording": False}
+        "diagnostic_trace": True, "opening_recording": False, "adaptive_diagnostics": False}
     assert debug_gate["next"] == ["ContinuousRealtimeStaminaHomeGate"]
     assert nodes["ContinuousRealtimeStaminaHomeGate"]["next"] == ["ContinuousRealtimeWatcher"]
     watcher = nodes["ContinuousRealtimeWatcher"]
@@ -1016,9 +1017,9 @@ def test_continuous_realtime_live_returns_home_after_internal_result_navigation(
         ]
         assert params == {"reset": True, "difficulty": case["name"]}
     debug = interface["option"]["ContinuousRealtimeDebug"]
-    assert debug["default_case"] == "Opening"
+    assert debug["default_case"] == "Adaptive"
     assert [case["name"] for case in debug["cases"]] == [
-        "Light", "Off", "Full", "Opening",
+        "Light", "Off", "Full", "Opening", "Adaptive",
     ]
     params = {
         case["name"]: case["pipeline_override"][
@@ -1029,10 +1030,11 @@ def test_continuous_realtime_live_returns_home_after_internal_result_navigation(
         for case in debug["cases"]
     }
     assert params == {
-        "Light": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": False},
-        "Off": {"debug_recording": False, "diagnostic_trace": False, "opening_recording": False},
-        "Full": {"debug_recording": True, "diagnostic_trace": True, "opening_recording": False},
-        "Opening": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": True},
+        "Light": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": False, "adaptive_diagnostics": False},
+        "Off": {"debug_recording": False, "diagnostic_trace": False, "opening_recording": False, "adaptive_diagnostics": False},
+        "Full": {"debug_recording": True, "diagnostic_trace": True, "opening_recording": False, "adaptive_diagnostics": False},
+        "Opening": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": True, "adaptive_diagnostics": False},
+        "Adaptive": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": True, "adaptive_diagnostics": True},
     }
 
 
@@ -1090,7 +1092,7 @@ print(json.dumps({
     }
     assert effective["ContinuousRealtimeDebugConfigure"] == {
         "debug_recording": False,
-        "diagnostic_trace": True, "opening_recording": False}
+        "diagnostic_trace": True, "opening_recording": False, "adaptive_diagnostics": False}
 
 
 def test_calibration_and_challenge_offer_three_diagnostic_levels():
@@ -1100,9 +1102,9 @@ def test_calibration_and_challenge_offer_three_diagnostic_levels():
         ("ChallengeDebug", "ChallengeDebugGate"),
     ):
         option = interface["option"][option_name]
-        assert option["default_case"] == "Opening"
+        assert option["default_case"] == "Adaptive"
         assert [case["name"] for case in option["cases"]] == [
-            "Light", "Off", "Full", "Opening",
+            "Light", "Off", "Full", "Opening", "Adaptive",
         ]
         params = {
             case["name"]: case["pipeline_override"][gate][
@@ -1111,10 +1113,11 @@ def test_calibration_and_challenge_offer_three_diagnostic_levels():
             for case in option["cases"]
         }
         assert params == {
-            "Light": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": False},
-            "Off": {"debug_recording": False, "diagnostic_trace": False, "opening_recording": False},
-            "Full": {"debug_recording": True, "diagnostic_trace": True, "opening_recording": False},
-        "Opening": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": True},
+            "Light": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": False, "adaptive_diagnostics": False},
+            "Off": {"debug_recording": False, "diagnostic_trace": False, "opening_recording": False, "adaptive_diagnostics": False},
+            "Full": {"debug_recording": True, "diagnostic_trace": True, "opening_recording": False, "adaptive_diagnostics": False},
+        "Opening": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": True, "adaptive_diagnostics": False},
+        "Adaptive": {"debug_recording": False, "diagnostic_trace": True, "opening_recording": True, "adaptive_diagnostics": True},
         }
 
 
@@ -1238,7 +1241,7 @@ def test_live_select_uses_template_then_exact_ocr_action():
     entry = challenge["ChallengeEntry"]
     assert entry["custom_action"] == "LiveSelectFind"
     assert entry["custom_action_param"]["expected"] == "挑战演出"
-    assert entry["on_error"] == ["ChallengeNoEvent"]
+    assert entry["on_error"] == ["ChallengeEntryRecoverHome"]
     assert challenge["ChallengeNoEvent"]["custom_action"] == "TaskOutcome"
     assert challenge["ChallengeNoEvent"]["custom_action_param"]["status"] == "failure"
 
@@ -1266,18 +1269,19 @@ def test_seven_opening_debug_options_resolve_complete_params_in_real_maafw(tmp_p
     entries=[]
     for name in ['RealtimeLiveDebug','CooperativeDebug','VersusDebug','ContinuousRealtimeDebug','CalibrationDebug','ChallengeDebug','MedleyDebug']:
         option=interface['option'][name]
-        assert option['default_case']=='Opening'
+        assert option['default_case']=='Adaptive'
         default_case = next(case for case in option['cases'] if case['name'] == option['default_case'])
         for value in default_case['pipeline_override'].values():
             assert value['custom_action_param'] == {
-                'debug_recording': False, 'diagnostic_trace': True, 'opening_recording': True,
+                'debug_recording': False, 'diagnostic_trace': True, 'opening_recording': True, 'adaptive_diagnostics': True,
             }
         for case in option['cases']:
             override=case.get('pipeline_override',{})
             for node,value in override.items():
                 params=value.get('custom_action_param',{})
                 if 'debug_recording' in params:
-                    assert params['opening_recording'] is (case['name']=='Opening')
+                    assert params['opening_recording'] is (case['name'] in ('Opening', 'Adaptive'))
+                    assert params['adaptive_diagnostics'] is (case['name']=='Adaptive')
                     entries.append({'node':node,'base':pipeline[node],'override':value,'expected':params})
     code="""
 import json,sys

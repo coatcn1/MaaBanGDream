@@ -119,6 +119,8 @@ public:
     std::string apply_future_phase(double delta_ms, double contact_available_s,
                                   bool post_random_display_large_step = false);
     bool supports_post_random_display_large_step() const noexcept { return true; }
+    bool supports_ordinary_single_tap_45ms() const noexcept { return true; }
+    bool supports_ordinary_single_tap_step_range() const noexcept { return true; }
     double future_phase_offset_ms() const noexcept {
         return future_phase_offset_s_ * 1000.0;
     }

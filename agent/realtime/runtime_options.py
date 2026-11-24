@@ -23,6 +23,7 @@ _DEBUG_ENABLED = False
 _DEBUG_BY_TASK: dict[int, bool] = {}
 _DIAGNOSTIC_TRACE_ENABLED = True
 _OPENING_BY_TASK: dict[int, bool] = {}
+_ADAPTIVE_BY_TASK: dict[int, bool] = {}
 _CALIBRATION_DIFFICULTY = "Easy"
 _CALIBRATION_SONG_MODE = "current"
 _CALIBRATION_RESUME_MODE = "auto"
@@ -68,6 +69,11 @@ def opening_recording_enabled(argv) -> bool:
     return bool(_OPENING_BY_TASK.get(identity,False)) if type(identity) is int else False
 
 
+def adaptive_diagnostics_enabled(argv) -> bool:
+    identity = getattr(getattr(argv, "task_detail", None), "task_id", None)
+    return _ADAPTIVE_BY_TASK.get(identity, False) if type(identity) is int and identity > 0 else False
+
+
 def calibration_difficulty() -> str:
     return _CALIBRATION_DIFFICULTY
 
@@ -89,6 +95,10 @@ class RealtimeRuntimeOptions(CustomAction):
         if context.tasker.stopping:
             return True
         params = json.loads(argv.custom_action_param or "{}")
+        if "adaptive_diagnostics" in params:
+            identity = getattr(getattr(argv, "task_detail", None), "task_id", None)
+            if type(identity) is int and identity > 0:
+                _ADAPTIVE_BY_TASK[identity] = params["adaptive_diagnostics"] is True
         if "opening_recording" in params:
             identity = getattr(getattr(argv,"task_detail",None),"task_id",None)
             if type(identity) is int and identity > 0:

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .native_random_great import RANDOM_GREAT_DEFAULTS, validate_random_great_options
+from .native_feedback_ticket import DEFAULT_FEEDBACK_INITIAL_STEP_MS, validate_feedback_initial_step
 
 
 # 这些字段只为兼容既有 Profile/校准 JSON 的版本 1 结构保留；运行时不再
@@ -135,6 +136,7 @@ class RealtimeProfileStore:
         "chart_predict_presses": True,
         "native_realtime_enabled": False,
         "native_life_feedback_enabled": False,
+        "native_life_feedback_initial_step_ms": DEFAULT_FEEDBACK_INITIAL_STEP_MS,
         "native_wait_jitter_filter_enabled": False,
         **RANDOM_GREAT_DEFAULTS,
         "cooperative_jitter_enabled": True,
@@ -271,6 +273,8 @@ class RealtimeProfileStore:
         if not isinstance(native_realtime_enabled, bool):
             raise ValueError("native_realtime_enabled 必须是布尔值")
         native_options = {}
+        native_options["native_life_feedback_initial_step_ms"] = validate_feedback_initial_step(
+            options.get("native_life_feedback_initial_step_ms", DEFAULT_FEEDBACK_INITIAL_STEP_MS))
         native_options.update(validate_random_great_options(options))
         for key in ("native_life_feedback_enabled", "native_wait_jitter_filter_enabled"):
             value = options.get(key, False)

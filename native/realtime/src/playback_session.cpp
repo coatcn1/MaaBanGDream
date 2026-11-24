@@ -396,7 +396,8 @@ std::string PlaybackSession::apply_future_phase(
     if (state_ != PlaybackState::Running) return "not-running";
     if (final_chunk_published_ || cursor_ == entries_.size()) return "no-future-actions";
     if (!std::isfinite(delta_ms) || (std::abs(delta_ms) > 15.0
-        && !(post_random_display_large_step && (std::abs(delta_ms) == 30.0 || std::abs(delta_ms) == 60.0)))
+        && !(post_random_display_large_step && std::abs(delta_ms) >= 30.0
+             && std::abs(delta_ms) <= 45.0 && std::trunc(delta_ms) == delta_ms))
         || !std::isfinite(contact_available_s)) return "invalid-request";
     const double candidate = future_phase_offset_s_ + delta_ms / kMillis;
     if (std::abs(candidate) > 0.200 + kTimeEpsilon) return "phase-limit";
